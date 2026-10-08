@@ -142,3 +142,17 @@ maintenance. Rust retains its shared background cache owner and one Settings
 draft, adding direct keyboard/menu entry points and in-dialog section links.
 F9 opens usage and controls; it does not clear caches. Ctrl/Cmd+, is an additional
 standard Settings shortcut. Existing modal, busy and held-key guards are reused.
+
+## Analysis keyboard entry point — 8 October 2026
+
+The reference MenuManager binds Ctrl/Cmd+S to Analyze Similarity across workflows.
+Rust instead makes this shortcut perform the visible step's existing analysis:
+Organize's configured grouping, Easy Delete's duplicate/technical pass, Pick
+Best's ranking, Cull's subject grouping, and Fix Rotation's orientation detection.
+This is an intentional UX change: the shortcut agrees with the current task's
+button, including model setup, unfinished-review guards and cancellation.
+
+One application-level availability check serves both buttons and their action
+owners. Empty libraries, discovery, file work and an already active analysis
+prevent admission. Repeated presses cannot replace the running generation or
+queue a second image/model pass. The shortcut never applies file changes.

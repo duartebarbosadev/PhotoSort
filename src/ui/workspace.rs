@@ -1506,11 +1506,21 @@ impl PhotoSortApp {
         self.progress = None;
         self.set_status("Analysis cancelled · completed results retained".into());
     }
+    pub(super) fn can_start_analysis(&self) -> bool {
+        !self.media.is_empty() && !self.scanning && !self.busy && self.analysis_run.is_none()
+    }
+    pub(super) fn analyze_current_workflow(&mut self) {
+        if self.step == Step::Rotation {
+            self.detect_rotations();
+        } else {
+            self.analyze();
+        }
+    }
     fn analyze(&mut self) {
-        if !self.model_install_ready() {
+        if !self.can_start_analysis() || !self.model_install_ready() {
             return;
         }
-        if self.scanning || self.busy || !self.allow_review_departure() {
+        if !self.allow_review_departure() {
             return;
         }
         self.resume_suspended = false;
@@ -2972,7 +2982,6 @@ mod organize_tests {
     fn preview_starts_the_matching_mode_once_and_manual_drafts_need_no_model_work() {
         for mode in [GroupMode::Visual, GroupMode::Faces, GroupMode::Mixed] {
             let (_dir, mut app) = visual_fixture();
-            app.media.clear();
             app.group_mode = mode;
             app.analysis_run = None;
             app.organize_run = None;

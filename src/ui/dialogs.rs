@@ -45,6 +45,7 @@ impl PhotoSortApp {
                     let shortcuts = [
                         ("Ctrl/Cmd + O", "Open a library"),
                         ("Ctrl/Cmd + F", "Focus library search (except Pick Best)"),
+                        ("Ctrl/Cmd + S", "Analyze this step; detect in Fix Rotation"),
                         ("Alt + 1 / 2 / 3", "Cull list / icons / grid"),
                         ("F / S", "Cull folder / similarity-group navigator"),
                         ("F9", "Open cache usage and controls"),

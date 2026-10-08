@@ -127,6 +127,9 @@ hints; Organize and Cull remain available. Easy Delete blur, near-black and
 overexposed thresholds apply to future analyses and preserve current reviews. Ctrl/Cmd+Alt+1–5 and Previous/Next use
 the same workflow guards as clicking a step. Ctrl/Cmd+O opens a library,
 Ctrl/Cmd+F focuses its search field (outside Pick Best), and F12 opens About.
+Ctrl/Cmd+S runs the active workflow's analysis, or orientation detection in Fix
+Rotation. It uses the same controls and review guards as the buttons; additional
+presses leave an active analysis running. Use Cancel analysis to stop it.
 In Cull, Alt+1/2/3 selects list/icons/grid; F and S toggle the folder and
 similarity-group navigator. Text fields keep ordinary typing and selection keys;
 modal dialogs and active file work keep keyboard ownership. The keyboard guide

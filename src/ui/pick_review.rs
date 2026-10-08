@@ -441,7 +441,10 @@ mod tests {
             .send(crate::core::jobs::Envelope {
                 epoch: app.runtime.epoch(),
                 event: Event::Opened(
-                    Arc::new(Catalog::default()),
+                    Arc::new(Catalog {
+                        media: app.media.clone(),
+                        ..Default::default()
+                    }),
                     Session::default(),
                     Default::default(),
                 ),

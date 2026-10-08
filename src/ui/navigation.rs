@@ -340,13 +340,13 @@ impl PhotoSortApp {
             } else if self.step != Step::Rotation
                 && ui
                     .add_enabled(
-                        !self.scanning && !self.busy && !self.media.is_empty(),
+                        self.can_start_analysis(),
                         egui::Button::new("Analyze library"),
                     )
-                    .on_hover_text("Local sharpness, exposure, exact duplicates and visual groups")
+                    .on_hover_text("Analyze this workflow locally · Ctrl/Cmd+S")
                     .clicked()
             {
-                self.analyze();
+                self.analyze_current_workflow();
             }
         });
         ui.add_space(4.0);

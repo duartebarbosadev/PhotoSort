@@ -584,6 +584,12 @@ mod tests {
     #[test]
     fn new_folder_and_fresh_analysis_drop_previous_recovery() {
         let (dir, mut app) = app();
+        app.media.push(Media {
+            id: MediaId(8),
+            path: dir.path().join("photo.jpg"),
+            kind: MediaKind::Photo,
+            fingerprint: Default::default(),
+        });
         app.step = Step::Organize;
         pending_recovery(&mut app);
         app.analyze();

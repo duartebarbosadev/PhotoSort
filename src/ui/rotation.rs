@@ -72,10 +72,10 @@ impl PhotoSortApp {
         }
     }
     pub(super) fn detect_rotations(&mut self) {
-        if !self.model_install_ready() {
+        if !self.can_start_analysis() || !self.model_install_ready() {
             return;
         }
-        if self.busy || self.analysis_run.is_some() || !self.allow_review_departure() {
+        if !self.allow_review_departure() {
             return;
         }
         if self.rotation_review.pending_count() > 0 {
@@ -140,12 +140,13 @@ impl PhotoSortApp {
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
-                    self.analysis_run.is_none() && !self.scanning && !self.busy,
+                    self.can_start_analysis(),
                     egui::Button::new("Detect rotations…"),
                 )
+                .on_hover_text("Detect orientations locally · Ctrl/Cmd+S")
                 .clicked()
             {
-                self.detect_rotations();
+                self.analyze_current_workflow();
             }
             let mut queue_only = self.rotation_queue_only;
             if ui.checkbox(&mut queue_only, "Suggestions only").changed()
