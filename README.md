@@ -301,7 +301,10 @@ packaging (including failed builds):
 
 The bundle contains its models and runtime. Packaging verifies the local code
 signature and a streamed resource manifest before replacing the output bundle.
-This is an ad-hoc signed local build, not a notarized distribution. The packager's
+By default this is an ad-hoc signed local build, not a notarized distribution.
+Use `--sign-identity` with an existing certificate name or SHA-1 for consistent
+development signing; see [macOS signing and folder access](docs/MACOS_SIGNING.md).
+Ad-hoc rebuilds can trigger a new macOS folder-access prompt. The packager's
 integrity and output-safety regressions run without compiling Rust:
 
 ```sh

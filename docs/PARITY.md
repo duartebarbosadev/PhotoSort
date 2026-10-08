@@ -223,3 +223,15 @@ prior scores, metadata and groups. First preparation retains its high peak, and
 the approximately 510 MiB artifact shares the existing disk budget. Small/disabled
 caches, custom models and other platforms keep the ordinary source path. See
 [the evidence and limits](diagnostics/offline-model-2026-10-08/README.md).
+
+
+## macOS discovery permission diagnosis
+
+The 8 October captured discovery wait is now correlated with a macOS Documents
+permission prompt caused by an ad-hoc signing identity change. It does not establish
+a scanner defect. Packaging accepts an explicit existing certificate identity to
+support consistent development signing; the default remains ad-hoc. Native fixture
+verification and failure-preservation tests pass. Actual certificate-backed
+rebuild/permission persistence and public distribution remain unverified. See
+[the evidence](diagnostics/discovery-permission-2026-10-08/README.md) and
+[signing guidance](MACOS_SIGNING.md). Older uncorrelated stalls remain open.
