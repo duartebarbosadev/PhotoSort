@@ -21,7 +21,11 @@ fn time(seconds: f64) -> String {
 }
 impl PhotoSortApp {
     fn video_target(&self) -> Option<&Media> {
-        if !self.review || self.busy || self.scanning || !playback::supported() {
+        if (!self.review && self.organize_preview().is_none())
+            || self.busy
+            || self.scanning
+            || !playback::supported()
+        {
             return None;
         }
         self.active
@@ -35,7 +39,8 @@ impl PhotoSortApp {
         self.runtime.playback.select(target);
         if context != self.video_context
             || !ctx.input(|i| i.raw.focused)
-            || self.modal_active()
+            || (self.modal_active() && self.organize_preview().is_none())
+            || self.other_modal_active()
             || self.error.is_some()
         {
             self.runtime.playback.pause();

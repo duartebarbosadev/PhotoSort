@@ -5,7 +5,17 @@ use crate::core::{
     organize::{Draft, Selection},
 };
 
+// Temporary comparison presentation; the folder draft remains untouched.
+pub(super) struct Preview {
+    pub(super) ids: Vec<MediaId>,
+    pub(super) active_before: Option<MediaId>,
+    pub(super) view_before: InspectionView,
+    pub(super) independent_before: HashMap<u64, InspectionView>,
+    pub(super) sync_before: bool,
+    focused_before: u64,
+}
 pub(super) struct Editor {
+    preview: Option<Preview>,
     catalog: Arc<Catalog>,
     output: PathBuf,
     desktop_enabled: bool,
@@ -1185,6 +1195,7 @@ impl PhotoSortApp {
             .cloned()
             .unwrap_or_default();
         let mut editor = Editor {
+            preview: None,
             catalog: self.catalog.as_ref().unwrap().clone(),
             output: self.output.clone().into(),
             desktop_enabled: self.desktop_available(),
@@ -1226,7 +1237,88 @@ impl PhotoSortApp {
         }
         self.organize_editor = Some(editor);
     }
+    pub(super) fn organize_preview(&self) -> Option<&Preview> {
+        self.organize_editor.as_ref()?.preview.as_ref()
+    }
+    fn organize_preview_ids(&self, editor: &Editor) -> Vec<MediaId> {
+        // Bound work even for very large folder-editor selections. Documents
+        // remain selected but are not sent to the shared media pipeline.
+        if editor.selected.len() > 9 {
+            return Vec::new();
+        }
+        let mut ids: Vec<_> = editor
+            .selected
+            .iter()
+            .copied()
+            .filter(|id| self.index.contains_key(id))
+            .collect();
+        ids.sort_by_key(|id| self.index[id]);
+        ids
+    }
+    fn begin_organize_preview(&mut self) {
+        let Some(editor) = self.organize_editor.as_ref() else {
+            return;
+        };
+        if editor.preview.is_some() || self.step != Step::Organize || self.busy || self.scanning {
+            return;
+        }
+        let ids = self.organize_preview_ids(editor);
+        if ids.is_empty() {
+            return;
+        }
+        let preview = Preview {
+            active_before: self.active,
+            view_before: self.inspection_view,
+            independent_before: std::mem::take(&mut self.independent_views),
+            sync_before: self.sync_views,
+            focused_before: self.focused_slot,
+            ids,
+        };
+        self.active = preview.ids.first().copied();
+        self.focused_slot = 0;
+        self.inspection_view = InspectionView::default();
+        self.organize_editor.as_mut().unwrap().preview = Some(preview);
+    }
+    fn end_organize_preview(&mut self) {
+        let Some(preview) = self.organize_editor.as_mut().and_then(|e| e.preview.take()) else {
+            return;
+        };
+        self.active = preview.active_before;
+        self.focused_slot = preview.focused_before;
+        self.inspection_view = preview.view_before;
+        self.independent_views = preview.independent_before;
+        self.sync_views = preview.sync_before;
+        self.inspection_wanted.clear();
+    }
+    fn organize_preview_dialog(&mut self, ctx: &egui::Context) {
+        let mut back = false;
+        egui::Modal::new(egui::Id::new("organize_editor")).show(ctx, |ui| {
+            ui.set_width((ctx.content_rect().width() - 64.0).clamp(280.0, 1080.0));
+            ui.horizontal_wrapped(|ui| {
+                back |= ui.button("< Back to arranging").clicked();
+                ui.heading("Selection preview");
+            });
+            ui.label("Your folder and name edits stay pending while you compare.");
+            ui.separator();
+            let height = (ctx.content_rect().height() - 210.0).clamp(140.0, 720.0);
+            ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
+                self.review_canvas(ui)
+            });
+        });
+        if !self.other_modal_active() && !egui::Popup::is_any_open(ctx) {
+            self.video_keyboard(ctx);
+            back |=
+                ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        }
+        if back {
+            self.end_organize_preview();
+        }
+    }
     pub(super) fn organize_dialog(&mut self, ctx: &egui::Context) {
+        if self.organize_preview().is_some() {
+            self.organize_preview_dialog(ctx);
+            return;
+        }
         let Some(mut editor) = self.organize_editor.take() else {
             return;
         };
@@ -1238,9 +1330,13 @@ impl PhotoSortApp {
         let mut command = None;
         egui::Modal::new(egui::Id::new("organize_editor")).show(ctx, |ui| {
             let width = (ctx.content_rect().width() - 64.0).clamp(280.0, 1080.0);
-            let height = (ctx.content_rect().height() - 360.0).clamp(160.0, 560.0);
+            let height = (ctx.content_rect().height() - 380.0).clamp(160.0, 560.0);
             ui.set_width(width);
-            ui.heading("Arrange files and folders");
+            ui.horizontal_wrapped(|ui| {
+                ui.heading("Arrange files and folders");
+                if ui.add_enabled(!self.organize_preview_ids(&editor).is_empty(), egui::Button::new("Preview selection"))
+                    .on_hover_text("Compare up to nine selected items without accepting edits. Supporting documents are omitted.").clicked() { action = 5; }
+            });
             if width >= 680.0 {
                 ui.label("Drag files onto folders, drag folders to nest them, or select a file to rename it.");
                 ui.label(RichText::new("Preview moves, then Apply to change files. Photo companions move and rename together when enabled. Added empty folders are included in the reviewed plan.").small().color(MUTED));
@@ -1340,6 +1436,10 @@ impl PhotoSortApp {
                 if action == 3 {
                     self.organize();
                 }
+            }
+            5 => {
+                self.organize_editor = Some(editor);
+                self.begin_organize_preview();
             }
             4 => {
                 editor.draft =
@@ -3951,5 +4051,338 @@ mod tests {
         assert_eq!(editor.draft.labels()[&MediaId(0)], "target");
         assert_eq!(editor.draft.labels()[&MediaId(1)], "target");
         assert_eq!(app.stats.decodes, 0);
+    }
+    #[test]
+    fn organize_selected_media_preview_is_available_without_accepting_edits() {
+        let mut app = app();
+        app.step = Step::Organize;
+        app.index = app
+            .media
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
+        app.open_organize_editor();
+        let editor = app.organize_editor.as_mut().unwrap();
+        editor.selected.extend([MediaId(0), MediaId(2)]);
+        editor.draft.create_folder("", "Pending").unwrap();
+        editor.refresh();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let mut labels = Vec::new();
+        for _ in 0..3 {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(640., 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| app.organize_dialog(ctx),
+            );
+            labels = output
+                .platform_output
+                .accesskit_update
+                .unwrap()
+                .nodes
+                .iter()
+                .filter_map(|(_, n)| n.label().map(str::to_owned))
+                .collect();
+        }
+        assert!(
+            labels.iter().any(|s| s == "Preview selection"),
+            "No photo preview from the folder editor: {labels:?}"
+        );
+        assert!(app.organize_drafts.is_empty());
+        assert!(app.plan.is_none());
+        app.runtime.shutdown();
+    }
+    #[test]
+    fn organize_preview_preserves_draft_and_view_and_reuses_textures_at_both_sizes() {
+        use super::super::compact_cull_tests::{click_label, fixture, rendered};
+        for size in [egui::vec2(640., 600.), egui::vec2(1440., 960.)] {
+            let (_temp, mut app) = fixture();
+            app.step = Step::Organize;
+            app.review = true;
+            let ids: Vec<_> = app.media.iter().map(|m| m.id).collect();
+            app.active = Some(ids[8]);
+            app.comparison = vec![ids[7], ids[8]];
+            app.focused_slot = 1;
+            app.sync_views = false;
+            app.inspection_view.zoom = 2.0;
+            app.independent_views.insert(
+                1,
+                InspectionView {
+                    zoom: 3.0,
+                    ..Default::default()
+                },
+            );
+            app.decisions.insert(
+                ids[0],
+                Decision {
+                    rating: Some(4),
+                    ..Default::default()
+                },
+            );
+            let before = app.capture_bookmark();
+            let catalog = app.catalog.clone().unwrap();
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            ctx.enable_accesskit();
+            for id in &ids {
+                for preview in [false, true] {
+                    let handle = ctx.load_texture(
+                        format!("existing-{id:?}-{preview}"),
+                        egui::ColorImage::filled([16, 16], Color32::WHITE),
+                        egui::TextureOptions::LINEAR,
+                    );
+                    app.textures.insert(
+                        (*id, preview),
+                        Texture {
+                            handle,
+                            bytes: 16 * 16 * 4,
+                            used: 0,
+                        },
+                    );
+                }
+            }
+            let texture_ids: HashMap<_, _> = app
+                .textures
+                .iter()
+                .map(|(key, value)| (*key, value.handle.id()))
+                .collect();
+            app.open_organize_editor();
+            let editor = app.organize_editor.as_mut().unwrap();
+            editor.selected.extend([ids[2], ids[0], MediaId(u64::MAX)]);
+            editor.draft.create_folder("", "Pending").unwrap();
+            editor.renaming = Some((ids[0], "unfinished name".into()));
+            editor.refresh();
+            let selected = editor.selected.clone();
+            let labels = editor.draft.labels().clone();
+            click_label(&mut app, &ctx, size, "Preview selection");
+            assert_eq!(app.comparison_ids(), vec![ids[0], ids[2]]);
+            let nodes = rendered(&mut app, &ctx, size);
+            for label in ["< Back to arranging", "Fit", "1:1", "Sync"] {
+                let rect = nodes.iter().find(|(name, _)| name == label).expect(label).1;
+                assert!(
+                    rect.min.x >= 0.
+                        && rect.max.x <= size.x
+                        && rect.min.y >= 0.
+                        && rect.max.y <= size.y,
+                    "{label} clipped at {size:?}: {rect:?}"
+                );
+            }
+            assert!(!nodes.iter().any(|(label, _)| label == "Clear rating"));
+            let saved = app.capture_bookmark();
+            assert_eq!(saved.active, before.active);
+            assert_eq!(saved.comparison, before.comparison);
+            assert_eq!(saved.view, before.view);
+            assert_eq!(saved.independent_views, before.independent_views);
+            assert_eq!(saved.sync_views, before.sync_views);
+            click_label(&mut app, &ctx, size, "Sync");
+            click_label(&mut app, &ctx, size, "Fit");
+            click_label(&mut app, &ctx, size, "< Back to arranging");
+            assert!(app.organize_preview().is_none());
+            assert_eq!(app.active, before.active);
+            assert_eq!(app.focused_slot, 1);
+            assert_eq!(app.inspection_view, before.view);
+            assert_eq!(app.independent_views, before.independent_views);
+            assert_eq!(app.sync_views, before.sync_views);
+            let editor = app.organize_editor.as_ref().unwrap();
+            assert_eq!(editor.selected, selected);
+            assert_eq!(editor.draft.labels(), &labels);
+            assert!(editor.draft.folders().contains("Pending"));
+            assert_eq!(editor.renaming, Some((ids[0], "unfinished name".into())));
+            assert!(
+                app.organize_drafts.is_empty() && app.file_names.is_empty() && app.plan.is_none()
+            );
+            assert_eq!(app.decisions[&ids[0]].rating, Some(4));
+            assert!(Arc::ptr_eq(&catalog, app.catalog.as_ref().unwrap()));
+            assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+            assert!(
+                app.requested.is_empty()
+                    && app.analysis_run.is_none()
+                    && app.metadata_run.is_none()
+            );
+            for (key, handle) in texture_ids {
+                assert_eq!(app.textures[&key].handle.id(), handle);
+            }
+            click_label(&mut app, &ctx, size, "Cancel edits");
+            assert!(app.organize_editor.is_none() && app.organize_drafts.is_empty());
+            app.runtime.shutdown();
+        }
+    }
+
+    #[test]
+    fn organize_preview_bounds_selection_and_does_not_accept_pending_names() {
+        let mut app = app();
+        app.step = Step::Organize;
+        app.index = app
+            .media
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
+        app.open_organize_editor();
+        for selection in [
+            HashSet::new(),
+            HashSet::from([MediaId(u64::MAX)]),
+            (0..100_000).map(MediaId).collect(),
+        ] {
+            app.organize_editor.as_mut().unwrap().selected = selection;
+            app.begin_organize_preview();
+            assert!(app.organize_preview().is_none());
+        }
+        app.organize_editor.as_mut().unwrap().selected = HashSet::from([MediaId(2)]);
+        app.begin_organize_preview();
+        assert_eq!(app.comparison_ids(), vec![MediaId(2)]);
+        app.end_organize_preview();
+        assert!(app.plan.is_none() && app.organize_drafts.is_empty());
+        assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn organize_preview_submits_detail_after_modal_render_and_escape_cancels_it() {
+        use super::super::compact_cull_tests::{fixture, frame};
+        let (_temp, mut app) = fixture();
+        app.step = Step::Organize;
+        let id = app.media[0].id;
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let handle = ctx.load_texture(
+            "preview",
+            egui::ColorImage::filled([16, 16], Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        );
+        app.textures.insert(
+            (id, true),
+            Texture {
+                handle,
+                bytes: 16 * 16 * 4,
+                used: 0,
+            },
+        );
+        app.open_organize_editor();
+        app.organize_editor.as_mut().unwrap().selected.insert(id);
+        app.begin_organize_preview();
+        app.actual_size();
+        let size = egui::vec2(640., 600.);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.inspection_frames.is_empty() {
+            frame(&mut app, &ctx, size, vec![]);
+            assert!(
+                Instant::now() < deadline,
+                "modal detail never reached the shared worker: {:?}",
+                app.error
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(!app.inspection_wanted.is_empty());
+        frame(
+            &mut app,
+            &ctx,
+            size,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+        );
+        assert!(app.organize_preview().is_none());
+        assert!(app.inspection_wanted.is_empty() && app.inspection_frames.is_empty());
+        assert!(app.organize_editor.is_some() && app.plan.is_none());
+        app.runtime.shutdown();
+    }
+    #[cfg(any(target_os = "macos", feature = "portable-video"))]
+    #[test]
+    fn organize_preview_video_uses_shared_player_and_pauses_for_other_dialogs() {
+        use super::super::compact_cull_tests::fixture;
+        let (_temp, mut app) = fixture();
+        app.step = Step::Organize;
+        app.review = false;
+        app.media[0].kind = MediaKind::Video;
+        let id = app.media[0].id;
+        app.runtime.playback = crate::core::playback::test_player();
+        app.open_organize_editor();
+        app.organize_editor.as_mut().unwrap().selected.insert(id);
+        app.begin_organize_preview();
+        let ctx = egui::Context::default();
+        let sync = |app: &mut PhotoSortApp, focused| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    focused,
+                    ..Default::default()
+                },
+                |ctx| app.sync_playback(ctx),
+            );
+        };
+        sync(&mut app, true);
+        assert_eq!(app.runtime.playback.snapshot().id, Some(id));
+        app.runtime.playback.toggle();
+        sync(&mut app, true);
+        assert!(app.runtime.playback.snapshot().play_requested);
+        app.help = true;
+        sync(&mut app, true);
+        assert!(!app.runtime.playback.snapshot().play_requested);
+        app.help = false;
+        app.runtime.playback.toggle();
+        sync(&mut app, false);
+        assert!(!app.runtime.playback.snapshot().play_requested);
+        app.end_organize_preview();
+        sync(&mut app, true);
+        assert!(app.runtime.playback.snapshot().id.is_none());
+        app.runtime.shutdown();
+    }
+    #[test]
+    fn organize_preview_defers_saved_view_restoration_until_editor_closes() {
+        let mut app = app();
+        app.step = Step::Organize;
+        app.index = app
+            .media
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
+        app.filtered = vec![0, 1, 2];
+        app.active = Some(MediaId(1));
+        app.open_organize_editor();
+        app.organize_editor
+            .as_mut()
+            .unwrap()
+            .selected
+            .insert(MediaId(2));
+        app.pending_bookmark = Some(crate::core::views::Bookmark {
+            active: Some(MediaId(0)),
+            comparison: vec![MediaId(0), MediaId(1)],
+            view: InspectionView {
+                zoom: 2.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        app.filter_dirty = false;
+        app.view_data_ready.insert(Step::Organize);
+        app.begin_organize_preview();
+        app.restore_bookmark();
+        app.fit_view();
+        assert_eq!(app.active, Some(MediaId(2)));
+        assert!(app.pending_bookmark.is_some());
+        app.end_organize_preview();
+        assert_eq!(app.active, Some(MediaId(1)));
+        let editor = app.organize_editor.take().unwrap();
+        app.finish_organize_edit(editor, 1);
+        app.restore_bookmark();
+        assert!(app.pending_bookmark.is_none());
+        assert_eq!(app.active, Some(MediaId(0)));
+        assert_eq!(app.comparison, vec![MediaId(0), MediaId(1)]);
+        assert_eq!(app.inspection_view.zoom, 2.0);
+        assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+        app.runtime.shutdown();
     }
 }

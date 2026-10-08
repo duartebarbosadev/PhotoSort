@@ -1,6 +1,6 @@
 use super::*;
 
-fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
+pub(super) fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("photos");
     std::fs::create_dir_all(root.join("A/Day1")).unwrap();
@@ -63,7 +63,7 @@ fn settle(app: &mut PhotoSortApp) {
         std::thread::sleep(Duration::from_millis(1));
     }
 }
-fn frame(
+pub(super) fn frame(
     app: &mut PhotoSortApp,
     ctx: &egui::Context,
     size: Vec2,
@@ -95,7 +95,11 @@ fn frame(
         })
         .collect()
 }
-fn rendered(app: &mut PhotoSortApp, ctx: &egui::Context, size: Vec2) -> Vec<(String, egui::Rect)> {
+pub(super) fn rendered(
+    app: &mut PhotoSortApp,
+    ctx: &egui::Context,
+    size: Vec2,
+) -> Vec<(String, egui::Rect)> {
     let mut nodes = Vec::new();
     for _ in 0..3 {
         nodes = frame(app, ctx, size, Vec::new());
@@ -141,7 +145,7 @@ fn compact_cull_workspace_keeps_photos_visible_with_navigator_and_filters() {
     assert_eq!(app.media.len(), 9);
 }
 
-fn click_label(app: &mut PhotoSortApp, ctx: &egui::Context, size: Vec2, label: &str) {
+pub(super) fn click_label(app: &mut PhotoSortApp, ctx: &egui::Context, size: Vec2, label: &str) {
     let nodes = rendered(app, ctx, size);
     let pos = nodes
         .iter()

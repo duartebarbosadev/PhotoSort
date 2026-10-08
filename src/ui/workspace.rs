@@ -1899,10 +1899,12 @@ impl PhotoSortApp {
         self.set_active(id);
     }
     fn modal_active(&self) -> bool {
+        self.organize_editor.is_some() || self.other_modal_active()
+    }
+    fn other_modal_active(&self) -> bool {
         self.plan_open
             || self.browse_filters_open
             || self.pending_location_layout.is_some()
-            || self.organize_editor.is_some()
             || self.organize_departure.is_some()
             || self.help
             || self.update_dialog
@@ -2349,6 +2351,9 @@ impl PhotoSortApp {
                         ui.label(if self.step == Step::Rotation && self.rotation_queue_only {
                             "No rotation suggestions remain. Turn off Suggestions only to review any photo manually."
                         } else if self.step == Step::PickBest { "No comparable clusters. Analyze the library to find similar photos." } else if self.step == Step::EasyDelete { "No reviews match. Analyze the library or enable more categories." } else { "No photos match these filters." });
+                    } else if self.organize_editor.is_some() {
+                        // The editor owns the visible content. Do not render or
+                        // submit hidden image/detail requests behind its modal.
                     } else if self.review {
                         self.review_canvas(ui);
                     } else {
@@ -2368,12 +2373,6 @@ impl PhotoSortApp {
                 });
             self.inspector = open;
         }
-        self.runtime.inspect(self.inspection_wanted.clone());
-        self.inspection_frames.retain(|slot, _| {
-            self.inspection_wanted
-                .iter()
-                .any(|request| request.slot == *slot)
-        });
         let dropped = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone()));
         if let Some(path) = dropped {
             self.open(if path.is_dir() {
@@ -2387,6 +2386,13 @@ impl PhotoSortApp {
         let smoke_requested = self.smoke_close_requested(ctx);
         self.handle_close_request(ctx, native_requested || smoke_requested);
         self.dialogs(ctx);
+        // Include detail requested by the folder editor's shared preview canvas.
+        self.runtime.inspect(self.inspection_wanted.clone());
+        self.inspection_frames.retain(|slot, _| {
+            self.inspection_wanted
+                .iter()
+                .any(|request| request.slot == *slot)
+        });
         self.sync_playback(ctx);
         if self.view_checkpoint.elapsed() >= Duration::from_secs(1) {
             self.checkpoint_bookmarks();

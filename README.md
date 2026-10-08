@@ -29,8 +29,8 @@ open ".tools/native-vips/PhotoSort Rust.app"
 ```
 
 The older `.tools/native/PhotoSort Rust.app` is a previous build. The current
-bundle's source/executable hashes, full test results and native filesystem checks
-are recorded in [the latest validation report](docs/diagnostics/copy-xattrs-2026-10-08/README.md).
+bundle's source/executable hashes, full test results and native interaction checks
+are recorded in [the latest validation report](docs/diagnostics/organize-preview-2026-10-08/README.md).
 These checks cover this macOS development build; they do not establish Windows,
 CUDA or DirectML runtime readiness.
 

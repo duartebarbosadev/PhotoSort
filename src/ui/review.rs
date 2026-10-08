@@ -2,6 +2,9 @@ use super::*;
 
 impl PhotoSortApp {
     pub(super) fn comparison_ids(&self) -> Vec<MediaId> {
+        if let Some(preview) = self.organize_preview() {
+            return preview.ids.clone();
+        }
         if self.step == Step::PickBest {
             return self
                 .pick_review
@@ -141,7 +144,9 @@ impl PhotoSortApp {
         }
     }
     fn set_view(&mut self, slot: u64, view: InspectionView) {
-        self.pending_bookmark = None;
+        if self.organize_preview().is_none() {
+            self.pending_bookmark = None;
+        }
         if self.sync_views {
             self.inspection_view = view;
         } else {
@@ -194,7 +199,8 @@ impl PhotoSortApp {
         let compact = ui.available_width() < 1100.0;
         // On short windows, give the photos room and use Previous/Next instead
         // of squeezing both the canvas and a clipped thumbnail strip below it.
-        let show_filmstrip = ui.available_height() >= 360.0;
+        let editor_preview = self.organize_preview().is_some();
+        let show_filmstrip = !editor_preview && ui.available_height() >= 360.0;
         let short = ui.ctx().content_rect().height() < 760.0;
         let controls_height = match (compact, short) {
             (true, true) => 80.0,
@@ -275,6 +281,10 @@ impl PhotoSortApp {
                 }
             });
         ui.spacing_mut().scroll = scroll_style;
+        if editor_preview {
+            ui.horizontal_wrapped(|ui| self.review_view_controls(ui));
+            return;
+        }
         ui.horizontal_wrapped(|ui| {
             if ui
                 .button("< Previous")
@@ -364,11 +374,7 @@ impl PhotoSortApp {
             .get(&active)
             .is_some_and(|i| self.media[*i].kind == MediaKind::Video)
         {
-            ui.label(
-                RichText::new("Space: play/pause · Alt+←/→: seek 10 s")
-                    .small()
-                    .color(MUTED),
-            );
+            self.review_view_controls(ui);
             return;
         }
         ui.spacing_mut().button_padding = egui::vec2(8.0, 6.0);
@@ -382,6 +388,21 @@ impl PhotoSortApp {
         }
         if ui.small_button("Clear rating").clicked() {
             self.rating(active, 0);
+        }
+        self.review_view_controls(ui);
+    }
+    fn review_view_controls(&mut self, ui: &mut egui::Ui) {
+        if self
+            .active
+            .and_then(|id| self.index.get(&id))
+            .is_some_and(|i| self.media[*i].kind == MediaKind::Video)
+        {
+            ui.label(
+                RichText::new("Space: play/pause · Alt+←/→: seek 10 s")
+                    .small()
+                    .color(MUTED),
+            );
+            return;
         }
         if ui.small_button("Fit").clicked() {
             self.fit_view();
