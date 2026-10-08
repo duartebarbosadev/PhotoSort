@@ -132,3 +132,13 @@ and companions; whole-original-folder removal remains an explicit named menu
 action. This keeps the available workflow while making shortcut scope predictable
 for generated or merged destinations. Folder rename/create remains draft-only,
 and both move and Trash execution require a separately reviewed Apply action.
+
+
+## Settings and cache entry points — 8 October 2026
+
+The reference MenuManager binds F10 to DialogManager.show_preferences_dialog and F9
+to DialogManager.show_cache_management_dialog. CacheController owns the actual cache
+maintenance. Rust retains its shared background cache owner and one Settings
+draft, adding direct keyboard/menu entry points and in-dialog section links.
+F9 opens usage and controls; it does not clear caches. Ctrl/Cmd+, is an additional
+standard Settings shortcut. Existing modal, busy and held-key guards are reused.

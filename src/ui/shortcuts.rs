@@ -7,6 +7,8 @@ enum ApplicationKey {
     Open,
     Find,
     About,
+    Settings,
+    Caches,
 }
 fn application_key(key: egui::Key, modifiers: egui::Modifiers) -> Option<ApplicationKey> {
     if modifiers.alt || modifiers.shift {
@@ -17,6 +19,9 @@ fn application_key(key: egui::Key, modifiers: egui::Modifiers) -> Option<Applica
         egui::Key::O if command => Some(ApplicationKey::Open),
         egui::Key::F if command => Some(ApplicationKey::Find),
         egui::Key::F12 if !command => Some(ApplicationKey::About),
+        egui::Key::F10 if !command => Some(ApplicationKey::Settings),
+        egui::Key::F9 if !command => Some(ApplicationKey::Caches),
+        egui::Key::Comma if command => Some(ApplicationKey::Settings),
         _ => None,
     }
 }
@@ -55,6 +60,8 @@ impl PhotoSortApp {
                 }
             }
             ApplicationKey::About => self.about = true,
+            ApplicationKey::Settings => self.open_settings(preferences::Section::General),
+            ApplicationKey::Caches => self.open_settings(preferences::Section::Caches),
         }
         true
     }
@@ -351,5 +358,89 @@ mod tests {
         );
         assert!(app.departure.is_some());
         assert_eq!(app.decisions[&MediaId(7)].turns, 0);
+    }
+    #[test]
+    fn settings_access_keys_open_the_existing_draft_without_photo_work() {
+        for step in Step::ALL {
+            for (key, modifiers) in [
+                (egui::Key::F9, egui::Modifiers::NONE),
+                (egui::Key::F10, egui::Modifiers::NONE),
+                (egui::Key::Comma, egui::Modifiers::COMMAND),
+                (egui::Key::Comma, egui::Modifiers::CTRL),
+            ] {
+                let mut app = app(step);
+                app.decisions.insert(
+                    MediaId(7),
+                    Decision {
+                        rating: Some(4),
+                        rejected: true,
+                        ..Default::default()
+                    },
+                );
+                let before = serde_json::to_vec(&app.preferences).unwrap();
+                let ctx = egui::Context::default();
+                let _ = ctx.run(
+                    input(&[(key, modifiers), (egui::Key::R, egui::Modifiers::NONE)]),
+                    |ctx| app.keyboard(ctx),
+                );
+                assert!(app.preferences_draft.is_some(), "{step:?}: {key:?}");
+                assert_eq!(
+                    serde_json::to_vec(app.preferences_draft.as_ref().unwrap()).unwrap(),
+                    before
+                );
+                assert_eq!(app.step, step);
+                assert_eq!(app.active, Some(MediaId(7)));
+                assert_eq!(app.decision(MediaId(7)).rating, Some(4));
+                assert!(app.decision(MediaId(7)).rejected);
+                assert_eq!(app.decision(MediaId(7)).turns, 0);
+                assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+                assert!(
+                    app.analysis_run.is_none()
+                        && app.metadata_run.is_none()
+                        && app.requested.is_empty()
+                );
+                app.runtime.shutdown();
+            }
+        }
+    }
+
+    #[test]
+    fn settings_access_respects_existing_modal_popup_repeat_and_modifier_guards() {
+        for key in [egui::Key::F9, egui::Key::F10] {
+            for modifiers in [
+                egui::Modifiers::ALT,
+                egui::Modifiers::SHIFT,
+                egui::Modifiers::CTRL,
+                egui::Modifiers::COMMAND,
+            ] {
+                assert!(application_key(key, modifiers).is_none());
+            }
+            for guard in 0..4 {
+                let mut app = app(Step::Cull);
+                let ctx = egui::Context::default();
+                match guard {
+                    0 => app.busy = true,
+                    1 => app.help = true,
+                    2 => egui::Popup::open_id(&ctx, egui::Id::new("settings-guard")),
+                    _ => ctx.input_mut(|i| {
+                        i.keys_down.insert(key);
+                    }),
+                }
+                let _ = ctx.run(input(&[(key, egui::Modifiers::NONE)]), |ctx| {
+                    app.keyboard(ctx)
+                });
+                assert!(app.preferences_draft.is_none(), "guard={guard}");
+                assert!(app.decisions.is_empty());
+                app.runtime.shutdown();
+            }
+        }
+        assert!(application_key(egui::Key::Comma, egui::Modifiers::NONE).is_none());
+        assert!(
+            application_key(
+                egui::Key::Comma,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT
+            )
+            .is_none()
+        );
     }
 }

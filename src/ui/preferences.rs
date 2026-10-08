@@ -1,7 +1,21 @@
 //! Application controls shared by every workflow and both navigation layouts.
 use super::*;
 use crate::core::preferences::Preferences;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Section {
+    General,
+    Caches,
+}
+
 impl PhotoSortApp {
+    pub(super) fn open_settings(&mut self, section: Section) {
+        if self.preferences_draft.is_none() {
+            self.preferences_draft = Some(self.preferences.clone());
+            self.runtime.cache.request(false);
+        }
+        self.preferences_section = Some(section);
+    }
+
     pub(super) fn save_preferences(&mut self) {
         if let Some(path) = &self.preferences_path
             && let Err(error) = self.runtime.io(IoWork::SavePreferences {
@@ -92,8 +106,11 @@ impl PhotoSortApp {
                 self.clear_trash_menu_item(ui);
                 ui.separator();
                 if ui.button("Settings…").clicked() {
-                    self.runtime.cache.request(false);
-                    self.preferences_draft = Some(self.preferences.clone());
+                    self.open_settings(Section::General);
+                    ui.close();
+                }
+                if ui.button("Cache usage…").clicked() {
+                    self.open_settings(Section::Caches);
                     ui.close();
                 }
                 if ui.button("AI models…").clicked() {
@@ -137,13 +154,20 @@ impl PhotoSortApp {
     pub(super) fn preferences_dialog(&mut self, ctx: &egui::Context) {
         if let Some(mut draft) = self.preferences_draft.take() {
             let mut action = 0;
+            let mut section = self.preferences_section.take();
             let response = egui::Modal::new(egui::Id::new("preferences")).show(ctx, |ui| {
                 ui.set_width((ctx.content_rect().width() - 64.0).clamp(280.0, 480.0));
                 ui.heading("Settings");
+                ui.horizontal(|ui| {
+                    if ui.button("General").clicked() { section = Some(Section::General); }
+                    if ui.button("Caches").clicked() { section = Some(Section::Caches); }
+                });
                 egui::ScrollArea::vertical()
+                    .id_salt("settings_content")
                     .max_height((ctx.content_rect().height() - 200.0).max(160.0))
                     .show(ui, |ui| {
-                        ui.label("Application updates");
+                        let general = ui.label("Application updates");
+                        if section == Some(Section::General) { general.scroll_to_me(Some(egui::Align::Min)); }
                         ui.checkbox(&mut draft.updates.automatic, "Check for updates daily");
                         if let Err(reason) = crate::core::updates::Source::configured() { ui.small(reason); }
                         ui.separator();
@@ -240,11 +264,12 @@ impl PhotoSortApp {
                     ui.label("Balanced uses 85% of the available thread count for AI. Applies to the next analysis, including rotation. Cached results stay available.");
                     ui.label("This controls AI calculations, not a limit on total app CPU use. Browsing and file tasks remain in the background.");
                     ui.separator();
-                    ui.label("Shared caches");
+                    let caches = ui.label("Shared caches");
+                    if section == Some(Section::Caches) { caches.scroll_to_me(Some(egui::Align::Min)); }
                     ui.add(egui::Slider::new(&mut draft.cache.previews_mib, 32..=1024).suffix(" MiB").text("Preview memory"));
                     ui.add(egui::Slider::new(&mut draft.cache.originals_mib, 64..=2048).suffix(" MiB").text("Original detail memory"));
                     ui.add(egui::Slider::new(&mut draft.cache.disk_mib, 0..=32768).suffix(" MiB").text("Disk cache"));
-                    ui.label("Limits apply when settings are saved. Zero disables persistent previews, AI evidence and prepared Apple models. Active model files can temporarily exceed the disk limit; reducing it releases this window’s prepared sessions. Displayed images and models use additional memory.");
+                    ui.label("Limits apply when settings are saved. Zero disables persistent previews, AI evidence and prepared models. Active model files can temporarily exceed the disk limit; reducing it releases this window’s prepared sessions. Displayed images and models use additional memory.");
                     let cache = self.runtime.cache.status();
                     if let Some(usage) = cache.usage {
                         ui.label(format!("Disk: {:.1} MiB · {} files", usage.disk_bytes as f64 / 1048576.0, usage.files));
@@ -260,7 +285,7 @@ impl PhotoSortApp {
                         if ui.button("Refresh cache usage").clicked() { self.runtime.cache.request(false); }
                         if ui.add_enabled(!self.busy && !self.scanning, egui::Button::new("Clear reusable caches")).clicked() { self.runtime.cache.request(true); }
                     }
-                    ui.label("Clear runs immediately in the background. Current reviews, staged choices, saved positions and model files are kept.");
+                    ui.label("Clear runs immediately in the background. Current reviews, staged choices, saved positions and downloaded models are kept.");
 
                     });
                 ui.separator();
@@ -594,5 +619,88 @@ mod tests {
         assert!(app.preferences_draft.is_none());
         assert_eq!(app.preferences.navigation.rating, None);
         assert!(app.analysis_run.is_none() && app.metadata_run.is_none());
+    }
+    #[test]
+    fn settings_access_reuses_draft_and_requests_usage_once_without_clearing() {
+        let (_dir, mut app) = fixture();
+        app.runtime.shutdown();
+        app.runtime.cache.take();
+        app.runtime.cache.finish(Ok(Default::default()), false);
+        app.open_settings(Section::Caches);
+        let request = app.runtime.cache.take().expect("one usage request");
+        assert!(!request.clear);
+        app.runtime.cache.finish(Ok(Default::default()), false);
+        app.preferences_draft.as_mut().unwrap().navigation.rating = Some(5);
+        app.open_settings(Section::General);
+        app.open_settings(Section::Caches);
+        assert!(
+            app.runtime.cache.take().is_none(),
+            "section navigation repeated cache work"
+        );
+        assert_eq!(
+            app.preferences_draft.as_ref().unwrap().navigation.rating,
+            Some(5)
+        );
+        assert_eq!(app.preferences.navigation.rating, None);
+        assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+    }
+    #[test]
+    fn settings_access_cache_and_general_anchors_keep_footer_visible_at_small_sizes() {
+        for size in [egui::vec2(600., 500.), egui::vec2(1440., 900.)] {
+            let (_dir, mut app) = fixture();
+            let ctx = egui::Context::default();
+            crate::ui::theme::install(&ctx);
+            ctx.enable_accesskit();
+            let mut time = 0.;
+            for (section, label) in [
+                (Section::Caches, "Shared caches"),
+                (Section::General, "Application updates"),
+                (Section::Caches, "Shared caches"),
+            ] {
+                app.open_settings(section);
+                let mut output = None;
+                for _ in 0..8 {
+                    time += 0.1;
+                    output = Some(ctx.run(
+                        egui::RawInput {
+                            time: Some(time),
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            ..Default::default()
+                        },
+                        |ctx| app.preferences_dialog(ctx),
+                    ));
+                }
+                let tree = output.unwrap().platform_output.accesskit_update.unwrap();
+                for label in [label, "General", "Caches", "Cancel", "Save settings"] {
+                    let node = tree
+                        .nodes
+                        .iter()
+                        .find(|(_, n)| n.label() == Some(label) || n.value() == Some(label))
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "missing {label} at {size:?}: {:?}",
+                                tree.nodes
+                                    .iter()
+                                    .filter_map(|(_, n)| n.label())
+                                    .collect::<Vec<_>>()
+                            )
+                        });
+                    let bounds = node.1.bounds().expect("visible control bounds");
+                    assert!(
+                        bounds.x0 >= 0.
+                            && bounds.x1 <= f64::from(size.x)
+                            && bounds.y0 >= 0.
+                            && bounds.y1 <= f64::from(size.y),
+                        "{label}: {bounds:?}, {size:?}"
+                    );
+                }
+            }
+            assert!(
+                app.analysis_run.is_none()
+                    && app.metadata_run.is_none()
+                    && app.requested.is_empty()
+            );
+            app.runtime.shutdown();
+        }
     }
 }

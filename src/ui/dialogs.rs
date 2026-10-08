@@ -47,6 +47,8 @@ impl PhotoSortApp {
                         ("Ctrl/Cmd + F", "Focus library search (except Pick Best)"),
                         ("Alt + 1 / 2 / 3", "Cull list / icons / grid"),
                         ("F / S", "Cull folder / similarity-group navigator"),
+                        ("F9", "Open cache usage and controls"),
+                        ("F10 / Ctrl/Cmd + ,", "Open Settings"),
                         ("F12", "About PhotoSort"),
                         (
                             "Organize files: arrows / Space",
