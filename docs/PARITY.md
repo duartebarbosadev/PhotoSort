@@ -295,3 +295,14 @@ replacement may initialize a CPU session; the second pass must reuse sessions.
 No photo library is opened, settings changed or PhotoSort prepared cache created.
 Native provider temporary caches and uninterruptible native calls remain possible.
 See diagnostics/runtime-backend-2026-10-08/README.md for validation and limits.
+
+## Cache-folder desktop access — 9 October 2026
+
+Settings → Caches → Open cache folder uses the runtime-injected cache directory
+and the existing desktop worker/opener library. Missing paths and ordinary files
+cannot become a folder handoff; the action neither creates directories nor changes
+cache contents. Settings now owns a bounded error display with its footer kept
+visible. All five workflows and compact/wide dialog tests pass, with no repeated
+cache/image work or changed review/settings drafts. Native macOS verifies the
+unavailable-folder message, dismissal and correct Finder destination after retry.
+All 68 final checks pass; see [the task report](diagnostics/cache-folder-2026-10-09/README.md).

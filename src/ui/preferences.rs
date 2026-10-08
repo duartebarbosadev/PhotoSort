@@ -8,6 +8,30 @@ pub(super) enum Section {
 }
 
 impl PhotoSortApp {
+    fn cache_folder_request(&self) -> Option<crate::core::desktop::Request> {
+        self.runtime.cache.directory().and_then(|path| {
+            crate::core::desktop::Request::for_path(path, crate::core::desktop::Action::OpenFolder)
+                .ok()
+        })
+    }
+    fn cache_folder_button(&mut self, ui: &mut egui::Ui) {
+        let request = self.cache_folder_request();
+        let description = request.as_ref().map_or_else(
+            || "The cache location is unavailable.".into(),
+            |request| request.path.display().to_string(),
+        );
+        if ui
+            .add_enabled(
+                request.is_some() && self.desktop_available(),
+                egui::Button::new("Open cache folder"),
+            )
+            .on_hover_text(description)
+            .clicked()
+            && let Some(request) = request
+        {
+            self.dispatch_desktop(request);
+        }
+    }
     pub(super) fn open_settings(&mut self, section: Section) {
         if self.preferences_draft.is_none() {
             self.preferences_draft = Some(self.preferences.clone());
@@ -158,13 +182,20 @@ impl PhotoSortApp {
             let response = egui::Modal::new(egui::Id::new("preferences")).show(ctx, |ui| {
                 ui.set_width((ctx.content_rect().width() - 64.0).clamp(280.0, 480.0));
                 ui.heading("Settings");
+                let error_height = if let Some(error) = self.error.clone() {
+                    ui.vertical(|ui| {
+                        egui::ScrollArea::vertical().id_salt("settings_error")
+                            .max_height(80.0).show(ui, |ui| { ui.colored_label(RED, error); });
+                        if ui.button("Dismiss error").clicked() { self.error = None; }
+                    }).response.rect.height() + ui.spacing().item_spacing.y
+                } else { 0.0 };
                 ui.horizontal(|ui| {
                     if ui.button("General").clicked() { section = Some(Section::General); }
                     if ui.button("Caches").clicked() { section = Some(Section::Caches); }
                 });
                 egui::ScrollArea::vertical()
                     .id_salt("settings_content")
-                    .max_height((ctx.content_rect().height() - 200.0).max(160.0))
+                    .max_height((ctx.content_rect().height() - 200.0 - error_height).max(80.0))
                     .show(ui, |ui| {
                         let general = ui.label("Application updates");
                         if section == Some(Section::General) { general.scroll_to_me(Some(egui::Align::Min)); }
@@ -266,6 +297,7 @@ impl PhotoSortApp {
                     ui.separator();
                     let caches = ui.label("Shared caches");
                     if section == Some(Section::Caches) { caches.scroll_to_me(Some(egui::Align::Min)); }
+                    self.cache_folder_button(ui);
                     ui.add(egui::Slider::new(&mut draft.cache.previews_mib, 32..=1024).suffix(" MiB").text("Preview memory"));
                     ui.add(egui::Slider::new(&mut draft.cache.originals_mib, 64..=2048).suffix(" MiB").text("Original detail memory"));
                     ui.add(egui::Slider::new(&mut draft.cache.disk_mib, 0..=32768).suffix(" MiB").text("Disk cache"));
@@ -389,6 +421,225 @@ pub(super) fn workflow_hint(step: Step) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn settings_errors_are_bounded_and_dismissible_without_hiding_footer_or_losing_draft() {
+        for size in [egui::vec2(600., 500.), egui::vec2(1440., 990.)] {
+            let (_dir, mut app) = fixture();
+            app.open_settings(Section::Caches);
+            app.preferences_draft.as_mut().unwrap().navigation.rating = Some(5);
+            let error = "Open folder failed: /unavailable/long cache folder café/".repeat(20);
+            app.error = Some(error.clone());
+            let ctx = egui::Context::default();
+            crate::ui::theme::install(&ctx);
+            ctx.enable_accesskit();
+            let mut time = 0.;
+            let mut frame = |app: &mut PhotoSortApp, events| {
+                time += 0.1;
+                ctx.run(
+                    egui::RawInput {
+                        time: Some(time),
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| app.dialogs(ctx),
+                )
+            };
+            let mut output = frame(&mut app, vec![]);
+            for _ in 0..7 {
+                output = frame(&mut app, vec![]);
+            }
+            let tree = output.platform_output.accesskit_update.unwrap();
+            assert!(
+                !tree
+                    .nodes
+                    .iter()
+                    .any(|(_, n)| n.label() == Some("Something needs attention")),
+                "Settings owns this error"
+            );
+            let mut dismiss = None;
+            for label in [
+                "Settings",
+                "Dismiss error",
+                "General",
+                "Caches",
+                "Cancel",
+                "Save settings",
+            ] {
+                let node = &tree
+                    .nodes
+                    .iter()
+                    .find(|(_, n)| n.label() == Some(label) || n.value() == Some(label))
+                    .unwrap()
+                    .1;
+                let bounds = node.bounds().unwrap();
+                assert!(
+                    bounds.x0 >= 0.
+                        && bounds.x1 <= f64::from(size.x)
+                        && bounds.y0 >= 0.
+                        && bounds.y1 <= f64::from(size.y),
+                    "{label}: {bounds:?}, {size:?}"
+                );
+                if label == "Dismiss error" {
+                    dismiss = Some(egui::pos2(
+                        ((bounds.x0 + bounds.x1) / 2.) as f32,
+                        ((bounds.y0 + bounds.y1) / 2.) as f32,
+                    ));
+                }
+            }
+            let pos = dismiss.unwrap();
+            for pressed in [true, false] {
+                frame(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert!(app.error.is_none());
+            assert_eq!(
+                app.preferences_draft.as_ref().unwrap().navigation.rating,
+                Some(5)
+            );
+            assert_eq!(app.preferences.navigation.rating, None);
+            assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+        }
+    }
+    #[test]
+    fn cache_folder_settings_uses_injected_location_in_every_workflow_without_extra_work() {
+        use crate::core::desktop::{Action, Worker};
+        for size in [egui::vec2(640., 600.), egui::vec2(1440., 900.)] {
+            let dir = tempfile::tempdir().unwrap();
+            let cache = dir.path().join("cache ' café #1");
+            std::fs::create_dir(&cache).unwrap();
+            std::fs::write(cache.join("retained.txt"), b"retained").unwrap();
+            let mut app =
+                PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, cache.clone()), None);
+            app.runtime.shutdown();
+            app.runtime.cache.take();
+            app.runtime.cache.finish(Ok(Default::default()), false);
+            let (sent, received) = std::sync::mpsc::channel();
+            app.runtime.desktop = Worker::with_launcher(
+                Arc::new(std::sync::atomic::AtomicU64::new(app.runtime.epoch())),
+                Arc::new(|| {}),
+                Arc::new(move |request| {
+                    sent.send(request.clone()).unwrap();
+                    Ok(())
+                }),
+            );
+            app.open_settings(Section::Caches);
+            assert!(!app.runtime.cache.take().unwrap().clear);
+            app.runtime.cache.finish(Ok(Default::default()), false);
+            app.preferences_draft.as_mut().unwrap().navigation.rating = Some(5);
+            app.decisions.insert(
+                MediaId(7),
+                Decision {
+                    rating: Some(4),
+                    ..Default::default()
+                },
+            );
+            for step in Step::ALL {
+                app.step = step;
+                app.open_settings(Section::Caches);
+                let ctx = egui::Context::default();
+                crate::ui::theme::install(&ctx);
+                ctx.enable_accesskit();
+                let mut time = 0.;
+                let mut frame = |app: &mut PhotoSortApp, events| {
+                    time += 0.1;
+                    ctx.run(
+                        egui::RawInput {
+                            time: Some(time),
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            events,
+                            ..Default::default()
+                        },
+                        |ctx| app.preferences_dialog(ctx),
+                    )
+                };
+                let mut output = frame(&mut app, vec![]);
+                for _ in 0..7 {
+                    output = frame(&mut app, vec![]);
+                }
+                let tree = output.platform_output.accesskit_update.unwrap();
+                let node = &tree
+                    .nodes
+                    .iter()
+                    .find(|(_, n)| n.label() == Some("Open cache folder"))
+                    .unwrap()
+                    .1;
+                assert!(!node.is_disabled());
+                let bounds = node.bounds().unwrap();
+                assert!(
+                    bounds.x0 >= 0.
+                        && bounds.x1 <= f64::from(size.x)
+                        && bounds.y0 >= 0.
+                        && bounds.y1 <= f64::from(size.y)
+                );
+                let pos = egui::pos2(
+                    ((bounds.x0 + bounds.x1) / 2.) as f32,
+                    ((bounds.y0 + bounds.y1) / 2.) as f32,
+                );
+                for pressed in [true, false] {
+                    frame(
+                        &mut app,
+                        vec![
+                            egui::Event::PointerMoved(pos),
+                            egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                }
+                let request = received.recv_timeout(Duration::from_secs(5)).unwrap();
+                assert_eq!(request.path, cache);
+                assert_eq!(request.action, Action::OpenFolder);
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while app.runtime.desktop.running() {
+                    assert!(Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                app.poll_desktop();
+                assert!(app.error.is_none() && received.try_recv().is_err());
+                assert!(
+                    app.runtime.cache.take().is_none(),
+                    "opening repeated cache work"
+                );
+                assert_eq!(
+                    app.preferences_draft.as_ref().unwrap().navigation.rating,
+                    Some(5)
+                );
+                assert_eq!(app.preferences.navigation.rating, None);
+                assert_eq!(app.decisions[&MediaId(7)].rating, Some(4));
+                assert!(
+                    app.root.is_none()
+                        && app.requested.is_empty()
+                        && app.runtime.processing.status().is_empty()
+                );
+                assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+                assert_eq!(
+                    std::fs::read(cache.join("retained.txt")).unwrap(),
+                    b"retained"
+                );
+            }
+            app.runtime.cache = Default::default();
+            assert!(app.cache_folder_request().is_none());
+            assert!(
+                crate::core::cache::Control::with_directory("relative".into())
+                    .directory()
+                    .is_none()
+            );
+        }
+    }
     fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
         let dir = tempfile::tempdir().unwrap();
         let app =

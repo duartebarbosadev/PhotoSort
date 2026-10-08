@@ -781,7 +781,7 @@ impl Runtime {
                 }
             })
             .expect("Start filesystem worker");
-        let cache_control = super::cache::Control::default();
+        let cache_control = super::cache::Control::with_directory(cache.clone());
         let duplicate_cache = cache_control.clone();
         let (duplicate_tx, duplicate_rx) = mpsc::sync_channel::<SimilarityJob>(1);
         let (evidence_tx, evidence_rx) = mpsc::sync_channel::<EvidenceRequest>(1);

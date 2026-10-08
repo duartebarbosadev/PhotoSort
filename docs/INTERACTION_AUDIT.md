@@ -70,7 +70,7 @@ The authoritative reference handlers are
 | “Similarity Model” section | The current Python dialog has strictness selection but no model chooser. Its loader pins DINOv2-small. Rust's verified model catalog/setup replaces stale claims about selectable Python models. |
 | Separate thumbnail/preview/EXIF/analysis clears and separate EXIF disk allowance | Deliberately consolidated into shared reusable-cache usage/clear, preview/detail memory budgets and one persistent-cache budget. Rust does not offer category-specific clearing or a separate EXIF disk slider. Clearing reusable caches preserves decisions, saved positions and downloaded model assets. |
 | Delete All Models | Rust reviews removal of each managed copy in `ui/models.rs` and retains bundled assets. Reanalysis may require import/download; the UI states that consequence. No blanket deletion of external or bundled model locations. |
-| Open Cache Folder | **Missing convenience action.** There is no Rust settings button dispatching the cache root to the desktop worker. Follow-up should expose the actual configured cache location through its owner and reuse the existing desktop service, with disabled/error handling when unavailable. It must not construct a competing cache, clear data or open a photo folder instead. |
+| Open Cache Folder | **Missing at the audited `979b0e6` baseline.** There was no Rust settings button dispatching the cache root to the desktop worker. Follow-up should expose the actual configured cache location through its owner and reuse the existing desktop service, with disabled/error handling when unavailable. It must not construct a competing cache, clear data or open a photo folder instead. |
 
 ## Organize context actions
 
@@ -108,3 +108,10 @@ changes: all 211 source fingerprints and the executable match the previous
 68 commands passed. That evidence retains its original scope and ignored tests.
 Distribution, hardware, accuracy and long-session gaps remain in the
 [completion audit](COMPLETION_AUDIT.md).
+
+## Follow-up
+
+The [cache-folder task](diagnostics/cache-folder-2026-10-09/README.md) implements
+and locally validates the baseline omission recorded above, including bounded
+Settings errors. This report and its snapshot still describe the audited
+`979b0e6` baseline; the follow-up has a separate current-source validation record.

@@ -16,6 +16,7 @@ use std::{
 pub enum Action {
     Reveal,
     Open,
+    OpenFolder,
     OpenVideo,
     Terminal,
 }
@@ -26,6 +27,7 @@ impl Action {
             Self::Reveal if cfg!(target_os = "windows") => "Show in Explorer",
             Self::Reveal => "Show in file manager",
             Self::Open => "Open in default app",
+            Self::OpenFolder => "Open folder",
             Self::OpenVideo => "Open in external player",
             Self::Terminal => "Open terminal here",
         }
@@ -69,6 +71,11 @@ impl Request {
         );
         let metadata = std::fs::metadata(&self.path)
             .with_context(|| format!("File is unavailable: {}", self.path.display()))?;
+        ensure!(
+            self.action != Action::OpenFolder || metadata.is_dir(),
+            "Folder is unavailable: {}",
+            self.path.display()
+        );
         ensure!(
             metadata.is_file() || (metadata.is_dir() && self.action != Action::OpenVideo),
             "File is unavailable: {}",
@@ -118,7 +125,9 @@ impl Worker {
             Arc::new(move |request| {
                 match request.action {
                     Action::Reveal => opener::reveal(&request.path)?,
-                    Action::Open | Action::OpenVideo => opener::open(&request.path)?,
+                    Action::Open | Action::OpenFolder | Action::OpenVideo => {
+                        opener::open(&request.path)?
+                    }
                     Action::Terminal => launcher.open(&request.path)?,
                 }
                 Ok(())
@@ -251,6 +260,38 @@ mod tests {
             fingerprint: super::super::model::Fingerprint::read(&path).unwrap(),
             path,
         }
+    }
+    #[test]
+    fn open_folder_checks_directory_on_worker_without_creating_or_opening_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("cache ' café #1");
+        std::fs::create_dir(&folder).unwrap();
+        let file = folder.join("keep.txt");
+        std::fs::write(&file, b"unchanged").unwrap();
+        let missing = dir.path().join("absent");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let expected = folder.clone();
+        let mut worker = Worker::with_launcher(
+            Arc::default(),
+            Arc::new(|| {}),
+            Arc::new(move |r| {
+                assert_eq!(r.path, expected);
+                assert_eq!(r.action, Action::OpenFolder);
+                count.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }),
+        );
+        for (path, valid) in [(&folder, true), (&file, false), (&missing, false)] {
+            worker
+                .start(0, Request::for_path(path, Action::OpenFolder).unwrap())
+                .unwrap();
+            wait(&worker);
+            assert_eq!(worker.take().unwrap().result.is_ok(), valid);
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert!(!missing.exists());
+        assert_eq!(std::fs::read(file).unwrap(), b"unchanged");
     }
     #[test]
     fn exact_clicked_path_is_passed_once_without_photo_processing() {

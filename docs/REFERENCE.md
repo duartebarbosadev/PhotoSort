@@ -143,6 +143,12 @@ draft, adding direct keyboard/menu entry points and in-dialog section links.
 F9 opens usage and controls; it does not clear caches. Ctrl/Cmd+, is an additional
 standard Settings shortcut. Existing modal, busy and held-key guards are reused.
 
+The reference cache dialog also offers Open Cache Folder. Rust now exposes the
+actual runtime-injected reusable-cache directory through Settings → Caches and
+the existing desktop worker. The UI neither constructs a cache nor creates a
+missing folder. Directory checks and the system file-manager handoff remain off
+the UI thread; see [cache-folder validation](diagnostics/cache-folder-2026-10-09/README.md).
+
 ## Analysis keyboard entry point — 8 October 2026
 
 The reference MenuManager binds Ctrl/Cmd+S to Analyze Similarity across workflows.

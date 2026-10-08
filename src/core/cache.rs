@@ -1,7 +1,7 @@
 //! Regenerable cache ownership. Never traverses photo libraries or application data.
 use serde::{Deserialize, Serialize};
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -64,10 +64,21 @@ struct State {
 /// Coalesced requests cannot fill image queues or block the UI.
 #[derive(Clone, Default)]
 pub struct Control {
+    directory: Option<Arc<PathBuf>>,
     state: Arc<Mutex<State>>,
     cancelled: Arc<AtomicU64>,
 }
 impl Control {
+    pub(crate) fn with_directory(directory: PathBuf) -> Self {
+        Self {
+            directory: directory.is_absolute().then(|| Arc::new(directory)),
+            ..Self::default()
+        }
+    }
+    /// The same location injected into the image pipeline, without filesystem I/O.
+    pub fn directory(&self) -> Option<&Path> {
+        self.directory.as_deref().map(PathBuf::as_path)
+    }
     pub fn status(&self) -> Status {
         self.state.lock().unwrap().status.clone()
     }

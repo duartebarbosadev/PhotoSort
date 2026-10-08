@@ -3,6 +3,7 @@ use super::*;
 impl PhotoSortApp {
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         if let Some(error) = self.error.clone()
+            && self.preferences_draft.is_none()
             && self.organize_departure.is_none()
             && !(self.plan_open && self.retry_plan.is_some())
         {
