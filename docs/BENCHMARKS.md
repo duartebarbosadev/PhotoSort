@@ -4,6 +4,11 @@ on mixed folders and 27.26× faster on 100 RAW photos. Rendering recipes and pro
 sizes differ; this does not establish whole-application speed. The report includes
 cache reuse, RSS ranges and the larger Rust disk-cache footprint.
 
+[Lossless proxy codec evaluation, 9 October](diagnostics/proxy-codecs-2026-10-09/README.md):
+retain the current PNG setting. On 263 photos, the tested WebP encoder saves
+15–27% of proxy bytes but decodes 1.65–2.18× more slowly; all tested pixels remain
+exact. The report explains why this cache-format change was not adopted.
+
 # File discovery comparison — 2026-09-28
 
 The Rust catalog scanner completed this synthetic 100,000-path workload in
