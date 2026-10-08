@@ -137,9 +137,12 @@ impl PhotoSortApp {
         }
     }
     pub(super) fn browse_controls(&mut self, ui: &mut egui::Ui) {
-        let compact = ui.available_width() < 850. || ui.ctx().content_rect().height() < 760.;
+        // Review prioritizes the photographs. Reuse the same filter panel as
+        // narrow windows; wide browsing keeps its inline controls.
+        let overlay =
+            self.review || ui.available_width() < 850. || ui.ctx().content_rect().height() < 760.;
         ui.horizontal_wrapped(|ui| {
-            if compact {
+            if overlay {
                 let active = [
                     self.browse.rating != RatingFilter::All,
                     self.browse.group.is_some(),
@@ -181,7 +184,7 @@ impl PhotoSortApp {
             }
             self.navigator_controls(ui);
         });
-        if !compact {
+        if !overlay {
             self.browse_filter_controls(ui);
         }
         // Progress and cancellation remain visible even while filters are closed.

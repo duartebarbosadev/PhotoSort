@@ -108,6 +108,85 @@ pub(super) fn rendered(
 }
 
 #[test]
+fn wide_review_gives_photos_space_and_reuses_the_existing_filter_panel() {
+    use crate::core::browsing::RatingFilter;
+    let (_temp, mut app) = fixture();
+    app.review = true;
+    app.navigator.enabled = false;
+    app.inspector = true;
+    let active = app.media[0].id;
+    app.active = Some(active);
+    let catalog = app.catalog.clone().unwrap();
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let size = egui::vec2(1440., 990.);
+    let nodes = rendered(&mut app, &ctx, size);
+    let canvas = nodes
+        .iter()
+        .find(|(label, _)| label.starts_with("Photo 1:"))
+        .unwrap()
+        .1;
+    eprintln!("wide review canvas before/after policy: {canvas:?}");
+    assert!(
+        nodes.iter().any(|(label, _)| label == "Filters & sort"),
+        "Wide review should share the compact filter panel"
+    );
+    assert!(
+        canvas.height() >= 300.,
+        "Photo canvas lost height to browse controls: {canvas:?}"
+    );
+    assert!(!nodes.iter().any(|(label, _)| label == "Any rating"));
+    click_label(&mut app, &ctx, size, "Filters & sort");
+    assert!(app.browse_filters_open);
+    choose_five_stars(&mut app, &ctx, size);
+    assert_eq!(app.browse.rating, RatingFilter::Exactly(5));
+    assert_eq!(app.filtered.len(), 1);
+    frame(
+        &mut app,
+        &ctx,
+        size,
+        vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }],
+    );
+    assert!(!app.browse_filters_open);
+    let nodes = rendered(&mut app, &ctx, size);
+    assert!(nodes.iter().any(|(label, _)| label == "Filters & sort · 1"));
+    assert_eq!(app.active, Some(active));
+    assert!(app.decisions.is_empty());
+    assert!(Arc::ptr_eq(&catalog, app.catalog.as_ref().unwrap()));
+    app.metadata_run = Some(73);
+    app.metadata_progress = Some((1, 9));
+    let nodes = rendered(&mut app, &ctx, size);
+    assert!(
+        nodes
+            .iter()
+            .any(|(label, _)| label == "Cancel metadata reading")
+    );
+    assert!(!app.browse_filters_open);
+    click_label(&mut app, &ctx, size, "Cancel metadata reading");
+    assert!(app.metadata_run.is_none());
+    // Return to the wide browser: existing inline controls and filter survive.
+    app.browse_filters_open = true;
+    app.set_library_layout(library::Layout::Grid);
+    let nodes = rendered(&mut app, &ctx, size);
+    assert!(!app.browse_filters_open);
+    assert!(nodes.iter().any(|(label, _)| label == "Exactly 5 stars"));
+    assert!(
+        !nodes
+            .iter()
+            .any(|(label, _)| label.starts_with("Filters & sort"))
+    );
+    assert_eq!(app.filtered.len(), 1);
+    app.runtime.shutdown();
+}
+
+#[test]
 fn compact_cull_workspace_keeps_photos_visible_with_navigator_and_filters() {
     let (_temp, mut app) = fixture();
     let ctx = egui::Context::default();
@@ -181,6 +260,35 @@ pub(super) fn click_label(app: &mut PhotoSortApp, ctx: &egui::Context, size: Vec
     settle(app);
 }
 
+fn choose_five_stars(app: &mut PhotoSortApp, ctx: &egui::Context, size: Vec2) {
+    click_label(app, ctx, size, "Any rating");
+    assert!(
+        app.browse_filters_open,
+        "Opening a nested chooser closed the parent panel"
+    );
+    let nodes = rendered(app, ctx, size);
+    let first = nodes
+        .iter()
+        .find(|(s, _)| s == "Unrated")
+        .unwrap()
+        .1
+        .center();
+    frame(
+        app,
+        ctx,
+        size,
+        vec![
+            egui::Event::PointerMoved(first),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0., -600.),
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    click_label(app, ctx, size, "Exactly 5 stars");
+}
+
 #[test]
 fn compact_filter_panel_keeps_nested_rating_folder_choices_and_keyboard_ownership() {
     use crate::core::browsing::RatingFilter;
@@ -208,32 +316,7 @@ fn compact_filter_panel_keeps_nested_rating_folder_choices_and_keyboard_ownershi
         app.decisions.is_empty(),
         "Filter interaction marked a photo"
     );
-    click_label(&mut app, &ctx, size, "Any rating");
-    assert!(
-        app.browse_filters_open,
-        "Opening a nested chooser closed the parent panel"
-    );
-    let nodes = rendered(&mut app, &ctx, size);
-    let first = nodes
-        .iter()
-        .find(|(s, _)| s == "Unrated")
-        .unwrap()
-        .1
-        .center();
-    frame(
-        &mut app,
-        &ctx,
-        size,
-        vec![
-            egui::Event::PointerMoved(first),
-            egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
-                delta: egui::vec2(0., -600.),
-                modifiers: Default::default(),
-            },
-        ],
-    );
-    click_label(&mut app, &ctx, size, "Exactly 5 stars");
+    choose_five_stars(&mut app, &ctx, size);
     assert_eq!(app.browse.rating, RatingFilter::Exactly(5));
     assert_eq!(app.filtered.len(), 1);
     app.browse_filters_open = true;
