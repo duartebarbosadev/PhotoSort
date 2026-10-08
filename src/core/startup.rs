@@ -10,6 +10,8 @@ pub struct Options {
     pub diagnostics: bool,
     pub check_runtime: bool,
     pub runtime_backend: Option<Backend>,
+    pub log_file: Option<PathBuf>,
+    pub log_level: Option<tracing::Level>,
     pub smoke_test: bool,
     pub smoke_delay_ms: Option<u64>,
     pub help: bool,
@@ -39,6 +41,35 @@ impl Options {
             }
             if !positional && arg == "--smoke-test" {
                 result.smoke_test = true;
+                continue;
+            }
+            if !positional && arg == "--log-file" {
+                if result.log_file.is_some() {
+                    return Err("Specify --log-file only once.".into());
+                }
+                let path = args.next().ok_or("--log-file requires a new file path.")?;
+                if path.is_empty() || path.to_string_lossy().starts_with("--") {
+                    return Err("--log-file requires a new file path.".into());
+                }
+                result.log_file = Some(path.into());
+                continue;
+            }
+            if !positional && arg == "--log-level" {
+                if result.log_level.is_some() {
+                    return Err("Specify --log-level only once.".into());
+                }
+                result.log_level = Some(match args.next().as_deref().and_then(|s| s.to_str()) {
+                    Some("error") => tracing::Level::ERROR,
+                    Some("warn") => tracing::Level::WARN,
+                    Some("info") => tracing::Level::INFO,
+                    Some("debug") => tracing::Level::DEBUG,
+                    Some("trace") => tracing::Level::TRACE,
+                    _ => {
+                        return Err(
+                            "--log-level requires error, warn, info, debug or trace.".into()
+                        );
+                    }
+                });
                 continue;
             }
             if !positional && arg == "--smoke-delay-ms" {
@@ -121,6 +152,9 @@ impl Options {
         if result.runtime_backend.is_some() && !result.check_runtime {
             return Err("--runtime-backend requires --check-runtime.".into());
         }
+        if result.log_level.is_some() && result.log_file.is_none() {
+            return Err("--log-level requires --log-file.".into());
+        }
         if result.smoke_delay_ms.is_some() && !result.smoke_test {
             return Err("--smoke-delay-ms requires --smoke-test.".into());
         }
@@ -133,10 +167,10 @@ impl Options {
                     || result.smoke_test))
         {
             return Err(
-                "Diagnostic commands run alone and never change files or open a folder.".into(),
+                "Diagnostic commands cannot open a photo folder or run maintenance.".into(),
             );
         }
         Ok(result)
     }
 }
-pub const HELP: &str = "PhotoSort Rust\n\nUsage: photosort [--folder PATH | --last-folder]\n       photosort [PATH]\n\n  --folder PATH   Open a photo folder\n  --last-folder   Open the most recent folder that still exists\n  --clear-cache   Clear regenerable previews and analysis evidence before startup\n  --clear-models  Remove managed model copies before startup; keep bundled models\n  --diagnostics   Print JSON file/readiness diagnostics and exit without a window\n  --check-runtime Run native inference checks, print JSON and exit without a window\n  --runtime-backend NAME  cpu (default), auto, coreml, cuda or directml; requires --check-runtime\n  --smoke-test    Request normal guarded quit after the first UI frame and delay\n  --smoke-delay-ms N  Delay of 200–60000 ms (default 2000; requires --smoke-test)\n  --help, -h      Show this help\n  --version, -V   Show the version\n\nAnalysis stays local. File changes require a reviewed plan.";
+pub const HELP: &str = "PhotoSort Rust\n\nUsage: photosort [--folder PATH | --last-folder]\n       photosort [PATH]\n\n  --folder PATH   Open a photo folder\n  --last-folder   Open the most recent folder that still exists\n  --clear-cache   Clear regenerable previews and analysis evidence before startup\n  --clear-models  Remove managed model copies before startup; keep bundled models\n  --diagnostics   Print JSON file/readiness diagnostics and exit without a window\n  --check-runtime Run native inference checks, print JSON and exit without a window\n  --runtime-backend NAME  cpu (default), auto, coreml, cuda or directml; requires --check-runtime\n  --smoke-test    Request normal guarded quit after the first UI frame and delay\n  --smoke-delay-ms N  Delay of 200–60000 ms (default 2000; requires --smoke-test)\n  --log-file PATH  Write optional session diagnostics to a NEW file (16 MiB cap)\n  --log-level LEVEL  error, warn, info (default), debug or trace; requires --log-file\n  --help, -h      Show this help\n  --version, -V   Show the version\n\nAnalysis stays local. File changes require a reviewed plan.";

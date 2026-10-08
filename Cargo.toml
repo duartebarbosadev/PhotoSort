@@ -40,6 +40,9 @@ half = { version = "2.7", default-features = false, features = ["std"] }
 rustfft = "6.4.1"
 nalgebra = { version = "0.35", default-features = false, features = ["std"] }
 filedescriptor = "0.8.3"
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "registry"] }
+tracing-appender = { version = "0.2.5", default-features = false }
 
 # Keep local development/test output modest across native/minimal feature builds.
 # Tests inherit this profile; retain filename/line backtraces without full type data.

@@ -20,6 +20,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "jobs/diagnostics.rs"]
+mod diagnostics;
+
 /// All analysis profiles, including rotation, share the same evidence owner.
 fn prepare_evidence_store(
     store: &mut Option<Arc<super::subjects::store::Store>>,
@@ -228,7 +231,7 @@ pub enum IoWork {
         session: Session,
     },
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnalysisProfile {
     Technical,
     Duplicates,
@@ -337,6 +340,9 @@ impl Publisher {
         self.send_checked(epoch, event, || false);
     }
     fn send_checked(&self, epoch: u64, event: Event, cancelled: impl Fn() -> bool) {
+        // Record the worker outcome once, independently of publication retries.
+        // This describes completed work, not acceptance by the current UI.
+        event.record_diagnostic(epoch);
         let mut envelope = Envelope { epoch, event };
         loop {
             if self.cancelled(epoch) || cancelled() {
@@ -477,6 +483,7 @@ impl Runtime {
         Self::with_cache(wake, super::session::cache_dir())
     }
     pub fn with_cache(wake: impl Fn() + Send + Sync + 'static, cache: PathBuf) -> Self {
+        tracing::debug!("shared runtime starting");
         let (tx, events) = mpsc::sync_channel(8);
         let (io, io_rx) = mpsc::sync_channel::<Message<IoWork>>(8);
         let (images, image_rx) = mpsc::sync_channel::<Message<ImageWork>>(48);
@@ -569,6 +576,7 @@ impl Runtime {
                                 }
                             }
                             IoWork::Scan(root) => {
+                                tracing::info!(epoch, root = %root.display(), "folder discovery started");
                                 let root = std::fs::canonicalize(root)?;
                                 let restored = operations::recovery::Store::standard()
                                     .restore(&root, &|| io_pub.cancelled(epoch))?;
@@ -2096,6 +2104,7 @@ impl Runtime {
         self.cancel_analysis();
         self.cancel_metadata();
         let epoch = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        tracing::debug!(epoch, "folder generation changed");
         self.inspection.lock().unwrap().update(epoch, Vec::new());
         epoch
     }
@@ -2108,6 +2117,12 @@ impl Runtime {
     }
     pub fn orient(&self, media: Arc<Vec<Media>>, model: PathBuf) -> Result<u64, String> {
         self.analysis.submit(|run| {
+            tracing::info!(
+                epoch = self.epoch(),
+                run,
+                photos = media.len(),
+                "orientation requested"
+            );
             self.image(ImageWork::Orient {
                 run,
                 media,
@@ -2117,6 +2132,7 @@ impl Runtime {
         })
     }
     pub fn shutdown(&mut self) {
+        tracing::debug!("shared runtime shutdown requested");
         self.desktop.shutdown();
         self.updates.shutdown();
         self.playback.shutdown();
@@ -2127,8 +2143,14 @@ impl Runtime {
         for thread in self.threads.drain(..) {
             let _ = thread.join();
         }
+        tracing::debug!("shared runtime shutdown finished");
     }
     pub fn cancel_analysis(&self) {
+        tracing::debug!(
+            epoch = self.epoch(),
+            run = self.analysis.current(),
+            "analysis cancellation requested"
+        );
         self.analysis.cancel();
     }
     pub fn analyze(&self, media: Arc<Vec<Media>>, profile: AnalysisProfile) -> Result<u64, String> {
@@ -2176,6 +2198,13 @@ impl Runtime {
     ) -> Result<u64, String> {
         thresholds.normalize();
         self.analysis.submit(|run| {
+            tracing::info!(
+                epoch = self.epoch(),
+                run,
+                ?profile,
+                photos = media.len(),
+                "analysis requested"
+            );
             self.image(ImageWork::Analyze {
                 run,
                 media,

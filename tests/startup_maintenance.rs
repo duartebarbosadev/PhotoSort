@@ -6,6 +6,94 @@ use std::{cell::Cell, collections::HashSet, ffi::OsString};
 fn options(args: &[&str]) -> Result<Options, String> {
     Options::parse(args.iter().map(OsString::from))
 }
+#[test]
+fn session_logging_is_explicit_validated_and_composes_with_diagnostics() {
+    let parsed = options(&[
+        "--log-file",
+        "/tmp/session.log",
+        "--log-level",
+        "debug",
+        "--diagnostics",
+    ])
+    .unwrap();
+    assert!(parsed.diagnostics);
+    assert_eq!(parsed.log_file, Some("/tmp/session.log".into()));
+    assert_eq!(parsed.log_level, Some(tracing::Level::DEBUG));
+    assert!(options(&["--log-file", "session.log", "--check-runtime"]).is_ok());
+    assert!(options(&["--log-file", "session.log", "--folder", "/photos"]).is_ok());
+    for args in [
+        vec!["--log-file"],
+        vec!["--log-file", ""],
+        vec!["--log-file", "--diagnostics"],
+        vec!["--log-file", "a", "--log-file", "b"],
+        vec!["--log-level", "debug"],
+        vec!["--log-file", "a", "--log-level"],
+        vec!["--log-file", "a", "--log-level", "verbose"],
+        vec![
+            "--log-file",
+            "a",
+            "--log-level",
+            "info",
+            "--log-level",
+            "debug",
+        ],
+    ] {
+        assert!(options(&args).is_err(), "{args:?}");
+    }
+    assert!(options(&[]).unwrap().log_file.is_none());
+    assert_eq!(
+        options(&["--", "--log-file"]).unwrap().folder,
+        Some("--log-file".into())
+    );
+}
+#[test]
+fn binary_logging_preserves_json_stdout_and_never_replaces_files() {
+    use std::process::Command;
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("session.log");
+    let binary = env!("CARGO_BIN_EXE_photosort");
+    let help = Command::new(binary)
+        .args(["--log-file"])
+        .arg(&path)
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    assert!(!path.exists());
+    let diagnostic = Command::new(binary)
+        .arg("--diagnostics")
+        .arg("--log-file")
+        .arg(&path)
+        .output()
+        .unwrap();
+    // Readiness may be false in a source checkout; stdout must still be pure JSON.
+    let report: serde_json::Value = serde_json::from_slice(&diagnostic.stdout).unwrap();
+    assert!(report.is_object());
+    let log = std::fs::read_to_string(&path).unwrap();
+    assert!(log.contains("application started"));
+    assert!(log.contains("application stopped") || log.contains("application failed"));
+    let repeated = Command::new(binary)
+        .arg("--diagnostics")
+        .arg("--log-file")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(!repeated.status.success());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), log);
+    #[cfg(unix)]
+    {
+        let link = temp.path().join("linked.log");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        let result = Command::new(binary)
+            .arg("--diagnostics")
+            .arg("--log-file")
+            .arg(link)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), log);
+    }
+}
 fn fixture() -> tempfile::TempDir {
     let temp = tempfile::tempdir().unwrap();
     std::fs::create_dir(temp.path().join("models")).unwrap();

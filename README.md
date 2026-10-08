@@ -69,6 +69,20 @@ or the configured orientation override is missing/empty.
 It does not load the runtime, run inference or initialize graphics. Diagnostics
 cannot be combined with folder-opening or clearing options.
 
+For an optional session log, add `--log-file /existing/folder/photosort-session.log`
+and, when needed, `--log-level debug` (default: `info`). The destination must be a
+new file; existing files and symlinks are rejected. Help/version create no log.
+The shared worker/model events include discovery, analysis, setup/fallback,
+file-plan outcomes, cancellation requests and errors. Logs may contain local
+paths and error details; photo pixels and embeddings are not recorded.
+
+Logging uses a bounded background queue and stops at 16 MiB with an explicit
+marker. Individual events are capped at 8 KiB; a saturated 256-event queue drops
+logs instead of blocking the UI. Drop counts and write failures are reported to
+stderr at shutdown. These are best-effort troubleshooting logs, separate from
+durable file-operation recovery journals. Normal startup creates no log. Logging
+also works with the JSON diagnostic commands and leaves stdout as JSON.
+
 `--check-runtime` goes further: it verifies the files, loads the native inference
 engine and runs two CPU passes on an embedded licensed fixture through the shared
 scene, aesthetic, face geometry, recognition and orientation services. Its JSON
