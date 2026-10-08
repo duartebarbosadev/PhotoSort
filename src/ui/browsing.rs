@@ -376,7 +376,6 @@ impl PhotoSortApp {
     }
     pub(super) fn metadata_status(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            if self.browse_run.is_some() { ui.spinner(); ui.label("Updating library view…"); }
             if let Some((done, total)) = self.metadata_progress && self.metadata_run.is_some() {
                 ui.spinner();
                 ui.label(format!("Reading photo metadata · {done} / {total}"));
@@ -389,6 +388,9 @@ impl PhotoSortApp {
                 ui.colored_label(RED, format!("{} files have unavailable metadata", self.metadata_failures.len()))
                     .on_hover_text("Restore access and retry metadata reading. Folder proposals wait for complete metadata; photos remain browsable.");
             }
+            // Browsing can finish between pointer down and up. Keep its changing
+            // indicator after metadata actions so Cancel does not move or change ID.
+            if self.browse_run.is_some() { ui.spinner(); ui.label("Updating library view…"); }
         });
     }
 }
@@ -396,6 +398,72 @@ impl PhotoSortApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn metadata_cancel_survives_browse_completion_between_pointer_down_and_up() {
+        for width in [640.0, 1440.0] {
+            let (_temp, mut app) = fixture();
+            app.metadata_run = Some(73);
+            app.metadata_progress = Some((1, 65));
+            app.browse_run = Some(99);
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            let frame = |app: &mut PhotoSortApp, events| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 300.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| app.metadata_status(ui));
+                    },
+                )
+            };
+            frame(&mut app, vec![]);
+            let output = frame(&mut app, vec![]);
+            let rect = output
+                .platform_output
+                .accesskit_update
+                .unwrap()
+                .nodes
+                .into_iter()
+                .find(|(_, n)| n.label() == Some("Cancel metadata reading"))
+                .unwrap()
+                .1
+                .bounds()
+                .unwrap();
+            let pos = egui::pos2(
+                ((rect.x0 + rect.x1) / 2.0) as f32,
+                ((rect.y0 + rect.y1) / 2.0) as f32,
+            );
+            for pressed in [true, false] {
+                if !pressed {
+                    app.browse_run = None;
+                }
+                frame(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+            }
+            assert!(
+                app.metadata_run.is_none(),
+                "Cancel moved or changed identity when browsing completed at {width} points"
+            );
+            assert_eq!(app.stats.decodes, 0);
+            app.runtime.shutdown();
+        }
+    }
     fn settle(app: &mut PhotoSortApp) {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
