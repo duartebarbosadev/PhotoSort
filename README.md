@@ -166,10 +166,10 @@ format supports it, or use sidecars only. Existing XMP sidecars remain authorita
 unsupported formats use a sidecar. The review plan names the destination. Embedded
 edits modify and verify an independent temporary copy before replacing the photo;
 pixels are not re-encoded. RAW/JPEG pairs sharing a sidecar must agree on its edits.
-When a rotation can only live in a sidecar because the file cannot store orientation
-itself (BMP, or PNG/TIFF in minimal builds), the review plan offers to rotate the
-pixels instead. This is lossless, keeps the colour profile and only happens after
-an explicit confirmation; other data stored inside such files is not carried over.
+A third choice, "Embed, or rotate pixels", rotates the pixels of files that cannot
+store orientation themselves (BMP, or PNG/TIFF in minimal builds) instead of using a
+sidecar. It is off by default, lossless, keeps the colour profile and is listed in
+the review plan; other data stored inside such files is not carried over.
 
 Settings also offers CPU, Automatic, Apple Core ML, NVIDIA CUDA and Windows
 DirectML inference. CPU remains the default. Provider/model failures fall back to

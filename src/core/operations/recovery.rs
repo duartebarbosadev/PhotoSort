@@ -366,8 +366,6 @@ impl Store {
                 description: header.plan.description.clone(),
                 output_root: header.plan.output_root.clone(),
                 completed_dependencies: header.plan.completed_dependencies.clone(),
-                // A retry runs only what was accepted; it never reopens the offer.
-                pixel_rotation_offer: Vec::new(),
             },
             ..Default::default()
         };

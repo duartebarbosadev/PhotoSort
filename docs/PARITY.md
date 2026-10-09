@@ -19,7 +19,7 @@ goal, different mechanism; **Open** = not done.
 | Organize: editable folders and names, preview, review before apply | Done | Create/rename/nest/drag; RAW/JPEG/XMP companions move together. |
 | Organize: compare several selected photos | Done | Up to 9 (Python: 12). |
 | Easy Delete: blur, dark, bright, exact and near duplicates | Done | Thresholds in Settings; suggestions stay reversible until review. |
-| Fix Rotation: detect, compare, manual turns, apply | Done | Orientation goes into embedded metadata or an XMP sidecar. When a file cannot store orientation itself (BMP in the full build; PNG/TIFF/BMP in the minimal build), plan review offers a confirmed, verified lossless pixel rotation instead. |
+| Fix Rotation: detect, compare, manual turns, apply | Done | Orientation goes into embedded metadata or an XMP sidecar. An opt-in setting ("Embed, or rotate pixels") rotates the pixels instead when a file cannot store orientation itself (BMP in the full build; PNG/TIFF/BMP in the minimal build). |
 | Pick Best: clusters, sharpness, aesthetic score, eyes, keep-all | Done | Progressive comparisons, previous-round revision. |
 | Cull: grid/list/icons, search, rating/folder/date/group filters, ordering | Done | Virtualized; filters intersect. |
 | Cull: side-by-side comparison, synchronized zoom/pan | Done | Fit, 1:1, numbered focus. |

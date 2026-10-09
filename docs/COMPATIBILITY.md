@@ -138,9 +138,9 @@ cancellation.
 Ratings and rotations support Embed where supported or Sidecars only. Native
 embedded writes use an independent temporary copy, verify EXIF/XMP values and
 source identity, then atomically replace without re-encoding pixels. Unsupported
-formats fall back to sidecars; for rotation-only edits of BMP (and PNG/TIFF in
-minimal builds) plan review can instead rotate the pixels losslessly after an
-explicit confirmation, verified by decoding the result before it replaces the file. Embedded HEIF/container transforms, broader camera
+formats fall back to sidecars. The opt-in "Embed, or rotate pixels" setting instead
+rotates the pixels of rotation-only BMP edits (and PNG/TIFF in minimal builds)
+losslessly, verified by decoding the result before it replaces the file. Embedded HEIF/container transforms, broader camera
 interoperability and broader platform/volume attributes need more coverage. A
 macOS probe of the existing staging copy and production metadata bridge preserves
 Finder-tag/custom extended attributes, ACLs, ownership, file flags, permissions and

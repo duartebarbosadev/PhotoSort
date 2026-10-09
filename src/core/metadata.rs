@@ -369,6 +369,14 @@ pub enum WritePolicy {
     #[default]
     EmbedWhenSupported,
     SidecarOnly,
+    /// Embed where supported; a rotation-only edit of a file that cannot store
+    /// orientation rotates its pixels losslessly instead of using a sidecar.
+    EmbedOrRotatePixels,
+}
+impl WritePolicy {
+    pub fn embeds(self) -> bool {
+        self != Self::SidecarOnly
+    }
 }
 /// Old serialized plans remain sidecar-only; preferences never rewrite a retry plan.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -377,14 +385,11 @@ pub enum WriteTarget {
     Sidecar,
     Embedded,
     /// Lossless pixel rotation for files that cannot store orientation; only
-    /// chosen by explicit confirmation in plan review, never by `write_target`.
+    /// chosen by the `EmbedOrRotatePixels` policy, never by `write_target`.
     Pixels,
 }
 pub fn write_target(path: &Path, metadata: &Metadata, policy: WritePolicy) -> WriteTarget {
-    if policy == WritePolicy::EmbedWhenSupported
-        && metadata.embedded_metadata_writable
-        && !sidecar(path).exists()
-    {
+    if policy.embeds() && metadata.embedded_metadata_writable && !sidecar(path).exists() {
         WriteTarget::Embedded
     } else {
         WriteTarget::Sidecar
