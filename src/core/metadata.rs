@@ -1,17 +1,17 @@
 use super::model::Metadata;
 use anyhow::{Context, Result};
-use image::ImageDecoder;
 use quick_xml::{
     Writer,
     events::{BytesStart, Event},
     name::ResolveResult,
 };
 use std::{
-    fs::{self, File},
-    io::{BufReader, Write},
+    fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
+mod fallback;
 mod movie;
 #[cfg(feature = "metadata-native")]
 mod native;
@@ -19,6 +19,29 @@ mod native;
 const XMP: &[u8] = b"http://ns.adobe.com/xap/1.0/";
 const TIFF: &[u8] = b"http://ns.adobe.com/tiff/1.0/";
 const RDF: &[u8] = b"http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+
+/// Candidate capture dates by precedence: EXIF original, XMP create, EXIF modify,
+/// Photoshop created. The first one present wins.
+#[derive(Default)]
+struct Dates {
+    day: [Option<String>; 4],
+    time: [Option<i64>; 4],
+}
+impl Dates {
+    fn assign(&mut self, slot: usize, raw: Option<&str>) {
+        self.day[slot] = raw.and_then(super::dates::parse);
+        self.time[slot] = raw.and_then(super::dates::timestamp);
+    }
+    /// A sidecar value replaces an embedded one only when it parses.
+    fn overlay(&mut self, slot: usize, raw: Option<&str>) {
+        if let Some(day) = raw.and_then(super::dates::parse) {
+            self.day[slot] = Some(day);
+        }
+        if let Some(time) = raw.and_then(super::dates::timestamp) {
+            self.time[slot] = Some(time);
+        }
+    }
+}
 
 pub fn sidecar(path: &Path) -> PathBuf {
     let upper = path.with_extension("XMP");
@@ -35,8 +58,7 @@ pub fn read(path: &Path) -> Metadata {
 
 pub fn read_cancellable(path: &Path, cancelled: &impl Fn() -> bool) -> Result<Metadata> {
     anyhow::ensure!(!cancelled(), "Metadata read cancelled");
-    let mut date_tags: [Option<String>; 4] = Default::default();
-    let mut time_tags: [Option<i64>; 4] = Default::default();
+    let mut dates = Dates::default();
     let mut result = Metadata {
         created_ms: fs::metadata(path)
             .ok()
@@ -48,7 +70,7 @@ pub fn read_cancellable(path: &Path, cancelled: &impl Fn() -> bool) -> Result<Me
     };
     #[cfg(feature = "metadata-native")]
     let native_loaded = if let Some(snapshot) = native::read(path) {
-        snapshot.apply(&mut result, &mut date_tags, &mut time_tags);
+        snapshot.apply(&mut result, &mut dates);
         true
     } else {
         false
@@ -56,103 +78,7 @@ pub fn read_cancellable(path: &Path, cancelled: &impl Fn() -> bool) -> Result<Me
     #[cfg(not(feature = "metadata-native"))]
     let native_loaded = false;
     if !native_loaded {
-        if let Ok(file) = File::open(path)
-            && let Ok(exif) = exif::Reader::new().read_from_container(&mut BufReader::new(file))
-        {
-            let text = |tag| {
-                exif.get_field(tag, exif::In::PRIMARY)
-                    .map(|f| {
-                        f.display_value()
-                            .with_unit(&exif)
-                            .to_string()
-                            .trim_matches('"')
-                            .to_owned()
-                    })
-                    .unwrap_or_default()
-            };
-            let uint = |tag| {
-                exif.get_field(tag, exif::In::PRIMARY)
-                    .and_then(|f| f.value.get_uint(0))
-                    .unwrap_or(0)
-            };
-            result.metadata_fields = exif
-                .fields()
-                .filter(|f| !f.value.display_as(f.tag).to_string().is_empty())
-                .count();
-            result.camera = text(exif::Tag::Model);
-            result.lens = text(exif::Tag::LensModel);
-            result.captured = text(exif::Tag::DateTimeOriginal);
-            time_tags[0] = super::dates::timestamp(&result.captured);
-            time_tags[2] = super::dates::timestamp(&text(exif::Tag::DateTime));
-            date_tags[0] = super::dates::parse(&result.captured);
-            date_tags[2] = super::dates::parse(&text(exif::Tag::DateTime));
-            result.exposure = text(exif::Tag::ExposureTime);
-            result.aperture = text(exif::Tag::FNumber);
-            result.iso = text(exif::Tag::PhotographicSensitivity);
-            result.orientation = uint(exif::Tag::Orientation).clamp(1, 8) as u8;
-            let rational = |tag| {
-                exif.get_field(tag, exif::In::PRIMARY)
-                    .and_then(|f| match &f.value {
-                        exif::Value::Rational(v) => v.first().map(exif::Rational::to_f64),
-                        exif::Value::SRational(v) => v.first().map(exif::SRational::to_f64),
-                        _ => None,
-                    })
-            };
-            let code = |tag| {
-                exif.get_field(tag, exif::In::PRIMARY)
-                    .and_then(|f| f.value.get_uint(0))
-                    .and_then(|v| u16::try_from(v).ok())
-            };
-            let owned = |tag| Some(text(tag).trim().to_owned()).filter(|v| !v.is_empty());
-            result.details = super::model::Details {
-                make: owned(exif::Tag::Make),
-                software: owned(exif::Tag::Software),
-                focal_length_mm: rational(exif::Tag::FocalLength).map(|v| v as f32),
-                exposure_bias_ev: rational(exif::Tag::ExposureBiasValue).map(|v| v as f32),
-                flash: code(exif::Tag::Flash),
-                white_balance: code(exif::Tag::WhiteBalance),
-                metering: code(exif::Tag::MeteringMode),
-                exposure_mode: code(exif::Tag::ExposureMode),
-                scene: code(exif::Tag::SceneCaptureType),
-                color_space: code(exif::Tag::ColorSpace),
-                bit_depth: code(exif::Tag::BitsPerSample),
-            };
-            result.width = uint(exif::Tag::PixelXDimension);
-            result.height = uint(exif::Tag::PixelYDimension);
-            let coordinate = |tag, ref_tag, negative: &str| -> Option<f64> {
-                let f = exif.get_field(tag, exif::In::PRIMARY)?;
-                let exif::Value::Rational(v) = &f.value else {
-                    return None;
-                };
-                if v.len() < 3 {
-                    return None;
-                }
-                let sign = if text(ref_tag).contains(negative) {
-                    -1.0
-                } else {
-                    1.0
-                };
-                Some(sign * (v[0].to_f64() + v[1].to_f64() / 60.0 + v[2].to_f64() / 3600.0))
-            };
-            result.gps = coordinate(exif::Tag::GPSLatitude, exif::Tag::GPSLatitudeRef, "S").zip(
-                coordinate(exif::Tag::GPSLongitude, exif::Tag::GPSLongitudeRef, "W"),
-            );
-        }
-        if let Ok(reader) = image::ImageReader::open(path).and_then(|r| r.with_guessed_format())
-            && let Ok(mut decoder) = reader.into_decoder()
-            && let Ok(Some(bytes)) = decoder.xmp_metadata()
-            && let Ok(xml) = std::str::from_utf8(&bytes)
-        {
-            if let Ok((Some(rating), _)) = read_xmp(xml) {
-                result.rating = rating;
-            }
-            if let Ok([created, photoshop]) = read_xmp_date_values(xml) {
-                date_tags[1] = created.as_deref().and_then(super::dates::parse);
-                date_tags[3] = photoshop.as_deref().and_then(super::dates::parse);
-                time_tags[1] = created.as_deref().and_then(super::dates::timestamp);
-                time_tags[3] = photoshop.as_deref().and_then(super::dates::timestamp);
-            }
-        }
+        fallback::read(path, &mut result, &mut dates);
     }
     #[cfg(all(feature = "heif", target_os = "macos"))]
     if path
@@ -181,27 +107,13 @@ pub fn read_cancellable(path: &Path, cancelled: &impl Fn() -> bool) -> Result<Me
             }
         }
         if let Ok([created, photoshop]) = read_xmp_date_values(&xml) {
-            date_tags[1] = created
-                .as_deref()
-                .and_then(super::dates::parse)
-                .or(date_tags[1].take());
-            date_tags[3] = photoshop
-                .as_deref()
-                .and_then(super::dates::parse)
-                .or(date_tags[3].take());
-            time_tags[1] = created
-                .as_deref()
-                .and_then(super::dates::timestamp)
-                .or(time_tags[1]);
-            time_tags[3] = photoshop
-                .as_deref()
-                .and_then(super::dates::timestamp)
-                .or(time_tags[3]);
+            dates.overlay(1, created.as_deref());
+            dates.overlay(3, photoshop.as_deref());
         }
     }
     anyhow::ensure!(!cancelled(), "Metadata read cancelled");
-    result.grouping_date = date_tags.into_iter().flatten().next();
-    result.captured_ms = time_tags.into_iter().flatten().next();
+    result.grouping_date = dates.day.into_iter().flatten().next();
+    result.captured_ms = dates.time.into_iter().flatten().next();
     // One bounded header read supplies video geometry and fallback capture time,
     // without starting a frame decoder. Explicit EXIF/XMP dates retain precedence.
     if let Some(movie) = movie::read_path(path, cancelled) {
@@ -520,7 +432,7 @@ pub fn write_embedded(
         native::write_copy(staged.path(), rating, orientation)?;
         // Exiv2 may replace its input while rewriting the container. Reopen the
         // path so we sync the verified result rather than an obsolete file handle.
-        File::open(staged.path())?.sync_all()?;
+        fs::File::open(staged.path())?.sync_all()?;
         verify()?;
         staged.persist(path).map_err(|e| e.error)?;
         Ok(())

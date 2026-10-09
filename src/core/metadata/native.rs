@@ -87,12 +87,7 @@ impl Snapshot {
             .get(key)
             .map_or_else(String::new, |v| v.1.clone())
     }
-    pub(super) fn apply(
-        self,
-        result: &mut super::Metadata,
-        dates: &mut [Option<String>; 4],
-        times: &mut [Option<i64>; 4],
-    ) {
+    pub(super) fn apply(self, result: &mut super::Metadata, dates: &mut super::Dates) {
         result.metadata_fields = self.summary.fields;
         result.embedded_metadata_writable = self.summary.writable != 0;
         result.width = self
@@ -136,7 +131,7 @@ impl Snapshot {
             // Per-channel depths are normally identical; the first one is shown.
             bit_depth: code("Exif.Image.BitsPerSample"),
         };
-        for (i, key) in [
+        for (slot, key) in [
             "Exif.Photo.DateTimeOriginal",
             "Xmp.xmp.CreateDate",
             "Exif.Image.DateTime",
@@ -145,8 +140,7 @@ impl Snapshot {
         .into_iter()
         .enumerate()
         {
-            dates[i] = crate::core::dates::parse(self.raw(key));
-            times[i] = crate::core::dates::timestamp(self.raw(key));
+            dates.assign(slot, Some(self.raw(key)));
         }
         let coordinate = |key, reference, negative| -> Option<f64> {
             let values: Vec<_> = self
