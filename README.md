@@ -30,9 +30,10 @@ open ".tools/native-vips/PhotoSort Rust.app"
 
 The older `.tools/native/PhotoSort Rust.app` is a previous build. The current
 bundle's source/executable hashes, full test results and native interaction checks
-are recorded in [the latest validation report](docs/diagnostics/settings-access-2026-10-08/README.md).
-These checks cover this macOS development build; they do not establish Windows,
-CUDA or DirectML runtime readiness.
+are recorded in [the current validation report](docs/diagnostics/cache-folder-2026-10-09/README.md).
+The [completion audit](docs/history/COMPLETION_AUDIT.md) separates covered workflows,
+intentional redesigns and remaining work. These checks cover this macOS development
+build; they do not establish Windows, CUDA or DirectML runtime readiness.
 
 To rebuild the current variant using the existing verified SIMD prefix, keep
 compiler output temporary and clean it after packaging:
@@ -68,6 +69,20 @@ failure when enabled AI model verification fails, its runtime file is missing,
 or the configured orientation override is missing/empty.
 It does not load the runtime, run inference or initialize graphics. Diagnostics
 cannot be combined with folder-opening or clearing options.
+
+For an optional session log, add `--log-file /existing/folder/photosort-session.log`
+and, when needed, `--log-level debug` (default: `info`). The destination must be a
+new file; existing files and symlinks are rejected. Help/version create no log.
+The shared worker/model events include discovery, analysis, setup/fallback,
+file-plan outcomes, cancellation requests and errors. Logs may contain local
+paths and error details; photo pixels and embeddings are not recorded.
+
+Logging uses a bounded background queue and stops at 16 MiB with an explicit
+marker. Individual events are capped at 8 KiB; a saturated 256-event queue drops
+logs instead of blocking the UI. Drop counts and write failures are reported to
+stderr at shutdown. These are best-effort troubleshooting logs, separate from
+durable file-operation recovery journals. Normal startup creates no log. Logging
+also works with the JSON diagnostic commands and leaves stdout as JSON.
 
 `--check-runtime` goes further: it verifies the files, loads the native inference
 engine and runs two CPU passes on an embedded licensed fixture through the shared
@@ -130,7 +145,9 @@ Ctrl/Cmd+F focuses its search field (outside Pick Best), and F12 opens About.
 Ctrl/Cmd+S runs the active workflow's analysis, or orientation detection in Fix
 Rotation. It uses the same controls and review guards as the buttons; additional
 presses leave an active analysis running. Use Cancel analysis to stop it.
-In Cull, Alt+1/2/3 selects list/icons/grid; F and S toggle the folder and
+In Organize, Alt+1–5 selects Current folders, Date + similarity, Visual similarity,
+Faces and Location through the same Group by control. Changing mode does not start
+AI or apply files. In Cull, Alt+1/2/3 selects list/icons/grid; F and S toggle the folder and
 similarity-group navigator. Text fields keep ordinary typing and selection keys;
 modal dialogs and active file work keep keyboard ownership. The keyboard guide
 scrolls in small windows. Cull navigation settings can jump
@@ -147,6 +164,10 @@ format supports it, or use sidecars only. Existing XMP sidecars remain authorita
 unsupported formats use a sidecar. The review plan names the destination. Embedded
 edits modify and verify an independent temporary copy before replacing the photo;
 pixels are not re-encoded. RAW/JPEG pairs sharing a sidecar must agree on its edits.
+When a rotation can only live in a sidecar because the file cannot store orientation
+itself (BMP, or PNG/TIFF in minimal builds), the review plan offers to rotate the
+pixels instead. This is lossless, keeps the colour profile and only happens after
+an explicit confirmation; other data stored inside such files is not carried over.
 
 Settings also offers CPU, Automatic, Apple Core ML, NVIDIA CUDA and Windows
 DirectML inference. CPU remains the default. Provider/model failures fall back to
@@ -371,8 +392,8 @@ identify their policy explicitly. The policy checks consistency rather than
 calibrating confidence, and an incorrect initial upright prediction can still
 be missed by the fast path.
 
-Feature parity work is active; see the [parity checklist](docs/PARITY.md).
-See [validation](docs/VALIDATION.md) for executed checks and remaining boundaries.
+Feature parity work is active; see the [parity table](docs/PARITY.md).
+See [validation log](docs/history/VALIDATION-LOG.md) for executed checks and remaining boundaries.
 
 Real reference fixtures can be checked explicitly without modifying them:
 

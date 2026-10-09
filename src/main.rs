@@ -1,4 +1,5 @@
 mod diagnostic_output;
+mod session_logging;
 
 fn main() -> eframe::Result {
     // The bundled ONNX Runtime uploader can race its own C++ static teardown.
@@ -25,6 +26,18 @@ fn main() -> eframe::Result {
         println!("PhotoSort Rust {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    let _logging = session_logging::start(options.log_file.as_deref(), options.log_level)
+        .map_err(|e| eframe::Error::AppCreation(e.into()))?;
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "application started");
+    let result = run(options);
+    match &result {
+        Ok(()) => tracing::info!("application stopped"),
+        Err(error) => tracing::error!(%error, "application failed"),
+    }
+    result
+}
+
+fn run(options: photosort::core::startup::Options) -> eframe::Result {
     if options.check_runtime {
         use std::io::Write;
         let mut output =

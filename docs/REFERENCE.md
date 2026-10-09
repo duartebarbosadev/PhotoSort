@@ -34,7 +34,7 @@ metadata access. The canonical RAW rendering path is `RawImageProcessor.render_d
 render as previews. There are generation locks and separate high-memory decode
 limits. Preview appearance must not change when resolution improves.
 
-Analysis is local. DINOv2 small/base uses pinned Hugging Face weights; aesthetic
+Analysis is local. DINOv2 small uses pinned Hugging Face weights; aesthetic
 scoring uses cafeai/cafe_aesthetic; orientation uses a four-class ONNX model
 (0, 90, 180, -90), RGB resize to 416, center crop to 384, ImageNet normalization.
 No cloud photo APIs. Heavy model initialization is lazy and shared.
@@ -143,6 +143,12 @@ draft, adding direct keyboard/menu entry points and in-dialog section links.
 F9 opens usage and controls; it does not clear caches. Ctrl/Cmd+, is an additional
 standard Settings shortcut. Existing modal, busy and held-key guards are reused.
 
+The reference cache dialog also offers Open Cache Folder. Rust now exposes the
+actual runtime-injected reusable-cache directory through Settings → Caches and
+the existing desktop worker. The UI neither constructs a cache nor creates a
+missing folder. Directory checks and the system file-manager handoff remain off
+the UI thread; see [cache-folder validation](diagnostics/cache-folder-2026-10-09/README.md).
+
 ## Analysis keyboard entry point — 8 October 2026
 
 The reference MenuManager binds Ctrl/Cmd+S to Analyze Similarity across workflows.
@@ -156,3 +162,41 @@ One application-level availability check serves both buttons and their action
 owners. Empty libraries, discovery, file work and an already active analysis
 prevent admission. Repeated presses cannot replace the running generation or
 queue a second image/model pass. The shortcut never applies file changes.
+
+## Replace-search interaction — 9 October 2026
+
+The reference's `MainWindow._focus_search_input` focuses the search field and
+selects its text. Rust previously requested focus only, leaving the caret at the
+end of an existing query. A real-toolbar regression reproduced new text being
+appended. The shared application shortcut now selects the current query through
+egui's character-indexed text state before focusing it. Unicode is counted as
+characters, existing edit history is retained, and filtering still flows through
+the same toolbar and review-departure guard. No new search worker is introduced.
+
+## Runtime claims checked against source — 9 October 2026
+
+The reference README still advertises a selectable DINOv2-base model. Its current
+`similarity_embedding_model.normalize_similarity_model_name` explicitly ignores
+legacy overrides and returns `model_provisioning.EMBEDDING_MODEL.repo_id`, pinned
+to `facebook/dinov2-small`. Base selection is not a working capability in this
+reference revision. Rust's small-only model catalog does not remove that feature.
+
+The reference README also advertises WebP, but `media_utils.py` omits it from
+`SUPPORTED_STANDARD_IMAGE_EXTENSIONS`. Rust recognizes WebP, BMP and GIF in
+addition to every extension in the reference scanner. This compares discovery
+policy; it does not prove that every camera variant or video codec decodes.
+
+Organize installs Alt+1–5 for Current, Mixed, Similarity, Face and Location; the
+handlers select enabled mode buttons and emit the existing mode-change signal.
+The audit at `b37d86b` confirmed that Rust exposed all those modes through its
+Group by control, but ignored the Organize Alt+number bindings. The subsequent
+Organize mode task routes those keys through `set_group_mode`, retaining draft
+and metadata ownership. The additional Date/Camera dropdown choices do not change
+the established shortcut mapping. See diagnostics/organize-modes-2026-10-09/README.md.
+
+Ctrl/Cmd+Shift+L in the reference hides the active workflow's content panel, not
+the five-step navigation. Rust uses a different layout: guided review queues are
+choosers, Details is independently collapsible, and Cull's navigator is optional.
+Do not map this shortcut to hiding workflow navigation without assessing that
+functional intent. The original intro video also describes the old interface;
+Rust has a new welcome screen and keyboard guide, not that playback action.

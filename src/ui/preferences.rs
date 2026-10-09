@@ -8,6 +8,30 @@ pub(super) enum Section {
 }
 
 impl PhotoSortApp {
+    fn cache_folder_request(&self) -> Option<crate::core::desktop::Request> {
+        self.runtime.cache.directory().and_then(|path| {
+            crate::core::desktop::Request::for_path(path, crate::core::desktop::Action::OpenFolder)
+                .ok()
+        })
+    }
+    fn cache_folder_button(&mut self, ui: &mut egui::Ui) {
+        let request = self.cache_folder_request();
+        let description = request.as_ref().map_or_else(
+            || "The cache location is unavailable.".into(),
+            |request| request.path.display().to_string(),
+        );
+        if ui
+            .add_enabled(
+                request.is_some() && self.desktop_available(),
+                egui::Button::new("Open cache folder"),
+            )
+            .on_hover_text(description)
+            .clicked()
+            && let Some(request) = request
+        {
+            self.dispatch_desktop(request);
+        }
+    }
     pub(super) fn open_settings(&mut self, section: Section) {
         if self.preferences_draft.is_none() {
             self.preferences_draft = Some(self.preferences.clone());
@@ -158,13 +182,20 @@ impl PhotoSortApp {
             let response = egui::Modal::new(egui::Id::new("preferences")).show(ctx, |ui| {
                 ui.set_width((ctx.content_rect().width() - 64.0).clamp(280.0, 480.0));
                 ui.heading("Settings");
+                let error_height = if let Some(error) = self.error.clone() {
+                    ui.vertical(|ui| {
+                        egui::ScrollArea::vertical().id_salt("settings_error")
+                            .max_height(80.0).show(ui, |ui| { ui.colored_label(RED, error); });
+                        if ui.button("Dismiss error").clicked() { self.error = None; }
+                    }).response.rect.height() + ui.spacing().item_spacing.y
+                } else { 0.0 };
                 ui.horizontal(|ui| {
                     if ui.button("General").clicked() { section = Some(Section::General); }
                     if ui.button("Caches").clicked() { section = Some(Section::Caches); }
                 });
                 egui::ScrollArea::vertical()
                     .id_salt("settings_content")
-                    .max_height((ctx.content_rect().height() - 200.0).max(160.0))
+                    .max_height((ctx.content_rect().height() - 200.0 - error_height).max(80.0))
                     .show(ui, |ui| {
                         let general = ui.label("Application updates");
                         if section == Some(Section::General) { general.scroll_to_me(Some(egui::Align::Min)); }
@@ -266,6 +297,7 @@ impl PhotoSortApp {
                     ui.separator();
                     let caches = ui.label("Shared caches");
                     if section == Some(Section::Caches) { caches.scroll_to_me(Some(egui::Align::Min)); }
+                    self.cache_folder_button(ui);
                     ui.add(egui::Slider::new(&mut draft.cache.previews_mib, 32..=1024).suffix(" MiB").text("Preview memory"));
                     ui.add(egui::Slider::new(&mut draft.cache.originals_mib, 64..=2048).suffix(" MiB").text("Original detail memory"));
                     ui.add(egui::Slider::new(&mut draft.cache.disk_mib, 0..=32768).suffix(" MiB").text("Disk cache"));
@@ -369,7 +401,7 @@ impl PhotoSortApp {
 pub(super) fn workflow_hint(step: Step) -> &'static str {
     match step {
         Step::Organize => {
-            "Arrows · Browse   Shift+arrows · Compare   I · Details   Shift+Enter · Review changes"
+            "Alt+1–5 · Grouping mode   Arrows · Browse   Shift+arrows · Compare   I · Details   Shift+Enter · Review changes"
         }
         Step::EasyDelete => {
             "1/Left, 2/Right · Keep/Trash   Up/Down · Browse   Enter · Confirm   R · Reset   Shift+R · Reset all   A · Accept defaults"
@@ -387,320 +419,5 @@ pub(super) fn workflow_hint(step: Step) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
-        let dir = tempfile::tempdir().unwrap();
-        let app =
-            PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None);
-        (dir, app)
-    }
-    #[test]
-    fn hiding_current_step_uses_departure_guard_and_keeps_it_reachable_until_resolved() {
-        let (_dir, mut app) = fixture();
-        app.step = Step::Rotation;
-        app.decisions.insert(
-            MediaId(1),
-            Decision {
-                rating: Some(4),
-                ..Default::default()
-            },
-        );
-        let mut p = Preferences::default();
-        p.hidden_steps.extend([Step::Rotation, Step::PickBest]);
-        app.apply_preferences(p);
-        assert_eq!(app.step, Step::Rotation);
-        assert!(matches!(app.departure, Some(Destination::Step(Step::Cull))));
-        assert!(app.navigation_steps().contains(&Step::Rotation));
-        assert!(app.decisions.contains_key(&MediaId(1)));
-        let destination = app.departure.take().unwrap();
-        app.discard_staged_choices();
-        app.continue_departure(destination);
-        assert_eq!(app.step, Step::Cull);
-        assert!(!app.navigation_steps().contains(&Step::Rotation));
-    }
-    #[test]
-    fn hidden_saved_workflow_falls_forward_without_losing_its_bookmark_or_running_models() {
-        let (_dir, mut app) = fixture();
-        app.preferences
-            .hidden_steps
-            .extend([Step::PickBest, Step::EasyDelete, Step::Rotation]);
-        let saved = crate::core::views::Saved {
-            step: Some(Step::PickBest),
-            bookmarks: [(Step::PickBest, Default::default())].into_iter().collect(),
-            ..Default::default()
-        };
-        app.load_bookmarks(saved);
-        assert_eq!(app.step, Step::Cull);
-        assert!(app.saved_views.bookmarks.contains_key(&Step::PickBest));
-        assert!(app.analysis_run.is_none() && app.requested.is_empty() && app.textures.is_empty());
-        assert!(app.workflow_shortcut(
-            egui::Key::Num4,
-            egui::Modifiers {
-                ctrl: true,
-                alt: true,
-                ..Default::default()
-            }
-        ));
-        assert_eq!(app.step, Step::Cull);
-        assert!(!app.workflow_shortcut(
-            egui::Key::Num4,
-            egui::Modifiers {
-                ctrl: true,
-                ..Default::default()
-            }
-        ));
-        assert!(app.workflow_shortcut(
-            egui::Key::Num1,
-            egui::Modifiers {
-                command: true,
-                alt: true,
-                ..Default::default()
-            }
-        ));
-        assert_eq!(app.step, Step::Organize);
-        // A new folder has no bookmark, but must not reopen a hidden step retained
-        // by a previously cancelled departure.
-        app.step = Step::Rotation;
-        app.load_bookmarks(Default::default());
-        assert_eq!(app.step, Step::Cull);
-    }
-    #[test]
-    fn changing_sensitivity_preserves_current_reviews_decisions_and_cached_results() {
-        let (_dir, mut app) = fixture();
-        app.step = Step::EasyDelete;
-        app.analysis.insert(
-            MediaId(1),
-            Analysis {
-                issues: vec!["Possibly soft".into()],
-                ..Default::default()
-            },
-        );
-        app.decisions.insert(
-            MediaId(1),
-            Decision {
-                rating: Some(4),
-                ..Default::default()
-            },
-        );
-        let mut next = app.preferences.clone();
-        next.easy_delete.blur = 10.0;
-        app.apply_preferences(next);
-        assert_eq!(app.preferences.easy_delete.blur, 10.0);
-        assert_eq!(app.analysis[&MediaId(1)].issues, vec!["Possibly soft"]);
-        assert_eq!(app.decisions[&MediaId(1)].rating, Some(4));
-        assert!(app.analysis_run.is_none() && app.requested.is_empty());
-    }
-    #[test]
-    fn saving_cpu_allocation_updates_shared_runtime_without_restarting_current_review() {
-        use crate::core::processing::{Mode, Preferences as Cpu};
-        let (_dir, mut app) = fixture();
-        app.analysis_run = Some(77);
-        app.step = Step::PickBest;
-        app.decisions.insert(
-            MediaId(1),
-            Decision {
-                rating: Some(4),
-                ..Default::default()
-            },
-        );
-        let mut next = app.preferences.clone();
-        next.processing = Cpu {
-            backend: crate::core::processing::Backend::CoreMl,
-            mode: Mode::Custom,
-            custom_threads: 1,
-        };
-        app.apply_preferences(next);
-        assert_eq!(app.runtime.processing.snapshot(), 1);
-        assert_eq!(
-            app.runtime.processing.snapshot_run().backend,
-            crate::core::processing::Backend::CoreMl
-        );
-        assert_eq!(app.analysis_run, Some(77));
-        assert_eq!(app.step, Step::PickBest);
-        assert_eq!(app.decisions[&MediaId(1)].rating, Some(4));
-        assert!(app.departure.is_none());
-    }
-    #[test]
-    fn settings_preserve_live_history_and_render_compactly_without_image_or_analysis_work() {
-        let (dir, mut app) = fixture();
-        let draft = app.preferences.clone();
-        app.preferences.remember(dir.path());
-        app.apply_preferences(draft);
-        assert_eq!(
-            app.preferences.recent_folders,
-            vec![dir.path().to_path_buf()]
-        );
-        app.preferences_draft = Some(app.preferences.clone());
-        let ctx = egui::Context::default();
-        let output = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(640.0, 600.0),
-                )),
-                ..Default::default()
-            },
-            |ctx| app.preferences_dialog(ctx),
-        );
-        assert!(!output.shapes.is_empty());
-        assert!(
-            app.analysis_run.is_none() && app.metadata_run.is_none() && app.requested.is_empty()
-        );
-        assert!(app.preferences_draft.is_some());
-    }
-    #[test]
-    fn clearing_shared_caches_preserves_every_workflows_review_and_bookmark_state() {
-        let (_dir, mut app) = fixture();
-        for step in Step::ALL {
-            app.step = step;
-            app.saved_views.bookmarks.insert(step, Default::default());
-            app.decisions.insert(
-                MediaId(1),
-                Decision {
-                    rating: Some(4),
-                    rejected: true,
-                    ..Default::default()
-                },
-            );
-            app.analysis.insert(
-                MediaId(1),
-                Analysis {
-                    issues: vec!["Possibly soft".into()],
-                    ..Default::default()
-                },
-            );
-            let saved = serde_json::to_vec(&app.saved_views).unwrap();
-            app.stats.resident_bytes = 123;
-            app.stats.detail_bytes = 456;
-            assert!(app.runtime.cache.request(true));
-            let deadline = Instant::now() + std::time::Duration::from_secs(5);
-            while app.runtime.cache.status().busy {
-                assert!(Instant::now() < deadline);
-                app.poll(&egui::Context::default());
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            app.poll(&egui::Context::default());
-            assert_eq!((app.stats.resident_bytes, app.stats.detail_bytes), (0, 0));
-            assert_eq!(app.step, step);
-            assert_eq!(serde_json::to_vec(&app.saved_views).unwrap(), saved);
-            assert_eq!(app.decisions[&MediaId(1)].rating, Some(4));
-            assert!(app.decisions[&MediaId(1)].rejected);
-            assert_eq!(app.analysis[&MediaId(1)].issues, vec!["Possibly soft"]);
-            assert!(app.analysis_run.is_none() && app.metadata_run.is_none() && !app.scanning);
-        }
-    }
-    #[test]
-    fn escape_cancels_settings_without_applying_draft_navigation() {
-        let (_dir, mut app) = fixture();
-        let mut draft = app.preferences.clone();
-        draft.navigation.rating = Some(5);
-        app.preferences_draft = Some(draft);
-        let ctx = egui::Context::default();
-        let raw = || egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(640.0, 600.0),
-            )),
-            ..Default::default()
-        };
-        for _ in 0..2 {
-            let _ = ctx.run(raw(), |ctx| app.preferences_dialog(ctx));
-        }
-        let mut input = raw();
-        input.events.push(egui::Event::Key {
-            key: egui::Key::Escape,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        });
-        let _ = ctx.run(input, |ctx| app.preferences_dialog(ctx));
-        assert!(app.preferences_draft.is_none());
-        assert_eq!(app.preferences.navigation.rating, None);
-        assert!(app.analysis_run.is_none() && app.metadata_run.is_none());
-    }
-    #[test]
-    fn settings_access_reuses_draft_and_requests_usage_once_without_clearing() {
-        let (_dir, mut app) = fixture();
-        app.runtime.shutdown();
-        app.runtime.cache.take();
-        app.runtime.cache.finish(Ok(Default::default()), false);
-        app.open_settings(Section::Caches);
-        let request = app.runtime.cache.take().expect("one usage request");
-        assert!(!request.clear);
-        app.runtime.cache.finish(Ok(Default::default()), false);
-        app.preferences_draft.as_mut().unwrap().navigation.rating = Some(5);
-        app.open_settings(Section::General);
-        app.open_settings(Section::Caches);
-        assert!(
-            app.runtime.cache.take().is_none(),
-            "section navigation repeated cache work"
-        );
-        assert_eq!(
-            app.preferences_draft.as_ref().unwrap().navigation.rating,
-            Some(5)
-        );
-        assert_eq!(app.preferences.navigation.rating, None);
-        assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
-    }
-    #[test]
-    fn settings_access_cache_and_general_anchors_keep_footer_visible_at_small_sizes() {
-        for size in [egui::vec2(600., 500.), egui::vec2(1440., 900.)] {
-            let (_dir, mut app) = fixture();
-            let ctx = egui::Context::default();
-            crate::ui::theme::install(&ctx);
-            ctx.enable_accesskit();
-            let mut time = 0.;
-            for (section, label) in [
-                (Section::Caches, "Shared caches"),
-                (Section::General, "Application updates"),
-                (Section::Caches, "Shared caches"),
-            ] {
-                app.open_settings(section);
-                let mut output = None;
-                for _ in 0..8 {
-                    time += 0.1;
-                    output = Some(ctx.run(
-                        egui::RawInput {
-                            time: Some(time),
-                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                            ..Default::default()
-                        },
-                        |ctx| app.preferences_dialog(ctx),
-                    ));
-                }
-                let tree = output.unwrap().platform_output.accesskit_update.unwrap();
-                for label in [label, "General", "Caches", "Cancel", "Save settings"] {
-                    let node = tree
-                        .nodes
-                        .iter()
-                        .find(|(_, n)| n.label() == Some(label) || n.value() == Some(label))
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "missing {label} at {size:?}: {:?}",
-                                tree.nodes
-                                    .iter()
-                                    .filter_map(|(_, n)| n.label())
-                                    .collect::<Vec<_>>()
-                            )
-                        });
-                    let bounds = node.1.bounds().expect("visible control bounds");
-                    assert!(
-                        bounds.x0 >= 0.
-                            && bounds.x1 <= f64::from(size.x)
-                            && bounds.y0 >= 0.
-                            && bounds.y1 <= f64::from(size.y),
-                        "{label}: {bounds:?}, {size:?}"
-                    );
-                }
-            }
-            assert!(
-                app.analysis_run.is_none()
-                    && app.metadata_run.is_none()
-                    && app.requested.is_empty()
-            );
-            app.runtime.shutdown();
-        }
-    }
-}
+#[path = "preferences/tests.rs"]
+mod tests;

@@ -1,5 +1,7 @@
 //! Shared same-subject evidence and decisions. Model ownership stays in Models;
 //! persistence is isolated in store and pure decisions in policy/geometry.
+mod candidates;
+pub use candidates::candidates;
 mod extraction;
 mod geometry;
 pub mod grouping;
@@ -9,7 +11,7 @@ pub use extraction::DenseEmbedding;
 pub use geometry::verify_geometry;
 pub use policy::{Pair, Strictness, verify_pair};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Evidence {
@@ -64,93 +66,6 @@ pub(super) fn dot(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
     a.iter().zip(b).map(|(a, b)| a * b).sum()
-}
-
-/// Exact reference candidates with O(n*k) retained storage, instead of a full
-/// n-by-n similarity matrix. Rows are supplied in stable path order. Callers can
-/// cancel even within a long nearest-neighbor scan.
-pub fn candidates(
-    artifacts: &[Artifact],
-    times: &[Option<i64>],
-    cancelled: impl Fn() -> bool,
-) -> Option<Vec<(usize, usize)>> {
-    use std::{cmp::Reverse, collections::BinaryHeap};
-    #[derive(Clone, Copy, Debug, PartialEq)]
-    struct Neighbor(f64, usize);
-    impl Eq for Neighbor {}
-    impl PartialOrd for Neighbor {
-        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-    impl Ord for Neighbor {
-        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-            self.0
-                .total_cmp(&other.0)
-                .then_with(|| other.1.cmp(&self.1))
-        }
-    }
-    let mut vectors = Vec::with_capacity(artifacts.len());
-    for artifact in artifacts {
-        if cancelled() {
-            return None;
-        }
-        vectors.push(normalized(&artifact.global));
-    }
-    let mut pairs = BTreeSet::new();
-    for (i, a) in vectors.iter().enumerate() {
-        if cancelled() {
-            return None;
-        }
-        let mut nearest = BinaryHeap::new();
-        for (j, b) in vectors.iter().enumerate() {
-            if j % 128 == 0 && cancelled() {
-                return None;
-            }
-            if i == j {
-                continue;
-            }
-            nearest.push(Reverse(Neighbor(f64::from(dot(a, b)), j)));
-            if nearest.len() > 32 {
-                nearest.pop();
-            }
-        }
-        for Reverse(Neighbor(_, j)) in nearest {
-            pairs.insert((i.min(j), i.max(j)));
-        }
-    }
-    let mut dated: Vec<_> = times
-        .iter()
-        .take(artifacts.len())
-        .enumerate()
-        .filter_map(|(i, t)| t.map(|t| (t, i)))
-        .collect();
-    dated.sort_unstable();
-    for (time, id) in &dated {
-        if cancelled() {
-            return None;
-        }
-        let first = dated.partition_point(|(t, _)| *t < time.saturating_sub(600_000));
-        let last = dated.partition_point(|(t, _)| *t <= time.saturating_add(600_000));
-        let mut nearby = BinaryHeap::new();
-        for (n, &(other_time, other)) in dated[first..last].iter().enumerate() {
-            if n % 128 == 0 && cancelled() {
-                return None;
-            }
-            if other == *id {
-                continue;
-            }
-            nearby.push((time.abs_diff(other_time), other));
-            if nearby.len() > 8 {
-                nearby.pop();
-            }
-        }
-
-        for (_, other) in nearby.into_iter().take(8) {
-            pairs.insert(((*id).min(other), (*id).max(other)));
-        }
-    }
-    (!cancelled()).then(|| pairs.into_iter().collect())
 }
 
 /// Every cross-pair must be accepted; missing evidence never permits chaining.

@@ -1,3 +1,42 @@
+Latest real-photo comparison: [preview and thumbnail preparation, 9 October](diagnostics/review-comparison-2026-10-09/README.md).
+On the authorized samples, median initial Rust preparation was 2.35–2.76× faster
+on mixed folders and 27.26× faster on 100 RAW photos. Rendering recipes and proxy
+sizes differ; this does not establish whole-application speed. The report includes
+cache reuse, RSS ranges and the larger Rust disk-cache footprint.
+
+[Lossless proxy codec evaluation, 9 October](diagnostics/proxy-codecs-2026-10-09/README.md):
+retain the current PNG setting. On 263 photos, the tested WebP encoder saves
+15–27% of proxy bytes but decodes 1.65–2.18× more slowly; all tested pixels remain
+exact. The report explains why this cache-format change was not adopted.
+
+Latest whole-analysis measurement: **real library, 9 October 2026** (below).
+
+## Analysis on a real library — 9 October 2026
+
+`examples/audit_library` (release, read-only, temporary cache, CPU backend, 8
+threads) on `sample_images_photosort`: 517 photos (353 ARW, 90 HEIC, 74 JPEG) plus
+10 videos, which are skipped. Apple M4 Max, 36 GiB. Each run analyses once cold,
+then reopens the same cache in a fresh runtime. RSS is `/usr/bin/time -l` maximum.
+
+| Profile | Cold | Reopened | Peak RSS |
+| --- | ---: | ---: | ---: |
+| Technical (sharpness, exposure, hashes) | 66 s | 1.2 s | 1.07 GiB |
+| Visual grouping (DINOv2 regions) | 182 s | 2.4 s | 1.18 GiB |
+| Quality (aesthetic, faces, eyes), before `f887f5f` | 139–221 s | 14.2 s | 3.11 GiB |
+| Quality, after not pinning pair records (`f887f5f`) | 114–149 s | **1.45 s** | 3.11 GiB |
+
+Cold times vary with the OS file cache over this 29 GB folder; the change does not
+affect the cold phase, which starts with an empty cache (the "about 140 s to 114 s"
+in the `f887f5f` commit message is that variance, not the fix). Results were
+byte-identical before and after. The Quality reopen was dominated by 11,454
+pair-record copies into a per-run working set.
+
+The Quality peak is the one-time ONNX Runtime graph optimization of the 378 MB
+aesthetic model (constant folding; see `diagnostics/model-memory-2026-10-08`).
+These runs use a fresh cache every time, so they always pay it; with the normal
+persistent cache the prepared graph is reused and later runs stay near 1–2 GiB.
+Removing it from the very first run would require shipping a pre-optimized model.
+
 # File discovery comparison — 2026-09-28
 
 The Rust catalog scanner completed this synthetic 100,000-path workload in

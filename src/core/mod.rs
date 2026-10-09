@@ -24,6 +24,7 @@ pub mod delete_review;
 pub mod pick_review;
 
 pub mod dates;
+pub mod details;
 
 pub mod organize;
 
@@ -48,6 +49,7 @@ pub mod regional;
 pub mod pixels;
 
 pub mod processing;
+pub mod reencode;
 
 pub mod face_groups;
 

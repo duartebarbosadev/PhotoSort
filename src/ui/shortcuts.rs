@@ -58,7 +58,17 @@ impl PhotoSortApp {
             ApplicationKey::Open => self.select_folder(),
             ApplicationKey::Find => {
                 if self.root.is_some() && self.step != Step::PickBest {
-                    ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("library_search")));
+                    let search = egui::Id::new("library_search");
+                    let mut state =
+                        egui::text_edit::TextEditState::load(ctx, search).unwrap_or_default();
+                    state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::two(
+                            egui::text::CCursor::new(0),
+                            egui::text::CCursor::new(self.query.chars().count()),
+                        )));
+                    state.store(ctx, search);
+                    ctx.memory_mut(|memory| memory.request_focus(search));
                 }
             }
             ApplicationKey::About => self.about = true,
@@ -75,7 +85,26 @@ impl PhotoSortApp {
         self.pending_bookmark = None;
     }
     pub(super) fn view_shortcut(&mut self, key: egui::Key, modifiers: egui::Modifiers) -> bool {
-        if self.step != Step::Cull || modifiers.command || modifiers.ctrl || modifiers.shift {
+        if modifiers.command || modifiers.ctrl || modifiers.shift {
+            return false;
+        }
+        if self.step == Step::Organize && modifiers.alt {
+            // Retain the workflow's established keys, independently of the
+            // additional Date/Camera choices and their dropdown order.
+            let mode = match key {
+                egui::Key::Num1 => GroupMode::Current,
+                egui::Key::Num2 => GroupMode::Mixed,
+                egui::Key::Num3 => GroupMode::Visual,
+                egui::Key::Num4 => GroupMode::Faces,
+                egui::Key::Num5 => GroupMode::Location,
+                _ => return false,
+            };
+            if self.root.is_some() {
+                self.set_group_mode(mode);
+            }
+            return true;
+        }
+        if self.step != Step::Cull {
             return false;
         }
         if modifiers.alt {
@@ -97,436 +126,241 @@ impl PhotoSortApp {
         self.set_navigator(mode, enabled);
         true
     }
+
+    /// Keys that reach the photo canvas once dialogs, popups and text fields have
+    /// declined them. Each stage returns whether it consumed the key.
+    pub(super) fn keyboard(&mut self, ctx: &egui::Context) {
+        if egui::Popup::is_any_open(ctx) || self.navigator_popup_open(ctx) || self.modal_active() {
+            return;
+        }
+        if self.application_shortcuts(ctx) || ctx.wants_keyboard_input() {
+            return;
+        }
+        self.video_keyboard(ctx);
+        let guided = matches!(
+            self.step,
+            Step::Rotation | Step::EasyDelete | Step::PickBest
+        );
+        for (pressed, modifiers) in pressed_keys(ctx, guided) {
+            if self.modal_active() {
+                break;
+            }
+            if self.workflow_shortcut(pressed, modifiers) || self.view_shortcut(pressed, modifiers)
+            {
+                continue;
+            }
+            if selection::clear_trash_shortcut(pressed, modifiers) {
+                self.clear_all_trash_marks();
+                continue;
+            }
+            let command = modifiers.command || modifiers.ctrl;
+            if command && (modifiers.alt || !command_chord_allowed(pressed))
+                || modifiers.alt && pressed != egui::Key::R
+            {
+                continue;
+            }
+            self.pending_bookmark = None;
+            if self.cull_selection_key(pressed, modifiers) {
+                continue;
+            }
+            if command && pressed == egui::Key::A {
+                continue; // Select All belongs to the Cull browser or a text field.
+            }
+            if !command && !modifiers.alt && self.guided_step_key(pressed, modifiers) {
+                continue;
+            }
+            self.arrow_key(pressed, modifiers);
+            self.photo_key(pressed, modifiers);
+            self.numeric_key(pressed, modifiers);
+        }
+    }
+
+    fn guided_step_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
+        match self.step {
+            Step::PickBest => self.pick_key(pressed, modifiers),
+            Step::EasyDelete => self.delete_key(pressed, modifiers),
+            Step::Rotation => self.rotation_key(pressed, modifiers),
+            _ => false,
+        }
+    }
+
+    fn pick_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
+        match pressed {
+            egui::Key::Num1 | egui::Key::Num2 | egui::Key::Num3 => {
+                let slot = match pressed {
+                    egui::Key::Num1 => 0,
+                    egui::Key::Num2 => 1,
+                    _ => 2,
+                };
+                if let Some(id) = self
+                    .pick_review
+                    .comparison()
+                    .and_then(|c| c.paths.get(slot).copied())
+                {
+                    self.toggle_pick(id);
+                }
+            }
+            egui::Key::ArrowLeft | egui::Key::ArrowRight => {
+                self.navigate_pick(
+                    if pressed == egui::Key::ArrowLeft {
+                        -1
+                    } else {
+                        1
+                    },
+                    true,
+                );
+            }
+            egui::Key::ArrowUp | egui::Key::ArrowDown => {
+                self.navigate_pick(if pressed == egui::Key::ArrowUp { -1 } else { 1 }, false);
+            }
+            egui::Key::C => self.toggle_pick_focus(),
+            egui::Key::K => self.confirm_pick(true),
+            egui::Key::R => self.reset_pick(modifiers.shift),
+            egui::Key::Enter if modifiers.shift => self.review_changes(),
+            egui::Key::Enter => self.confirm_pick(false),
+            _ => return false,
+        }
+        true
+    }
+
+    fn delete_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
+        match pressed {
+            egui::Key::ArrowLeft | egui::Key::Num1 => self.toggle_delete_candidate(0),
+            egui::Key::ArrowRight | egui::Key::Num2 => self.toggle_delete_candidate(1),
+            egui::Key::R => self.reset_delete(modifiers.shift),
+            egui::Key::Enter if modifiers.shift => self.review_changes(),
+            egui::Key::Enter => self.confirm_delete(),
+            egui::Key::A => self.accept_delete_defaults(),
+            _ => return false,
+        }
+        true
+    }
+
+    fn rotation_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
+        match pressed {
+            egui::Key::Q | egui::Key::E => {
+                if let Some(id) = self.active {
+                    self.rotate(id, if pressed == egui::Key::Q { 3 } else { 1 });
+                }
+            }
+            egui::Key::R => self.reset_rotation(modifiers.shift),
+            egui::Key::Enter if modifiers.shift => self.review_rotations(),
+            egui::Key::Enter => self.confirm_rotation(),
+            egui::Key::Num1 | egui::Key::Num2 => self.select_rotation(pressed == egui::Key::Num2),
+            _ => return false,
+        }
+        true
+    }
+
+    fn arrow_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) {
+        let command = modifiers.command || modifiers.ctrl;
+        let (direction, horizontal) = match pressed {
+            egui::Key::ArrowRight => (1, true),
+            egui::Key::ArrowDown => (1, false),
+            egui::Key::ArrowLeft => (-1, true),
+            egui::Key::ArrowUp => (-1, false),
+            _ => return,
+        };
+        self.navigate_axis(direction, modifiers.shift, command, horizontal);
+    }
+
+    /// Single-photo actions shared by every workflow that shows a canvas.
+    fn photo_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) {
+        let reviewing_candidates = matches!(self.step, Step::EasyDelete | Step::PickBest);
+        match pressed {
+            egui::Key::D if !reviewing_candidates => {
+                if let Some(id) = self.active {
+                    self.reject(id);
+                }
+            }
+            egui::Key::R => {
+                if let Some(id) = self.active {
+                    let turns = if modifiers.alt {
+                        2
+                    } else if modifiers.shift {
+                        3
+                    } else {
+                        1
+                    };
+                    self.rotate(id, turns);
+                }
+            }
+            egui::Key::I => self.inspector ^= true,
+            egui::Key::F1 => {
+                self.comparison.clear();
+                self.review = true;
+            }
+            egui::Key::F2 => self.compare_similar(),
+            egui::Key::F3 => self.toggle_sync(),
+            egui::Key::A => self.actual_size(),
+            egui::Key::Plus | egui::Key::Equals => self.zoom_view(1.25),
+            egui::Key::Minus => self.zoom_view(0.8),
+            egui::Key::Escape => {
+                self.comparison.clear();
+                self.fit_view();
+            }
+            egui::Key::Enter if modifiers.shift => self.review_changes(),
+            egui::Key::Delete | egui::Key::Backspace if !reviewing_candidates => {
+                if let Some(id) = self.active {
+                    self.decisions.entry(id).or_default().rejected = true;
+                    self.changed();
+                    self.review_changes();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Digits focus a comparison slot; with Ctrl/Cmd they set the star rating.
+    fn numeric_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) {
+        let command = modifiers.command || modifiers.ctrl;
+        let Some(digit) = digit(pressed) else { return };
+        if command {
+            if let Some(id) = self.active {
+                self.rating(id, digit.min(5) as u8);
+            }
+            return;
+        }
+        if digit == 0 {
+            self.fit_view();
+        } else if let Some(&id) = self.comparison_ids().get(digit - 1) {
+            self.active = Some(id);
+            self.focused_slot = (digit - 1) as u64;
+        }
+    }
+}
+
+/// With Ctrl/Cmd held, only select-all, zoom, arrows and digits reach the canvas.
+fn command_chord_allowed(key: egui::Key) -> bool {
+    matches!(
+        key,
+        egui::Key::A
+            | egui::Key::Plus
+            | egui::Key::Equals
+            | egui::Key::Minus
+            | egui::Key::ArrowLeft
+            | egui::Key::ArrowRight
+            | egui::Key::ArrowUp
+            | egui::Key::ArrowDown
+    ) || matches!(digit(key), Some(0..=5))
+}
+
+fn digit(key: egui::Key) -> Option<usize> {
+    Some(match key {
+        egui::Key::Num0 => 0,
+        egui::Key::Num1 => 1,
+        egui::Key::Num2 => 2,
+        egui::Key::Num3 => 3,
+        egui::Key::Num4 => 4,
+        egui::Key::Num5 => 5,
+        egui::Key::Num6 => 6,
+        egui::Key::Num7 => 7,
+        egui::Key::Num8 => 8,
+        egui::Key::Num9 => 9,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    fn app(step: Step) -> PhotoSortApp {
-        let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
-        app.root = Some("/absent/library".into());
-        app.step = step;
-        app.active = Some(MediaId(7));
-        app.media = vec![Media {
-            id: MediaId(7),
-            path: "/absent/library/a.jpg".into(),
-            kind: MediaKind::Photo,
-            fingerprint: Default::default(),
-        }];
-        app.index.insert(MediaId(7), 0);
-        app.filtered = vec![0];
-        app
-    }
-    fn input(keys: &[(egui::Key, egui::Modifiers)]) -> egui::RawInput {
-        egui::RawInput {
-            events: keys
-                .iter()
-                .map(|(key, modifiers)| egui::Event::Key {
-                    key: *key,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: *modifiers,
-                })
-                .collect(),
-            ..Default::default()
-        }
-    }
-    #[test]
-    fn global_key_mapping_is_exact_and_platform_independent() {
-        for command in [egui::Modifiers::CTRL, egui::Modifiers::COMMAND] {
-            assert_eq!(
-                application_key(egui::Key::O, command),
-                Some(ApplicationKey::Open)
-            );
-            assert_eq!(
-                application_key(egui::Key::F, command),
-                Some(ApplicationKey::Find)
-            );
-            assert_eq!(application_key(egui::Key::F12, command), None);
-            assert_eq!(
-                application_key(
-                    egui::Key::O,
-                    egui::Modifiers {
-                        shift: true,
-                        ..command
-                    }
-                ),
-                None
-            );
-            assert_eq!(
-                application_key(
-                    egui::Key::F,
-                    egui::Modifiers {
-                        alt: true,
-                        ..command
-                    }
-                ),
-                None
-            );
-        }
-        assert_eq!(
-            application_key(egui::Key::F12, egui::Modifiers::NONE),
-            Some(ApplicationKey::About)
-        );
-        assert_eq!(application_key(egui::Key::O, egui::Modifiers::NONE), None);
-    }
-    #[test]
-    fn view_keys_share_actions_and_never_become_ratings_or_guided_choices() {
-        for step in Step::ALL {
-            let mut app = app(step);
-            let ctx = egui::Context::default();
-            app.library_layout = library::Layout::Grid;
-            let _ = ctx.run(input(&[(egui::Key::Num1, egui::Modifiers::ALT)]), |ctx| {
-                app.keyboard(ctx)
-            });
-            assert_eq!(app.active, Some(MediaId(7)));
-            assert!(app.decisions.is_empty());
-            assert_eq!(
-                app.library_layout,
-                if step == Step::Cull {
-                    library::Layout::List
-                } else {
-                    library::Layout::Grid
-                }
-            );
-            assert_eq!(app.stats.decodes, 0);
-        }
-        let mut app = app(Step::Cull);
-        let ctx = egui::Context::default();
-        for (key, mode) in [(egui::Key::F, Mode::Folders), (egui::Key::S, Mode::Groups)] {
-            app.navigator.enabled = false;
-            let _ = ctx.run(input(&[(key, egui::Modifiers::NONE)]), |ctx| {
-                app.keyboard(ctx)
-            });
-            assert!(app.navigator.enabled && !app.review);
-            assert_eq!(app.navigator.mode, mode);
-            assert!(app.filter_dirty);
-            let _ = ctx.run(input(&[(key, egui::Modifiers::NONE)]), |ctx| {
-                app.keyboard(ctx)
-            });
-            assert!(!app.navigator.enabled);
-        }
-        assert!(app.analysis_run.is_none() && app.requested.is_empty());
-    }
-    #[test]
-    fn navigator_activation_shares_review_transition_without_image_or_model_work() {
-        for mode in Mode::ALL {
-            let mut app = app(Step::Cull);
-            app.review = true;
-            app.comparison = vec![MediaId(7)];
-            app.decisions.insert(
-                MediaId(7),
-                Decision {
-                    rating: Some(4),
-                    ..Default::default()
-                },
-            );
-            app.set_navigator(mode, true);
-            assert!(!app.review && app.navigator.enabled);
-            assert_eq!(app.navigator.mode, mode);
-            assert_eq!(app.active, Some(MediaId(7)));
-            assert_eq!(app.comparison, vec![MediaId(7)]);
-            assert_eq!(app.decisions[&MediaId(7)].rating, Some(4));
-            assert_eq!(app.stats.decodes, 0);
-            assert_eq!(app.stats.metadata_reads, 0);
-            assert!(
-                app.requested.is_empty()
-                    && app.analysis_run.is_none()
-                    && app.metadata_run.is_none()
-            );
-            app.runtime.shutdown();
-        }
-    }
-    #[test]
-    fn modified_unbound_keys_do_not_change_photos_in_any_workflow() {
-        for step in Step::ALL {
-            for command in [egui::Modifiers::CTRL, egui::Modifiers::COMMAND] {
-                let mut app = app(step);
-                let before = app.inspector;
-                let ctx = egui::Context::default();
-                let _ = ctx.run(
-                    input(&[
-                        (egui::Key::R, command),
-                        (egui::Key::D, command),
-                        (egui::Key::I, command),
-                        (egui::Key::Delete, command),
-                    ]),
-                    |ctx| app.keyboard(ctx),
-                );
-                assert!(app.decisions.is_empty() && !app.plan_open);
-                assert_eq!(app.inspector, before);
-                let _ = ctx.run(input(&[(egui::Key::Plus, command)]), |ctx| {
-                    app.keyboard(ctx)
-                });
-                assert_eq!(app.inspection_view.zoom, 1.25);
-                let _ = ctx.run(input(&[(egui::Key::Minus, command)]), |ctx| {
-                    app.keyboard(ctx)
-                });
-                assert_eq!(app.inspection_view.zoom, 1.0);
-            }
-        }
-    }
-    #[test]
-    fn search_focus_handles_text_input_but_dialogs_and_busy_state_keep_ownership() {
-        let mut app = app(Step::Cull);
-        let ctx = egui::Context::default();
-        let search = egui::Id::new("library_search");
-        let mut text = String::new();
-        let _ = ctx.run(input(&[(egui::Key::F, egui::Modifiers::COMMAND)]), |ctx| {
-            app.keyboard(ctx);
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.add(egui::TextEdit::singleline(&mut text).id(search));
-            });
-        });
-        assert_eq!(ctx.memory(|m| m.focused()), Some(search));
-        let _ = ctx.run(
-            input(&[
-                (egui::Key::R, egui::Modifiers::NONE),
-                (egui::Key::Num1, egui::Modifiers::ALT),
-            ]),
-            |ctx| {
-                app.keyboard(ctx);
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut text).id(search));
-                });
-            },
-        );
-        assert!(app.decisions.is_empty());
-        assert_eq!(app.library_layout, library::Layout::Grid);
-        let _ = ctx.run(input(&[(egui::Key::F12, egui::Modifiers::NONE)]), |ctx| {
-            app.keyboard(ctx)
-        });
-        assert!(app.about);
-        for busy in [true, false] {
-            app.about = false;
-            app.busy = busy;
-            app.help = !busy;
-            let _ = ctx.run(
-                input(&[
-                    (egui::Key::F12, egui::Modifiers::NONE),
-                    (egui::Key::O, egui::Modifiers::COMMAND),
-                ]),
-                |ctx| app.keyboard(ctx),
-            );
-            assert!(!app.about); // Open must also be left untouched; no native picker.
-        }
-    }
-    #[test]
-    fn repeated_global_keys_and_search_without_a_search_field_are_harmless() {
-        let mut app = app(Step::PickBest);
-        let ctx = egui::Context::default();
-        let _ = ctx.run(input(&[(egui::Key::F, egui::Modifiers::COMMAND)]), |ctx| {
-            app.keyboard(ctx)
-        });
-        assert!(ctx.memory(|m| m.focused()).is_none());
-        let _ = ctx.run(input(&[(egui::Key::F12, egui::Modifiers::NONE)]), |ctx| {
-            app.keyboard(ctx)
-        });
-        assert!(app.about);
-        app.about = false;
-        // egui derives repeat state from held keys, rather than trusting a raw
-        // repeat flag on a key it has never seen pressed.
-        let mut repeated = input(&[(egui::Key::F12, egui::Modifiers::NONE)]);
-        if let egui::Event::Key { repeat, .. } = &mut repeated.events[0] {
-            *repeat = true;
-        }
-        let _ = ctx.run(repeated, |ctx| app.keyboard(ctx));
-        assert!(!app.about);
-    }
-    #[test]
-    fn opening_a_departure_guard_stops_later_photo_keys_in_the_same_frame() {
-        let mut app = app(Step::Cull);
-        app.decisions.insert(
-            MediaId(7),
-            Decision {
-                rejected: true,
-                ..Default::default()
-            },
-        );
-        let ctx = egui::Context::default();
-        let _ = ctx.run(
-            input(&[
-                (
-                    egui::Key::Num1,
-                    egui::Modifiers {
-                        command: true,
-                        alt: true,
-                        ..Default::default()
-                    },
-                ),
-                (egui::Key::R, egui::Modifiers::NONE),
-            ]),
-            |ctx| app.keyboard(ctx),
-        );
-        assert!(app.departure.is_some());
-        assert_eq!(app.decisions[&MediaId(7)].turns, 0);
-    }
-    #[test]
-    fn analysis_shortcut_uses_workflow_owner_and_preserves_active_work() {
-        for step in Step::ALL {
-            for modifiers in [egui::Modifiers::CTRL, egui::Modifiers::COMMAND] {
-                let mut app = app(step);
-                app.group_mode = GroupMode::Current;
-                app.decisions.insert(
-                    MediaId(7),
-                    Decision {
-                        rating: Some(4),
-                        ..Default::default()
-                    },
-                );
-                let ctx = egui::Context::default();
-                let _ = ctx.run(
-                    input(&[
-                        (egui::Key::S, modifiers),
-                        (egui::Key::R, egui::Modifiers::NONE),
-                    ]),
-                    |ctx| app.keyboard(ctx),
-                );
-                if step == Step::Rotation {
-                    // Minimal builds have no model; the same action opens setup.
-                    assert!(app.model_dialog || app.rotation_run.is_some());
-                    assert_eq!(app.analysis_run, app.rotation_run);
-                } else {
-                    assert!(app.analysis_run.is_some(), "{step:?}");
-                    assert!(app.rotation_run.is_none());
-                }
-                assert_eq!(app.step, step);
-                assert_eq!(app.active, Some(MediaId(7)));
-                assert_eq!(app.decision(MediaId(7)).rating, Some(4));
-                assert_eq!(app.decision(MediaId(7)).turns, 0);
-                if let Some(run) = app.analysis_run {
-                    // Both a second UI request and a direct retry leave the
-                    // admitted generation intact: no duplicate decode/model pass.
-                    app.analyze_current_workflow();
-                    app.analyze();
-                    assert_eq!(app.analysis_run, Some(run));
-                    let _ = ctx.run(input(&[(egui::Key::S, modifiers)]), |ctx| app.keyboard(ctx));
-                    assert_eq!(app.analysis_run, Some(run));
-                    app.cancel_analysis();
-                    assert!(app.analysis_run.is_none());
-                }
-                app.runtime.shutdown();
-            }
-        }
-    }
-    #[test]
-    fn analysis_shortcut_respects_availability_modal_and_modifier_guards() {
-        for modifiers in [
-            egui::Modifiers::NONE,
-            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-            egui::Modifiers::CTRL | egui::Modifiers::ALT,
-        ] {
-            assert!(application_key(egui::Key::S, modifiers).is_none());
-        }
-        for step in Step::ALL {
-            for guard in 0..7 {
-                let mut app = app(step);
-                let ctx = egui::Context::default();
-                match guard {
-                    0 => app.media.clear(),
-                    1 => app.scanning = true,
-                    2 => app.busy = true,
-                    3 => app.help = true,
-                    4 => egui::Popup::open_id(&ctx, egui::Id::new("analysis-guard")),
-                    5 => ctx.input_mut(|i| {
-                        i.keys_down.insert(egui::Key::S);
-                    }),
-                    _ => app.analysis_run = Some(42),
-                }
-                let before = app.analysis_run;
-                let _ = ctx.run(input(&[(egui::Key::S, egui::Modifiers::COMMAND)]), |ctx| {
-                    app.keyboard(ctx)
-                });
-                assert_eq!(app.analysis_run, before, "{step:?}, guard={guard}");
-                assert!(!app.model_dialog && app.rotation_run.is_none());
-                assert!(!app.navigator.enabled);
-                app.runtime.shutdown();
-            }
-        }
-    }
-    #[test]
-    fn settings_access_keys_open_the_existing_draft_without_photo_work() {
-        for step in Step::ALL {
-            for (key, modifiers) in [
-                (egui::Key::F9, egui::Modifiers::NONE),
-                (egui::Key::F10, egui::Modifiers::NONE),
-                (egui::Key::Comma, egui::Modifiers::COMMAND),
-                (egui::Key::Comma, egui::Modifiers::CTRL),
-            ] {
-                let mut app = app(step);
-                app.decisions.insert(
-                    MediaId(7),
-                    Decision {
-                        rating: Some(4),
-                        rejected: true,
-                        ..Default::default()
-                    },
-                );
-                let before = serde_json::to_vec(&app.preferences).unwrap();
-                let ctx = egui::Context::default();
-                let _ = ctx.run(
-                    input(&[(key, modifiers), (egui::Key::R, egui::Modifiers::NONE)]),
-                    |ctx| app.keyboard(ctx),
-                );
-                assert!(app.preferences_draft.is_some(), "{step:?}: {key:?}");
-                assert_eq!(
-                    serde_json::to_vec(app.preferences_draft.as_ref().unwrap()).unwrap(),
-                    before
-                );
-                assert_eq!(app.step, step);
-                assert_eq!(app.active, Some(MediaId(7)));
-                assert_eq!(app.decision(MediaId(7)).rating, Some(4));
-                assert!(app.decision(MediaId(7)).rejected);
-                assert_eq!(app.decision(MediaId(7)).turns, 0);
-                assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
-                assert!(
-                    app.analysis_run.is_none()
-                        && app.metadata_run.is_none()
-                        && app.requested.is_empty()
-                );
-                app.runtime.shutdown();
-            }
-        }
-    }
-
-    #[test]
-    fn settings_access_respects_existing_modal_popup_repeat_and_modifier_guards() {
-        for key in [egui::Key::F9, egui::Key::F10] {
-            for modifiers in [
-                egui::Modifiers::ALT,
-                egui::Modifiers::SHIFT,
-                egui::Modifiers::CTRL,
-                egui::Modifiers::COMMAND,
-            ] {
-                assert!(application_key(key, modifiers).is_none());
-            }
-            for guard in 0..4 {
-                let mut app = app(Step::Cull);
-                let ctx = egui::Context::default();
-                match guard {
-                    0 => app.busy = true,
-                    1 => app.help = true,
-                    2 => egui::Popup::open_id(&ctx, egui::Id::new("settings-guard")),
-                    _ => ctx.input_mut(|i| {
-                        i.keys_down.insert(key);
-                    }),
-                }
-                let _ = ctx.run(input(&[(key, egui::Modifiers::NONE)]), |ctx| {
-                    app.keyboard(ctx)
-                });
-                assert!(app.preferences_draft.is_none(), "guard={guard}");
-                assert!(app.decisions.is_empty());
-                app.runtime.shutdown();
-            }
-        }
-        assert!(application_key(egui::Key::Comma, egui::Modifiers::NONE).is_none());
-        assert!(
-            application_key(
-                egui::Key::Comma,
-                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT
-            )
-            .is_none()
-        );
-    }
-}
+#[path = "shortcuts/tests.rs"]
+mod tests;

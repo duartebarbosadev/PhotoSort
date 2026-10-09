@@ -137,6 +137,7 @@ impl Control {
     }
     #[cfg(feature = "onnx")]
     pub(crate) fn preparing(&self, model: &'static str, backend: Backend) {
+        tracing::info!(model, ?backend, "model preparation started");
         self.status.lock().unwrap().insert(
             model,
             ModelStatus {
@@ -149,6 +150,7 @@ impl Control {
     }
     #[cfg(feature = "onnx")]
     pub(crate) fn report(&self, model: &'static str, backend: Backend, detail: String) {
+        tracing::info!(model, ?backend, %detail, "model preparation finished");
         self.status.lock().unwrap().insert(
             model,
             ModelStatus {

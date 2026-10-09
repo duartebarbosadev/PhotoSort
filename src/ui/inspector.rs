@@ -26,30 +26,7 @@ impl PhotoSortApp {
         self.reveal_button(ui, id);
         ui.add_space(10.0);
         ui.separator();
-        if let Some(meta) = self.metadata.get(&id) {
-            for (label, value) in [
-                (
-                    "Dimensions",
-                    if meta.width > 0 && meta.height > 0 {
-                        format!("{} × {}", meta.width, meta.height)
-                    } else {
-                        String::new()
-                    },
-                ),
-                ("Camera", meta.camera.clone()),
-                ("Lens", meta.lens.clone()),
-                ("Captured", meta.captured.clone()),
-                ("Exposure", meta.exposure.clone()),
-                ("Aperture", meta.aperture.clone()),
-                ("ISO", meta.iso.clone()),
-            ] {
-                if !value.is_empty() {
-                    ui.add_space(8.0);
-                    ui.label(RichText::new(label).small().color(MUTED));
-                    ui.label(value);
-                }
-            }
-        }
+        self.details_tables(ui, id);
         if let Some(analysis) = self.analysis.get(&id) {
             ui.add_space(15.0);
             ui.separator();
@@ -170,5 +147,85 @@ impl PhotoSortApp {
                 .small()
                 .color(MUTED),
         );
+    }
+}
+
+impl PhotoSortApp {
+    /// Metadata tables for the active photo, or one column per photo while a
+    /// comparison is open. Values come from the shared metadata index.
+    fn details_tables(&self, ui: &mut egui::Ui, active: MediaId) {
+        let mut ids = self.comparison_ids();
+        if ids.len() < 2 || !ids.contains(&active) {
+            ids = vec![active];
+        }
+        let empty = Metadata::default();
+        let items: Vec<(&Media, &Metadata)> = ids
+            .iter()
+            .filter_map(|id| {
+                let media = self.media.get(*self.index.get(id)?)?;
+                Some((media, self.metadata.get(id).unwrap_or(&empty)))
+            })
+            .collect();
+        let sections = crate::core::details::sections(&items);
+        if items.len() < 2 {
+            for section in &sections {
+                ui.add_space(10.0);
+                ui.label(
+                    RichText::new(section.title.to_uppercase())
+                        .small()
+                        .color(MUTED),
+                );
+                for row in &section.rows {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(row.label).small().color(MUTED));
+                    ui.label(&row.values[0]);
+                }
+            }
+            return;
+        }
+        ui.add_space(10.0);
+        ui.label(RichText::new("COMPARE DETAILS").small().color(MUTED));
+        egui::ScrollArea::horizontal()
+            .id_salt("compare-details")
+            .show(ui, |ui| {
+                for section in &sections {
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(section.title).small().color(MUTED));
+                    egui::Grid::new(("compare-details", section.title))
+                        .num_columns(items.len() + 1)
+                        .spacing([14.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label("");
+                            for (media, _) in &items {
+                                let name = media.name();
+                                let short = if name.chars().count() > 15 {
+                                    format!("{}…", name.chars().take(12).collect::<String>())
+                                } else {
+                                    name.clone()
+                                };
+                                ui.label(RichText::new(short).small().strong())
+                                    .on_hover_text(name);
+                            }
+                            ui.end_row();
+                            for row in &section.rows {
+                                let differs = row.values.iter().any(|v| *v != row.values[0]);
+                                ui.label(RichText::new(row.label).small().color(MUTED));
+                                for value in &row.values {
+                                    let shown = if value.is_empty() {
+                                        "—"
+                                    } else {
+                                        value.as_str()
+                                    };
+                                    ui.label(if differs {
+                                        RichText::new(shown).color(ACCENT)
+                                    } else {
+                                        RichText::new(shown)
+                                    });
+                                }
+                                ui.end_row();
+                            }
+                        });
+                }
+            });
     }
 }

@@ -3,6 +3,7 @@ use super::*;
 impl PhotoSortApp {
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         if let Some(error) = self.error.clone()
+            && self.preferences_draft.is_none()
             && self.organize_departure.is_none()
             && !(self.plan_open && self.retry_plan.is_some())
         {
@@ -47,6 +48,10 @@ impl PhotoSortApp {
                         ("Ctrl/Cmd + F", "Focus library search (except Pick Best)"),
                         ("Ctrl/Cmd + S", "Analyze this step; detect in Fix Rotation"),
                         ("Alt + 1 / 2 / 3", "Cull list / icons / grid"),
+                        (
+                            "Organize: Alt + 1–5",
+                            "Current / date + similarity / visual / faces / location",
+                        ),
                         ("F / S", "Cull folder / similarity-group navigator"),
                         ("F9", "Open cache usage and controls"),
                         ("F10 / Ctrl/Cmd + ,", "Open Settings"),

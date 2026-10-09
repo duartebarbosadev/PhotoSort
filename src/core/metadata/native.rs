@@ -1,4 +1,5 @@
 //! One shared native metadata boundary; no file/model/cache ownership lives in the bridge.
+use crate::core::{details::ratio, model::Details};
 use std::{collections::HashMap, ffi::c_void, path::Path};
 #[derive(Default)]
 #[repr(C)]
@@ -86,12 +87,7 @@ impl Snapshot {
             .get(key)
             .map_or_else(String::new, |v| v.1.clone())
     }
-    pub(super) fn apply(
-        self,
-        result: &mut super::Metadata,
-        dates: &mut [Option<String>; 4],
-        times: &mut [Option<i64>; 4],
-    ) {
+    pub(super) fn apply(self, result: &mut super::Metadata, dates: &mut super::Dates) {
         result.metadata_fields = self.summary.fields;
         result.embedded_metadata_writable = self.summary.writable != 0;
         result.width = self
@@ -119,7 +115,23 @@ impl Snapshot {
             .or_else(|_| self.raw("Exif.Image.Rating").parse())
             .unwrap_or(0)
             .min(5);
-        for (i, key) in [
+        let code = |key| self.raw(key).split_whitespace().next()?.parse::<u16>().ok();
+        let owned = |key| Some(self.raw(key).trim().to_owned()).filter(|v| !v.is_empty());
+        result.details = Details {
+            make: owned("Exif.Image.Make"),
+            software: owned("Exif.Image.Software"),
+            focal_length_mm: ratio(self.raw("Exif.Photo.FocalLength")).map(|v| v as f32),
+            exposure_bias_ev: ratio(self.raw("Exif.Photo.ExposureBiasValue")).map(|v| v as f32),
+            flash: code("Exif.Photo.Flash"),
+            white_balance: code("Exif.Photo.WhiteBalance"),
+            metering: code("Exif.Photo.MeteringMode"),
+            exposure_mode: code("Exif.Photo.ExposureMode"),
+            scene: code("Exif.Photo.SceneCaptureType"),
+            color_space: code("Exif.Photo.ColorSpace"),
+            // Per-channel depths are normally identical; the first one is shown.
+            bit_depth: code("Exif.Image.BitsPerSample"),
+        };
+        for (slot, key) in [
             "Exif.Photo.DateTimeOriginal",
             "Xmp.xmp.CreateDate",
             "Exif.Image.DateTime",
@@ -128,8 +140,7 @@ impl Snapshot {
         .into_iter()
         .enumerate()
         {
-            dates[i] = crate::core::dates::parse(self.raw(key));
-            times[i] = crate::core::dates::timestamp(self.raw(key));
+            dates.assign(slot, Some(self.raw(key)));
         }
         let coordinate = |key, reference, negative| -> Option<f64> {
             let values: Vec<_> = self

@@ -6,7 +6,7 @@ its appearance or numerical implementation is not a product requirement. There
 is no Python runtime dependency. Historical comparison fixtures remain useful
 regression evidence, but do not establish photographic accuracy or relative speed.
 See [PARITY.md](PARITY.md) for the detailed implementation status and
-[VALIDATION.md](VALIDATION.md) for the checks actually performed.
+[VALIDATION.md](history/VALIDATION-LOG.md) for the checks actually performed.
 
 ## Photo review and organization
 
@@ -91,7 +91,10 @@ LibRaw rendering recipes are unchanged.
 
 General visual grouping uses six regional DINO descriptors and streaming,
 orientation-aware DBSCAN. Mixed organization partitions by date first. Cull and
-Pick Best use shared subject evidence and complete-link grouping. People Organize
+Pick Best use shared subject evidence and complete-link grouping. Their exact
+neighbor search evaluates each finite semantic pair once with bounded top-32
+heaps; temporal neighbors come from sorted equal-time groups. No approximate
+index is used, so candidate selection and stable tie ordering remain unchanged. People Organize
 uses native SFace identity embeddings after five-point face alignment. Multiple
 main people receive one stable combination destination, such as People 001 + 002;
 small background faces do not create extra destinations. Unclear, very small or
@@ -135,7 +138,9 @@ cancellation.
 Ratings and rotations support Embed where supported or Sidecars only. Native
 embedded writes use an independent temporary copy, verify EXIF/XMP values and
 source identity, then atomically replace without re-encoding pixels. Unsupported
-formats fall back to sidecars. Embedded HEIF/container transforms, broader camera
+formats fall back to sidecars; for rotation-only edits of BMP (and PNG/TIFF in
+minimal builds) plan review can instead rotate the pixels losslessly after an
+explicit confirmation, verified by decoding the result before it replaces the file. Embedded HEIF/container transforms, broader camera
 interoperability and broader platform/volume attributes need more coverage. A
 macOS probe of the existing staging copy and production metadata bridge preserves
 Finder-tag/custom extended attributes, ACLs, ownership, file flags, permissions and
@@ -156,7 +161,8 @@ retain external playback and FFmpeg posters. The Linux aarch64 backend has passe
 its portable-feature suite, while Windows runtime and Linux desktop interaction
 remain unverified; see `diagnostics/portable-video-2026-10-06/README.md`. Muted macOS
 fixtures and native playback controls passed; audible A/V synchronization,
-HDR/color fidelity and native compact resizing still need validation. Finder/
+HDR/color fidelity still need validation. Native compact resizing and controls
+passed the later `diagnostics/video-layout-2026-10-07/README.md` check. Finder/
 Explorer reveal and external-player launch now share one lazy bounded desktop
 service. Service and all-workflow routing tests pass. Packaged macOS checks passed
 for Organize/Cull reveal, the exact context-clicked file without changing review
@@ -214,7 +220,7 @@ stale claims of missing features. Relevant evidence includes
 `diagnostics/multiple-people-native-2026-10-04.json`,
 `diagnostics/partial-companions-native-2026-10-04.json`,
 `diagnostics/resumable-quit-native-2026-10-04.json`, the durable destination editing
-and update-check sections in VALIDATION.md, and the current default/minimal suite
+and update-check sections in history/VALIDATION-LOG.md, and the current default/minimal suite
 record in `diagnostics/desktop-final-validation-2026-10-05.json`. Historical native
 checks establish the stated scenarios, not fresh execution on every later build.
 
