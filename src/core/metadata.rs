@@ -376,6 +376,9 @@ pub enum WriteTarget {
     #[default]
     Sidecar,
     Embedded,
+    /// Lossless pixel rotation for files that cannot store orientation; only
+    /// chosen by explicit confirmation in plan review, never by `write_target`.
+    Pixels,
 }
 pub fn write_target(path: &Path, metadata: &Metadata, policy: WritePolicy) -> WriteTarget {
     if policy == WritePolicy::EmbedWhenSupported
@@ -405,36 +408,47 @@ pub fn write_embedded(
         anyhow::bail!("Embedded metadata needs a full native build");
     }
     #[cfg(feature = "metadata-native")]
-    {
-        let verify = || -> Result<()> {
-            anyhow::ensure!(
-                !fs::symlink_metadata(path)?.file_type().is_symlink(),
-                "Refusing a symlink image"
-            );
-            anyhow::ensure!(
-                super::model::Fingerprint::read(path)? == expected,
-                "File changed since metadata review"
-            );
-            anyhow::ensure!(
-                !sidecar(path).exists(),
-                "An XMP sidecar appeared during embedded metadata editing"
-            );
-            Ok(())
-        };
-        verify()?;
-        let parent = path.parent().context("Missing image parent")?;
-        let staged = tempfile::Builder::new()
-            .prefix(".photosort-metadata-")
-            .suffix(".tmp")
-            .tempfile_in(parent)?;
-        fs::copy(path, staged.path())?;
-        verify()?;
-        native::write_copy(staged.path(), rating, orientation)?;
-        // Exiv2 may replace its input while rewriting the container. Reopen the
-        // path so we sync the verified result rather than an obsolete file handle.
-        fs::File::open(staged.path())?.sync_all()?;
-        verify()?;
-        staged.persist(path).map_err(|e| e.error)?;
+    replace_verified(path, expected, |staged| {
+        native::write_copy(staged, rating, orientation)
+    })
+}
+
+/// Replace `path` with an edited private copy made in the same folder, so the
+/// result keeps permissions and extended attributes and is swapped in atomically.
+/// The source must still match `expected` before, during and after the edit.
+pub(crate) fn replace_verified(
+    path: &Path,
+    expected: super::model::Fingerprint,
+    edit: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    let verify = || -> Result<()> {
+        anyhow::ensure!(
+            !fs::symlink_metadata(path)?.file_type().is_symlink(),
+            "Refusing a symlink image"
+        );
+        anyhow::ensure!(
+            super::model::Fingerprint::read(path)? == expected,
+            "File changed since review"
+        );
+        anyhow::ensure!(
+            !sidecar(path).exists(),
+            "An XMP sidecar appeared while editing the file"
+        );
         Ok(())
-    }
+    };
+    verify()?;
+    let parent = path.parent().context("Missing image parent")?;
+    let staged = tempfile::Builder::new()
+        .prefix(".photosort-metadata-")
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
+    fs::copy(path, staged.path())?;
+    verify()?;
+    edit(staged.path())?;
+    // The editor may replace its input while rewriting the container. Reopen the
+    // path so we sync the verified result rather than an obsolete file handle.
+    fs::File::open(staged.path())?.sync_all()?;
+    verify()?;
+    staged.persist(path).map_err(|e| e.error)?;
+    Ok(())
 }

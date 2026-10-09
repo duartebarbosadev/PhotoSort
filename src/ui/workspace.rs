@@ -239,6 +239,8 @@ pub struct PhotoSortApp {
     plan_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     apply_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     plan_open: bool,
+    /// Plan review is asking to confirm switching sidecar rotations to pixels.
+    pixel_rotation_confirm: bool,
     help: bool,
     dirty: Option<Instant>,
     inspection_view: InspectionView,
@@ -445,6 +447,7 @@ impl PhotoSortApp {
             plan_stop: None,
             apply_stop: None,
             plan_open: false,
+            pixel_rotation_confirm: false,
             help: false,
             dirty: None,
             inspection_view: InspectionView::default(),

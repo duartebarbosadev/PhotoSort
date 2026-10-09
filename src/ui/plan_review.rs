@@ -217,6 +217,12 @@ impl PhotoSortApp {
                     ui.add(egui::Label::new(format!("Destination: {}", output.display())).truncate()).on_hover_text(output.display().to_string());
                 }
                 if retry && self.error.is_some() { ui.colored_label(RED, "Some operations need attention. Open details before retrying."); }
+                if !retry && !plan.pixel_rotation_offer.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(format!("{} rotation(s) can only be kept in an XMP sidecar, which some apps ignore.", plan.pixel_rotation_offer.len()));
+                        if ui.add_enabled(!self.busy, egui::Button::new("Rotate pixels instead…")).clicked() { self.pixel_rotation_confirm = true; }
+                    });
+                }
                 egui::CollapsingHeader::new("Operation details").show(ui, |ui| {
                     egui::ScrollArea::vertical().id_salt("plan_explanation").max_height(70.0).show(ui, |ui| {
                         ui.label(&plan.description);
@@ -224,7 +230,7 @@ impl PhotoSortApp {
                             ui.label("Successful operations are already applied. Finish staged move rechecks that the destination is the same file before removing its source link. Edit destination saves a revised folder or base name for a pending move and all its companions. Retry uses the saved destinations and source checks. Resolve remaining conflicts first. Discard abandons only unfinished operations; the audit record is retained.");
                             if let Some(error) = &self.error { ui.colored_label(RED, error); }
                         } else {
-                            ui.label(if self.rotation_plan { "Only confirmed corrections are included. Metadata rows identify embedded updates or XMP sidecars; pixels are not re-encoded." } else { "All listed companion files are included. Metadata rows identify embedded updates or XMP sidecars; pixels are not re-encoded. Trash entries go to your system's Trash. Moves never overwrite existing files." });
+                            ui.label(if self.rotation_plan { "Only confirmed corrections are included. Metadata rows identify embedded updates, XMP sidecars or confirmed pixel rotations." } else { "All listed companion files are included. Metadata rows identify embedded updates, XMP sidecars or confirmed pixel rotations. Trash entries go to your system's Trash. Moves never overwrite existing files." });
                         }
                     });
                 });
@@ -250,6 +256,7 @@ impl PhotoSortApp {
                 }); });
             }
         });
+        self.pixel_rotation_dialog(ctx);
         if save_quit {
             self.save_plan_and_quit();
         }
@@ -268,6 +275,48 @@ impl PhotoSortApp {
         }
         if apply {
             self.apply_reviewed_plan();
+        }
+    }
+}
+
+impl PhotoSortApp {
+    fn pixel_rotation_dialog(&mut self, ctx: &egui::Context) {
+        if !self.pixel_rotation_confirm {
+            return;
+        }
+        let count = self
+            .plan
+            .as_ref()
+            .map_or(0, |p| p.pixel_rotation_offer.len());
+        let (mut confirm, mut cancel) = (false, false);
+        egui::Modal::new(egui::Id::new("confirm_pixel_rotation")).show(ctx, |ui| {
+            ui.set_width((ctx.content_rect().width() - 64.0).clamp(240.0, 480.0));
+            ui.heading("Rotate pixels instead?");
+            ui.label(format!(
+                "{count} PNG, TIFF or BMP file(s) cannot store their orientation. PhotoSort can \
+                 rewrite their image data rotated. Pixels and the colour profile are kept \
+                 exactly; other information stored inside these files, such as text or \
+                 camera details, is not carried over."
+            ));
+            ui.small("Files are only changed when you apply the plan. Anything that cannot be rewritten exactly is left untouched and reported.");
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Keep sidecars").clicked() {
+                    cancel = true;
+                }
+                if ui
+                    .add(egui::Button::new(RichText::new("Rotate pixels").color(BG)).fill(ACCENT))
+                    .clicked()
+                {
+                    confirm = true;
+                }
+            });
+        });
+        if confirm && let Some(plan) = &mut self.plan {
+            plan.use_pixel_rotation();
+            self.plan_rows.replace(Some(plan));
+        }
+        if confirm || cancel {
+            self.pixel_rotation_confirm = false;
         }
     }
 }

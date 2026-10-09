@@ -49,6 +49,7 @@ pub mod regional;
 pub mod pixels;
 
 pub mod processing;
+pub mod reencode;
 
 pub mod face_groups;
 
