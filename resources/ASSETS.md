@@ -13,7 +13,7 @@ restore these files when making a fresh checkout or distributing a local bundle.
 | --- | --- | --- |
 | `models/orientation.onnx` | Unmodified upstream `v2` release asset `orientation_model_v2_0.9882.onnx`; identical to the reference copy; RGB 416 resize, center crop 384 | MIT upstream repository; notice retained in `licenses/ORIENTATION-MIT.txt` |
 | `models/dinov2-small.onnx` | `onnx-community/dinov2-small`, revision `8b1f705a3a7f6f062f6bdd21986c1583d3ef105d`, `onnx/model.onnx` | Apache-2.0 model repository |
-| `models/aesthetic.onnx` | `cafeai/cafe_aesthetic`, revision `48a343764f786abc1ca8aaddfcd60a688a70da9b`; exported using `scripts/export_aesthetic.py`, opset 17 | AGPL-3.0 model card; original model card retained below |
+| `models/aesthetic.onnx` | `cafeai/cafe_aesthetic`, revision `48a343764f786abc1ca8aaddfcd60a688a70da9b`; exported using `scripts/export_aesthetic.py`, opset 17, then folded with `examples/fold_model.rs` (ONNX Runtime basic, hardware-independent optimizations; outputs verified bit-identical) | AGPL-3.0 model card; original model card retained below |
 | `models/face_detector.onnx`, `models/face_landmarks_detector.onnx` | Reference `assets/models/face_landmarker.task`, Google MediaPipe face detector and Face Mesh V2; `scripts/normalize_faces.py` folds float16 constants, then tflite2onnx 0.4.1 exports opset 11 | Google MediaPipe assets, Apache-2.0 project; model cards upstream |
 | `runtime/libonnxruntime.dylib` | Native ONNX Runtime 1.29.0 library, copied from the reference environment; no Python runtime included | MIT |
 | `locations.tsv` | 155,210 latitude/longitude/country/region/city records converted from reverse_geocode 1.6.6's GeoNames dataset | GeoNames CC BY 4.0; reverse_geocode package LGPL |
@@ -35,9 +35,18 @@ Use a separate export environment with torch, transformers, onnx, numpy, flatbuf
 tflite 2.18.0 and tflite2onnx 0.4.1. These are build tools, not application dependencies.
 
 ```
-python scripts/export_aesthetic.py /path/to/pinned/beit/snapshot resources/models/aesthetic.onnx
+python scripts/export_aesthetic.py /path/to/pinned/beit/snapshot aesthetic-export.onnx
+cargo run --release --example fold_model -- aesthetic-export.onnx resources/models/aesthetic.onnx
 python scripts/normalize_faces.py /path/to/face_landmarker.task resources/models
 ```
+
+Folding pre-computes the export's constant subgraphs once. Without it, ONNX
+Runtime does this at every first load and briefly needs about 3.5 GiB; with it the
+first load peaks under 1 GiB and loads about 7× faster. `fold_model` refuses to
+finish unless the folded graph gives bit-identical outputs. The pinned checksum was
+produced with the bundled ONNX Runtime 1.29.0 (export `6e6aa39e…`, 378,039,625 bytes
+→ folded `862b59e3…`, 534,515,358 bytes); another runtime version may serialize
+different bytes, which then needs a new checksum. Import only the folded file.
 
 The face conversion first converts constant half-precision buffers to exact float32
 values and removes their redundant DEQUANTIZE operators. It does not train or

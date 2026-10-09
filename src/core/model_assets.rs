@@ -48,7 +48,8 @@ pub const ALL: [Asset; 6] = [
         name: "aesthetic.onnx",
         title: "Aesthetic scoring",
         purpose: "Pick Best",
-        bytes: 378_039_625,
+        // Basic-level ORT folding of the pinned export (examples/fold_model.rs).
+        bytes: 534_515_358,
         url: None,
         license: "AGPL-3.0 model card",
     },
