@@ -98,7 +98,7 @@ impl Files<'_> {
                 automatic,
                 manual,
                 edit,
-            } => self.edit_groups(scene, &cancelled, run, &catalog, automatic, manual, edit),
+            } => self.edit_groups(scene, &cancelled, run, &catalog, (automatic, manual), edit),
             IoWork::Scan(root) => self.scan(root),
             IoWork::PlanTrash {
                 catalog,
@@ -118,8 +118,7 @@ impl Files<'_> {
                 &cancelled,
                 &directories,
                 &catalog,
-                &labels,
-                &names,
+                (&labels, &names),
                 &output,
                 companions,
             ),
@@ -166,15 +165,16 @@ impl Files<'_> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn edit_groups(
         &self,
         scene: bool,
         cancelled: &AtomicBool,
         run: u64,
         catalog: &Catalog,
-        automatic: Arc<HashMap<MediaId, usize>>,
-        manual: Arc<manual_groups::ManualGroups>,
+        (automatic, manual): (
+            Arc<HashMap<MediaId, usize>>,
+            Arc<manual_groups::ManualGroups>,
+        ),
         edit: manual_groups::Edit,
     ) -> anyhow::Result<()> {
         let resolved = manual_groups::edit(run, automatic, manual, &catalog.media, edit, || {
@@ -233,14 +233,13 @@ impl Files<'_> {
         self.send_plan(result, cancelled)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// `intent` is the reviewed destination folder and file name per photo.
     fn plan_organize(
         &self,
         cancelled: &AtomicBool,
         directories: &crate::core::organize::DirectoryEdits,
         catalog: &Catalog,
-        labels: &HashMap<MediaId, String>,
-        names: &HashMap<MediaId, String>,
+        (labels, names): (&HashMap<MediaId, String>, &HashMap<MediaId, String>),
         output: &std::path::Path,
         companions: bool,
     ) -> anyhow::Result<()> {
