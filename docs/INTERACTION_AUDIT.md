@@ -107,7 +107,7 @@ changes: all 211 source fingerprints and the executable match the previous
 [Organize-mode validation](diagnostics/organize-modes-2026-10-09/README.md), whose
 68 commands passed. That evidence retains its original scope and ignored tests.
 Distribution, hardware, accuracy and long-session gaps remain in the
-[completion audit](COMPLETION_AUDIT.md).
+[completion audit](history/COMPLETION_AUDIT.md).
 
 ## Follow-up
 

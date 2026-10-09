@@ -6,7 +6,7 @@ its appearance or numerical implementation is not a product requirement. There
 is no Python runtime dependency. Historical comparison fixtures remain useful
 regression evidence, but do not establish photographic accuracy or relative speed.
 See [PARITY.md](PARITY.md) for the detailed implementation status and
-[VALIDATION.md](VALIDATION.md) for the checks actually performed.
+[VALIDATION.md](history/VALIDATION-LOG.md) for the checks actually performed.
 
 ## Photo review and organization
 
@@ -218,7 +218,7 @@ stale claims of missing features. Relevant evidence includes
 `diagnostics/multiple-people-native-2026-10-04.json`,
 `diagnostics/partial-companions-native-2026-10-04.json`,
 `diagnostics/resumable-quit-native-2026-10-04.json`, the durable destination editing
-and update-check sections in VALIDATION.md, and the current default/minimal suite
+and update-check sections in history/VALIDATION-LOG.md, and the current default/minimal suite
 record in `diagnostics/desktop-final-validation-2026-10-05.json`. Historical native
 checks establish the stated scenarios, not fresh execution on every later build.
 

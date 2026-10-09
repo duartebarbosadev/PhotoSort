@@ -31,7 +31,7 @@ open ".tools/native-vips/PhotoSort Rust.app"
 The older `.tools/native/PhotoSort Rust.app` is a previous build. The current
 bundle's source/executable hashes, full test results and native interaction checks
 are recorded in [the current validation report](docs/diagnostics/cache-folder-2026-10-09/README.md).
-The [completion audit](docs/COMPLETION_AUDIT.md) separates covered workflows,
+The [completion audit](docs/history/COMPLETION_AUDIT.md) separates covered workflows,
 intentional redesigns and remaining work. These checks cover this macOS development
 build; they do not establish Windows, CUDA or DirectML runtime readiness.
 
@@ -388,8 +388,8 @@ identify their policy explicitly. The policy checks consistency rather than
 calibrating confidence, and an incorrect initial upright prediction can still
 be missed by the fast path.
 
-Feature parity work is active; see the [parity checklist](docs/PARITY.md).
-See [validation](docs/VALIDATION.md) for executed checks and remaining boundaries.
+Feature parity work is active; see the [parity table](docs/PARITY.md).
+See [validation log](docs/history/VALIDATION-LOG.md) for executed checks and remaining boundaries.
 
 Real reference fixtures can be checked explicitly without modifying them:
 
