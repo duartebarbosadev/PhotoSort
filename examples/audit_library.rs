@@ -6,7 +6,7 @@ use anyhow::{Context, Result, ensure};
 use photosort::core::{
     catalog::Catalog,
     jobs::{AnalysisProfile, AnalysisStats, Event, Runtime},
-    model::{Media, MediaId},
+    model::{Media, MediaId, MediaKind},
     processing::{Backend, Mode, Preferences},
 };
 use serde_json::{Value, json};
@@ -146,7 +146,13 @@ fn main() -> Result<()> {
         !catalog.media.is_empty() && catalog.warnings.is_empty(),
         "Empty library or scan warnings"
     );
-    let media = Arc::new(catalog.media);
+    // Analysis covers photos only; videos are browse/play media.
+    let media: Vec<Media> = catalog
+        .media
+        .into_iter()
+        .filter(|m| m.kind != MediaKind::Video)
+        .collect();
+    let media = Arc::new(media);
     let mut extra = std::env::args_os().skip(4);
     let temporary;
     let cache = if let Some(flag) = extra.next() {
