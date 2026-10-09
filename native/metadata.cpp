@@ -49,7 +49,12 @@ extern "C" int photosort_metadata_read(const char *path, size_t length, void *co
                     "Exif.Photo.ISOSpeedRatings", "Exif.Image.Orientation", "Exif.Photo.PixelXDimension",
                     "Exif.Photo.PixelYDimension", "Exif.GPSInfo.GPSLatitude", "Exif.GPSInfo.GPSLatitudeRef",
                     "Exif.GPSInfo.GPSLongitude", "Exif.GPSInfo.GPSLongitudeRef",
-                    "Exif.Image.Rating", "Xmp.xmp.Rating", "Xmp.xmp.CreateDate", "Xmp.photoshop.DateCreated"
+                    "Exif.Image.Rating", "Xmp.xmp.Rating", "Xmp.xmp.CreateDate", "Xmp.photoshop.DateCreated",
+                    // Details panel values, formatted on the Rust side from raw codes.
+                    "Exif.Image.Make", "Exif.Image.Software", "Exif.Photo.FocalLength",
+                    "Exif.Photo.ExposureBiasValue", "Exif.Photo.Flash", "Exif.Photo.WhiteBalance",
+                    "Exif.Photo.MeteringMode", "Exif.Photo.ExposureMode",
+                    "Exif.Photo.SceneCaptureType", "Exif.Photo.ColorSpace", "Exif.Image.BitsPerSample"
                 };
                 if (std::find(std::begin(selected), std::end(selected), key) != std::end(selected)) {
                     const auto display = item.print(&image->exifData());

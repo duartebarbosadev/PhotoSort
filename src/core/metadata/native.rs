@@ -1,4 +1,5 @@
 //! One shared native metadata boundary; no file/model/cache ownership lives in the bridge.
+use crate::core::{details::ratio, model::Details};
 use std::{collections::HashMap, ffi::c_void, path::Path};
 #[derive(Default)]
 #[repr(C)]
@@ -119,6 +120,22 @@ impl Snapshot {
             .or_else(|_| self.raw("Exif.Image.Rating").parse())
             .unwrap_or(0)
             .min(5);
+        let code = |key| self.raw(key).split_whitespace().next()?.parse::<u16>().ok();
+        let owned = |key| Some(self.raw(key).trim().to_owned()).filter(|v| !v.is_empty());
+        result.details = Details {
+            make: owned("Exif.Image.Make"),
+            software: owned("Exif.Image.Software"),
+            focal_length_mm: ratio(self.raw("Exif.Photo.FocalLength")).map(|v| v as f32),
+            exposure_bias_ev: ratio(self.raw("Exif.Photo.ExposureBiasValue")).map(|v| v as f32),
+            flash: code("Exif.Photo.Flash"),
+            white_balance: code("Exif.Photo.WhiteBalance"),
+            metering: code("Exif.Photo.MeteringMode"),
+            exposure_mode: code("Exif.Photo.ExposureMode"),
+            scene: code("Exif.Photo.SceneCaptureType"),
+            color_space: code("Exif.Photo.ColorSpace"),
+            // Per-channel depths are normally identical; the first one is shown.
+            bit_depth: code("Exif.Image.BitsPerSample"),
+        };
         for (i, key) in [
             "Exif.Photo.DateTimeOriginal",
             "Xmp.xmp.CreateDate",

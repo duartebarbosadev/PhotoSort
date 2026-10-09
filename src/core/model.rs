@@ -108,6 +108,24 @@ impl Fingerprint {
     }
 }
 
+/// Secondary EXIF values shown by the Details panel. Enumerations are stored as
+/// their raw EXIF codes and formatted at display time, so both metadata backends
+/// agree and the cached record stays small.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Details {
+    pub make: Option<String>,
+    pub software: Option<String>,
+    pub focal_length_mm: Option<f32>,
+    pub exposure_bias_ev: Option<f32>,
+    pub flash: Option<u16>,
+    pub white_balance: Option<u16>,
+    pub metering: Option<u16>,
+    pub exposure_mode: Option<u16>,
+    pub scene: Option<u16>,
+    pub color_space: Option<u16>,
+    pub bit_depth: Option<u16>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Metadata {
     pub width: u32,
@@ -137,6 +155,8 @@ pub struct Metadata {
     pub gps: Option<(f64, f64)>,
     #[serde(default)]
     pub location: Option<super::geography::Location>,
+    #[serde(default)]
+    pub details: Details,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
