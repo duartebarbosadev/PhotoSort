@@ -75,6 +75,17 @@ impl Store {
         kind: Kind,
         valid: impl Fn(&T) -> bool,
     ) -> Option<T> {
+        self.read_pinned(key, kind, valid, true)
+    }
+    /// `pin` keeps a persisted record in this run's working set so later stages
+    /// can read it again even if cache maintenance prunes it meanwhile.
+    fn read_pinned<T: serde::de::DeserializeOwned + Serialize>(
+        &self,
+        key: &str,
+        kind: Kind,
+        valid: impl Fn(&T) -> bool,
+        pin: bool,
+    ) -> Option<T> {
         let working = self.path(key).ok()?;
         let persistent = self.persistent.load(Ordering::Acquire);
         let disk = self.root.join(format!("{key}.bin"));
@@ -92,8 +103,8 @@ impl Store {
             if !valid(&value) {
                 return None;
             }
-            if path != working {
-                codec::write(&working, &bytes).ok()?;
+            if pin && path != working {
+                self::pin(&path, &working, &bytes).ok()?;
             }
             return Some(value);
         }
@@ -176,19 +187,26 @@ impl Store {
             .to_hex()
             .to_string()
     }
+    /// Pairs are read once per grouping and then held in memory, so they are not
+    /// pinned: on a reopened library that saves two file operations per pair.
     pub fn pair(&self, key: &str) -> Option<Pair> {
-        self.read(key, Kind::Pair, |p: &Pair| {
-            [
-                p.subject_similarity,
-                p.scene_similarity,
-                p.confidence,
-                p.geometry.inlier_ratio,
-                p.geometry.coverage_a,
-                p.geometry.coverage_b,
-            ]
-            .iter()
-            .all(|v| v.is_finite())
-        })
+        self.read_pinned(
+            key,
+            Kind::Pair,
+            |p: &Pair| {
+                [
+                    p.subject_similarity,
+                    p.scene_similarity,
+                    p.confidence,
+                    p.geometry.inlier_ratio,
+                    p.geometry.coverage_a,
+                    p.geometry.coverage_b,
+                ]
+                .iter()
+                .all(|v| v.is_finite())
+            },
+            false,
+        )
     }
     pub fn regional_key(subject_key: &str) -> String {
         blake3::hash(format!("general-regions-v2-batched-five-crops:{subject_key}").as_bytes())
@@ -274,5 +292,58 @@ impl Store {
             let _ = codec::write(&self.root.join(format!("{key}.bin")), &bytes);
         }
         Ok(())
+    }
+}
+
+/// Keep a persisted record available for the rest of this run even if cache
+/// maintenance prunes it. Records are only ever replaced by rename, never edited
+/// in place, so a hard link pins a complete record without copying it (a racing
+/// replacement can only substitute another complete record, and every read is
+/// validated). Other volumes fall back to a copy.
+fn pin(persisted: &std::path::Path, working: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    match std::fs::hard_link(persisted, working) {
+        Ok(()) => Ok(()),
+        // Another worker pinned the same record first.
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(_) => codec::write(working, bytes),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::subjects::Geometry;
+
+    fn pair() -> Pair {
+        Pair {
+            subject_similarity: 0.9,
+            face_similarity: None,
+            scene_similarity: 0.8,
+            complete: true,
+            geometry: Geometry::default(),
+            time_delta_seconds: None,
+            confidence: 0.7,
+            accepted: true,
+            reason: String::new(),
+        }
+    }
+
+    #[test]
+    fn reopened_pairs_are_read_without_pinning_but_other_evidence_is_pinned() {
+        let root = tempfile::tempdir().unwrap();
+        let (pair_key, score_key) = (Store::pair_key("a", "b", None, None), "c".repeat(64));
+        let first = Store::new(root.path().into(), true).unwrap();
+        first.put_pair(&pair_key, &pair()).unwrap();
+        first.put_aesthetic(&score_key, 0.5).unwrap();
+        drop(first);
+
+        let reopened = Store::new(root.path().into(), true).unwrap();
+        assert!(reopened.pair(&pair_key).is_some());
+        assert_eq!(reopened.aesthetic(&score_key), Some(0.5));
+        assert!(!reopened.path(&pair_key).unwrap().exists());
+        assert!(reopened.path(&score_key).unwrap().exists());
+        // A pinned record survives the persisted copy being pruned mid-run.
+        std::fs::remove_file(root.path().join(format!("{score_key}.bin"))).unwrap();
+        assert_eq!(reopened.aesthetic(&score_key), Some(0.5));
     }
 }
