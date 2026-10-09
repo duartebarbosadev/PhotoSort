@@ -22,11 +22,14 @@ then reopens the same cache in a fresh runtime. RSS is `/usr/bin/time -l` maximu
 | --- | ---: | ---: | ---: |
 | Technical (sharpness, exposure, hashes) | 66 s | 1.2 s | 1.07 GiB |
 | Visual grouping (DINOv2 regions) | 182 s | 2.4 s | 1.18 GiB |
-| Quality (aesthetic, faces, eyes), before | ~140 s | 14.2 s | 3.11 GiB |
-| Quality, after not pinning pair records (`f887f5f`) | 114 s | **1.45 s** | 3.11 GiB |
+| Quality (aesthetic, faces, eyes), before `f887f5f` | 139–221 s | 14.2 s | 3.11 GiB |
+| Quality, after not pinning pair records (`f887f5f`) | 114–149 s | **1.45 s** | 3.11 GiB |
 
-Results were byte-identical before and after. The Quality reopen was dominated by
-11,454 pair-record copies into a per-run working set; see the commit message.
+Cold times vary with the OS file cache over this 29 GB folder; the change does not
+affect the cold phase, which starts with an empty cache (the "about 140 s to 114 s"
+in the `f887f5f` commit message is that variance, not the fix). Results were
+byte-identical before and after. The Quality reopen was dominated by 11,454
+pair-record copies into a per-run working set.
 
 The Quality peak is the one-time ONNX Runtime graph optimization of the 378 MB
 aesthetic model (constant folding; see `diagnostics/model-memory-2026-10-08`).
