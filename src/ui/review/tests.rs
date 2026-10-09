@@ -429,3 +429,70 @@ fn a_single_comparison_row_fits_the_short_canvas_without_clipping() {
         );
     }
 }
+
+#[test]
+fn details_panel_compares_every_open_photo_and_returns_to_one_photo() {
+    let (_temp, mut app) = comparison_fixture(Step::Cull);
+    for (id, flash) in [(0, 25), (1, 0)] {
+        app.metadata.insert(
+            MediaId(id),
+            Metadata {
+                width: 4000,
+                height: 3000,
+                orientation: 1,
+                details: crate::core::model::Details {
+                    flash: Some(flash),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+    }
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let texts = |app: &mut PhotoSortApp| -> Vec<String> {
+        let mut output = None;
+        for _ in 0..2 {
+            output = Some(ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| app.inspector(ui))
+                    });
+                },
+            ));
+        }
+        let tree = output.unwrap().platform_output.accesskit_update.unwrap();
+        tree.nodes
+            .iter()
+            .filter_map(|(_, n)| n.value().or(n.label()).map(str::to_owned))
+            .collect()
+    };
+    let compared = texts(&mut app);
+    for text in [
+        "COMPARE DETAILS",
+        "0.jpg",
+        "1.jpg",
+        "2.jpg",
+        "Fired (Auto)",
+        "Off",
+        "12.0 MP",
+    ] {
+        assert!(
+            compared.iter().any(|t| t == text),
+            "missing {text}: {compared:?}"
+        );
+    }
+    app.comparison.clear();
+    let single = texts(&mut app);
+    assert!(single.iter().all(|t| t != "COMPARE DETAILS"));
+    assert!(single.iter().any(|t| t == "Fired (Auto)"));
+    assert!(single.iter().all(|t| t != "Off"));
+    app.runtime.shutdown();
+}

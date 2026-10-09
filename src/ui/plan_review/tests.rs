@@ -281,3 +281,114 @@ fn destination_editor_virtualizes_large_plans_and_keeps_compact_controls_visible
     assert!(app.retry_edit.is_none() && app.plan_rows.movable.is_empty());
     app.runtime.shutdown();
 }
+
+fn labelled(
+    app: &mut PhotoSortApp,
+    ctx: &egui::Context,
+    events: Vec<egui::Event>,
+) -> Vec<(String, egui::Rect)> {
+    let size = egui::vec2(900.0, 700.0);
+    let mut output = None;
+    for events in [events, Vec::new(), Vec::new()] {
+        output = Some(ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.plan_review_dialog(ctx),
+        ));
+    }
+    let tree = output.unwrap().platform_output.accesskit_update.unwrap();
+    tree.nodes
+        .iter()
+        .filter_map(|(_, n)| {
+            let b = n.bounds()?;
+            Some((
+                n.label()?.to_owned(),
+                egui::Rect::from_min_max(
+                    egui::pos2(b.x0 as f32, b.y0 as f32),
+                    egui::pos2(b.x1 as f32, b.y1 as f32),
+                ),
+            ))
+        })
+        .collect()
+}
+
+fn click(app: &mut PhotoSortApp, ctx: &egui::Context, label: &str) {
+    let nodes = labelled(app, ctx, Vec::new());
+    let pos = nodes
+        .iter()
+        .find(|(l, _)| l == label)
+        .unwrap_or_else(|| {
+            panic!(
+                "missing {label}: {:?}",
+                nodes.iter().map(|n| &n.0).collect::<Vec<_>>()
+            )
+        })
+        .1
+        .center();
+    for pressed in [true, false] {
+        labelled(
+            app,
+            ctx,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+    }
+}
+
+#[test]
+fn pixel_rotation_changes_the_plan_only_after_confirmation() {
+    use crate::core::metadata::WriteTarget;
+    let temp = tempfile::tempdir().unwrap();
+    let mut app =
+        PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
+    app.root = Some("/library".into());
+    app.set_review_plan(Some(Plan {
+        actions: vec![Action::Metadata {
+            source: source("scan.bmp"),
+            sidecar_before: None,
+            target: WriteTarget::Sidecar,
+            rating: None,
+            orientation: Some(6),
+        }],
+        pixel_rotation_offer: vec![Path::new("/library/scan.bmp").into()],
+        ..Default::default()
+    }));
+    app.plan_open = true;
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let target = |app: &PhotoSortApp| match &app.plan.as_ref().unwrap().actions[0] {
+        Action::Metadata { target, .. } => *target,
+        _ => unreachable!(),
+    };
+
+    click(&mut app, &ctx, "Rotate pixels instead…");
+    assert!(app.pixel_rotation_confirm);
+    assert_eq!(target(&app), WriteTarget::Sidecar);
+    click(&mut app, &ctx, "Keep sidecars");
+    assert!(!app.pixel_rotation_confirm);
+    assert_eq!(target(&app), WriteTarget::Sidecar);
+    assert_eq!(app.plan.as_ref().unwrap().pixel_rotation_offer.len(), 1);
+
+    click(&mut app, &ctx, "Rotate pixels instead…");
+    click(&mut app, &ctx, "Rotate pixels");
+    assert_eq!(target(&app), WriteTarget::Pixels);
+    assert!(app.plan.as_ref().unwrap().pixel_rotation_offer.is_empty());
+    assert!(
+        labelled(&mut app, &ctx, Vec::new())
+            .iter()
+            .all(|(l, _)| l != "Rotate pixels instead…"),
+        "the offer disappears once accepted"
+    );
+    assert!(app.decisions.is_empty() && app.stats.decodes == 0);
+    app.runtime.shutdown();
+}
