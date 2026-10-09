@@ -126,6 +126,239 @@ impl PhotoSortApp {
         self.set_navigator(mode, enabled);
         true
     }
+
+    /// Keys that reach the photo canvas once dialogs, popups and text fields have
+    /// declined them. Each stage returns whether it consumed the key.
+    pub(super) fn keyboard(&mut self, ctx: &egui::Context) {
+        if egui::Popup::is_any_open(ctx) || self.navigator_popup_open(ctx) || self.modal_active() {
+            return;
+        }
+        if self.application_shortcuts(ctx) || ctx.wants_keyboard_input() {
+            return;
+        }
+        self.video_keyboard(ctx);
+        let guided = matches!(
+            self.step,
+            Step::Rotation | Step::EasyDelete | Step::PickBest
+        );
+        for (pressed, modifiers) in pressed_keys(ctx, guided) {
+            if self.modal_active() {
+                break;
+            }
+            if self.workflow_shortcut(pressed, modifiers) || self.view_shortcut(pressed, modifiers)
+            {
+                continue;
+            }
+            if selection::clear_trash_shortcut(pressed, modifiers) {
+                self.clear_all_trash_marks();
+                continue;
+            }
+            let command = modifiers.command || modifiers.ctrl;
+            if command && (modifiers.alt || !command_chord_allowed(pressed))
+                || modifiers.alt && pressed != egui::Key::R
+            {
+                continue;
+            }
+            self.pending_bookmark = None;
+            if self.cull_selection_key(pressed, modifiers) {
+                continue;
+            }
+            if command && pressed == egui::Key::A {
+                continue; // Select All belongs to the Cull browser or a text field.
+            }
+            if !command && !modifiers.alt && self.guided_step_key(pressed, modifiers) {
+                continue;
+            }
+            self.arrow_key(pressed, modifiers);
+            self.photo_key(pressed, modifiers);
+            self.numeric_key(pressed, modifiers);
+        }
+    }
+
+    fn guided_step_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
+        match self.step {
+            Step::PickBest => self.pick_key(pressed, modifiers),
+            Step::EasyDelete => self.delete_key(pressed, modifiers),
+            Step::Rotation => self.rotation_key(pressed, modifiers),
+            _ => false,
+        }
+    }
+
+    fn pick_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
+        match pressed {
+            egui::Key::Num1 | egui::Key::Num2 | egui::Key::Num3 => {
+                let slot = match pressed {
+                    egui::Key::Num1 => 0,
+                    egui::Key::Num2 => 1,
+                    _ => 2,
+                };
+                if let Some(id) = self
+                    .pick_review
+                    .comparison()
+                    .and_then(|c| c.paths.get(slot).copied())
+                {
+                    self.toggle_pick(id);
+                }
+            }
+            egui::Key::ArrowLeft | egui::Key::ArrowRight => {
+                self.navigate_pick(
+                    if pressed == egui::Key::ArrowLeft {
+                        -1
+                    } else {
+                        1
+                    },
+                    true,
+                );
+            }
+            egui::Key::ArrowUp | egui::Key::ArrowDown => {
+                self.navigate_pick(if pressed == egui::Key::ArrowUp { -1 } else { 1 }, false);
+            }
+            egui::Key::C => self.toggle_pick_focus(),
+            egui::Key::K => self.confirm_pick(true),
+            egui::Key::R => self.reset_pick(modifiers.shift),
+            egui::Key::Enter if modifiers.shift => self.review_changes(),
+            egui::Key::Enter => self.confirm_pick(false),
+            _ => return false,
+        }
+        true
+    }
+
+    fn delete_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
+        match pressed {
+            egui::Key::ArrowLeft | egui::Key::Num1 => self.toggle_delete_candidate(0),
+            egui::Key::ArrowRight | egui::Key::Num2 => self.toggle_delete_candidate(1),
+            egui::Key::R => self.reset_delete(modifiers.shift),
+            egui::Key::Enter if modifiers.shift => self.review_changes(),
+            egui::Key::Enter => self.confirm_delete(),
+            egui::Key::A => self.accept_delete_defaults(),
+            _ => return false,
+        }
+        true
+    }
+
+    fn rotation_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
+        match pressed {
+            egui::Key::Q | egui::Key::E => {
+                if let Some(id) = self.active {
+                    self.rotate(id, if pressed == egui::Key::Q { 3 } else { 1 });
+                }
+            }
+            egui::Key::R => self.reset_rotation(modifiers.shift),
+            egui::Key::Enter if modifiers.shift => self.review_rotations(),
+            egui::Key::Enter => self.confirm_rotation(),
+            egui::Key::Num1 | egui::Key::Num2 => self.select_rotation(pressed == egui::Key::Num2),
+            _ => return false,
+        }
+        true
+    }
+
+    fn arrow_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) {
+        let command = modifiers.command || modifiers.ctrl;
+        let (direction, horizontal) = match pressed {
+            egui::Key::ArrowRight => (1, true),
+            egui::Key::ArrowDown => (1, false),
+            egui::Key::ArrowLeft => (-1, true),
+            egui::Key::ArrowUp => (-1, false),
+            _ => return,
+        };
+        self.navigate_axis(direction, modifiers.shift, command, horizontal);
+    }
+
+    /// Single-photo actions shared by every workflow that shows a canvas.
+    fn photo_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) {
+        let reviewing_candidates = matches!(self.step, Step::EasyDelete | Step::PickBest);
+        match pressed {
+            egui::Key::D if !reviewing_candidates => {
+                if let Some(id) = self.active {
+                    self.reject(id);
+                }
+            }
+            egui::Key::R => {
+                if let Some(id) = self.active {
+                    let turns = if modifiers.alt {
+                        2
+                    } else if modifiers.shift {
+                        3
+                    } else {
+                        1
+                    };
+                    self.rotate(id, turns);
+                }
+            }
+            egui::Key::I => self.inspector ^= true,
+            egui::Key::F1 => {
+                self.comparison.clear();
+                self.review = true;
+            }
+            egui::Key::F2 => self.compare_similar(),
+            egui::Key::F3 => self.toggle_sync(),
+            egui::Key::A => self.actual_size(),
+            egui::Key::Plus | egui::Key::Equals => self.zoom_view(1.25),
+            egui::Key::Minus => self.zoom_view(0.8),
+            egui::Key::Escape => {
+                self.comparison.clear();
+                self.fit_view();
+            }
+            egui::Key::Enter if modifiers.shift => self.review_changes(),
+            egui::Key::Delete | egui::Key::Backspace if !reviewing_candidates => {
+                if let Some(id) = self.active {
+                    self.decisions.entry(id).or_default().rejected = true;
+                    self.changed();
+                    self.review_changes();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Digits focus a comparison slot; with Ctrl/Cmd they set the star rating.
+    fn numeric_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) {
+        let command = modifiers.command || modifiers.ctrl;
+        let Some(digit) = digit(pressed) else { return };
+        if command {
+            if let Some(id) = self.active {
+                self.rating(id, digit.min(5) as u8);
+            }
+            return;
+        }
+        if digit == 0 {
+            self.fit_view();
+        } else if let Some(&id) = self.comparison_ids().get(digit - 1) {
+            self.active = Some(id);
+            self.focused_slot = (digit - 1) as u64;
+        }
+    }
+}
+
+/// With Ctrl/Cmd held, only select-all, zoom, arrows and digits reach the canvas.
+fn command_chord_allowed(key: egui::Key) -> bool {
+    matches!(
+        key,
+        egui::Key::A
+            | egui::Key::Plus
+            | egui::Key::Equals
+            | egui::Key::Minus
+            | egui::Key::ArrowLeft
+            | egui::Key::ArrowRight
+            | egui::Key::ArrowUp
+            | egui::Key::ArrowDown
+    ) || matches!(digit(key), Some(0..=5))
+}
+
+fn digit(key: egui::Key) -> Option<usize> {
+    Some(match key {
+        egui::Key::Num0 => 0,
+        egui::Key::Num1 => 1,
+        egui::Key::Num2 => 2,
+        egui::Key::Num3 => 3,
+        egui::Key::Num4 => 4,
+        egui::Key::Num5 => 5,
+        egui::Key::Num6 => 6,
+        egui::Key::Num7 => 7,
+        egui::Key::Num8 => 8,
+        egui::Key::Num9 => 9,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
