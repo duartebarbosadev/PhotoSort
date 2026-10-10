@@ -207,9 +207,10 @@ impl PhotoSortApp {
             (true, false) => 100.0,
             (false, _) => 60.0,
         };
-        let height =
-            (ui.available_height() - controls_height - if show_filmstrip { 125.0 } else { 0.0 })
-                .max(40.0);
+        let height = (ui.available_height()
+            - controls_height
+            - if show_filmstrip { FILMSTRIP } else { 0.0 })
+        .max(40.0);
         let ideal_columns = if ids.len() == 4 { 2 } else { 3 };
         let columns = ((ui.available_width() / 250.0).floor() as usize)
             .clamp(1, ideal_columns)
@@ -285,10 +286,11 @@ impl PhotoSortApp {
             ui.horizontal_wrapped(|ui| self.review_view_controls(ui));
             return;
         }
+        ui.add_space(S1);
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .button("< Previous")
-                .on_hover_text("Cull follows Up/Down navigation preferences. Hold Ctrl or Cmd to include marked photos and bypass movement filters.")
+            use egui_phosphor::regular as icon;
+            const NAVIGATION: &str = "Cull follows Up/Down navigation preferences. Hold Ctrl or Cmd to include marked photos and bypass movement filters.";
+            if icon_button(ui, icon::CARET_LEFT, &format!("Previous photo · Up\n{NAVIGATION}"))
                 .clicked()
             {
                 self.navigate_selection(
@@ -297,9 +299,7 @@ impl PhotoSortApp {
                     ui.input(|i| i.modifiers.command || i.modifiers.ctrl),
                 );
             }
-            if ui
-                .button("Next >")
-                .on_hover_text("Cull follows Up/Down navigation preferences. Hold Ctrl or Cmd to include marked photos and bypass movement filters.")
+            if icon_button(ui, icon::CARET_RIGHT, &format!("Next photo · Down\n{NAVIGATION}"))
                 .clicked()
             {
                 self.navigate_selection(
@@ -314,11 +314,8 @@ impl PhotoSortApp {
                         .delete_current
                         .is_none_or(|review| self.delete_review.keeps(review, *id));
                     if ui
-                        .button(format!(
-                            "{}: {}",
-                            side + 1,
-                            if keep { "Keep" } else { "Trash" }
-                        ))
+                        .add(decision_button(side, keep))
+                        .on_hover_text(format!("Toggle photo {} · {}", side + 1, side + 1))
                         .clicked()
                     {
                         self.toggle_delete_candidate(side);
@@ -333,25 +330,27 @@ impl PhotoSortApp {
                 for (side, id) in paths.iter().enumerate() {
                     let keep = self.pick_review.comparison().is_none_or(|c| c.keeps(*id));
                     if ui
-                        .button(format!(
-                            "{}: {}",
-                            side + 1,
-                            if keep { "Keep" } else { "Trash" }
-                        ))
+                        .add(decision_button(side, keep))
+                        .on_hover_text(format!("Toggle photo {} · {}", side + 1, side + 1))
                         .clicked()
                     {
                         self.toggle_pick(*id);
                     }
                 }
-            } else if ui
-                .button(if self.decision(active).rejected {
-                    "Unmark"
-                } else {
-                    "Mark for Trash"
-                })
-                .clicked()
-            {
-                self.reject(active);
+            } else {
+                let rejected = self.decision(active).rejected;
+                if icon_text_button(
+                    ui,
+                    true,
+                    rejected,
+                    icon::TRASH,
+                    if rejected { "Marked for Trash" } else { "Trash" },
+                )
+                .on_hover_text(if rejected { "Unmark · D" } else { "Mark for Trash · D" })
+                    .clicked()
+                {
+                    self.reject(active);
+                }
             }
             if !self.comparison.is_empty() && ui.small_button("End comparison").clicked() {
                 self.comparison.clear();
@@ -377,10 +376,19 @@ impl PhotoSortApp {
             self.review_view_controls(ui);
             return;
         }
-        ui.spacing_mut().button_padding = egui::vec2(8.0, 6.0);
+        ui.add_space(S2);
+        let rating = self.selected_rating(active);
         for star in 1..=5 {
             if ui
-                .selectable_label(self.selected_rating(active) >= star, "★")
+                .add(
+                    egui::Button::new(RichText::new("★").size(16.0).color(if rating >= star {
+                        ACCENT
+                    } else {
+                        FAINT
+                    }))
+                    .frame(false),
+                )
+                .on_hover_text(format!("Rate {star} · Ctrl/Cmd+{star}"))
                 .clicked()
             {
                 self.rating(active, star);
@@ -437,10 +445,17 @@ impl PhotoSortApp {
         {
             self.set_view(self.focused_slot, view);
         }
+        ui.label(
+            RichText::new(format!("{:.0}%", view.zoom * 100.0))
+                .small()
+                .color(MUTED),
+        )
+        .on_hover_text("Zoom relative to fitting the whole photo");
     }
     fn filmstrip(&mut self, ui: &mut egui::Ui) {
-        const WIDTH: f32 = 156.0;
-        const HEIGHT: f32 = 100.0;
+        // Image-only tiles: the strip is for orientation, the canvas for judging.
+        const WIDTH: f32 = 104.0;
+        const HEIGHT: f32 = 72.0;
         let stride = WIDTH + ui.spacing().item_spacing.x;
         let selection_key = egui::Id::new("filmstrip_selection");
         let previous = ui.data(|data| data.get_temp::<MediaId>(selection_key));
@@ -818,6 +833,23 @@ fn paint_region(
     ui.painter()
         .with_clip_rect(rect)
         .add(egui::Shape::mesh(mesh));
+}
+
+/// Height reserved for the filmstrip below the review canvas.
+const FILMSTRIP: f32 = 88.0;
+
+/// Keep/Trash toggle for one side of a guided comparison.
+fn decision_button(side: usize, keep: bool) -> egui::Button<'static> {
+    use egui_phosphor::regular as icon;
+    egui::Button::new(
+        RichText::new(format!(
+            "{}  {}  {}",
+            side + 1,
+            if keep { icon::CHECK } else { icon::TRASH },
+            if keep { "Keep" } else { "Trash" }
+        ))
+        .color(if keep { GREEN } else { RED }),
+    )
 }
 
 #[cfg(test)]

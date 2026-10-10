@@ -1099,8 +1099,9 @@ fn virtual_editor_rows_keep_exact_pitch_and_last_entries_visible_without_image_w
                 } else {
                     editor.rows.len()
                 };
+                let gap = ctx.style().spacing.item_spacing.y;
                 assert!(
-                    (content.y - (count as f32 * (height + 10.0) - 10.0)).abs() <= height + 10.0,
+                    (content.y - (count as f32 * (height + gap) - gap)).abs() <= height + gap,
                     "{key}: content {content:?} height {height}"
                 );
                 assert!(
@@ -1120,7 +1121,7 @@ fn virtual_editor_rows_keep_exact_pitch_and_last_entries_visible_without_image_w
                     })
                     .collect();
                 assert!(
-                    (rects[1].top() - rects[0].top() - height - 10.0).abs() < 0.6,
+                    (rects[1].top() - rects[0].top() - height - gap).abs() < 0.6,
                     "{key}: {rects:?}, height {height}, offset {offset}"
                 );
                 if end {
@@ -2262,6 +2263,8 @@ fn drag_hover_expansion_reaches_nested_destinations_in_wide_and_compact_layouts(
                 vec![egui::Event::PointerMoved(tab)],
             );
             hover_frame(&ctx, &mut app, 0.36, width, vec![]);
+            // The newly shown folder list settles on its second frame.
+            hover_frame(&ctx, &mut app, 0.37, width, vec![]);
         }
         let selected = app.organize_editor.as_ref().unwrap().selected.clone();
         let folders = app

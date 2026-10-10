@@ -227,6 +227,7 @@ mod tests {
         for smoke in [false, true] {
             let mut app = app();
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             if smoke {
                 app = app.with_smoke_test(Duration::from_millis(200));
                 let _ = ctx.run(

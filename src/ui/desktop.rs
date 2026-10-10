@@ -311,6 +311,7 @@ mod tests {
         for step in Step::ALL {
             app.step = step;
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             ctx.enable_accesskit();
             let output = ctx.run(
                 egui::RawInput {

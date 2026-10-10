@@ -449,6 +449,7 @@ fn details_panel_compares_every_open_photo_and_returns_to_one_photo() {
         );
     }
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     ctx.enable_accesskit();
     let texts = |app: &mut PhotoSortApp| -> Vec<String> {
         let mut output = None;
@@ -476,7 +477,7 @@ fn details_panel_compares_every_open_photo_and_returns_to_one_photo() {
     };
     let compared = texts(&mut app);
     for text in [
-        "COMPARE DETAILS",
+        "Compare details",
         "0.jpg",
         "1.jpg",
         "2.jpg",
@@ -491,7 +492,7 @@ fn details_panel_compares_every_open_photo_and_returns_to_one_photo() {
     }
     app.comparison.clear();
     let single = texts(&mut app);
-    assert!(single.iter().all(|t| t != "COMPARE DETAILS"));
+    assert!(single.iter().all(|t| t != "Compare details"));
     assert!(single.iter().any(|t| t == "Fired (Auto)"));
     assert!(single.iter().all(|t| t != "Off"));
     app.runtime.shutdown();

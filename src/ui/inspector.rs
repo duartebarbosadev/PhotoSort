@@ -2,18 +2,17 @@ use super::*;
 
 impl PhotoSortApp {
     pub(super) fn inspector(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(12.0);
-        ui.label(RichText::new("PHOTO DETAILS").small().color(MUTED));
-        ui.add_space(16.0);
+        ui.add_space(S2);
         let Some(id) = self.active else {
-            ui.label("Select a photo");
+            ui.label(RichText::new("Select a photo to see its details.").color(MUTED));
             return;
         };
         let Some(&index) = self.index.get(&id) else {
             return;
         };
         let media = self.media[index].clone();
-        ui.label(RichText::new(media.name()).size(17.0).strong());
+        ui.add(egui::Label::new(RichText::new(media.name()).font(semibold(15.0))).truncate())
+            .on_hover_text(media.path.display().to_string());
         ui.label(
             RichText::new(format!(
                 "{:.1} MB · {:?}",
@@ -30,7 +29,7 @@ impl PhotoSortApp {
         if let Some(analysis) = self.analysis.get(&id) {
             ui.add_space(15.0);
             ui.separator();
-            ui.label(RichText::new("PHOTO QUALITY").small().color(MUTED));
+            section_title(ui, "Photo quality");
             ui.label(
                 RichText::new(format!("{:.0} / 100", analysis.score))
                     .size(24.0)
@@ -73,7 +72,7 @@ impl PhotoSortApp {
         if self.step == Step::Organize {
             ui.add_space(12.0);
             ui.separator();
-            ui.label(RichText::new("DESTINATION FOLDER").small().color(MUTED));
+            section_title(ui, "Destination folder");
             let label = self
                 .organize_drafts
                 .get(&self.group_mode)
@@ -169,22 +168,24 @@ impl PhotoSortApp {
         let sections = crate::core::details::sections(&items);
         if items.len() < 2 {
             for section in &sections {
-                ui.add_space(10.0);
-                ui.label(
-                    RichText::new(section.title.to_uppercase())
-                        .small()
-                        .color(MUTED),
-                );
-                for row in &section.rows {
-                    ui.add_space(6.0);
-                    ui.label(RichText::new(row.label).small().color(MUTED));
-                    ui.label(&row.values[0]);
-                }
+                ui.add_space(S3);
+                section_title(ui, section.title);
+                egui::Grid::new(("details", section.title))
+                    .num_columns(2)
+                    .spacing([S3, 5.0])
+                    .min_col_width(84.0)
+                    .show(ui, |ui| {
+                        for row in &section.rows {
+                            ui.label(RichText::new(row.label).color(MUTED));
+                            ui.add(egui::Label::new(&row.values[0]).wrap());
+                            ui.end_row();
+                        }
+                    });
             }
             return;
         }
         ui.add_space(10.0);
-        ui.label(RichText::new("COMPARE DETAILS").small().color(MUTED));
+        section_title(ui, "Compare details");
         egui::ScrollArea::horizontal()
             .id_salt("compare-details")
             .show(ui, |ui| {
@@ -228,4 +229,10 @@ impl PhotoSortApp {
                 }
             });
     }
+}
+
+/// Sentence-case section heading for the Details panel.
+fn section_title(ui: &mut egui::Ui, title: &str) {
+    ui.label(RichText::new(title).font(medium(12.5)).color(INK));
+    ui.add_space(2.0);
 }

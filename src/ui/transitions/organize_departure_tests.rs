@@ -120,6 +120,7 @@ fn smoke_exit_starts_on_first_frame_and_requests_normal_close_once() {
         PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None)
             .with_smoke_test(Duration::from_millis(200));
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let first = ctx.run(
         egui::RawInput {
             time: Some(100.0),

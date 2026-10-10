@@ -365,49 +365,6 @@ impl PhotoSortApp {
                 });
         }
     }
-    pub(super) fn workflow_footer(&mut self, ctx: &egui::Context) {
-        if self.root.is_none() {
-            return;
-        }
-        egui::TopBottomPanel::bottom("workflow_navigation").show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                let previous = self.preferences.neighbor(self.step, false);
-                let next = self.preferences.neighbor(self.step, true);
-                if ui
-                    .add_enabled(
-                        previous.is_some() && !self.busy,
-                        egui::Button::new(
-                            previous.map_or("First step".into(), |s| format!("< {}", s.title())),
-                        ),
-                    )
-                    .clicked()
-                {
-                    self.switch_step(previous.unwrap());
-                }
-                if ui
-                    .add_enabled(
-                        next.is_some() && !self.busy,
-                        egui::Button::new(
-                            next.map_or("Final step".into(), |s| format!("{} >", s.title())),
-                        ),
-                    )
-                    .clicked()
-                {
-                    self.switch_step(next.unwrap());
-                }
-                if self.preferences.show_shortcuts {
-                    ui.label(
-                        RichText::new("Ctrl/Cmd+Alt+1–5 · Switch step")
-                            .small()
-                            .color(MUTED),
-                    );
-                }
-            });
-            if self.preferences.show_shortcuts {
-                ui.label(RichText::new(workflow_hint(self.step)).small().color(MUTED));
-            }
-        });
-    }
 }
 pub(super) fn workflow_hint(step: Step) -> &'static str {
     match step {

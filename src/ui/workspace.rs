@@ -1435,19 +1435,18 @@ impl PhotoSortApp {
         self.was_wide = wide;
         let compact = ctx.content_rect().width() < 1000.0;
         self.header(ctx);
-        if compact {
-            self.compact_steps(ctx);
-        } else {
-            self.sidebar(ctx);
-        }
         self.footer(ctx);
-        self.workflow_footer(ctx);
         if self.inspector && self.catalog.is_some() && ctx.content_rect().width() > 1180.0 {
             egui::SidePanel::right("inspector")
                 .resizable(true)
-                .default_width(245.0)
-                .width_range(220.0..=350.0)
-                .frame(egui::Frame::new().fill(PANEL).inner_margin(18))
+                .default_width(300.0)
+                .width_range(260.0..=440.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(PANEL)
+                        .inner_margin(S4 as i8)
+                        .stroke(Stroke::new(1.0, LINE)),
+                )
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
                 });
@@ -1456,7 +1455,7 @@ impl PhotoSortApp {
             .frame(
                 egui::Frame::new()
                     .fill(BG)
-                    .inner_margin(if compact { 16 } else { 26 }),
+                    .inner_margin(if compact { 12 } else { 16 }),
             )
             .show(ctx, |ui| {
                 if self.root.is_none() {

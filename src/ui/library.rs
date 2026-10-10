@@ -207,10 +207,11 @@ impl PhotoSortApp {
     }
 
     pub(super) fn grid(&mut self, ui: &mut egui::Ui) {
-        let columns = (ui.available_width() / 190.0).floor().max(1.0) as usize;
+        let gap = ui.spacing().item_spacing.x;
+        let columns = ((ui.available_width() + gap) / 200.0).floor().max(1.0) as usize;
         let cell_width =
-            (ui.available_width() - 10.0 * (columns.saturating_sub(1) as f32)) / columns as f32;
-        let row_height = cell_width * 0.67 + 52.0;
+            (ui.available_width() - gap * (columns.saturating_sub(1) as f32)) / columns as f32;
+        let row_height = cell_width * 0.75 + CAPTION;
         let rows = self.filtered.len().div_ceil(columns);
         let scroll = self.library_scroll(ui, row_height, columns, egui::Id::new("library_grid"));
         let output = scroll.show_rows(ui, row_height, rows, |ui, range| {
@@ -228,7 +229,10 @@ impl PhotoSortApp {
         self.library_offset = output.state.offset.y;
     }
 
+    /// A photo tile. Grid tiles carry a two-line caption; short tiles (the
+    /// filmstrip) are image-only and name the photo in their tooltip.
     pub(super) fn card(&mut self, ui: &mut egui::Ui, index: usize, width: f32, height: f32) {
+        use egui_phosphor::regular as icon;
         let media = self.media[index].clone();
         let id = media.id;
         let texture = self.texture(id, false);
@@ -236,6 +240,7 @@ impl PhotoSortApp {
         let active = self.active == Some(id);
         let comparison = self.comparison.contains(&id);
         let selected = self.library_selection_mode() && self.selection.contains(id);
+        let captioned = height >= 2.0 * CAPTION + 40.0;
         let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), Sense::click());
         response.widget_info(|| {
             egui::WidgetInfo::selected(
@@ -245,10 +250,15 @@ impl PhotoSortApp {
                 media.name(),
             )
         });
-        ui.painter().rect_filled(rect, 8.0, CARD);
+        let painter = ui.painter_at(rect);
+        let hovered = response.hovered();
+        painter.rect_filled(rect, R_TILE, if hovered { CARD_HOVER } else { CARD });
         let image_rect = egui::Rect::from_min_max(
-            rect.min + egui::vec2(5.0, 5.0),
-            egui::pos2(rect.right() - 5.0, rect.bottom() - 49.0),
+            rect.min + egui::vec2(S1, S1),
+            egui::pos2(
+                rect.right() - S1,
+                rect.bottom() - if captioned { CAPTION } else { S1 },
+            ),
         );
         if let Some(texture) = texture {
             paint_image(
@@ -260,105 +270,131 @@ impl PhotoSortApp {
                 self.preview_turns(id),
             );
         } else {
-            ui.painter().text(
+            painter.text(
                 image_rect.center(),
                 Align2::CENTER_CENTER,
                 if self.failures.contains_key(&id) {
-                    "Preview unavailable"
+                    icon::IMAGE_BROKEN
                 } else if media.kind == MediaKind::Video {
-                    "VIDEO"
+                    icon::FILM_STRIP
                 } else {
-                    "PS"
+                    icon::IMAGE
                 },
-                FontId::proportional(13.0),
-                MUTED,
+                FontId::proportional(22.0),
+                FAINT,
+            );
+        }
+        if media.kind == MediaKind::Video && texture_is_drawn(&self.textures, id) {
+            badge(
+                &painter,
+                image_rect.left_bottom() + egui::vec2(S1, -S1),
+                Align2::LEFT_BOTTOM,
+                icon::PLAY,
+                INK,
             );
         }
         if d.rejected {
-            ui.painter()
-                .rect_filled(image_rect, 4.0, Color32::from_black_alpha(150));
-            ui.painter().text(
-                image_rect.center(),
-                Align2::CENTER_CENTER,
-                "MARKED",
-                FontId::proportional(13.0),
+            painter.rect_filled(image_rect, 4.0, Color32::from_black_alpha(130));
+            badge(
+                &painter,
+                image_rect.left_top() + egui::vec2(S1, S1),
+                Align2::LEFT_TOP,
+                &format!("{} Trash", icon::TRASH),
                 RED,
             );
         }
+        let rating = self.selected_rating(id);
+        if rating > 0 && !captioned {
+            badge(
+                &painter,
+                image_rect.right_top() + egui::vec2(-S1, S1),
+                Align2::RIGHT_TOP,
+                &"★".repeat(rating as usize),
+                ACCENT,
+            );
+        }
         if active || comparison || selected {
-            ui.painter().rect_stroke(
+            painter.rect_stroke(
                 rect,
-                8.0,
+                R_TILE,
                 Stroke::new(
-                    2.0,
-                    if active {
-                        ACCENT
-                    } else {
-                        Color32::from_rgb(216, 187, 128)
-                    },
+                    if active { 2.0 } else { 1.5 },
+                    if active { ACCENT } else { MUTED },
                 ),
                 StrokeKind::Inside,
             );
         }
-        let name = media.name();
-        let short = if name.chars().count() > 26 {
-            format!("{}…", name.chars().take(24).collect::<String>())
-        } else {
-            name
-        };
-        ui.painter().text(
-            egui::pos2(rect.left() + 11.0, rect.bottom() - 34.0),
-            Align2::LEFT_CENTER,
-            short,
-            FontId::proportional(12.0),
-            INK,
-        );
-        let rating = self.selected_rating(id);
-        let detail = if self.step == Step::Rotation {
-            self.rotation_review
-                .choice(id)
-                .map(|c| {
-                    format!(
-                        "{} · {}°",
-                        if c.confirmed {
-                            "Confirmed"
-                        } else {
-                            "Unconfirmed"
-                        },
-                        c.degrees()
-                    )
-                })
-                .unwrap_or_else(|| "Not reviewed".into())
-        } else if rating > 0 {
-            "★".repeat(rating as usize).to_string()
-        } else if let Some(a) = self.analysis.get(&id) {
-            if !a.issues.is_empty() {
-                a.issues.join(" · ")
+        if selected && !active {
+            badge(
+                &painter,
+                image_rect.right_bottom() + egui::vec2(-S1, -S1),
+                Align2::RIGHT_BOTTOM,
+                icon::CHECK,
+                ACCENT,
+            );
+        }
+        if captioned {
+            let name = media.name();
+            let left = rect.left() + S2;
+            let text_rect = egui::Rect::from_min_max(
+                egui::pos2(left, image_rect.bottom()),
+                egui::pos2(rect.right() - S2, rect.bottom()),
+            );
+            painter.with_clip_rect(text_rect).text(
+                egui::pos2(left, image_rect.bottom() + 11.0),
+                Align2::LEFT_CENTER,
+                name,
+                FontId::proportional(12.0),
+                INK,
+            );
+            let (detail, color) = if self.step == Step::Rotation {
+                (
+                    self.rotation_review
+                        .choice(id)
+                        .map(|c| {
+                            format!(
+                                "{} · {}°",
+                                if c.confirmed {
+                                    "Confirmed"
+                                } else {
+                                    "Unconfirmed"
+                                },
+                                c.degrees()
+                            )
+                        })
+                        .unwrap_or_else(|| "Not reviewed".into()),
+                    MUTED,
+                )
+            } else if rating > 0 {
+                ("★".repeat(rating as usize), ACCENT)
+            } else if let Some(a) = self.analysis.get(&id).filter(|a| !a.issues.is_empty()) {
+                (a.issues.join(" · "), RED)
             } else {
-                format!("Quality {:.0}", a.score)
-            }
-        } else {
-            format!(
-                "{}  ·  {:.1} MB",
-                media
-                    .path
-                    .extension()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_uppercase(),
-                media.fingerprint.bytes as f64 / 1048576.0
-            )
-        };
-        let detail = self
-            .browse_group_label(id)
-            .map_or_else(|| detail.clone(), |g| format!("{g} · {detail}"));
-        ui.painter().with_clip_rect(rect.shrink(4.0)).text(
-            egui::pos2(rect.left() + 11.0, rect.bottom() - 15.0),
-            Align2::LEFT_CENTER,
-            detail,
-            FontId::proportional(10.0),
-            if rating > 0 { ACCENT } else { MUTED },
-        );
+                (
+                    format!(
+                        "{} · {:.1} MB",
+                        media
+                            .path
+                            .extension()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_uppercase(),
+                        media.fingerprint.bytes as f64 / 1048576.0
+                    ),
+                    FAINT,
+                )
+            };
+            let detail = self
+                .browse_group_label(id)
+                .map_or(detail.clone(), |g| format!("{g} · {detail}"));
+            painter.with_clip_rect(text_rect).text(
+                egui::pos2(left, image_rect.bottom() + 25.0),
+                Align2::LEFT_CENTER,
+                detail,
+                FontId::proportional(11.0),
+                color,
+            );
+        }
         self.library_response(
             ui,
             response.on_hover_text(media.path.display().to_string()),
@@ -427,6 +463,22 @@ impl PhotoSortApp {
             }
         });
     }
+}
+
+/// Caption height under grid tiles.
+pub(super) const CAPTION: f32 = 34.0;
+
+fn texture_is_drawn(textures: &HashMap<(MediaId, bool), Texture>, id: MediaId) -> bool {
+    textures.contains_key(&(id, false))
+}
+
+/// A small pill on top of an image: dark translucent fill, coloured text.
+fn badge(painter: &egui::Painter, anchor: egui::Pos2, align: Align2, text: &str, color: Color32) {
+    let galley = painter.layout_no_wrap(text.to_owned(), FontId::proportional(11.0), color);
+    let size = galley.size() + egui::vec2(10.0, 4.0);
+    let rect = align.anchor_size(anchor, size);
+    painter.rect_filled(rect, 4.0, Color32::from_black_alpha(170));
+    painter.galley(rect.min + egui::vec2(5.0, 2.0), galley, color);
 }
 
 #[cfg(test)]

@@ -151,9 +151,10 @@ impl PhotoSortApp {
             self.set_active(id);
         }
     }
+    /// Inline, so it wraps with whatever row it is placed in.
     pub(super) fn selection_controls(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(format!("{} selected", self.selection.len()));
+        {
+            ui.label(RichText::new(format!("{} selected", self.selection.len())).color(MUTED));
             ui.add_enabled_ui(self.selection_ready(), |ui| {
                 ui.menu_button("Selection", |ui| {
                     if ui.button("Select all visible · Ctrl/Cmd+A").clicked() { self.select_all_visible(); ui.close(); }
@@ -165,7 +166,7 @@ impl PhotoSortApp {
                 if ui.add_enabled((2..=9).contains(&self.selection.len()), egui::Button::new("Compare selected"))
                     .on_hover_text("Compare 2–9 selected photos. Larger selections can still be rated, rotated or marked together.").clicked() { self.compare_selection(); }
             });
-        });
+        }
     }
     pub(super) fn selection_actions(&mut self, ui: &mut egui::Ui) {
         self.group_controls(ui);
