@@ -29,7 +29,7 @@ open ".tools/native-vips/PhotoSort Rust.app"
 ```
 
 The older `.tools/native/PhotoSort Rust.app` is a previous build. The current
-bundle was built from `a62ba38` (10 October 2026) after the full default and minimal
+bundle was built from `d436ad2` (10 October 2026) after the full default and minimal
 suites, strict clippy and fmt passed; `--diagnostics`, `--check-runtime` and
 `--smoke-test` pass on it. Earlier native interaction checks are in
 `docs/diagnostics/` and [the validation log](docs/history/VALIDATION-LOG.md).
