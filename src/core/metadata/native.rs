@@ -99,7 +99,22 @@ impl Snapshot {
             .parse()
             .unwrap_or(self.summary.height);
         result.camera = self.raw("Exif.Image.Model").into();
-        result.lens = self.raw("Exif.Photo.LensModel").into();
+        // Same fallbacks as the reference sidebar: model, specification, XMP.
+        result.lens = [
+            self.raw("Exif.Photo.LensModel").trim().to_owned(),
+            crate::core::details::lens_specification(
+                &self
+                    .raw("Exif.Photo.LensSpecification")
+                    .split_whitespace()
+                    .filter_map(ratio)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap_or_default(),
+            self.raw("Xmp.aux.Lens").trim().to_owned(),
+        ]
+        .into_iter()
+        .find(|lens| !lens.is_empty())
+        .unwrap_or_default();
         result.captured = self.raw("Exif.Photo.DateTimeOriginal").into();
         result.exposure = self.display("Exif.Photo.ExposureTime");
         result.aperture = self.display("Exif.Photo.FNumber");

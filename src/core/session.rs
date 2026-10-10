@@ -6,16 +6,30 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Application data (preferences, sessions, saved views, models). Set
+/// `PHOTOSORT_DATA_ROOT` to relocate it, e.g. for portable or isolated runs.
 pub fn data_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("PhotoSort-Rust")
+    root_override("PHOTOSORT_DATA_ROOT").unwrap_or_else(|| {
+        dirs::data_local_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("PhotoSort-Rust")
+    })
 }
+/// Regenerable caches. `PHOTOSORT_CACHE_ROOT` relocates them.
 pub fn cache_dir() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("PhotoSort-Rust")
+    root_override("PHOTOSORT_CACHE_ROOT")
+        .unwrap_or_else(|| {
+            dirs::cache_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("PhotoSort-Rust")
+        })
         .join("proxy-v1")
+}
+/// Only absolute paths are honoured, so a stray relative value cannot scatter
+/// state into whatever the working directory happens to be.
+fn root_override(name: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(std::env::var_os(name)?);
+    path.is_absolute().then_some(path)
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Session {

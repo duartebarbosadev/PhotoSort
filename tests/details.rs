@@ -158,3 +158,45 @@ fn rational_parsing_rejects_zero_denominators_and_garbage() {
     assert_eq!(details::ratio("n/a"), None);
     assert_eq!(details::ratio("inf"), None);
 }
+
+#[test]
+fn shutter_speeds_read_like_a_camera() {
+    let render = |exposure: &str| {
+        let meta = Metadata {
+            exposure: exposure.into(),
+            ..Default::default()
+        };
+        let media = Media {
+            id: photosort::core::model::MediaId(1),
+            path: "x.jpg".into(),
+            kind: photosort::core::model::MediaKind::Photo,
+            fingerprint: Default::default(),
+        };
+        value(&details::sections(&[(&media, &meta)]), "Shutter")[0].clone()
+    };
+    assert_eq!(render("249783/100000000"), "1/400 s");
+    assert_eq!(render("0.00249783 s"), "1/400 s");
+    assert_eq!(render("1/250 s"), "1/250 s");
+    assert_eq!(render("1/250"), "1/250 s");
+    assert_eq!(render("2/1"), "2 s");
+    assert_eq!(render("0.5"), "0.5 s");
+}
+
+#[test]
+fn lens_specification_reads_like_a_lens_name() {
+    use details::lens_specification as spec;
+    assert_eq!(
+        spec(&[24.0, 70.0, 2.8, 2.8]).as_deref(),
+        Some("24–70 mm f/2.8")
+    );
+    assert_eq!(
+        spec(&[18.0, 55.0, 3.5, 5.6]).as_deref(),
+        Some("18–55 mm f/3.5–5.6")
+    );
+    assert_eq!(
+        spec(&[50.0, 50.0, 1.8, 1.8]).as_deref(),
+        Some("50 mm f/1.8")
+    );
+    assert_eq!(spec(&[35.0, 0.0, f64::NAN, 0.0]).as_deref(), Some("35 mm"));
+    assert_eq!(spec(&[0.0, 0.0, 0.0, 0.0]), None);
+}

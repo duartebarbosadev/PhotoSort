@@ -304,9 +304,11 @@ impl PhotoSortApp {
         if let Some(folder) = folder {
             app.open(folder);
         }
+        // Without the native hook, Quit still closes through the window and the
+        // shared departure guard; nothing here is actionable for the user.
         match super::platform::QuitHandler::install(&cc.egui_ctx) {
             Ok(handler) => app.native_quit = handler,
-            Err(error) => app.error = Some(error),
+            Err(error) => tracing::warn!(%error, "native quit handler unavailable"),
         }
         app
     }
@@ -1538,6 +1540,26 @@ impl PhotoSortApp {
         }
     }
 }
+/// Hooks for the headless screenshot gallery (`examples/ui_gallery.rs`); not
+/// part of the application API.
+#[doc(hidden)]
+impl PhotoSortApp {
+    pub fn gallery_step(&mut self, step: Step) {
+        self.switch_step(step);
+    }
+    pub fn gallery_review(&mut self, review: bool) {
+        self.review = review;
+    }
+    /// True while discovery, metadata, thumbnails or analysis are still arriving.
+    pub fn gallery_busy(&self) -> bool {
+        self.scanning
+            || self.busy
+            || !self.requested.is_empty()
+            || self.metadata_run.is_some()
+            || self.analysis_run.is_some()
+    }
+}
+
 impl eframe::App for PhotoSortApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let native_requested = self

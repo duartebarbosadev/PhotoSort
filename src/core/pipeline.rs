@@ -220,7 +220,7 @@ impl Pipeline {
         // names are derived separately and must never become persisted EXIF.
         let record_key = blake3::hash(
             format!(
-                "metadata-v3-details:heif={}:os={}:{key}",
+                "metadata-v4-lens:heif={}:os={}:{key}",
                 cfg!(feature = "heif"),
                 std::env::consts::OS
             )

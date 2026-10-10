@@ -31,6 +31,13 @@ pub(super) fn read(path: &Path, result: &mut Metadata, dates: &mut Dates) {
             .count();
         result.camera = text(exif::Tag::Model);
         result.lens = text(exif::Tag::LensModel);
+        if result.lens.trim().is_empty()
+            && let Some(field) = exif.get_field(exif::Tag::LensSpecification, exif::In::PRIMARY)
+            && let exif::Value::Rational(values) = &field.value
+        {
+            let values: Vec<f64> = values.iter().map(exif::Rational::to_f64).collect();
+            result.lens = crate::core::details::lens_specification(&values).unwrap_or_default();
+        }
         result.captured = text(exif::Tag::DateTimeOriginal);
         dates.assign(0, Some(&result.captured));
         dates.assign(2, Some(&text(exif::Tag::DateTime)));

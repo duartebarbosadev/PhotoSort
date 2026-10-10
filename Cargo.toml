@@ -93,3 +93,5 @@ wgpu = { version = "27", default-features = false, features = ["vulkan", "gles",
 
 [dev-dependencies]
 jpeg-encoder = "0.7.1"
+# Headless rendering for the UI screenshot gallery and visual checks.
+egui_kittest = { version = "0.33.3", features = ["wgpu", "eframe"] }
