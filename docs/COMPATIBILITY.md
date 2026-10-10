@@ -107,7 +107,13 @@ Easy Delete combines exposure/sharpness review, full-content exact copies and
 subject-sensitive near-duplicate verification with alignment, masked structural
 comparison and lazy face evidence. Completed pair results are cached. Pick Best
 uses aesthetics, sharpness and eye-closure evidence as suggestions; users confirm
-the outcome. Eye suggestions can fail on small, obscured or angled faces. There
+the outcome. Eye suggestions can fail on small, obscured or angled faces.
+Faces must also re-detect on a centred crop, and eyes count as closed below a Face
+Mesh eye ratio of 0.09 (the reference used 0.21). On 79 hand-labelled faces from the
+sample library this kept all 10 closed-eye faces, dropped 8 wrong flags (downward
+gazes, smiling squints, false detections) and 3 of 5 false faces, with no real face
+lost. The rules were tuned on that same set; `examples/audit_faces.rs` repeats the
+measurement on any folder. There
 is no claim of perfect automatic keeper selection.
 
 Technical measurements, full-content hashes and aesthetic evidence persist under

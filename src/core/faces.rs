@@ -60,6 +60,16 @@ struct Detection {
     size: f32,
     angle: f32,
 }
+/// Part of the face-cache identity; change it whenever a rule below changes.
+pub const RECIPE: &str = "faces-v2-redetect060-eyes009";
+/// Face Mesh eye aspect ratio below which an eye pair counts as closed. On 79
+/// hand-labelled faces, closed eyes measured 0.016–0.059 while downward gazes,
+/// smiling squints and false detections measured 0.10–0.21; the reference 0.21
+/// flagged 18 faces of which only 10 were closed.
+const CLOSED_EYE_RATIO: f32 = 0.09;
+/// Minimum detector score on a crop centred on the candidate. In the same set it
+/// rejected 3 of 5 false faces (roof, blur, dark patch); real faces scored ≥ 0.66.
+const MIN_REDETECT: f32 = 0.6;
 pub fn analyze(models: &mut super::models::Models, asset: &Asset) -> Result<Faces> {
     analyze_cancellable(models, asset, || false)
 }
@@ -67,6 +77,36 @@ pub fn analyze_cancellable(
     models: &mut super::models::Models,
     asset: &Asset,
     cancelled: impl Fn() -> bool,
+) -> Result<Faces> {
+    detect(models, asset, cancelled, None)
+}
+/// Every detector candidate with the evidence used to accept or reject it, for
+/// offline threshold evaluation. Not used by the application itself.
+#[derive(Clone, Debug, Serialize)]
+pub struct Candidate {
+    pub detector_score: f32,
+    pub presence: f32,
+    /// Mean eye aspect ratio; `NaN` for rejected candidates.
+    pub eye_ratio: f32,
+    /// Detector square in normalized source coordinates.
+    pub bbox: [f32; 4],
+    pub accepted: bool,
+    /// Best detector score on a crop centred on this candidate.
+    pub redetect: f32,
+}
+pub fn analyze_with_candidates(
+    models: &mut super::models::Models,
+    asset: &Asset,
+) -> Result<(Faces, Vec<Candidate>)> {
+    let mut candidates = Vec::new();
+    let faces = detect(models, asset, || false, Some(&mut candidates))?;
+    Ok((faces, candidates))
+}
+fn detect(
+    models: &mut super::models::Models,
+    asset: &Asset,
+    cancelled: impl Fn() -> bool,
+    mut report: Option<&mut Vec<Candidate>>,
 ) -> Result<Faces> {
     let detector = model_path("face_detector.onnx").context("Face detector is not installed")?;
     let landmarks_model =
@@ -157,7 +197,41 @@ pub fn analyze_cancellable(
             landmarks.len() >= 468 * 3 && !presence.is_empty(),
             "Unexpected Face Mesh output"
         );
-        if sigmoid(presence[0]) < 0.5 {
+        let square = [
+            (face.x - face.size / 2.0) / image.width() as f32,
+            (face.y - face.size / 2.0) / image.height() as f32,
+            (face.x + face.size / 2.0) / image.width() as f32,
+            (face.y + face.size / 2.0) / image.height() as f32,
+        ];
+        // Texture that barely passes in the whole photo rarely looks like a face
+        // once centred and upright; real faces re-detect strongly.
+        let redetect = {
+            let input = sample(
+                image,
+                face.x,
+                face.y,
+                face.size * 2.0,
+                face.angle,
+                128,
+                true,
+            )?;
+            let output = models.infer_all("face_detector", &detector, 128, input)?;
+            output[1].iter().copied().map(sigmoid).fold(0.0, f32::max)
+        };
+        let mut record = |presence: f32, eye_ratio: f32, accepted: bool| {
+            if let Some(report) = report.as_deref_mut() {
+                report.push(Candidate {
+                    detector_score: face.score,
+                    presence,
+                    eye_ratio,
+                    bbox: square,
+                    accepted,
+                    redetect,
+                });
+            }
+        };
+        if sigmoid(presence[0]) < 0.5 || redetect < MIN_REDETECT {
+            record(sigmoid(presence[0]), f32::NAN, false);
             continue;
         }
         let point = |index: usize| {
@@ -190,7 +264,8 @@ pub fn analyze_cancellable(
         faces.count += 1;
         let left = eye_aspect_ratio(landmarks, [33, 160, 158, 133, 153, 144]);
         let right = eye_aspect_ratio(landmarks, [362, 385, 387, 263, 373, 380]);
-        if (left + right) / 2.0 < 0.21 {
+        record(sigmoid(presence[0]), (left + right) / 2.0, true);
+        if (left + right) / 2.0 < CLOSED_EYE_RATIO {
             faces.closed_eyes += 1;
         }
         if face.size > largest {

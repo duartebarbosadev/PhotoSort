@@ -602,7 +602,11 @@ pub fn recognition_signature() -> String {
     model_signature(&[super::face_groups::MODEL])
 }
 pub fn face_signature() -> String {
-    model_signature(&["face_detector.onnx", "face_landmarks_detector.onnx"])
+    format!(
+        "{}:{}",
+        super::faces::RECIPE,
+        model_signature(&["face_detector.onnx", "face_landmarks_detector.onnx"])
+    )
 }
 fn model_signature(names: &[&str]) -> String {
     let mut hash = blake3::Hasher::new();
