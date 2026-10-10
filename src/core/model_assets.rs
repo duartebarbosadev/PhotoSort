@@ -18,6 +18,7 @@ pub enum Id {
     Aesthetic,
     Detector,
     Landmarks,
+    Blendshapes,
     People,
     Rotation,
 }
@@ -31,7 +32,7 @@ pub struct Asset {
     pub url: Option<&'static str>,
     pub license: &'static str,
 }
-pub const ALL: [Asset; 6] = [
+pub const ALL: [Asset; 7] = [
     Asset {
         id: Id::Scene,
         name: "dinov2-small.onnx",
@@ -67,8 +68,18 @@ pub const ALL: [Asset; 6] = [
         name: "face_landmarks_detector.onnx",
         title: "Face landmarks",
         purpose: "People Organize, Easy Delete, Pick Best and Cull",
-        // Pooling pads made explicit for Core ML (scripts/explicit_pool_pads.py).
+        // Pooling pads made explicit for Core ML (scripts/explicit_pads.py).
         bytes: 4_996_107,
+        url: None,
+        license: "MediaPipe / Apache-2.0",
+    },
+    Asset {
+        id: Id::Blendshapes,
+        name: "face_blendshapes.onnx",
+        title: "Eye openness",
+        purpose: "Closed-eye checks in Easy Delete, Pick Best and Cull",
+        // MediaPipe face_blendshapes.tflite via scripts/convert_blendshapes.py.
+        bytes: 1_884_171,
         url: None,
         license: "MediaPipe / Apache-2.0",
     },
@@ -128,9 +139,15 @@ pub fn required(profile: super::jobs::AnalysisProfile) -> &'static [Id] {
     match profile {
         Technical => &[],
         Visual | Mixed => &[Id::Scene],
-        Faces => &[Id::Detector, Id::Landmarks, Id::People],
-        Duplicates | Subjects => &[Id::Scene, Id::Detector, Id::Landmarks],
-        Quality => &[Id::Scene, Id::Aesthetic, Id::Detector, Id::Landmarks],
+        Faces => &[Id::Detector, Id::Landmarks, Id::Blendshapes, Id::People],
+        Duplicates | Subjects => &[Id::Scene, Id::Detector, Id::Landmarks, Id::Blendshapes],
+        Quality => &[
+            Id::Scene,
+            Id::Aesthetic,
+            Id::Detector,
+            Id::Landmarks,
+            Id::Blendshapes,
+        ],
     }
 }
 fn runtime_file() -> Option<PathBuf> {
@@ -664,7 +681,7 @@ mod tests {
         let state = worker.state();
         assert!(state.error.is_none());
         let snapshot = state.snapshot.unwrap();
-        assert_eq!(snapshot.rows.len(), 6);
+        assert_eq!(snapshot.rows.len(), ALL.len());
         assert!(
             snapshot
                 .rows

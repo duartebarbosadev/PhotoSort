@@ -108,12 +108,14 @@ subject-sensitive near-duplicate verification with alignment, masked structural
 comparison and lazy face evidence. Completed pair results are cached. Pick Best
 uses aesthetics, sharpness and eye-closure evidence as suggestions; users confirm
 the outcome. Eye suggestions can fail on small, obscured or angled faces.
-Faces must also re-detect on a centred crop, and eyes count as closed below a Face
-Mesh eye ratio of 0.09 (the reference used 0.21). On 79 hand-labelled faces from the
-sample library this kept all 10 closed-eye faces, dropped 8 wrong flags (downward
-gazes, smiling squints, false detections) and 3 of 5 false faces, with no real face
-lost. The rules were tuned on that same set; `examples/audit_faces.rs` repeats the
-measurement on any folder. There
+Faces must also re-detect on a centred crop. Eyes count as closed when both
+MediaPipe blendshape blink scores reach 0.55 and the Face Mesh eye ratio is below
+0.15 (the reference used ratio < 0.21 alone). On 76 hand-labelled faces from the
+sample library this flags all 10 closed-eye faces and nothing else; any blink cutoff
+from 0.44 to 0.68 gives the same result. The reference rule also flagged three
+downward gazes, a squint and a false face. Winks are not detected: Face Mesh places
+both eyelids symmetrically, so neither signal sees one eye closed. The rules were
+tuned on the same faces; `examples/audit_faces.rs` repeats the measurement. There
 is no claim of perfect automatic keeper selection.
 
 Technical measurements, full-content hashes and aesthetic evidence persist under
@@ -196,7 +198,7 @@ remain separate acceptance criteria.
 
 ## Startup maintenance and diagnostics
 
-`--clear-models` clears the six catalogued managed model filenames before startup,
+`--clear-models` clears the seven catalogued managed model filenames before startup,
 using the same model ownership as import/download setup. Bundled resources,
 external overrides, unknown files, runtime libraries, photos and saved sessions
 are outside that scope. The operation preflights the complete known set, refuses
@@ -207,7 +209,7 @@ model inspector and reports build capabilities, model verification, runtime
 presence and override presence. It neither initializes a graphical window nor
 loads ONNX Runtime. `files_ready` is file readiness for the enabled build, not
 proof of ABI compatibility, successful inference or UI health. A minimal build
-reports AI as disabled rather than requiring AI files. `--check-runtime` additionally exercises all six native AI sessions through the
+reports AI as disabled rather than requiring AI files. `--check-runtime` additionally exercises all seven native AI sessions through the
 shared production services on an embedded licensed fixture, then repeats the work
 to check session reuse. The default is CPU; `--runtime-backend` selects cpu,
 auto, coreml, cuda or directml without changing saved preferences. Per-model JSON

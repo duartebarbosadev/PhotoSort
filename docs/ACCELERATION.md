@@ -105,7 +105,7 @@ selects a diagnostic backend through the same production registry and fallback
 policy. This uses the embedded licensed fixture and does not require a photo
 library or change the saved backend preference.
 
-Inspect `requested_backend` and all six `model_providers` records in its JSON,
+Inspect `requested_backend` and all seven `model_providers` records in its JSON,
 including fallback details. Native compiler/runtime output is routed to stderr
 for the command lifetime, including shutdown, so stdout remains JSON. `passed` and exit status describe successful inference
 and session reuse, allowing CPU fallback. `accelerated_models` and `cpu_models`
@@ -144,11 +144,10 @@ aesthetic score and Pick Best group is identical to the unfolded model at 8 and 
 threads. Back to back on the same machine, a fresh Quality analysis peaked at a
 2.44 GiB memory footprint instead of 4.6 GiB (RSS 2.4–2.7 vs 3.6–4.2 GiB).
 
-All six models now compile for Core ML: the face-landmarks export had pooling
-layers with `auto_pad=VALID`, which the Core ML converter rejects, and now uses the
-equivalent explicit zero pads (`scripts/explicit_pool_pads.py`, bit-identical on
-CPU). On the sample library Core ML and CPU find the same 79 faces, the same
-closed eyes and the same groups (aesthetic scores within 0.00001). A fresh Core ML
-run still pays one-time compilation (204 s and 6.5 GiB vs 103 s and 2.7 GiB on
-CPU), so CPU stays the default.
-History: [the preparation report](diagnostics/offline-model-2026-10-08/README.md).
+All seven models compile for Core ML. The face-landmarks export had pooling layers
+with `auto_pad=VALID` and the blendshape export convolutions with no `pads`
+attribute; both mean zero padding but the Core ML converter requires explicit pads,
+so `scripts/explicit_pads.py` writes them (bit-identical on CPU). On the sample
+library Core ML and CPU find the same 76 faces, the same closed-eye photos and the
+same groups. A fresh Core ML run still pays one-time compilation, so CPU stays the
+default.

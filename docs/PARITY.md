@@ -53,7 +53,7 @@ execution with per-model CPU fallback; session logging and `--diagnostics` /
    evidence for the accelerators.
 3. **Accuracy:** grouping, face, keeper-ranking and rotation checks use 186 distinct
    photos. Broader labelled sets are needed before claiming accuracy.
-4. **Accelerators beyond Core ML:** all six models run on Core ML with results
+4. **Accelerators beyond Core ML:** all seven models run on Core ML with results
    matching CPU on the sample library; CUDA and DirectML remain untested (item 2).
    Measurements on a real 517-photo library are in [BENCHMARKS.md](BENCHMARKS.md).
 

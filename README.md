@@ -89,7 +89,7 @@ also works with the JSON diagnostic commands and leaves stdout as JSON.
 `--check-runtime` goes further: it verifies the files, loads the native inference
 engine and runs two CPU passes on an embedded licensed fixture through the shared
 scene, aesthetic, face geometry, recognition and orientation services. Its JSON
-reports each stage, counters and session reuse. All six model sessions must be
+reports each stage, counters and session reuse. All seven model sessions must be
 reused on the second pass; replacing a failed accelerator during the first pass
 is allowed. It uses one inference thread, never opens a
 window or a photo library, and writes no analysis cache. It exits with failure in
@@ -108,7 +108,7 @@ photosort --check-runtime --runtime-backend coreml
 The JSON includes `requested_backend`, `model_providers` (with fallback reasons),
 `accelerated_models` and `cpu_models`. **A successful exit validates inference,
 including CPU fallback; it does not prove the requested accelerator was selected.**
-Check all six provider records. Native compiler/runtime messages go to stderr,
+Check all seven provider records. Native compiler/runtime messages go to stderr,
 keeping stdout valid JSON even during native shutdown. The two counts summarize configured sessions only
 after a complete successful check, not individual operator placement. This command
 does not change Settings or persist PhotoSort prepared-model caches; native

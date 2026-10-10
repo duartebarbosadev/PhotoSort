@@ -56,6 +56,7 @@ fn aligned_face_crops_match_reference_pixels_without_mutating_source() {
             &asset,
             &Face {
                 landmarks: Vec::new(),
+                blink: None,
                 bbox: [2., 2., 3., 3.],
                 eyes: [[0., 0.], [1., 0.]]
             }
@@ -67,6 +68,7 @@ fn aligned_face_crops_match_reference_pixels_without_mutating_source() {
             &asset,
             &Face {
                 landmarks: Vec::new(),
+                blink: None,
                 bbox: [f32::NAN, 0., 1., 1.],
                 eyes: [[0., 0.], [1., 0.]]
             }
