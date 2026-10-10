@@ -278,16 +278,24 @@ impl ImageWorker {
     /// Each step reports whether it did work, in which case the loop starts over so
     /// cache maintenance, inspection and evidence requests keep their priority.
     fn run(&mut self) {
-        while !self.publisher.stop.load(Ordering::Relaxed) {
-            if self.handle_cache_request()
-                || self.handle_inspection()
-                || self.handle_evidence()
-                || self.handle_work()
-                || self.step_analysis()
-            {
-                continue;
-            }
-            self.step_metadata_index();
+        // Work that panics every time (one corrupt state) must not spin; after
+        // a few failures in a row this worker stops and the crash notice
+        // asks for a restart.
+        let mut failures = 0;
+        while !self.publisher.stop.load(Ordering::Relaxed) && failures < 3 {
+            let publisher = self.publisher.clone();
+            let ok = publisher.guard(|| {
+                if self.handle_cache_request()
+                    || self.handle_inspection()
+                    || self.handle_evidence()
+                    || self.handle_work()
+                    || self.step_analysis()
+                {
+                    return;
+                }
+                self.step_metadata_index();
+            });
+            failures = if ok { 0 } else { failures + 1 };
         }
     }
 

@@ -118,6 +118,10 @@ pub struct PhotoSortApp {
     /// Recent folders that were missing at startup (e.g. an unplugged drive):
     /// hidden from the menu but kept, so they return once available again.
     missing_recent: HashSet<PathBuf>,
+    /// A crash report to tell the user about, and whether it is from a
+    /// previous session (true) or a background panic in this one (false).
+    crash_notice: Option<(PathBuf, bool)>,
+    crash_notice_shown: bool,
     preferences_path: Option<PathBuf>,
     preferences_draft: Option<crate::core::preferences::Preferences>,
     preferences_section: Option<preferences::Section>,
@@ -300,6 +304,9 @@ impl PhotoSortApp {
             Ok(preferences) => app.preferences = preferences,
             Err(e) => app.error = Some(format!("Preferences could not be loaded: {e}")),
         }
+        app.crash_notice = crate::core::crash::unseen_report(&crate::core::crash::directory())
+            .map(|path| (path, true));
+        app.crash_notice_shown = app.crash_notice.is_some();
         app.missing_recent = app
             .preferences
             .recent_folders
@@ -330,6 +337,8 @@ impl PhotoSortApp {
             video_context: None,
             preferences: Default::default(),
             missing_recent: HashSet::new(),
+            crash_notice: None,
+            crash_notice_shown: false,
             preferences_path: None,
             preferences_draft: None,
             preferences_section: None,

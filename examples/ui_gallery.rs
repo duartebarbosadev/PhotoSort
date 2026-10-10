@@ -154,6 +154,25 @@ fn main() -> anyhow::Result<()> {
         .render()
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .save(out.join("00-welcome.png"))?;
+    // The notice after a crash in the previous session.
+    photosort::core::crash::write_report(
+        &photosort::core::crash::directory(),
+        "main",
+        "gallery example",
+        "examples/ui_gallery.rs",
+        "",
+    )?;
+    let folder = library.path().to_path_buf();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(|cc| PhotoSortApp::new(cc, Some(folder)));
+    settle(&mut harness);
+    harness
+        .render()
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .save(out.join("13-crash-notice.png"))?;
+    eprintln!("13-crash-notice");
     Ok(())
 }
 

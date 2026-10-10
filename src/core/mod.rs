@@ -5,6 +5,7 @@ pub mod cache;
 mod cache_record;
 pub mod catalog;
 mod color;
+pub mod crash;
 pub mod faces;
 pub mod geography;
 pub mod jobs;

@@ -310,7 +310,23 @@ struct Publisher {
     stop: Arc<AtomicBool>,
     wake: Arc<dyn Fn() + Send + Sync>,
 }
+/// The error a worker publishes when one of its tasks panicked. The UI resets
+/// its busy state on it; the crash notice explains what happened.
+pub const WORKER_STOPPED: &str =
+    "A background task stopped unexpectedly. Try again; restart PhotoSort if it keeps happening.";
+
 impl Publisher {
+    /// Runs one unit of worker work. A panic becomes an error for the current
+    /// folder instead of ending the worker thread and leaving the UI waiting.
+    /// Returns false when the work panicked.
+    fn guard(&self, work: impl FnOnce()) -> bool {
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).is_ok();
+        if !ok {
+            let epoch = self.generation.load(Ordering::Acquire);
+            self.send(epoch, Event::Error(WORKER_STOPPED.into()));
+        }
+        ok
+    }
     fn cancelled(&self, epoch: u64) -> bool {
         self.stop.load(Ordering::Relaxed) || self.generation.load(Ordering::Acquire) != epoch
     }

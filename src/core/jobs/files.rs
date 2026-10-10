@@ -57,10 +57,12 @@ fn run(publisher: &Publisher, rx: &Receiver<Message<IoWork>>) {
         {
             continue;
         }
-        let files = Files { publisher, epoch };
-        if let Err(e) = files.handle(message.work) {
-            publisher.send(epoch, Event::Error(format!("{e:#}")));
-        }
+        let _ = publisher.guard(|| {
+            let files = Files { publisher, epoch };
+            if let Err(e) = files.handle(message.work) {
+                publisher.send(epoch, Event::Error(format!("{e:#}")));
+            }
+        });
     }
 }
 

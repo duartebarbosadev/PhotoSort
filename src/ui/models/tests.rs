@@ -111,7 +111,6 @@ fn model_dialog_fits_compact_and_wide_windows_without_loading_models_or_images()
     assert!(app.model_removal.is_some());
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    crate::ui::theme::install(&ctx);
     for running in [false, true] {
         let mut state = app.runtime.model_assets.state();
         state.running = running;

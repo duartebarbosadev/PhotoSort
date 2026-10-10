@@ -9,7 +9,6 @@ fn settings_errors_are_bounded_and_dismissible_without_hiding_footer_or_losing_d
         app.error = Some(error.clone());
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        crate::ui::theme::install(&ctx);
         ctx.enable_accesskit();
         let mut time = 0.;
         let mut frame = |app: &mut PhotoSortApp, events| {
@@ -127,7 +126,6 @@ fn cache_folder_settings_uses_injected_location_in_every_workflow_without_extra_
             app.open_settings(Section::Caches);
             let ctx = egui::Context::default();
             theme_install(&ctx);
-            crate::ui::theme::install(&ctx);
             ctx.enable_accesskit();
             let mut time = 0.;
             let mut frame = |app: &mut PhotoSortApp, events| {
@@ -480,7 +478,6 @@ fn settings_access_cache_and_general_anchors_keep_footer_visible_at_small_sizes(
         let (_dir, mut app) = fixture();
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        crate::ui::theme::install(&ctx);
         ctx.enable_accesskit();
         let mut time = 0.;
         for (section, label) in [

@@ -29,6 +29,7 @@ fn main() -> eframe::Result {
     let _logging = session_logging::start(options.log_file.as_deref(), options.log_level)
         .map_err(|e| eframe::Error::AppCreation(e.into()))?;
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "application started");
+    photosort::core::crash::install(photosort::core::crash::directory());
     let result = run(options);
     match &result {
         Ok(()) => tracing::info!("application stopped"),

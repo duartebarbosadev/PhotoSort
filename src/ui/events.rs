@@ -661,7 +661,13 @@ impl PhotoSortApp {
         }
         self.runtime.cancel_analysis();
         self.analysis_run = None;
-        self.error = Some(e);
+        // A worker panic is explained by the crash notice when the hook is
+        // installed; show the plain message only if there is no report.
+        if e != crate::core::jobs::WORKER_STOPPED
+            || crate::core::crash::background_panic().is_none()
+        {
+            self.error = Some(e);
+        }
         self.after_apply = None;
         if self.retry_plan.is_none() {
             self.rotation_plan = false;
