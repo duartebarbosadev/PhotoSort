@@ -156,7 +156,7 @@ fn pair(discard: MediaId, keep: MediaId) -> photosort::core::near_duplicates::ba
     }
 }
 #[test]
-fn review_adapter_preserves_quality_precedence_and_rejects_invalid_pairs() {
+fn duplicate_pairs_outrank_quality_issues_and_invalid_pairs_are_rejected() {
     let media: Vec<_> = (1..=5).map(media).collect();
     let mut a: HashMap<_, _> = media
         .iter()
@@ -180,7 +180,15 @@ fn review_adapter_preserves_quality_precedence_and_rejects_invalid_pairs() {
     );
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].subject, id(2));
-    assert_eq!(rows[0].category, Category::Blur);
+    assert_eq!(rows[0].companion, Some(id(1)));
+    assert_ne!(rows[0].category, Category::Blur);
+    assert!(
+        rows[0]
+            .reason
+            .ends_with("· the suggested discard is also possibly soft"),
+        "{}",
+        rows[0].reason
+    );
 }
 #[test]
 fn capture_sorting_changes_order_without_changing_pair_ownership() {

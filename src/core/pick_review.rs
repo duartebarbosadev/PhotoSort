@@ -449,16 +449,9 @@ pub fn from_analysis(
     }
     let order: HashMap<_, _> = media
         .iter()
-        .map(|m| {
-            let captured = metadata
-                .get(&m.id)
-                .map(|m| m.captured.as_str())
-                .filter(|s| !s.is_empty())
-                .unwrap_or("");
-            (m.id, (captured.is_empty(), captured, m.path.as_path()))
-        })
+        .map(|m| (m.id, super::dates::capture_order(m, metadata.get(&m.id))))
         .collect();
-    clusters.sort_by_key(|c| c.ordered.iter().map(|id| order[id]).min());
+    clusters.sort_by_key(|c| c.ordered.iter().map(|id| &order[id]).min().cloned());
     clusters
 }
 fn cosine(a: &[f32], b: &[f32]) -> Option<f64> {

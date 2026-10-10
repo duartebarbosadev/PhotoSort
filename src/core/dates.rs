@@ -99,6 +99,14 @@ pub fn capture_millis(media: &Media, metadata: Option<&Metadata>) -> Option<i64>
         })
 }
 
+/// Sort key shared by every list that shows photos in the order they were taken:
+/// capture time (with the same fallbacks as `capture_millis`), undated photos
+/// last, ties by file name so the order is stable.
+pub fn capture_order(media: &Media, metadata: Option<&Metadata>) -> (bool, i64, String) {
+    let millis = capture_millis(media, metadata);
+    (millis.is_none(), millis.unwrap_or_default(), media.name())
+}
+
 /// Calendar browsing preserves the written camera date, including an explicit
 /// offset. Absolute timestamps still determine chronological ordering.
 pub fn calendar(captured: Option<i64>, metadata: Option<&Metadata>) -> Option<String> {

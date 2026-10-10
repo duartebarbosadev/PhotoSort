@@ -1,7 +1,21 @@
 use super::*;
 impl PhotoSortApp {
-    pub(super) fn start_ready_pick_analysis(&mut self) {
-        if self.step == Step::PickBest
+    /// Start the current step's analysis on entry when it has nothing to show
+    /// yet, as the reference app does for Easy Delete, Fix Rotation and Pick Best.
+    pub(super) fn start_ready_analysis(&mut self) {
+        let unanalysed = match self.step {
+            Step::PickBest => self.pick_review.tournaments().is_empty(),
+            Step::EasyDelete => {
+                !self.view_data_ready.contains(&Step::EasyDelete)
+                    && self.delete_review.entries().is_empty()
+            }
+            Step::Rotation => {
+                !self.view_data_ready.contains(&Step::Rotation)
+                    && self.rotation_review.ids().is_empty()
+            }
+            _ => false,
+        };
+        if unanalysed
             && self.model_issue.is_none()
             && !self.model_dialog
             && self.catalog.is_some()
@@ -14,9 +28,8 @@ impl PhotoSortApp {
             && self.review_notice.is_none()
             && !self.plan_open
             && self.analysis_run.is_none()
-            && self.pick_review.tournaments().is_empty()
         {
-            self.analyze();
+            self.analyze_current_workflow();
         }
     }
 

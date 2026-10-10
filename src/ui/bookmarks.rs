@@ -157,7 +157,7 @@ impl PhotoSortApp {
             self.resume_started = true;
             match self.step {
                 Step::PickBest if !self.view_data_ready.contains(&self.step) => {
-                    self.start_ready_pick_analysis()
+                    self.start_ready_analysis()
                 }
                 Step::EasyDelete if !self.view_data_ready.contains(&self.step) => self.analyze(),
                 Step::Cull

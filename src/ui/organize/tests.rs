@@ -3171,6 +3171,18 @@ fn organize_action_order_fallback_and_repeat_guards_share_navigation() {
         .map(|(i, m)| (m.id, i))
         .collect();
     app.open_organize_editor();
+    // action_focus clicks MediaId(0); ArrowDown moves to the next displayed row,
+    // which follows folder and capture order rather than fixture insertion order.
+    let rows: Vec<_> = app
+        .organize_editor
+        .as_ref()
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| r.id)
+        .collect();
+    let first = MediaId(0);
+    let second = rows[rows.iter().position(|id| *id == first).unwrap() + 1];
     let ctx = egui::Context::default();
     theme_install(&ctx);
     action_focus(&mut app, &ctx, 640., false);
@@ -3182,7 +3194,7 @@ fn organize_action_order_fallback_and_repeat_guards_share_navigation() {
         640.,
         vec![key(egui::Key::ArrowDown), key(egui::Key::D)],
     );
-    assert!(!app.decision(MediaId(0)).rejected && app.decision(MediaId(1)).rejected);
+    assert!(!app.decision(first).rejected && app.decision(second).rejected);
     action_frame(
         &mut app,
         &ctx,
@@ -3193,7 +3205,7 @@ fn organize_action_order_fallback_and_repeat_guards_share_navigation() {
         ],
     );
     assert!(
-        app.decision(MediaId(1)).rejected,
+        app.decision(second).rejected,
         "clear then mark lost event ordering"
     );
     action_frame(

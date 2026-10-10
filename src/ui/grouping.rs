@@ -181,7 +181,7 @@ impl PhotoSortApp {
         if task.source.is_some() && self.pick_run == task.source && self.analysis_run.is_none() {
             self.finish_pick_analysis();
         } else {
-            self.start_ready_pick_analysis();
+            self.start_ready_analysis();
         }
         if self.step == Step::Cull || self.metadata_organize_mode() {
             self.start_metadata_index();

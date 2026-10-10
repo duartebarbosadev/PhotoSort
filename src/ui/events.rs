@@ -168,6 +168,7 @@ impl PhotoSortApp {
         self.set_status(format!("{} items · library ready", self.media.len()));
         self.report_scan_warnings(&catalog.warnings);
         self.preferences.remember(&catalog.root);
+        self.missing_recent.remove(&catalog.root);
         self.save_preferences();
         self.catalog = Some(catalog);
         self.initialize_browse();
@@ -196,7 +197,7 @@ impl PhotoSortApp {
                 false,
             );
         }
-        self.start_ready_pick_analysis();
+        self.start_ready_analysis();
         if self.step == Step::Cull || self.metadata_organize_mode() {
             self.start_metadata_index();
         }

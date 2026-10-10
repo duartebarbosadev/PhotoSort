@@ -152,8 +152,8 @@ impl PhotoSortApp {
         self.view_started = Instant::now();
         if step == Step::PickBest {
             self.sync_pick_view();
-            self.start_ready_pick_analysis();
         }
+        self.start_ready_analysis();
         self.prepare_bookmark();
         if step == Step::Cull || self.metadata_organize_mode() {
             self.start_metadata_index();

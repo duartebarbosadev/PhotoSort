@@ -1289,11 +1289,19 @@ impl PhotoSortApp {
             .media
             .iter()
             .filter(|m| {
-                (self.group_mode != GroupMode::Visual
-                    || self
-                        .visual_groups
-                        .as_ref()
-                        .is_some_and(|groups| groups.contains_key(&m.id)))
+                // Video GPS is not read, so a video without a resolved place would
+                // otherwise be swept into "No GPS"; it stays where it is instead.
+                !(self.group_mode == GroupMode::Location
+                    && m.kind == MediaKind::Video
+                    && self
+                        .metadata
+                        .get(&m.id)
+                        .is_none_or(|meta| meta.location.is_none()))
+                    && (self.group_mode != GroupMode::Visual
+                        || self
+                            .visual_groups
+                            .as_ref()
+                            .is_some_and(|groups| groups.contains_key(&m.id)))
                     && (self.group_mode != GroupMode::Faces
                         || self
                             .face_groups
@@ -1343,7 +1351,7 @@ impl PhotoSortApp {
             .unwrap_or_else(|| {
                 Draft::from_catalog(self.catalog.as_ref().unwrap(), self.organize_labels())
             });
-        let rows = self
+        let mut rows: Vec<PhotoRow> = self
             .catalog
             .as_ref()
             .unwrap()
@@ -1356,6 +1364,13 @@ impl PhotoSortApp {
                 after: String::new(),
             })
             .collect();
+        // Folders alphabetically, photos within a folder in the order taken.
+        rows.sort_by_cached_key(|row| {
+            let order = self.index.get(&row.id).map(|&i| {
+                crate::core::dates::capture_order(&self.media[i], self.metadata.get(&row.id))
+            });
+            (row.source.parent().map(std::path::Path::to_path_buf), order)
+        });
         let folder = self
             .active
             .and_then(|id| draft.labels().get(&id))

@@ -149,11 +149,17 @@ impl PhotoSortApp {
                     self.about = true;
                     ui.close();
                 }
-                if !self.preferences.recent_folders.is_empty() {
+                let recent: Vec<_> = self
+                    .preferences
+                    .recent_folders
+                    .iter()
+                    .filter(|p| !self.missing_recent.contains(*p))
+                    .collect();
+                if !recent.is_empty() {
                     ui.separator();
                     ui.label("Recent folders");
                     let mut selected = None;
-                    for path in &self.preferences.recent_folders {
+                    for path in recent {
                         if ui
                             .add_enabled(
                                 !self.busy,

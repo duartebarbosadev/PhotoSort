@@ -112,10 +112,10 @@ impl PhotoSortApp {
             .media
             .iter()
             .filter_map(|m| {
-                self.rotations
-                    .get(&m.id)
-                    .filter(|s| s.turns != 0)
-                    .map(|s| (m.name(), m.id, s.turns, s.uncertain))
+                self.rotations.get(&m.id).filter(|s| s.turns != 0).map(|s| {
+                    let order = crate::core::dates::capture_order(m, self.metadata.get(&m.id));
+                    (order, m.id, s.turns, s.uncertain)
+                })
             })
             .collect();
         rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.0.cmp(&b.1.0)));
