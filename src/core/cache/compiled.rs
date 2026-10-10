@@ -7,6 +7,11 @@ use std::{
 };
 const OWNER: &[u8] = b"PhotoSort compiled models v1\n";
 
+/// Prepared CPU graphs (`.onnx-cache`) are no longer created; existing ones are
+/// still recognized as owned so maintenance can delete them.
+pub(super) fn retired(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "onnx-cache")
+}
 pub(super) fn named(path: &Path) -> bool {
     path.file_name().and_then(|p| p.to_str()).is_some_and(|n| {
         [".coreml", ".onnx-cache"].iter().any(|suffix| {

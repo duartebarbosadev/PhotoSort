@@ -53,11 +53,10 @@ execution with per-model CPU fallback; session logging and `--diagnostics` /
    evidence for the accelerators.
 3. **Accuracy:** grouping, face, keeper-ranking and rotation checks use 186 distinct
    photos. Broader labelled sets are needed before claiming accuracy.
-4. **First-run memory:** the first Quality analysis on a machine peaks around
-   3–4.6 GiB while ONNX Runtime optimizes the 378 MB aesthetic model once; later runs
-   reuse the prepared graph. Avoiding it entirely means shipping a pre-optimized
-   model (an asset/provenance decision). Measurements on a real 517-photo library are
-   in [BENCHMARKS.md](BENCHMARKS.md).
+4. **Core ML face landmarks:** `face_landmarks_detector.onnx` fails Core ML
+   compilation (a pooling layer without `pad`) and falls back to CPU; the other
+   five models run on Core ML. Measurements on a real 517-photo library are in
+   [BENCHMARKS.md](BENCHMARKS.md).
 
 ## Reference corrections
 

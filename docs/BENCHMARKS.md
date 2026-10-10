@@ -31,11 +31,10 @@ in the `f887f5f` commit message is that variance, not the fix). Results were
 byte-identical before and after. The Quality reopen was dominated by 11,454
 pair-record copies into a per-run working set.
 
-The Quality peak is the one-time ONNX Runtime graph optimization of the 378 MB
-aesthetic model (constant folding; see `diagnostics/model-memory-2026-10-08`).
-These runs use a fresh cache every time, so they always pay it; with the normal
-persistent cache the prepared graph is reused and later runs stay near 1–2 GiB.
-Removing it from the very first run would require shipping a pre-optimized model.
+The 3.1 GiB Quality peak was ONNX Runtime constant-folding the 378 MB aesthetic
+model on load. Since `627915c` the model ships pre-folded: identical scores and
+groups for all 517 photos at 8 and 4 threads, peak 1.71 / 1.78 GiB, model load
+0.22–0.24 s instead of 1.4–1.8 s, warm inference within ±4%.
 
 # File discovery comparison — 2026-09-28
 
