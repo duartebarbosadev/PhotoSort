@@ -584,10 +584,17 @@ impl ImageWorker {
     }
 
     fn load_asset(&mut self, epoch: u64, media: &Media, preview: bool) {
-        match self
-            .pipeline
-            .load_cancellable(media, || self.publisher.cancelled(epoch))
-        {
+        let cancelled = || self.publisher.cancelled(epoch);
+        let fast = (!preview)
+            .then(|| self.pipeline.cached_thumbnail(media, cancelled))
+            .flatten();
+        match fast.map_or_else(
+            || {
+                self.pipeline
+                    .load_cancellable(media, || self.publisher.cancelled(epoch))
+            },
+            Ok,
+        ) {
             Ok(asset) => self.publisher.send(
                 epoch,
                 Event::Asset {

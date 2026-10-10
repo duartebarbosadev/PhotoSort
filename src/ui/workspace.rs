@@ -1573,6 +1573,10 @@ impl PhotoSortApp {
         self.changed();
         self.review_changes();
     }
+    /// Thumbnails and previews currently uploaded as textures.
+    pub fn gallery_textures(&self) -> usize {
+        self.textures.len()
+    }
     /// True while discovery, metadata, thumbnails or analysis are still arriving.
     pub fn gallery_busy(&self) -> bool {
         self.scanning

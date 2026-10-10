@@ -11,6 +11,30 @@ exact. The report explains why this cache-format change was not adopted.
 
 Latest whole-analysis measurement: **real library, 9 October 2026** (below).
 
+Latest UI responsiveness: **grid and thumbnails, 10 October 2026** (below).
+
+## Grid and thumbnails — 10 October 2026
+
+`examples/perf_budget` (release, temporary data and cache roots, copies of
+`sample_images_photosort`: 677 files, of which 24 fill the first screen at
+1440×900). Apple M4 Max. CPU frame time is `Harness::step` (layout and paint
+lists, no GPU), scrolling 120 px per frame through generated photos.
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| First thumbnail, cold cache | 50–70 ms | 50–65 ms |
+| First screen (24 thumbnails), cold cache | 0.71–0.79 s | 0.72–0.77 s |
+| First screen, reopening the folder | 0.79–3.58 s | **0.06–0.15 s** |
+| Grid scroll, 10,000 photos: median / p95 / max | 0.10 / 0.13 / 0.98 ms | 0.10 / 0.13 / 0.73 ms |
+| Thumbnails after a long jump (generated 160×120) | 0.47–0.59 s | 0.47–0.53 s |
+
+Reopening was slow because each grid tile decoded the 2048 px display proxy
+and copied it to RGBA; tiles now have their own 320 px artifact. The first
+reopen after a cold run can still show photos the cold run never displayed,
+and those load cold. Cold preparation is serial on one image worker
+(about 30 ms per photo); native renders are serialised by a process-wide lock
+around libvips' global error buffer, and libvips threads each render itself.
+
 ## Analysis on a real library — 9 October 2026
 
 `examples/audit_library` (release, read-only, temporary cache, CPU backend, 8

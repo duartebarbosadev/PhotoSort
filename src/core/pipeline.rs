@@ -44,6 +44,13 @@ struct CachedRender {
     height: u32,
     warning: Option<String>,
 }
+/// The grid thumbnail's own small artifact, so reopening a folder decodes a
+/// 320 px image per tile instead of the 2048 px display proxy.
+fn thumb_key(source_key: &str) -> String {
+    blake3::hash(format!("thumb-{THUMB_EDGE}-v1:{source_key}").as_bytes())
+        .to_hex()
+        .to_string()
+}
 fn analysis_key(source_key: &str) -> String {
     blake3::hash(format!("analysis-1024-v1:{source_key}").as_bytes())
         .to_hex()
@@ -307,6 +314,53 @@ impl Pipeline {
                 v.width > 0 && v.height > 0 && v.warning.as_ref().is_none_or(|w| w.len() <= 4096)
             })
     }
+    /// A grid thumbnail from its disk artifact, without the display proxy.
+    /// `None` when it is not cached (or already in memory); load normally then.
+    /// The returned asset carries only thumbnail pixels and is not cached.
+    pub fn cached_thumbnail(
+        &mut self,
+        media: &Media,
+        cancelled: impl Fn() -> bool,
+    ) -> Option<Asset> {
+        let source_key = Self::key(media).ok()?;
+        if self.cache.contains_key(&source_key) {
+            return None;
+        }
+        let saved = self.render_info(&source_key)?;
+        let image = image::open(self.disk.join(format!("{}.png", thumb_key(&source_key)))).ok()?;
+        let mut meta = self.metadata_for_key(media, &source_key, &cancelled).ok()?;
+        if media.kind != MediaKind::Video {
+            (meta.width, meta.height) = (saved.width, saved.height);
+        }
+        self.stats.disk_hits += 1;
+        let thumbnail = Arc::new(image.to_rgba8());
+        Some(Asset {
+            pixels: thumbnail.clone(),
+            thumbnail,
+            metadata: meta,
+            decoder_warning: saved.warning,
+        })
+    }
+    fn save_thumbnail(&self, source_key: &str, thumbnail: &RgbaImage) {
+        if self.disk_budget == 0 || std::fs::create_dir_all(&self.disk).is_err() {
+            return;
+        }
+        let path = self.disk.join(format!("{}.png", thumb_key(source_key)));
+        if path.exists() {
+            return;
+        }
+        let temp = path.with_extension("tmp.png");
+        // Opaque tiles are stored as RGB; the PNG is about a quarter smaller.
+        let image = DynamicImage::ImageRgba8(thumbnail.clone());
+        let image = if thumbnail.pixels().all(|p| p[3] == 255) {
+            DynamicImage::ImageRgb8(image.into_rgb8())
+        } else {
+            image
+        };
+        if image.save(&temp).is_ok() && std::fs::rename(&temp, &path).is_err() {
+            let _ = std::fs::remove_file(&temp);
+        }
+    }
     pub fn load(&mut self, media: &Media) -> Result<Asset> {
         self.load_cancellable(media, || false)
     }
@@ -441,6 +495,9 @@ impl Pipeline {
                 decoded.thumbnail(THUMB_EDGE, THUMB_EDGE).to_rgba8(),
             ))
         };
+        if let Some(thumbnail) = &thumbnail {
+            self.save_thumbnail(&source_key, thumbnail);
+        }
         let pixels = Arc::new(decoded.to_rgba8());
         let thumbnail = thumbnail.unwrap_or_else(|| pixels.clone());
         let asset = Asset {

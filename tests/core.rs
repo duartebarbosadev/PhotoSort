@@ -87,6 +87,24 @@ fn proxy_survives_memory_eviction_without_redecoding_source() {
     assert_eq!(p.stats.disk_hits, 1);
 }
 #[test]
+fn grid_thumbnails_reopen_from_their_own_artifact_without_decoding() {
+    let d = TempDir::new().unwrap();
+    let m = photo(d.path(), "a.png");
+    let cache = TempDir::new().unwrap();
+    let loaded = Pipeline::new(1_000_000, cache.path().to_owned())
+        .load(&m)
+        .unwrap();
+    // A new session: nothing in memory, the display proxy is not decoded.
+    let mut reopened = Pipeline::new(1_000_000, cache.path().to_owned());
+    let thumb = reopened.cached_thumbnail(&m, || false).unwrap();
+    assert_eq!(*thumb.thumbnail, *loaded.thumbnail);
+    assert_eq!(thumb.metadata.width, loaded.metadata.width);
+    assert_eq!(reopened.stats.decodes, 0);
+    // Editing the sidecar changes the photo's key, so the old tile is not reused.
+    metadata::write_sidecar(&m.path, Some(4), Some(6)).unwrap();
+    assert!(reopened.cached_thumbnail(&m, || false).is_none());
+}
+#[test]
 fn sidecar_mutation_invalidates_canonical_preview() {
     let d = TempDir::new().unwrap();
     let m = photo(d.path(), "a.png");

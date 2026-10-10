@@ -414,7 +414,8 @@ fn opaque_proxies_drop_redundant_alpha_without_changing_pixels_or_repeating_work
             .map(|p| p.unwrap().path())
             .filter(|p| p.extension().is_some_and(|ext| ext == "png"))
             .collect();
-        assert_eq!(proxies.len(), 2);
+        // Display proxy, analysis proxy and the grid thumbnail.
+        assert_eq!(proxies.len(), 3);
         for path in proxies {
             assert_eq!(
                 image::open(path).unwrap().color(),
