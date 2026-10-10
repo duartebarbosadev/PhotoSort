@@ -110,6 +110,7 @@ fn model_dialog_fits_compact_and_wide_windows_without_loading_models_or_images()
         .clone();
     assert!(app.model_removal.is_some());
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     crate::ui::theme::install(&ctx);
     for running in [false, true] {
         let mut state = app.runtime.model_assets.state();
@@ -339,6 +340,7 @@ fn repaired_models_update_footer_and_dialog_without_restarting_analysis() {
     let message = app.model_recovery_status(&state).unwrap();
     assert_eq!(message.contains("Models ready"), cfg!(feature = "onnx"));
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     ctx.enable_accesskit();
     let mut labels = Vec::new();
     for _ in 0..3 {

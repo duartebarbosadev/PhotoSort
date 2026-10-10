@@ -153,6 +153,7 @@ mod tests {
             ("Open terminal here", "/library/a ' café.jpg"),
         ] {
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             ctx.enable_accesskit();
             let input = || egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(

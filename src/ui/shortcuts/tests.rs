@@ -89,6 +89,7 @@ fn organize_mode_keys_share_toolbar_state_without_repeating_expensive_work() {
             .insert(GroupMode::Current, draft.clone());
         app.analysis_run = Some(77);
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         ctx.enable_accesskit();
         for (key, expected) in [
             (egui::Key::Num2, GroupMode::Mixed),
@@ -137,6 +138,7 @@ fn organize_mode_location_reuses_one_metadata_run_and_cached_results() {
     app.step = Step::Organize;
     app.metadata.clear();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     for _ in 0..2 {
         let _ = ctx.run(input(&[(egui::Key::Num5, egui::Modifiers::ALT)]), |ctx| {
             app.keyboard(ctx)
@@ -168,6 +170,7 @@ fn organize_mode_keys_preserve_text_modal_and_workflow_ownership() {
         let (_temp, mut app) = super::super::compact_cull_tests::fixture();
         app.step = Step::Organize;
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         let field = egui::Id::new("mode_shortcut_text");
         let mut text = String::new();
         match blocker {
@@ -208,6 +211,7 @@ fn organize_mode_keys_preserve_text_modal_and_workflow_ownership() {
             let mut app = app(step);
             app.group_mode = GroupMode::Camera;
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             let _ = ctx.run(input(&[(egui::Key::Num4, modifiers)]), |ctx| {
                 app.keyboard(ctx)
             });
@@ -226,6 +230,7 @@ fn organize_mode_keys_preserve_text_modal_and_workflow_ownership() {
     for command in [egui::Modifiers::CTRL, egui::Modifiers::COMMAND] {
         let mut app = app(Step::Organize);
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         let _ = ctx.run(
             input(&[(
                 egui::Key::Num5,
@@ -248,6 +253,7 @@ fn view_keys_share_actions_and_never_become_ratings_or_guided_choices() {
     for step in Step::ALL {
         let mut app = app(step);
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         app.library_layout = library::Layout::Grid;
         let _ = ctx.run(input(&[(egui::Key::Num1, egui::Modifiers::ALT)]), |ctx| {
             app.keyboard(ctx)
@@ -266,6 +272,7 @@ fn view_keys_share_actions_and_never_become_ratings_or_guided_choices() {
     }
     let mut app = app(Step::Cull);
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     for (key, mode) in [(egui::Key::F, Mode::Folders), (egui::Key::S, Mode::Groups)] {
         app.navigator.enabled = false;
         let _ = ctx.run(input(&[(key, egui::Modifiers::NONE)]), |ctx| {
@@ -315,6 +322,7 @@ fn modified_unbound_keys_do_not_change_photos_in_any_workflow() {
             let mut app = app(step);
             let before = app.inspector;
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             let _ = ctx.run(
                 input(&[
                     (egui::Key::R, command),
@@ -345,6 +353,7 @@ fn find_shortcut_replaces_existing_query_in_the_real_toolbar() {
                 let mut app = app(step);
                 app.query = "A café/東京📷 e\u{301}".into();
                 let ctx = egui::Context::default();
+                theme_install(&ctx);
                 let mut frame = |mut events: egui::RawInput| {
                     events.screen_rect = Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -385,6 +394,7 @@ fn find_does_not_replace_selection_when_another_owner_blocks_it() {
         let mut app = app(Step::Cull);
         app.query = "existing query".into();
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         let range = egui::text::CCursorRange::one(egui::text::CCursor::new(3));
         let mut state = egui::text_edit::TextEditState::default();
         state.cursor.set_char_range(Some(range));
@@ -419,6 +429,7 @@ fn find_does_not_replace_selection_when_another_owner_blocks_it() {
 fn search_focus_handles_text_input_but_dialogs_and_busy_state_keep_ownership() {
     let mut app = app(Step::Cull);
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let search = egui::Id::new("library_search");
     let mut text = String::new();
     let _ = ctx.run(input(&[(egui::Key::F, egui::Modifiers::COMMAND)]), |ctx| {
@@ -464,6 +475,7 @@ fn search_focus_handles_text_input_but_dialogs_and_busy_state_keep_ownership() {
 fn repeated_global_keys_and_search_without_a_search_field_are_harmless() {
     let mut app = app(Step::PickBest);
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let _ = ctx.run(input(&[(egui::Key::F, egui::Modifiers::COMMAND)]), |ctx| {
         app.keyboard(ctx)
     });
@@ -493,6 +505,7 @@ fn opening_a_departure_guard_stops_later_photo_keys_in_the_same_frame() {
         },
     );
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let _ = ctx.run(
         input(&[
             (
@@ -524,6 +537,7 @@ fn analysis_shortcut_uses_workflow_owner_and_preserves_active_work() {
                 },
             );
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             let _ = ctx.run(
                 input(&[
                     (egui::Key::S, modifiers),
@@ -571,6 +585,7 @@ fn analysis_shortcut_respects_availability_modal_and_modifier_guards() {
         for guard in 0..7 {
             let mut app = app(step);
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             match guard {
                 0 => app.media.clear(),
                 1 => app.scanning = true,
@@ -613,6 +628,7 @@ fn settings_access_keys_open_the_existing_draft_without_photo_work() {
             );
             let before = serde_json::to_vec(&app.preferences).unwrap();
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             let _ = ctx.run(
                 input(&[(key, modifiers), (egui::Key::R, egui::Modifiers::NONE)]),
                 |ctx| app.keyboard(ctx),
@@ -652,6 +668,7 @@ fn settings_access_respects_existing_modal_popup_repeat_and_modifier_guards() {
         for guard in 0..4 {
             let mut app = app(Step::Cull);
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             match guard {
                 0 => app.busy = true,
                 1 => app.help = true,

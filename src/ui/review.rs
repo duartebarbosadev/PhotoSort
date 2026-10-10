@@ -676,9 +676,9 @@ impl PhotoSortApp {
                 rect.left_bottom() + egui::vec2(10.0, -8.0),
                 Align2::LEFT_BOTTOM,
                 if view.actual_size && view.zoom == 1.0 {
-                    "ORIGINAL · 1:1"
+                    "Original · 1:1"
                 } else {
-                    "ORIGINAL DETAIL"
+                    "Original detail"
                 },
                 FontId::proportional(10.0),
                 ACCENT,
@@ -694,14 +694,14 @@ impl PhotoSortApp {
                         .is_some_and(|c| c.selected == corrected)
                     {
                         if corrected {
-                            "CORRECTION · SELECTED"
+                            "Correction · selected"
                         } else {
-                            "ORIGINAL · SELECTED"
+                            "Original · selected"
                         }
                     } else if corrected {
-                        "CORRECTION"
+                        "Correction"
                     } else {
-                        "ORIGINAL"
+                        "Original"
                     },
                     self.media[index].name()
                 )
@@ -742,21 +742,9 @@ impl PhotoSortApp {
                 self.delete_current
                     .is_none_or(|review| self.delete_review.keeps(review, id))
             };
-            ui.painter().text(
-                rect.right_bottom() + egui::vec2(-10.0, -8.0),
-                Align2::RIGHT_BOTTOM,
-                if keep { "KEEP" } else { "TRASH" },
-                FontId::proportional(12.0),
-                if keep { ACCENT } else { RED },
-            );
+            decision_pill(ui.painter(), rect, keep);
         } else if d.rejected {
-            ui.painter().text(
-                rect.right_bottom() + egui::vec2(-10.0, -8.0),
-                Align2::RIGHT_BOTTOM,
-                "MARKED FOR TRASH",
-                FontId::proportional(10.0),
-                RED,
-            );
+            decision_pill(ui.painter(), rect, false);
         }
         if pan.is_none() && response.clicked() && self.step == Step::EasyDelete {
             self.toggle_delete_candidate(slot as usize);
@@ -855,3 +843,19 @@ fn decision_button(side: usize, keep: bool) -> egui::Button<'static> {
 #[cfg(test)]
 #[path = "review/tests.rs"]
 mod tests;
+
+/// The Keep/Trash state of a compared photo, pinned to the slot's top-right
+/// corner where it stays readable on any image.
+fn decision_pill(painter: &egui::Painter, slot: egui::Rect, keep: bool) {
+    use egui_phosphor::regular as icon;
+    let (text, fill) = if keep {
+        (format!("{}  Keep", icon::CHECK), GREEN)
+    } else {
+        (format!("{}  Trash", icon::TRASH), RED)
+    };
+    let galley = painter.layout_no_wrap(text, medium(13.0), Color32::from_rgb(16, 16, 16));
+    let size = galley.size() + egui::vec2(20.0, 8.0);
+    let rect = Align2::RIGHT_TOP.anchor_size(slot.right_top() + egui::vec2(-S2, S2), size);
+    painter.rect_filled(rect, size.y / 2.0, fill);
+    painter.galley(rect.min + egui::vec2(10.0, 4.0), galley, Color32::BLACK);
+}

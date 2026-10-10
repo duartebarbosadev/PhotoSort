@@ -347,7 +347,26 @@ impl PhotoSortApp {
                 FontId::proportional(12.0),
                 INK,
             );
-            let (detail, color) = if self.step == Step::Rotation {
+            let (detail, color) = if self.step == Step::Organize {
+                let folder = self
+                    .organize_drafts
+                    .get(&self.group_mode)
+                    .and_then(|draft| draft.labels().get(&id))
+                    .cloned()
+                    .unwrap_or_else(|| self.label_for(&media));
+                (
+                    format!(
+                        "{}  {}",
+                        icon::FOLDER_SIMPLE,
+                        if folder.is_empty() {
+                            "Library root"
+                        } else {
+                            &folder
+                        }
+                    ),
+                    MUTED,
+                )
+            } else if self.step == Step::Rotation {
                 (
                     self.rotation_review
                         .choice(id)
@@ -500,6 +519,7 @@ mod tests {
         app.filtered = vec![0];
         app.active = Some(id);
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         let texture = ctx.load_texture(
             "canonical",
             egui::ColorImage::filled([40, 20], Color32::WHITE),

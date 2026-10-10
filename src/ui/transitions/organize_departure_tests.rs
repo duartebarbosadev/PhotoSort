@@ -173,6 +173,7 @@ fn smoke_exit_preserves_staged_changes_in_every_workflow_and_cancel_is_final() {
             },
         );
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         smoke_frame(&mut app, &ctx, 0.0);
         smoke_frame(&mut app, &ctx, 0.3);
         assert!(!app.close_authorized);
@@ -197,6 +198,7 @@ fn smoke_exit_does_not_interrupt_active_file_work_or_apply_a_retry_plan() {
             app.retry_plan = Some(Plan::default());
         }
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         smoke_frame(&mut app, &ctx, 0.0);
         smoke_frame(&mut app, &ctx, 0.3);
         assert!(!app.close_authorized);
@@ -209,6 +211,7 @@ fn smoke_exit_does_not_interrupt_active_file_work_or_apply_a_retry_plan() {
 }
 fn close_request(app: &mut PhotoSortApp, native: bool) -> egui::FullOutput {
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let mut input = egui::RawInput::default();
     if !native {
         input
@@ -421,6 +424,7 @@ fn case_only_file_edit_uses_shared_review_and_preserves_staged_rating_after_relo
         [Action::RenameFile { .. }]
     ));
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     ctx.enable_accesskit();
     let mut output = None;
     for _ in 0..3 {
@@ -566,6 +570,7 @@ fn departure_modal_remains_usable_during_analysis_and_discard_rejects_late_resul
     app.request_departure(Destination::Step(Step::Cull));
     settle(&mut app);
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
             egui::Pos2::ZERO,

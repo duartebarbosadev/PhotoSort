@@ -200,6 +200,7 @@ fn clear_all_trash_does_not_resurrect_marks_from_confirmed_keep_all_reviews() {
     app.pick_review.confirm(true, &mut app.decisions);
     assert!(!app.decision(MediaId(0)).rejected && !app.decision(MediaId(2)).rejected);
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let _ = ctx.run(
         egui::RawInput {
             events: vec![egui::Event::Key {
@@ -292,6 +293,7 @@ fn clear_all_trash_shared_action_covers_every_workflow_and_retains_unconfirmed_c
         let catalog = app.catalog.clone().unwrap();
         let selected = app.selection.snapshot();
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         clear_key(&mut app, &ctx, egui::Modifiers::ALT);
         assert!(app.decisions.values().all(|d| !d.rejected), "{step:?}");
         assert_eq!(app.decision(MediaId(4)).rating, Some(5));
@@ -431,6 +433,7 @@ fn clear_all_trash_shortcut_preserves_text_and_requires_exact_modifiers() {
         },
     );
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let field = egui::Id::new("clear-test-input");
     let mut text = "unfinished".to_string();
     for _ in 0..2 {

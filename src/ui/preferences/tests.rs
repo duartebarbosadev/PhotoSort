@@ -8,6 +8,7 @@ fn settings_errors_are_bounded_and_dismissible_without_hiding_footer_or_losing_d
         let error = "Open folder failed: /unavailable/long cache folder café/".repeat(20);
         app.error = Some(error.clone());
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         crate::ui::theme::install(&ctx);
         ctx.enable_accesskit();
         let mut time = 0.;
@@ -125,6 +126,7 @@ fn cache_folder_settings_uses_injected_location_in_every_workflow_without_extra_
             app.step = step;
             app.open_settings(Section::Caches);
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             crate::ui::theme::install(&ctx);
             ctx.enable_accesskit();
             let mut time = 0.;
@@ -361,6 +363,7 @@ fn settings_preserve_live_history_and_render_compactly_without_image_or_analysis
     );
     app.preferences_draft = Some(app.preferences.clone());
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let output = ctx.run(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -423,6 +426,7 @@ fn escape_cancels_settings_without_applying_draft_navigation() {
     draft.navigation.rating = Some(5);
     app.preferences_draft = Some(draft);
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let raw = || egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
             egui::Pos2::ZERO,
@@ -475,6 +479,7 @@ fn settings_access_cache_and_general_anchors_keep_footer_visible_at_small_sizes(
     for size in [egui::vec2(600., 500.), egui::vec2(1440., 900.)] {
         let (_dir, mut app) = fixture();
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         crate::ui::theme::install(&ctx);
         ctx.enable_accesskit();
         let mut time = 0.;

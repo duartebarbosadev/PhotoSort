@@ -92,6 +92,7 @@ fn comparison_menu_pointer_action_is_bounded_and_compact() {
     for step in [Step::Organize, Step::Cull] {
         let (_temp, mut app) = comparison_fixture(step);
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         ctx.enable_accesskit();
         let input = || egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -153,6 +154,7 @@ fn zoom_controls_report_the_same_limits_and_values_as_keyboard_and_wheel() {
             app.fit_view();
             app.zoom_view(factor);
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             ctx.enable_accesskit();
             let output = ctx.run(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| app.review_ratings(ui, MediaId(1)));
@@ -204,6 +206,7 @@ fn adequate_previews_do_not_request_idle_originals_in_any_workflow() {
         app.step = step;
         app.view_started = Instant::now() - Duration::from_secs(2);
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         let texture = ctx.load_texture(
             "preview",
             egui::ColorImage::filled([1200, 800], Color32::WHITE),
@@ -280,6 +283,7 @@ fn shared_canvas_pans_each_pointer_gesture_once_across_frame_boundaries() {
             app.sync_views = synced;
             app.actual_size();
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             let frame = |app: &mut PhotoSortApp, events| {
                 app.inspection_wanted.clear();
                 let _ = ctx.run(
@@ -373,6 +377,7 @@ fn entering_easy_delete_before_analysis_renders_an_empty_review_safely() {
     app.active = Some(MediaId(1));
     app.set_step(Step::EasyDelete);
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let _ = ctx.run(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| app.review_canvas(ui));
     });
@@ -390,6 +395,7 @@ fn a_single_comparison_row_fits_the_short_canvas_without_clipping() {
     app.active = Some(MediaId(1));
     app.set_step(Step::Rotation);
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let output = ctx.run(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(

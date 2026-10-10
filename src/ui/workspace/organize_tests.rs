@@ -515,6 +515,7 @@ fn current_folders_default_to_in_place_and_do_not_invent_root_moves() {
     app.open_now(folder.path().to_owned());
     assert_eq!(PathBuf::from(&app.output), folder.path());
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let deadline = Instant::now() + Duration::from_secs(5);
     while app.scanning && Instant::now() < deadline {
         app.poll(&ctx);

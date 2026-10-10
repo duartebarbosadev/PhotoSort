@@ -115,16 +115,20 @@ impl PhotoSortApp {
                 if count == 0 {
                     continue;
                 }
-                let mut enabled = self.delete_categories.contains(&category);
-                if ui
-                    .checkbox(&mut enabled, format!("{} ({count})", category.title()))
-                    .changed()
+                let enabled = self.delete_categories.contains(&category);
+                if chip(ui, enabled, &format!("{} ({count})", category.title()))
+                    .on_hover_text(if enabled {
+                        "Hide this kind of suggestion"
+                    } else {
+                        "Show this kind of suggestion"
+                    })
+                    .clicked()
                     && self.allow_review_departure()
                 {
                     if enabled {
-                        self.delete_categories.insert(category);
-                    } else {
                         self.delete_categories.remove(&category);
+                    } else {
+                        self.delete_categories.insert(category);
                     }
                     self.filter_dirty = true;
                 }
@@ -132,54 +136,49 @@ impl PhotoSortApp {
         });
         ui.horizontal_wrapped(|ui| {
             if let Some(id) = self.delete_current {
-                if ui
-                    .button(if self.delete_review.confirmed(id) {
-                        "Cancel confirmation"
-                    } else {
-                        "Confirm →"
-                    })
-                    .clicked()
-                {
+                let confirmed = self.delete_review.confirmed(id);
+                let confirm = if confirmed {
+                    ui.button("Cancel confirmation")
+                } else {
+                    ui.add(primary("Confirm"))
+                };
+                if confirm.on_hover_text("Enter").clicked() {
                     self.confirm_delete();
                 }
-                if ui.button("Reset default").clicked() {
+                if ui
+                    .button("Reset")
+                    .on_hover_text("Back to the suggestion · R")
+                    .clicked()
+                {
                     self.reset_delete(false);
                 }
-                if ui.button("Reset all").clicked() {
+                if ui.button("Reset all").on_hover_text("Shift+R").clicked() {
                     self.reset_delete(true);
                 }
+                divider(ui);
             }
             if ui
                 .add_enabled(
                     !self.filtered.is_empty(),
-                    egui::Button::new("Accept filtered defaults"),
+                    egui::Button::new("Accept all suggestions"),
                 )
+                .on_hover_text("Confirm the suggested Keep/Trash choice for every photo shown · A")
                 .clicked()
             {
                 self.accept_delete_defaults();
-            }
-            if ui
-                .add_enabled(
-                    self.decisions.values().any(|d| d.rejected),
-                    egui::Button::new("Review marked files…"),
-                )
-                .clicked()
-            {
-                self.review_changes();
             }
         });
         if let Some(id) = self.delete_current
             && let Some(entry) = self.delete_review.entry(id)
         {
-            ui.label(RichText::new(&entry.reason).small().color(MUTED));
-            ui.label(
-                RichText::new(if self.delete_review.confirmed(id) {
-                    "Confirmed · shared Trash marks updated"
+            ui.add(egui::Label::new(RichText::new(&entry.reason).color(INK)).wrap());
+            step_hint(
+                ui,
+                if self.delete_review.confirmed(id) {
+                    "Confirmed. The Trash marks are shared with every step."
                 } else {
-                    "Choose Keep or Trash for each photo, then confirm. Files stay unchanged."
-                })
-                .small()
-                .color(ACCENT),
+                    "Choose Keep or Trash for each photo, then confirm. Files stay unchanged until you review changes."
+                },
             );
         }
     }

@@ -7,6 +7,7 @@ fn metadata_cancel_survives_browse_completion_between_pointer_down_and_up() {
         app.metadata_progress = Some((1, 65));
         app.browse_run = Some(99);
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         ctx.enable_accesskit();
         let frame = |app: &mut PhotoSortApp, events| {
             ctx.run(
@@ -150,6 +151,7 @@ fn cull_indexes_once_without_decoding_and_keeps_richer_metadata_and_staged_ratin
         },
     );
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let deadline = Instant::now() + Duration::from_secs(5);
     while app.metadata_run.is_some() && Instant::now() < deadline {
         app.poll(&ctx);
@@ -182,6 +184,7 @@ fn cancelled_metadata_batches_do_not_change_a_different_workflow() {
     assert!(app.metadata_run.is_some());
     app.set_step(Step::Organize);
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let deadline = Instant::now() + Duration::from_millis(150);
     while Instant::now() < deadline {
         app.poll(&ctx);

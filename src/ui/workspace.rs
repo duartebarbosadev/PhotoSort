@@ -1508,16 +1508,7 @@ impl PhotoSortApp {
                 }
             });
         if self.inspector && self.catalog.is_some() && ctx.content_rect().width() <= 1180.0 {
-            let mut open = self.inspector;
-            egui::Window::new("Photo details")
-                .open(&mut open)
-                .default_width(260.0)
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical()
-                        .max_height(500.0)
-                        .show(ui, |ui| self.inspector(ui));
-                });
-            self.inspector = open;
+            self.inspector_drawer(ctx);
         }
         let dropped = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone()));
         if let Some(path) = dropped {
@@ -1661,6 +1652,7 @@ mod keyboard_tests {
     fn plain_enter_is_owned_by_guided_review_only() {
         for rotation in [false, true] {
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             let mut input = egui::RawInput::default();
             input.events.push(egui::Event::Key {
                 key: egui::Key::Enter,
@@ -1687,6 +1679,7 @@ mod keyboard_tests {
     #[test]
     fn quick_modified_keys_keep_their_own_modifiers_and_order() {
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         let mut input = egui::RawInput::default();
         for _ in 0..3 {
             input.events.push(egui::Event::Key {

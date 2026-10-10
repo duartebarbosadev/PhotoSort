@@ -901,6 +901,7 @@ fn selective_reset_waits_for_generated_metadata_and_survives_keep_reopen() {
         ..Default::default()
     });
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let _ = ctx.run(Default::default(), |ctx| app.organize_dialog(ctx));
     let editor = app.organize_editor.take().unwrap();
     assert_eq!(editor.draft.labels()[&MediaId(0)], "trip");
@@ -1830,6 +1831,7 @@ fn pending_analysis_blocks_editor_and_modal_blocks_workflow_keyboard() {
     app.analysis_run = None;
     app.open_organize_editor();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let mut input = egui::RawInput::default();
     input.events.push(egui::Event::Key {
         key: egui::Key::I,
@@ -1952,6 +1954,7 @@ fn hidden_inventory_reaches_editor_and_shared_planner_without_decoding() {
     app.organize_drafts.insert(GroupMode::Current, editor.draft);
     app.organize();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let deadline = Instant::now() + Duration::from_secs(5);
     while app.busy && Instant::now() < deadline {
         app.poll(&ctx);
@@ -1993,6 +1996,7 @@ fn empty_folder_editor_intent_reaches_shared_io_worker_without_mutation() {
     app.organize_drafts.insert(GroupMode::Current, editor.draft);
     app.organize();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let deadline = Instant::now() + Duration::from_secs(5);
     while app.busy && Instant::now() < deadline {
         app.poll(&ctx);
@@ -2068,6 +2072,7 @@ fn drop_target_scopes_payload_to_editor_and_escape_cancels_drag() {
     let mut editor = app.organize_editor.take().unwrap();
     editor.draft.create_folder("", "target").unwrap();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let mut rect = egui::Rect::NOTHING;
     let mut dropped = None;
     let _ = ctx.run(Default::default(), |ctx| {
@@ -2845,6 +2850,7 @@ fn organize_preview_video_uses_shared_player_and_pauses_for_other_dialogs() {
     app.organize_editor.as_mut().unwrap().selected.insert(id);
     app.begin_organize_preview();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let sync = |app: &mut PhotoSortApp, focused| {
         let _ = ctx.run(
             egui::RawInput {

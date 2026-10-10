@@ -484,6 +484,7 @@ fn empty_filtered_scope_keeps_navigation_available_and_other_workflows_stay_isol
     app.select_navigation_node(Key::Folder("/absent/empty".into()));
     assert!(app.filtered.is_empty());
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let mut shown = false;
     let _ = ctx.run(Default::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {

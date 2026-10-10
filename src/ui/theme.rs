@@ -97,6 +97,26 @@ pub(super) fn icon_text_button(
     response
 }
 
+/// A pill-shaped toggle for filters and scopes, such as Easy Delete categories.
+pub(super) fn chip(ui: &mut egui::Ui, selected: bool, text: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(egui::RichText::new(text).color(if selected { INK } else { MUTED }))
+            .selected(selected)
+            .corner_radius(14)
+            .stroke(Stroke::new(1.0, if selected { ACCENT } else { LINE })),
+    )
+}
+/// A thin vertical rule between groups of controls in one toolbar row.
+pub(super) fn divider(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(9.0, 20.0), egui::Sense::hover());
+    ui.painter()
+        .vline(rect.center().x, rect.y_range(), Stroke::new(1.0, LINE));
+}
+/// The quiet guidance line under a step's controls.
+pub(super) fn step_hint(ui: &mut egui::Ui, text: &str) {
+    ui.add(egui::Label::new(egui::RichText::new(text).small().color(MUTED)).wrap());
+}
+
 pub fn install(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     for (name, bytes) in [
@@ -144,7 +164,8 @@ pub fn install(ctx: &egui::Context) {
     visuals.window_stroke = Stroke::new(1.0, LINE);
     visuals.window_corner_radius = CornerRadius::same(R_SURFACE);
     visuals.menu_corner_radius = CornerRadius::same(R_SURFACE);
-    visuals.extreme_bg_color = BG;
+    // Text fields sit inset: darker than panels, with a visible fill on BG.
+    visuals.extreme_bg_color = rgb(0x141414);
     visuals.faint_bg_color = CARD;
     visuals.code_bg_color = CARD;
     visuals.override_text_color = Some(INK);
@@ -202,6 +223,7 @@ mod tests {
         for padding in [2.0, 9.0] {
             for font_size in [13.0, 18.0] {
                 let ctx = egui::Context::default();
+                install(&ctx);
                 install(&ctx);
                 ctx.style_mut(|s| {
                     s.spacing.button_padding.y = padding;
@@ -268,6 +290,7 @@ mod tests {
     #[test]
     fn shared_ui_fonts_cover_workflow_controls_without_replacement_glyphs() {
         let ctx = egui::Context::default();
+        install(&ctx);
         install(&ctx);
         let styles = ctx.style().text_styles.clone();
         let _ = ctx.run(Default::default(), |ctx| {

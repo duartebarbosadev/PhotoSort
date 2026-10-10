@@ -138,6 +138,7 @@ mod tests {
         let state = updates::evaluate(&source, "0.1.0", &body).unwrap();
         app.update_dialog = true;
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         ctx.enable_accesskit();
         for size in [egui::vec2(600.0, 500.0), egui::vec2(1440.0, 900.0)] {
             let mut output = None;
@@ -174,6 +175,7 @@ mod tests {
         let mut app =
             PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         for step in Step::ALL {
             app.step = step;
             app.runtime

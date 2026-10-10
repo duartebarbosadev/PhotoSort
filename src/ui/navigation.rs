@@ -2,6 +2,8 @@ use super::*;
 
 /// Height of the status bar; photos and controls must end above it.
 pub(super) const STATUS_HEIGHT: f32 = 30.0;
+/// Height of the header bar with the step tabs.
+pub(super) const HEADER_HEIGHT: f32 = 52.0;
 
 impl PhotoSortApp {
     /// One bar: brand and folder, the five steps as tabs, then the actions.
@@ -9,7 +11,7 @@ impl PhotoSortApp {
         use egui_phosphor::regular as icon;
         let compact = ctx.content_rect().width() < 1000.0;
         egui::TopBottomPanel::top("header")
-            .exact_height(52.0)
+            .exact_height(HEADER_HEIGHT)
             .frame(
                 egui::Frame::new()
                     .fill(PANEL)
@@ -213,11 +215,29 @@ impl PhotoSortApp {
                         ui.label(RichText::new(format!("{} photos", self.filtered.len())).small().color(MUTED))
                             .on_hover_text(format!("{:.0} MB of previews in memory", self.stats.resident_bytes as f64 / 1048576.0));
                     }
-                    if self.preferences.show_shortcuts && self.root.is_some() && ui.available_width() > 640.0 {
-                        ui.add_space(S4);
+                    let recovery_status = self.model_recovery_status(&self.runtime.model_assets.state());
+                    let scoped_status = self.workflow_status();
+                    let status = self
+                        .navigation_notice
+                        .clone()
+                        .or(recovery_status.map(str::to_owned))
+                        .unwrap_or_else(|| scoped_status.into_owned());
+                    // The status message has priority; shortcut hints use only
+                    // what is left and disappear before the message truncates.
+                    let status_width = ui
+                        .painter()
+                        .layout_no_wrap(status.clone(), egui::TextStyle::Small.resolve(ui.style()), MUTED)
+                        .size()
+                        .x
+                        + 40.0;
+                    let hint_room = ui.available_width() - status_width - S6;
+                    if self.preferences.show_shortcuts && self.root.is_some() && hint_room > 240.0 {
                         let hint = preferences::workflow_hint(self.step);
-                        ui.add(egui::Label::new(RichText::new(hint).small().color(FAINT)).truncate())
-                            .on_hover_text(hint);
+                        ui.add_space(S4);
+                        ui.allocate_ui(egui::vec2(hint_room, STATUS_HEIGHT), |ui| {
+                            ui.add(egui::Label::new(RichText::new(hint).small().color(FAINT)).truncate())
+                                .on_hover_text(hint);
+                        });
                     }
                     ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
                         if self.scanning || self.busy || self.analysis_run.is_some() {
@@ -225,11 +245,8 @@ impl PhotoSortApp {
                         } else {
                             ui.label(RichText::new(egui_phosphor::regular::CHECK_CIRCLE).color(GREEN).small());
                         }
-                        let recovery_status = self.model_recovery_status(&self.runtime.model_assets.state());
-                        let scoped_status = self.workflow_status();
-                        let status = self.navigation_notice.as_deref().or(recovery_status).unwrap_or(&scoped_status);
-                        ui.add(egui::Label::new(RichText::new(status).small().color(MUTED)).truncate())
-                            .on_hover_text(status);
+                        ui.add(egui::Label::new(RichText::new(&status).small().color(MUTED)).truncate())
+                            .on_hover_text(&status);
                     });
                 });
             });
@@ -297,6 +314,7 @@ impl PhotoSortApp {
                                     egui::TextEdit::singleline(&mut query)
                                         .id(egui::Id::new("library_search"))
                                         .hint_text(format!("{}  Search", icon::MAGNIFYING_GLASS))
+                                        .background_color(CARD)
                                         .desired_width(180.0),
                                 )
                                 .changed()
@@ -330,16 +348,19 @@ impl PhotoSortApp {
                             {
                                 self.cancel_analysis();
                             }
-                        } else if self.step != Step::Rotation
-                            && icon_text_button(
-                                ui,
-                                self.can_start_analysis(),
-                                false,
-                                icon::SPARKLE,
-                                "Analyze library",
-                            )
-                            .on_hover_text("Analyze this workflow locally · Ctrl/Cmd+S")
-                            .clicked()
+                        } else if icon_text_button(
+                            ui,
+                            self.can_start_analysis(),
+                            false,
+                            icon::SPARKLE,
+                            if self.step == Step::Rotation {
+                                "Detect rotations"
+                            } else {
+                                "Analyze library"
+                            },
+                        )
+                        .on_hover_text("Runs on this computer · Ctrl/Cmd+S")
+                        .clicked()
                         {
                             self.analyze_current_workflow();
                         }
@@ -380,7 +401,9 @@ impl PhotoSortApp {
                             self.compare_selection();
                         }
                     }
-                    ui.checkbox(&mut self.companions, "Keep RAW + JPEG + XMP together");
+                    divider(ui);
+                    ui.checkbox(&mut self.companions, "Keep RAW + JPEG + XMP together")
+                        .on_hover_text("Move sidecars and paired RAW files with their photo");
                     if ui
                         .add_enabled(self.can_edit_folders(), egui::Button::new("Edit folders…"))
                         .clicked()
@@ -390,20 +413,28 @@ impl PhotoSortApp {
                     if ui
                         .add_enabled(
                             !self.scanning && !self.busy && self.organize_metadata_ready(),
-                            egui::Button::new("Preview moves >"),
+                            primary("Preview moves"),
                         )
+                        .on_hover_text("See every move before anything changes")
                         .clicked()
                     {
                         self.organize();
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Destination").small().color(MUTED));
+                    ui.label(RichText::new("Destination").color(MUTED));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.output)
-                            .desired_width((ui.available_width() - 55.0).max(100.0)),
-                    );
-                    if ui.button("…").clicked()
+                            .background_color(CARD)
+                            .desired_width((ui.available_width() - 48.0).clamp(120.0, 520.0)),
+                    )
+                    .on_hover_text("Folders are created inside this folder");
+                    if icon_button(
+                        ui,
+                        egui_phosphor::regular::FOLDER_OPEN,
+                        "Choose destination folder",
+                    )
+                    .clicked()
                         && let Some(path) = rfd::FileDialog::new().pick_folder()
                     {
                         self.output = path.display().to_string();
@@ -446,69 +477,128 @@ impl PhotoSortApp {
     }
 
     pub(super) fn welcome(&mut self, ui: &mut egui::Ui) {
+        use egui_phosphor::regular as icon;
         let width = ui.available_width();
-        ui.add_space((ui.available_height() * 0.15).max(25.0));
-        ui.vertical_centered(|ui| {
-            ui.label(RichText::new("PS").size(62.0).color(ACCENT));
-            ui.add_space(20.0);
-            ui.label(
-                RichText::new("Make room for your best work.")
-                    .size(if width > 750.0 { 38.0 } else { 27.0 })
-                    .strong(),
-            );
-            ui.add_space(12.0);
-            ui.label(
-                RichText::new(
-                    "A calmer way from a full memory card to a collection worth keeping.",
-                )
-                .size(15.0)
-                .color(MUTED),
-            );
-            ui.add_space(28.0);
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("Open a photo folder  >").color(BG).strong())
-                        .fill(ACCENT)
-                        .min_size(egui::vec2(225.0, 46.0)),
-                )
-                .clicked()
-            {
-                self.select_folder();
-            }
-            ui.add_space(12.0);
-            ui.label(
-                RichText::new("Or drop a folder anywhere in this window")
-                    .small()
-                    .color(MUTED),
-            );
-            ui.add_space(40.0);
-            ui.horizontal_wrapped(|ui| {
-                for step in self.navigation_steps() {
-                    egui::Frame::new()
-                        .fill(CARD)
-                        .corner_radius(10)
-                        .inner_margin(18)
-                        .show(ui, |ui| {
-                            ui.set_min_width(110.0);
-                            ui.label(
-                                RichText::new(format!("{:02}", step.index() + 1))
-                                    .color(ACCENT)
-                                    .small(),
-                            );
-                            ui.label(RichText::new(step.title()).strong());
-                        });
+        let column = (width - 2.0 * S6).clamp(280.0, 520.0);
+        egui::ScrollArea::vertical().id_salt("welcome").show(ui, |ui| {
+            ui.add_space((ui.available_height() * 0.12).max(S6));
+            ui.vertical_centered(|ui| {
+                ui.label(RichText::new(icon::APERTURE).size(52.0).color(ACCENT));
+                ui.add_space(S4);
+                ui.label(
+                    RichText::new("Make room for your best work.")
+                        .font(semibold(if width > 750.0 { 34.0 } else { 26.0 })),
+                );
+                ui.add_space(S2);
+                ui.label(
+                    RichText::new("Sort, clean up and pick the keepers from a folder of photos. Nothing changes on disk until you review it.")
+                        .size(14.5)
+                        .color(MUTED),
+                );
+                ui.add_space(S6);
+                let open = ui.add(
+                    primary(format!("{}  Open a photo folder", icon::FOLDER_OPEN))
+                        .min_size(egui::vec2(220.0, 42.0)),
+                );
+                let enabled = open.enabled();
+                open.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "Open a photo folder")
+                });
+                if open.clicked() {
+                    self.select_folder();
                 }
+                ui.add_space(S2);
+                ui.label(
+                    RichText::new("or drop a folder anywhere in this window")
+                        .small()
+                        .color(FAINT),
+                );
+                let recent: Vec<PathBuf> = self
+                    .preferences
+                    .recent_folders
+                    .iter()
+                    .filter(|p| !self.missing_recent.contains(*p))
+                    .take(5)
+                    .cloned()
+                    .collect();
+                if !recent.is_empty() {
+                    ui.add_space(S6);
+                    welcome_section(ui, column, "Recent folders", |ui| {
+                        for path in recent {
+                            let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                            let row = ui
+                                .add_enabled(
+                                    !self.busy,
+                                    egui::Button::new(format!("{}  {name}", icon::FOLDER))
+                                        .frame(false)
+                                        .min_size(egui::vec2(column - 2.0 * S3, 30.0)),
+                                )
+                                .on_hover_text(path.display().to_string());
+                            let enabled = row.enabled();
+                            row.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name)
+                            });
+                            if row.clicked() {
+                                self.open(path);
+                            }
+                        }
+                    });
+                }
+                ui.add_space(S6);
+                welcome_section(ui, column, "Five steps, in any order", |ui| {
+                    for step in Step::ALL {
+                        ui.horizontal_top(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}", step.index() + 1))
+                                    .font(semibold(13.0))
+                                    .color(ACCENT),
+                            );
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 2.0;
+                                ui.label(RichText::new(step.title()).font(medium(13.5)));
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(step_summary(step)).small().color(MUTED),
+                                    )
+                                    .wrap(),
+                                );
+                            });
+                        });
+                        ui.add_space(S1);
+                    }
+                });
+                ui.add_space(S6);
             });
-            ui.add_space(22.0);
-            ui.label(
-                RichText::new(
-                    "Start anywhere. Return to any step. Keep every decision in your hands.",
-                )
-                .small()
-                .color(MUTED),
-            );
         });
     }
+}
+
+/// A plain-language line for each step on the welcome screen.
+fn step_summary(step: Step) -> &'static str {
+    match step {
+        Step::Organize => "Sort photos into folders by date, place, camera or people.",
+        Step::EasyDelete => "Find duplicates, blurry and badly exposed shots to clear out.",
+        Step::Rotation => "Spot sideways photos and turn them upright.",
+        Step::PickBest => "Keep the best frame from each run of similar shots.",
+        Step::Cull => "Rate, mark and compare every photo yourself.",
+    }
+}
+
+/// A left-aligned card centred in the welcome column.
+fn welcome_section(ui: &mut egui::Ui, width: f32, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(PANEL)
+        .stroke(Stroke::new(1.0, LINE))
+        .corner_radius(R_SURFACE)
+        .inner_margin(S3)
+        .show(ui, |ui| {
+            ui.set_width(width - 2.0 * S3);
+            ui.with_layout(egui::Layout::top_down(Align::Min), |ui| {
+                ui.label(RichText::new(title).font(medium(12.5)).color(MUTED));
+                ui.add_space(S1);
+                body(ui);
+            });
+        });
 }
 
 #[cfg(test)]
@@ -598,6 +688,7 @@ mod cull_navigation_tests {
         ] {
             let mut app = fixture();
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             let _ = ctx.run(
                 egui::RawInput {
                     events: vec![egui::Event::Key {

@@ -362,6 +362,7 @@ mod tests {
     fn shared_video_focus_navigation_dialogs_and_folder_epochs_stop_or_pause_playback() {
         let (mut app, _root) = app();
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         let _ = ctx.run(input(true, egui::vec2(800.0, 600.0)), |ctx| {
             app.sync_playback(ctx)
         });
@@ -599,6 +600,7 @@ mod tests {
     fn video_space_and_seek_keys_are_owned_by_playback_without_navigating_the_library() {
         let (mut app, _root) = app();
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         let mut raw = input(true, egui::vec2(800.0, 600.0));
         raw.events.push(egui::Event::Key {
             key: egui::Key::Space,

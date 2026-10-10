@@ -1555,7 +1555,7 @@ impl PhotoSortApp {
                 if ui.button("Reset folder layout").clicked() { action = 4; }
                 if ui.button("Cancel edits").on_hover_text("Discard folder and name edits. Shared Trash marks remain staged for review.").clicked() { action = 1; }
                 if ui.button("Keep edits").clicked() { action = 2; }
-                if ui.button("Preview moves >").clicked() { action = 3; }
+                if ui.add(primary("Preview moves")).clicked() { action = 3; }
             });
         });
         if command.is_none()

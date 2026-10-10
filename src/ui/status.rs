@@ -128,6 +128,7 @@ mod tests {
         assert_eq!(app.status_scope, Some((Step::Rotation, None)));
         assert!(!app.workflow_status().contains("rotation suggestions"));
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         ctx.enable_accesskit();
         let output = ctx.run(
             egui::RawInput {

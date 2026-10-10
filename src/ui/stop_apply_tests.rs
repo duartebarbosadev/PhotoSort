@@ -143,6 +143,7 @@ fn every_workflow_can_stop_from_compact_footer_and_retry_without_losing_intent()
         let token = app.apply_stop.as_ref().unwrap().clone();
         let epoch = app.runtime.epoch();
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         ctx.enable_accesskit();
         theme_install(&ctx);
         app.status = "A deliberately long operation status that must never push Stop outside a small window ".repeat(8);

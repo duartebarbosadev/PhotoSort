@@ -306,6 +306,7 @@ pub(super) mod tests {
             let b_index = tree.lookup[&b];
             let mut collapsed = BTreeSet::from([a.clone(), b.clone()]);
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             let mut hover = HoverExpand::default();
             let mut frame = |time, target, pressed: Option<bool>, focused, render| {
                 let events = pressed
@@ -380,6 +381,7 @@ pub(super) mod tests {
         )
         .unwrap();
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         let mut selected = Some(tree.nodes[0].key.clone());
         let mut collapsed = BTreeSet::new();
         let mut text = String::from("sample name");

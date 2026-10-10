@@ -42,6 +42,7 @@ fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
 fn settle(app: &mut PhotoSortApp) {
     let deadline = Instant::now() + Duration::from_secs(10);
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     loop {
         app.poll(&ctx);
         app.refilter();
@@ -221,6 +222,7 @@ fn group_target_picker_virtualizes_large_libraries_at_compact_and_wide_sizes() {
     let (_dir, mut app) = fixture();
     app.browse_groups = (1..=100_000).collect();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     for width in [320., 480., 1200.] {
         let out = ctx.run(
             egui::RawInput {
@@ -480,6 +482,7 @@ fn scene_edit_cancel_keeps_completed_groups_and_folder_drafts_are_guarded() {
     app.group_mode = GroupMode::Visual;
     app.scene_choices = (1..=100_000).map(|g| (g, 1, MediaId(0))).collect();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     for width in [320., 600., 1200.] {
         let output = ctx.run(
             egui::RawInput {

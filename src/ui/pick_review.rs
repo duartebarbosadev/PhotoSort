@@ -265,14 +265,20 @@ impl PhotoSortApp {
                             },
                         );
                 });
-            ui.label(format!(
-                "{} clusters complete",
-                self.pick_review
-                    .tournaments()
-                    .iter()
-                    .filter(|t| t.finalized)
-                    .count()
-            ));
+            let complete = self
+                .pick_review
+                .tournaments()
+                .iter()
+                .filter(|t| t.finalized)
+                .count();
+            ui.label(
+                RichText::new(format!(
+                    "{complete} of {} clusters complete",
+                    self.pick_review.tournaments().len()
+                ))
+                .small()
+                .color(MUTED),
+            );
         });
         if selected_cluster != current && self.allow_review_departure() {
             self.pick_review.select_cluster(selected_cluster);
@@ -288,38 +294,45 @@ impl PhotoSortApp {
         }
         let confirmed = self.pick_review.comparison().is_some_and(|c| c.confirmed);
         ui.horizontal_wrapped(|ui| {
+            let confirm = if confirmed {
+                egui::Button::new("Confirmed")
+            } else {
+                primary("Confirm")
+            };
             if ui
-                .add_enabled(
-                    !confirmed,
-                    egui::Button::new(if confirmed { "Confirmed" } else { "Confirm >" }),
+                .add_enabled(!confirmed, confirm)
+                .on_hover_text(
+                    "Apply these Keep/Trash choices and move to the next comparison · Enter",
                 )
                 .clicked()
             {
                 self.confirm_pick(false);
             }
-            if ui.button("Reset default").clicked() {
+            if ui.button("Keep all").on_hover_text("K").clicked() {
+                self.confirm_pick(true);
+            }
+            if ui
+                .button("Reset")
+                .on_hover_text("Back to the suggestion · R")
+                .clicked()
+            {
                 self.reset_pick(false);
             }
             if ui.button("Reset all").clicked() {
                 self.reset_pick(true);
             }
-            if ui.button("Keep all").clicked() {
-                self.confirm_pick(true);
-            }
-            if ui
-                .selectable_label(self.pick_focus, "Focus photo (C)")
-                .clicked()
+            divider(ui);
+            if icon_text_button(
+                ui,
+                true,
+                self.pick_focus,
+                egui_phosphor::regular::CORNERS_OUT,
+                "Focus photo",
+            )
+            .on_hover_text("Show one photo at a time · C")
+            .clicked()
             {
                 self.toggle_pick_focus();
-            }
-            if ui
-                .add_enabled(
-                    self.pick_review.any_completed(),
-                    egui::Button::new("Review changes…"),
-                )
-                .clicked()
-            {
-                self.review_changes();
             }
         });
         if let Some(c) = self.pick_review.comparison() {
@@ -329,17 +342,16 @@ impl PhotoSortApp {
                 .map(|i| self.media[*i].name())
                 .unwrap_or_default();
             let score = self.pick_review.current().unwrap().cluster.scores[&c.ai_pick];
-            ui.label(
-                RichText::new(format!(
-                    "Suggested: {name} · score {score:.1} · {}",
+            step_hint(
+                ui,
+                &format!(
+                    "Suggested keeper: {name} (score {score:.0}). {}",
                     if c.confirmed {
-                        "Confirmed choices"
+                        "Choices confirmed."
                     } else {
-                        "Choose Keep/Trash, then confirm"
+                        "Choose Keep or Trash for each photo, then confirm."
                     }
-                ))
-                .small()
-                .color(ACCENT),
+                ),
             );
         }
     }
@@ -417,6 +429,7 @@ mod tests {
     fn workflow_keys_toggle_keep_and_keep_all_without_staging_ratings() {
         let mut app = app();
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         for key in [egui::Key::Num1, egui::Key::C, egui::Key::K] {
             let input = egui::RawInput {
                 events: vec![egui::Event::Key {
@@ -503,6 +516,7 @@ mod tests {
     fn popup_keys_do_not_confirm_or_change_the_underlying_review() {
         let mut app = app();
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         for key in [
             egui::Key::Num1,
             egui::Key::Enter,

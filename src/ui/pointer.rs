@@ -168,6 +168,7 @@ mod tests {
     fn cancelled_or_abandoned_gestures_cannot_resume_in_another_context() {
         for reason in 0..6 {
             let ctx = egui::Context::default();
+            crate::ui::theme::install(&ctx);
             let mut tracker = DragTracker::default();
             let start = egui::pos2(20.0, 20.0);
             let end = egui::pos2(80.0, 90.0);
@@ -218,6 +219,7 @@ mod tests {
     fn coalesced_drags_are_claimed_by_the_press_pane_once_and_respect_clipping() {
         for clipped in [false, true] {
             let ctx = egui::Context::default();
+            crate::ui::theme::install(&ctx);
             let mut tracker = DragTracker::default();
             let mut rectangles = Vec::new();
             let mut render = |events, tracker: &mut DragTracker| {
@@ -282,6 +284,7 @@ mod tests {
     #[test]
     fn clicks_and_secondary_buttons_do_not_pan_and_multiple_drags_keep_their_deltas() {
         let ctx = egui::Context::default();
+        crate::ui::theme::install(&ctx);
         let mut tracker = DragTracker::default();
         let start = egui::pos2(20., 20.);
         let end = egui::pos2(80., 90.);
