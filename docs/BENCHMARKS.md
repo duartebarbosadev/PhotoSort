@@ -33,7 +33,9 @@ pair-record copies into a per-run working set.
 
 The 3.1 GiB Quality peak was ONNX Runtime constant-folding the 378 MB aesthetic
 model on load. Since `627915c` the model ships pre-folded: identical scores and
-groups for all 517 photos at 8 and 4 threads, peak 1.71 / 1.78 GiB, model load
+groups for all 517 photos at 8 and 4 threads; back to back the peak footprint is
+2.44 GiB instead of 4.6 GiB (an earlier 1.7 GiB reading was taken under memory
+pressure and is not representative); model load
 0.22–0.24 s instead of 1.4–1.8 s, warm inference within ±4%.
 
 # File discovery comparison — 2026-09-28

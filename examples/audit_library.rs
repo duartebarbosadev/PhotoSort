@@ -180,6 +180,15 @@ fn main() -> Result<()> {
         temporary = tempfile::tempdir()?;
         temporary.path().to_path_buf()
     };
+    // PHOTOSORT_AUDIT_BACKEND=coreml|cuda|directml|auto compares accelerators with CPU.
+    let backend = match std::env::var("PHOTOSORT_AUDIT_BACKEND").as_deref() {
+        Err(_) | Ok("cpu") => Backend::Cpu,
+        Ok("auto") => Backend::Auto,
+        Ok("coreml") => Backend::CoreMl,
+        Ok("cuda") => Backend::Cuda,
+        Ok("directml") => Backend::DirectMl,
+        Ok(other) => anyhow::bail!("Unknown PHOTOSORT_AUDIT_BACKEND {other}"),
+    };
     let mut phases = Vec::new();
     let mut expected = None;
     for phase in ["cold", "reopened"] {
@@ -187,7 +196,7 @@ fn main() -> Result<()> {
         rt.processing.configure(Preferences {
             mode: Mode::Custom,
             custom_threads: threads,
-            backend: Backend::Cpu,
+            backend,
         });
         let start = Instant::now();
         let result = run(&rt, media.clone(), profile);

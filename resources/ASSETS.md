@@ -38,7 +38,13 @@ tflite 2.18.0 and tflite2onnx 0.4.1. These are build tools, not application depe
 python scripts/export_aesthetic.py /path/to/pinned/beit/snapshot aesthetic-export.onnx
 cargo run --release --example fold_model -- aesthetic-export.onnx resources/models/aesthetic.onnx
 python scripts/normalize_faces.py /path/to/face_landmarker.task resources/models
+python scripts/explicit_pool_pads.py resources/models/face_landmarks_detector.onnx landmarks.onnx
+mv landmarks.onnx resources/models/face_landmarks_detector.onnx
 ```
+
+`explicit_pool_pads.py` replaces `auto_pad=VALID` on pooling layers with the
+equivalent explicit zero pads, which Core ML requires, and only writes its output
+after ONNX Runtime returns bit-identical results (needs `onnx`, `onnxruntime`).
 
 Folding pre-computes the export's constant subgraphs once. Without it, ONNX
 Runtime does this at every first load and briefly needs about 3.5 GiB; with it the

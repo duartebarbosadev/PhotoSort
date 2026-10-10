@@ -67,7 +67,8 @@ pub const ALL: [Asset; 6] = [
         name: "face_landmarks_detector.onnx",
         title: "Face landmarks",
         purpose: "People Organize, Easy Delete, Pick Best and Cull",
-        bytes: 4_996_125,
+        // Pooling pads made explicit for Core ML (scripts/explicit_pool_pads.py).
+        bytes: 4_996_107,
         url: None,
         license: "MediaPipe / Apache-2.0",
     },
