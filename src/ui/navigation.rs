@@ -46,15 +46,31 @@ impl PhotoSortApp {
                         {
                             self.select_folder();
                         }
-                        if (self.catalog.is_some() || self.retry_plan.is_some())
-                            && ui
-                                .add_enabled(!self.busy, primary("Review changes"))
+                        if self.catalog.is_some() || self.retry_plan.is_some() {
+                            // Accent only when there is something to review, so the
+                            // header doubles as the staged-change indicator.
+                            let staged = self.staged_change_count();
+                            let button = if staged > 0 || self.retry_plan.is_some() {
+                                primary(if staged > 0 {
+                                    format!(
+                                        "Review {staged} {}",
+                                        if staged == 1 { "change" } else { "changes" }
+                                    )
+                                } else {
+                                    "Review changes".into()
+                                })
+                            } else {
+                                egui::Button::new("Review changes")
+                            };
+                            if ui
+                                .add_enabled(!self.busy, button)
                                 .on_hover_text(
                                     "See every staged change before applying · Shift+Enter",
                                 )
                                 .clicked()
-                        {
-                            self.review_changes();
+                            {
+                                self.review_changes();
+                            }
                         }
                         if self.root.is_some() {
                             ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
@@ -124,6 +140,16 @@ impl PhotoSortApp {
         }
     }
 
+    /// Photos with a staged Trash mark, rating or rotation, plus confirmed
+    /// rotations waiting in Fix Rotation.
+    pub(super) fn staged_change_count(&self) -> usize {
+        let decided = self.decisions.values().filter(|d| !d.is_empty()).count();
+        if self.step == Step::Rotation {
+            decided.max(self.rotation_review.pending_count())
+        } else {
+            decided
+        }
+    }
     pub(super) fn switch_step(&mut self, step: Step) {
         if self.step != step && self.preferences.visible(step) {
             self.request_departure(Destination::Step(step));
@@ -545,8 +571,9 @@ impl PhotoSortApp {
                     });
                 }
                 ui.add_space(S6);
-                welcome_section(ui, column, "Five steps, in any order", |ui| {
-                    for step in Step::ALL {
+                let steps = self.navigation_steps();
+                welcome_section(ui, column, "Steps, in any order", |ui| {
+                    for step in steps {
                         ui.horizontal_top(|ui| {
                             ui.label(
                                 RichText::new(format!("{}", step.index() + 1))

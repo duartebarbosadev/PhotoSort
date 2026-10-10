@@ -160,9 +160,9 @@ impl PhotoSortApp {
             if ui
                 .add_enabled(
                     !self.filtered.is_empty(),
-                    egui::Button::new("Accept all suggestions"),
+                    egui::Button::new(format!("Accept suggestions ({} shown)", self.filtered.len())),
                 )
-                .on_hover_text("Confirm the suggested Keep/Trash choice for every photo shown · A")
+                .on_hover_text("Confirm the suggested Keep/Trash choice for every photo in the categories shown · A")
                 .clicked()
             {
                 self.accept_delete_defaults();

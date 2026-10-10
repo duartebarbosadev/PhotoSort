@@ -120,7 +120,9 @@ impl PhotoSortApp {
             }
             self.library_layout = view.layout;
             self.review = view.review;
-            self.inspector = view.inspector;
+            // Narrow windows show Details as a drawer over the photos; only
+            // reopen it on request, never from a view saved in a wide window.
+            self.inspector = view.inspector && self.was_wide;
             self.group_mode = view.group_mode;
             self.organize_view = view.editor.clone();
             self.delete_categories = view.delete_categories.iter().copied().collect();

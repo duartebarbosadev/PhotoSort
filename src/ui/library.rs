@@ -347,13 +347,18 @@ impl PhotoSortApp {
                 FontId::proportional(12.0),
                 INK,
             );
-            let (detail, color) = if self.step == Step::Organize {
-                let folder = self
-                    .organize_drafts
-                    .get(&self.group_mode)
-                    .and_then(|draft| draft.labels().get(&id))
-                    .cloned()
-                    .unwrap_or_else(|| self.label_for(&media));
+            // Organize shows the destination once one exists; before analysis
+            // the label is an instruction, which would repeat on every tile.
+            let destination = (self.step == Step::Organize)
+                .then(|| {
+                    self.organize_drafts
+                        .get(&self.group_mode)
+                        .and_then(|draft| draft.labels().get(&id))
+                        .cloned()
+                        .unwrap_or_else(|| self.label_for(&media))
+                })
+                .filter(|folder| !folder.starts_with("Analyze to"));
+            let (detail, color) = if let Some(folder) = destination {
                 (
                     format!(
                         "{}  {}",

@@ -186,7 +186,7 @@ impl PhotoSortApp {
             let mut action = 0;
             let mut section = self.preferences_section.take();
             let response = egui::Modal::new(egui::Id::new("preferences")).show(ctx, |ui| {
-                ui.set_width((ctx.content_rect().width() - 64.0).clamp(280.0, 480.0));
+                ui.set_width((ctx.content_rect().width() - 64.0).clamp(280.0, 560.0));
                 ui.heading("Settings");
                 let error_height = if let Some(error) = self.error.clone() {
                     ui.vertical(|ui| {
@@ -203,13 +203,13 @@ impl PhotoSortApp {
                     .id_salt("settings_content")
                     .max_height((ctx.content_rect().height() - 200.0 - error_height).max(80.0))
                     .show(ui, |ui| {
-                        let general = ui.label("Application updates");
+                        let general = settings_heading(ui, "Application updates");
                         if section == Some(Section::General) { general.scroll_to_me(Some(egui::Align::Min)); }
                         ui.checkbox(&mut draft.updates.automatic, "Check for updates daily");
                         if let Err(reason) = crate::core::updates::Source::configured() { ui.small(reason); }
                         ui.separator();
-                        ui.label("Choose your workflow");
-                        ui.label("Organize and Cull always remain available.");
+                        settings_heading(ui, "Choose your workflow");
+                        settings_note(ui, "Organize and Cull always remain available.");
                         for step in Step::ALL {
                             let mut visible = draft.visible(step);
                             if ui
@@ -229,29 +229,29 @@ impl PhotoSortApp {
                         ui.separator();
                         ui.checkbox(&mut draft.show_shortcuts, "Show workflow shortcut hints");
                     ui.separator();
-                    ui.label("Easy Delete sensitivity");
+                    settings_heading(ui, "Easy Delete sensitivity");
                     ui.add(egui::Slider::new(&mut draft.easy_delete.blur,10.0..=1000.0).text("Blur threshold"));
                     ui.add(egui::Slider::new(&mut draft.easy_delete.dark,0.0..=128.0).text("Near-black ceiling"));
                     ui.add(egui::Slider::new(&mut draft.easy_delete.bright,128.0..=255.0).text("Overexposed threshold"));
-                    ui.label("Lower blur values flag fewer photos. Near-black suggestions still require an almost entirely black preview.");
-                    ui.label("Applies to future Easy Delete analyses. Current reviews stay unchanged.");
+                    settings_note(ui, "Lower blur values flag fewer photos. Near-black suggestions still require an almost entirely black preview.");
+                    settings_note(ui, "Applies to future Easy Delete analyses. Current reviews stay unchanged.");
                     if ui.button("Reset detection defaults").clicked() { draft.easy_delete = Default::default(); }
                     ui.separator();
-                    ui.label("Visual similarity grouping");
+                    settings_heading(ui, "Visual similarity grouping");
                     ui.add(egui::Slider::new(&mut draft.similarity_distance,0.02..=0.20).fixed_decimals(3).text("Similarity distance"));
-                    ui.label("Lower values make smaller, stricter groups. Used by the next Organize or Easy Delete analysis; current reviews stay unchanged.");
+                    settings_note(ui, "Lower values make smaller, stricter groups. Used by the next Organize or Easy Delete analysis; current reviews stay unchanged.");
                     if ui.button("Reset visual grouping default").clicked() {draft.similarity_distance=crate::core::regional::DEFAULT_EPS;}
                     ui.separator();
-                    ui.label("Same-subject grouping");
+                    settings_heading(ui, "Same-subject grouping");
                     ui.horizontal_wrapped(|ui| {
                         use crate::core::subjects::Strictness;
                         for (value,label) in [(Strictness::Conservative,"Conservative"),(Strictness::Standard,"Standard"),(Strictness::Broad,"Broad")] {
                             ui.selectable_value(&mut draft.subject_strictness,value,label);
                         }
                     });
-                    ui.label("Used by the next Cull or Pick Best analysis. Conservative keeps uncertain matches apart; Broad accepts more matches.");
+                    settings_note(ui, "Used by the next Cull or Pick Best analysis. Conservative keeps uncertain matches apart; Broad accepts more matches.");
                     ui.separator();
-                    ui.label("Cull navigation");
+                    settings_heading(ui, "Cull navigation");
                     ui.label("Up/Down and Previous/Next stop at:");
                     ui.horizontal_wrapped(|ui| {
                         ui.selectable_value(&mut draft.navigation.rating, None, "Any rating");
@@ -262,22 +262,22 @@ impl PhotoSortApp {
                     });
                     ui.checkbox(&mut draft.navigation.skip_singletons, "Skip single-photo groups with Up/Down");
                     ui.checkbox(&mut draft.navigation.cycle_similarity, "Cycle Left/Right within similarity groups");
-                    ui.label("Rating jumps take priority. Ctrl/Cmd bypasses movement filters and includes Trash marks. Group options use Cull analysis results; photos remain visible.");
+                    settings_note(ui, "Rating jumps take priority. Ctrl/Cmd bypasses movement filters and includes Trash marks. Group options use Cull analysis results; photos remain visible.");
                     ui.separator();
-                    ui.label("Saving ratings and rotation");
+                    settings_heading(ui, "Saving ratings and rotation");
                     ui.horizontal_wrapped(|ui| {
                         use crate::core::metadata::WritePolicy;
                         ui.selectable_value(&mut draft.metadata_writes,WritePolicy::EmbedWhenSupported,"Embed where supported");
                         ui.selectable_value(&mut draft.metadata_writes,WritePolicy::SidecarOnly,"Sidecars only");
                         ui.selectable_value(&mut draft.metadata_writes,WritePolicy::EmbedOrRotatePixels,"Embed, or rotate pixels");
                     });
-                    ui.label(if draft.metadata_writes == crate::core::metadata::WritePolicy::EmbedOrRotatePixels {
+                    settings_note(ui, if draft.metadata_writes == crate::core::metadata::WritePolicy::EmbedOrRotatePixels {
                         "Like Embed where supported, but rotating a file that cannot store orientation (such as BMP) rewrites its pixels instead of using a sidecar. Pixels and colour profile are kept exactly; other data stored inside those files is not. Review lists each one before applying."
                     } else {
                         "Existing XMP sidecars remain authoritative. Unsupported formats use a sidecar. Review shows the destination before applying; photo pixels are not re-encoded."
                     });
                     ui.separator();
-                    ui.label("AI execution");
+                    settings_heading(ui, "AI execution");
                     egui::ComboBox::from_id_salt("inference-backend")
                         .selected_text(draft.processing.backend.label())
                         .show_ui(ui, |ui| {
@@ -285,13 +285,13 @@ impl PhotoSortApp {
                                 ui.selectable_value(&mut draft.processing.backend, backend, backend.label());
                             }
                         });
-                    ui.label("Applies to the next analysis in every workflow. Automatic chooses a platform provider. Missing or failing providers fall back to CPU per model.");
-                    ui.label("Acceleration requires a compatible ONNX Runtime and driver. First model preparation can take minutes and extra memory. Native compilation finishes before cancellation can release it; cached photo results remain reusable.");
+                    settings_note(ui, "Applies to the next analysis in every workflow. Automatic chooses a platform provider. Missing or failing providers fall back to CPU per model.");
+                    settings_note(ui, "Acceleration requires a compatible ONNX Runtime and driver. First model preparation can take minutes and extra memory. Native compilation finishes before cancellation can release it; cached photo results remain reusable.");
                     for status in self.runtime.processing.status() {
                         ui.label(format!("{} · {} · {}", status.model, status.backend.label(), status.detail));
                     }
-                    ui.label("Session providers above can still use CPU for unsupported operations; they do not prove that every operation ran on a GPU.");
-                    ui.label("AI CPU allocation");
+                    settings_note(ui, "Session providers above can still use CPU for unsupported operations; they do not prove that every operation ran on a GPU.");
+                    settings_heading(ui, "AI CPU allocation");
                     ui.horizontal_wrapped(|ui| {
                         use crate::core::processing::Mode;
                         for (mode,label) in [(Mode::Balanced,"Balanced"),(Mode::Maximum,"Maximum"),(Mode::Custom,"Custom")] {
@@ -303,16 +303,16 @@ impl PhotoSortApp {
                         ui.add(egui::Slider::new(&mut draft.processing.custom_threads,1..=available).text("AI threads"));
                     }
                     ui.label(format!("{} AI threads · {} available",draft.processing.threads(available),available));
-                    ui.label("Balanced uses 85% of the available thread count for AI. Applies to the next analysis, including rotation. Cached results stay available.");
-                    ui.label("This controls AI calculations, not a limit on total app CPU use. Browsing and file tasks remain in the background.");
+                    settings_note(ui, "Balanced uses 85% of the available thread count for AI. Applies to the next analysis, including rotation. Cached results stay available.");
+                    settings_note(ui, "This controls AI calculations, not a limit on total app CPU use. Browsing and file tasks remain in the background.");
                     ui.separator();
-                    let caches = ui.label("Shared caches");
+                    let caches = settings_heading(ui, "Shared caches");
                     if section == Some(Section::Caches) { caches.scroll_to_me(Some(egui::Align::Min)); }
                     self.cache_folder_button(ui);
                     ui.add(egui::Slider::new(&mut draft.cache.previews_mib, 32..=1024).suffix(" MiB").text("Preview memory"));
                     ui.add(egui::Slider::new(&mut draft.cache.originals_mib, 64..=2048).suffix(" MiB").text("Original detail memory"));
                     ui.add(egui::Slider::new(&mut draft.cache.disk_mib, 0..=32768).suffix(" MiB").text("Disk cache"));
-                    ui.label("Limits apply when settings are saved. Zero disables persistent previews, AI evidence and prepared models. Active model files can temporarily exceed the disk limit; reducing it releases this window’s prepared sessions. Displayed images and models use additional memory.");
+                    settings_note(ui, "Limits apply when settings are saved. Zero disables persistent previews, AI evidence and prepared models. Active model files can temporarily exceed the disk limit; reducing it releases this window’s prepared sessions. Displayed images and models use additional memory.");
                     let cache = self.runtime.cache.status();
                     if let Some(usage) = cache.usage {
                         ui.label(format!("Disk: {:.1} MiB · {} files", usage.disk_bytes as f64 / 1048576.0, usage.files));
@@ -328,7 +328,7 @@ impl PhotoSortApp {
                         if ui.button("Refresh cache usage").clicked() { self.runtime.cache.request(false); }
                         if ui.add_enabled(!self.busy && !self.scanning, egui::Button::new("Clear reusable caches")).clicked() { self.runtime.cache.request(true); }
                     }
-                    ui.label("Clear runs immediately in the background. Current reviews, staged choices, saved positions and downloaded models are kept.");
+                    settings_note(ui, "Clear runs immediately in the background. Current reviews, staged choices, saved positions and downloaded models are kept.");
 
                     });
                 ui.separator();
@@ -336,7 +336,7 @@ impl PhotoSortApp {
                     if ui.button("Cancel").clicked() {
                         action = 1;
                     }
-                    if ui.button("Save settings").clicked() {
+                    if ui.add(primary("Save settings")).clicked() {
                         action = 2;
                     }
                 });
@@ -389,3 +389,13 @@ pub(super) fn workflow_hint(step: Step) -> &'static str {
 #[cfg(test)]
 #[path = "preferences/tests.rs"]
 mod tests;
+
+/// A settings group title with room above it; returns the label for scrolling.
+fn settings_heading(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.add_space(S2);
+    ui.label(RichText::new(text).font(semibold(14.0)))
+}
+/// Secondary explanation under a setting.
+fn settings_note(ui: &mut egui::Ui, text: &str) {
+    ui.add(egui::Label::new(RichText::new(text).small().color(MUTED)).wrap());
+}

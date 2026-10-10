@@ -708,7 +708,13 @@ impl PhotoSortApp {
             } else {
                 format!("{} / {}", slot + 1, self.media[index].name())
             };
-            ui.painter().with_clip_rect(rect).text(
+            // Leave room for the Keep/Trash pill in the top-right corner.
+            let pill = matches!(self.step, Step::EasyDelete | Step::PickBest) || d.rejected;
+            let mut label_clip = rect;
+            if pill {
+                label_clip.max.x -= 104.0;
+            }
+            ui.painter().with_clip_rect(label_clip).text(
                 rect.left_top() + egui::vec2(10.0, 14.0),
                 Align2::LEFT_CENTER,
                 label,

@@ -1551,6 +1551,19 @@ impl PhotoSortApp {
     pub fn gallery_review(&mut self, review: bool) {
         self.review = review;
     }
+    pub fn gallery_settings(&mut self) {
+        self.preferences_draft = Some(self.preferences.clone());
+    }
+    /// Marks the first `count` photos for Trash and opens the plan review.
+    /// Planning is a dry run; nothing is applied without the Apply button.
+    pub fn gallery_plan_review(&mut self, count: usize) {
+        let ids: Vec<_> = self.media.iter().take(count).map(|m| m.id).collect();
+        for id in ids {
+            self.decisions.entry(id).or_default().rejected = true;
+        }
+        self.changed();
+        self.review_changes();
+    }
     /// True while discovery, metadata, thumbnails or analysis are still arriving.
     pub fn gallery_busy(&self) -> bool {
         self.scanning

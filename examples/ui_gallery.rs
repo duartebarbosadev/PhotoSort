@@ -86,6 +86,24 @@ fn main() -> anyhow::Result<()> {
             false,
             [900.0, 700.0],
         ),
+        (
+            "08-easy-delete-compact",
+            Some(Step::EasyDelete),
+            true,
+            [900.0, 700.0],
+        ),
+        (
+            "09-pick-best-compact",
+            Some(Step::PickBest),
+            true,
+            [900.0, 700.0],
+        ),
+        (
+            "10-organize-compact",
+            Some(Step::Organize),
+            false,
+            [900.0, 700.0],
+        ),
     ];
     for (name, step, review, size) in shots {
         let folder = library.path().to_path_buf();
@@ -104,6 +122,28 @@ fn main() -> anyhow::Result<()> {
         image.save(out.join(format!("{name}.png")))?;
         eprintln!("{name}");
     }
+    // Dialogs over the Cull grid.
+    for (name, open) in [
+        ("11-settings", Dialog::Settings),
+        ("12-plan-review", Dialog::PlanReview),
+    ] {
+        let folder = library.path().to_path_buf();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_pixels_per_point(2.0)
+            .build_eframe(|cc| PhotoSortApp::new(cc, Some(folder)));
+        settle(&mut harness);
+        harness.state_mut().gallery_step(Step::Cull);
+        settle(&mut harness);
+        match open {
+            Dialog::Settings => harness.state_mut().gallery_settings(),
+            Dialog::PlanReview => harness.state_mut().gallery_plan_review(3),
+        }
+        settle(&mut harness);
+        let image = harness.render().map_err(|e| anyhow::anyhow!("{e}"))?;
+        image.save(out.join(format!("{name}.png")))?;
+        eprintln!("{name}");
+    }
     // The welcome screen, before any folder is chosen.
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
@@ -115,6 +155,11 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .save(out.join("00-welcome.png"))?;
     Ok(())
+}
+
+enum Dialog {
+    Settings,
+    PlanReview,
 }
 
 /// Step frames until background work settles (or ~20 s pass).
