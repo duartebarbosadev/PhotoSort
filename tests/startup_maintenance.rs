@@ -179,9 +179,11 @@ fn cancelled_clear_reports_completed_work_and_retry_only_removes_remaining_files
     let temp = fixture();
     assert!(model_assets::clear_managed(temp.path(), &|| true).is_err());
     let checks = Cell::new(0);
+    // One check up front and one per catalogued model before any removal.
+    let preflight = 1 + ALL.len();
     let report = model_assets::clear_managed(temp.path(), &|| {
         checks.set(checks.get() + 1);
-        checks.get() >= 9
+        checks.get() >= preflight + 2
     })
     .unwrap();
     assert!(report.cancelled && report.errors.is_empty());
@@ -196,7 +198,7 @@ fn clearing_rechecks_reviewed_files_and_reports_partial_failure() {
     let checks = Cell::new(0);
     let report = model_assets::clear_managed(temp.path(), &|| {
         checks.set(checks.get() + 1);
-        if checks.get() == 8 {
+        if checks.get() == 2 + ALL.len() {
             std::fs::write(&changed, b"replacement").unwrap();
         }
         false

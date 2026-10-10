@@ -19,7 +19,7 @@ goal, different mechanism; **Open** = not done.
 | Organize: editable folders and names, preview, review before apply | Done | Create/rename/nest/drag; RAW/JPEG/XMP companions move together. |
 | Organize: compare several selected photos | Done | Up to 9 (Python: 12). |
 | Easy Delete: blur, dark, bright, exact and near duplicates | Done | Thresholds in Settings; suggestions stay reversible until review. |
-| Fix Rotation: detect, compare, manual turns, apply | Done | Orientation goes into embedded metadata or an XMP sidecar. When a file cannot store orientation itself (BMP in the full build; PNG/TIFF/BMP in the minimal build), plan review offers a confirmed, verified lossless pixel rotation instead. |
+| Fix Rotation: detect, compare, manual turns, apply | Done | Orientation goes into embedded metadata or an XMP sidecar. An opt-in setting ("Embed, or rotate pixels") rotates the pixels instead when a file cannot store orientation itself (BMP in the full build; PNG/TIFF/BMP in the minimal build). |
 | Pick Best: clusters, sharpness, aesthetic score, eyes, keep-all | Done | Progressive comparisons, previous-round revision. |
 | Cull: grid/list/icons, search, rating/folder/date/group filters, ordering | Done | Virtualized; filters intersect. |
 | Cull: side-by-side comparison, synchronized zoom/pan | Done | Fit, 1:1, numbered focus. |
@@ -53,11 +53,9 @@ execution with per-model CPU fallback; session logging and `--diagnostics` /
    evidence for the accelerators.
 3. **Accuracy:** grouping, face, keeper-ranking and rotation checks use 186 distinct
    photos. Broader labelled sets are needed before claiming accuracy.
-4. **First-run memory:** the first Quality analysis on a machine peaks around
-   3–4.6 GiB while ONNX Runtime optimizes the 378 MB aesthetic model once; later runs
-   reuse the prepared graph. Avoiding it entirely means shipping a pre-optimized
-   model (an asset/provenance decision). Measurements on a real 517-photo library are
-   in [BENCHMARKS.md](BENCHMARKS.md).
+4. **Accelerators beyond Core ML:** all seven models run on Core ML with results
+   matching CPU on the sample library; CUDA and DirectML remain untested (item 2).
+   Measurements on a real 517-photo library are in [BENCHMARKS.md](BENCHMARKS.md).
 
 ## Reference corrections
 

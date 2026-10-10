@@ -27,6 +27,8 @@ impl Faces {
             && self.closed_eyes <= self.count
             && self.geometry.iter().all(|f| {
                 !f.landmarks.is_empty()
+                    && f.blink
+                        .is_some_and(|b| b.iter().all(|v| (0.0..=1.0).contains(v)))
                     && f.bbox
                         .iter()
                         .chain(f.eyes.iter().flatten())
@@ -51,6 +53,10 @@ pub struct Face {
     /// Empty only for legacy cache records; motion comparison treats this as unknown.
     #[serde(default)]
     pub landmarks: Vec<[f32; 2]>,
+    /// MediaPipe blendshape eye-blink scores (subject's left, right), 0–1.
+    /// `None` only in legacy records, which `Faces::complete` rejects.
+    #[serde(default)]
+    pub blink: Option<[f32; 2]>,
 }
 #[derive(Clone)]
 struct Detection {
@@ -60,6 +66,33 @@ struct Detection {
     size: f32,
     angle: f32,
 }
+/// Part of the face-cache identity; change it whenever a rule below changes.
+pub const RECIPE: &str = "faces-v3-blendshapes";
+/// Eyes count as closed when both MediaPipe blink scores reach `CLOSED_BLINK`
+/// and the Face Mesh eye aspect ratio agrees (`CLOSED_EYE_RATIO`). On 76
+/// hand-labelled faces closed eyes scored ≥ 0.68 / ≤ 0.06 and every other face,
+/// including downward gazes, squints and sunglasses, < 0.44 / ≥ 0.10; any blink
+/// cutoff from 0.44 to 0.68 with any ratio from 0.07 to 0.29 made no mistake.
+/// (The reference rule, ratio < 0.21 alone, flagged 18 faces, 10 of them closed.)
+const CLOSED_BLINK: f32 = 0.55;
+const CLOSED_EYE_RATIO: f32 = 0.15;
+/// Minimum detector score on a crop centred on the candidate. In the same set it
+/// rejected 3 of 5 false faces (roof, blur, dark patch); real faces scored ≥ 0.66.
+const MIN_REDETECT: f32 = 0.6;
+/// MediaPipe's landmark subset for the blendshape model (face_blendshapes_graph),
+/// verified to reproduce MediaPipe's own scores within 2e-6.
+const BLENDSHAPE_POINTS: [usize; 146] = [
+    0, 1, 4, 5, 6, 7, 8, 10, 13, 14, 17, 21, 33, 37, 39, 40, 46, 52, 53, 54, 55, 58, 61, 63, 65,
+    66, 67, 70, 78, 80, 81, 82, 84, 87, 88, 91, 93, 95, 103, 105, 107, 109, 127, 132, 133, 136,
+    144, 145, 146, 148, 149, 150, 152, 153, 154, 155, 157, 158, 159, 160, 161, 162, 163, 168, 172,
+    173, 176, 178, 181, 185, 191, 195, 197, 234, 246, 249, 251, 263, 267, 269, 270, 276, 282, 283,
+    284, 285, 288, 291, 293, 295, 296, 297, 300, 308, 310, 311, 312, 314, 317, 318, 321, 323, 324,
+    332, 334, 336, 338, 356, 361, 362, 365, 373, 374, 375, 377, 378, 379, 380, 381, 382, 384, 385,
+    386, 387, 388, 389, 390, 397, 398, 400, 402, 405, 409, 415, 454, 466, 468, 469, 470, 471, 472,
+    473, 474, 475, 476, 477,
+];
+const EYE_BLINK_LEFT: usize = 9;
+const EYE_BLINK_RIGHT: usize = 10;
 pub fn analyze(models: &mut super::models::Models, asset: &Asset) -> Result<Faces> {
     analyze_cancellable(models, asset, || false)
 }
@@ -68,9 +101,45 @@ pub fn analyze_cancellable(
     asset: &Asset,
     cancelled: impl Fn() -> bool,
 ) -> Result<Faces> {
+    detect(models, asset, cancelled, None)
+}
+/// Every detector candidate with the evidence used to accept or reject it, for
+/// offline threshold evaluation. Not used by the application itself.
+#[derive(Clone, Debug, Serialize)]
+pub struct Candidate {
+    pub detector_score: f32,
+    pub presence: f32,
+    /// Mean eye aspect ratio; `NaN` for rejected candidates.
+    pub eye_ratio: f32,
+    /// Per-eye aspect ratios (subject's left, right).
+    pub eye_ratios: [f32; 2],
+    /// Detector square in normalized source coordinates.
+    pub bbox: [f32; 4],
+    pub accepted: bool,
+    /// Best detector score on a crop centred on this candidate.
+    pub redetect: f32,
+    /// Blendshape eye-blink scores; `NaN` for rejected candidates.
+    pub blink: [f32; 2],
+}
+pub fn analyze_with_candidates(
+    models: &mut super::models::Models,
+    asset: &Asset,
+) -> Result<(Faces, Vec<Candidate>)> {
+    let mut candidates = Vec::new();
+    let faces = detect(models, asset, || false, Some(&mut candidates))?;
+    Ok((faces, candidates))
+}
+fn detect(
+    models: &mut super::models::Models,
+    asset: &Asset,
+    cancelled: impl Fn() -> bool,
+    mut report: Option<&mut Vec<Candidate>>,
+) -> Result<Faces> {
     let detector = model_path("face_detector.onnx").context("Face detector is not installed")?;
     let landmarks_model =
         model_path("face_landmarks_detector.onnx").context("Face Mesh is not installed")?;
+    let blendshapes_model =
+        model_path("face_blendshapes.onnx").context("Face blendshapes are not installed")?;
     let image = &*asset.pixels;
     let edge = image.width().max(image.height()) as f32;
     let cx = image.width() as f32 / 2.0;
@@ -157,7 +226,43 @@ pub fn analyze_cancellable(
             landmarks.len() >= 468 * 3 && !presence.is_empty(),
             "Unexpected Face Mesh output"
         );
-        if sigmoid(presence[0]) < 0.5 {
+        let square = [
+            (face.x - face.size / 2.0) / image.width() as f32,
+            (face.y - face.size / 2.0) / image.height() as f32,
+            (face.x + face.size / 2.0) / image.width() as f32,
+            (face.y + face.size / 2.0) / image.height() as f32,
+        ];
+        // Texture that barely passes in the whole photo rarely looks like a face
+        // once centred and upright; real faces re-detect strongly.
+        let redetect = {
+            let input = sample(
+                image,
+                face.x,
+                face.y,
+                face.size * 2.0,
+                face.angle,
+                128,
+                true,
+            )?;
+            let output = models.infer_all("face_detector", &detector, 128, input)?;
+            output[1].iter().copied().map(sigmoid).fold(0.0, f32::max)
+        };
+        let mut record = |presence: f32, eye_ratios: [f32; 2], blink: [f32; 2], accepted: bool| {
+            if let Some(report) = report.as_deref_mut() {
+                report.push(Candidate {
+                    detector_score: face.score,
+                    presence,
+                    eye_ratio: (eye_ratios[0] + eye_ratios[1]) / 2.0,
+                    eye_ratios,
+                    bbox: square,
+                    accepted,
+                    redetect,
+                    blink,
+                });
+            }
+        };
+        if sigmoid(presence[0]) < 0.5 || redetect < MIN_REDETECT {
+            record(sigmoid(presence[0]), [f32::NAN; 2], [f32::NAN; 2], false);
             continue;
         }
         let point = |index: usize| {
@@ -169,6 +274,27 @@ pub fn analyze_cancellable(
                 (face.y + u * sin + v * cos) / image.height() as f32,
             ]
         };
+        // The blendshape model expects photo-frame pixel coordinates, as MediaPipe
+        // feeds it; it is invariant to translation and scale.
+        anyhow::ensure!(
+            landmarks.len() >= 478 * 3,
+            "Face Mesh returned no iris landmarks"
+        );
+        let (width, height) = (image.width() as f32, image.height() as f32);
+        let points = BLENDSHAPE_POINTS
+            .iter()
+            .flat_map(|&i| {
+                let [x, y] = point(i);
+                [x * width, y * height]
+            })
+            .collect();
+        let shapes = models.infer_points("face_blendshapes", &blendshapes_model, points)?;
+        anyhow::ensure!(
+            shapes.first().is_some_and(|s| s.len() == 52),
+            "Unexpected blendshape output"
+        );
+        let blink =
+            [shapes[0][EYE_BLINK_LEFT], shapes[0][EYE_BLINK_RIGHT]].map(|v| v.clamp(0.0, 1.0));
         let mut bbox = [
             f32::INFINITY,
             f32::INFINITY,
@@ -186,11 +312,13 @@ pub fn analyze_cancellable(
             bbox,
             eyes: [point(33), point(263)],
             landmarks: (0..landmarks.len() / 3).map(point).collect(),
+            blink: Some(blink),
         });
         faces.count += 1;
         let left = eye_aspect_ratio(landmarks, [33, 160, 158, 133, 153, 144]);
         let right = eye_aspect_ratio(landmarks, [362, 385, 387, 263, 373, 380]);
-        if (left + right) / 2.0 < 0.21 {
+        record(sigmoid(presence[0]), [left, right], blink, true);
+        if blink.iter().all(|&b| b >= CLOSED_BLINK) && (left + right) / 2.0 < CLOSED_EYE_RATIO {
             faces.closed_eyes += 1;
         }
         if face.size > largest {

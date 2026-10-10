@@ -260,6 +260,7 @@ fn face_motion_matches_reference_assignment_and_expression_changes() {
         bbox: [0.2, 0.2, 0.5, 0.5],
         eyes: [[0.3, 0.3], [0.4, 0.3]],
         landmarks: Vec::new(),
+        blink: None,
     };
     let identity = Alignment::validate([[1., 0., 0.], [0., 1., 0.]], 1., 100, 100).unwrap();
     assert!(
@@ -289,6 +290,7 @@ fn review_rows_retain_summary_only_and_face_evidence_roundtrips_without_inferenc
             bbox: [0.2, 0.2, 0.6, 0.6],
             eyes: [[0.3, 0.3], [0.5, 0.3]],
             landmarks: vec![[0.4, 0.4]; 468],
+            blink: Some([0.9, 0.8]),
         }],
     };
     let persisted = serde_json::to_vec(&faces).unwrap();

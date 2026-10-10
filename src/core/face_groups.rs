@@ -409,6 +409,7 @@ mod tests {
             bbox,
             eyes: [[0.; 2]; 2],
             landmarks: Vec::new(),
+            blink: None,
         };
         let faces = Faces {
             count: 4,
@@ -440,6 +441,7 @@ mod tests {
             bbox: [0., 0., 1., 1.],
             eyes: [[0.; 2]; 2],
             landmarks,
+            blink: None,
         };
         let pixels = std::sync::Arc::new(image::RgbaImage::from_pixel(
             112,

@@ -107,7 +107,15 @@ Easy Delete combines exposure/sharpness review, full-content exact copies and
 subject-sensitive near-duplicate verification with alignment, masked structural
 comparison and lazy face evidence. Completed pair results are cached. Pick Best
 uses aesthetics, sharpness and eye-closure evidence as suggestions; users confirm
-the outcome. Eye suggestions can fail on small, obscured or angled faces. There
+the outcome. Eye suggestions can fail on small, obscured or angled faces.
+Faces must also re-detect on a centred crop. Eyes count as closed when both
+MediaPipe blendshape blink scores reach 0.55 and the Face Mesh eye ratio is below
+0.15 (the reference used ratio < 0.21 alone). On 76 hand-labelled faces from the
+sample library this flags all 10 closed-eye faces and nothing else; any blink cutoff
+from 0.44 to 0.68 gives the same result. The reference rule also flagged three
+downward gazes, a squint and a false face. Winks are not detected: Face Mesh places
+both eyelids symmetrically, so neither signal sees one eye closed. The rules were
+tuned on the same faces; `examples/audit_faces.rs` repeats the measurement. There
 is no claim of perfect automatic keeper selection.
 
 Technical measurements, full-content hashes and aesthetic evidence persist under
@@ -138,9 +146,9 @@ cancellation.
 Ratings and rotations support Embed where supported or Sidecars only. Native
 embedded writes use an independent temporary copy, verify EXIF/XMP values and
 source identity, then atomically replace without re-encoding pixels. Unsupported
-formats fall back to sidecars; for rotation-only edits of BMP (and PNG/TIFF in
-minimal builds) plan review can instead rotate the pixels losslessly after an
-explicit confirmation, verified by decoding the result before it replaces the file. Embedded HEIF/container transforms, broader camera
+formats fall back to sidecars. The opt-in "Embed, or rotate pixels" setting instead
+rotates the pixels of rotation-only BMP edits (and PNG/TIFF in minimal builds)
+losslessly, verified by decoding the result before it replaces the file. Embedded HEIF/container transforms, broader camera
 interoperability and broader platform/volume attributes need more coverage. A
 macOS probe of the existing staging copy and production metadata bridge preserves
 Finder-tag/custom extended attributes, ACLs, ownership, file flags, permissions and
@@ -190,7 +198,7 @@ remain separate acceptance criteria.
 
 ## Startup maintenance and diagnostics
 
-`--clear-models` clears the six catalogued managed model filenames before startup,
+`--clear-models` clears the seven catalogued managed model filenames before startup,
 using the same model ownership as import/download setup. Bundled resources,
 external overrides, unknown files, runtime libraries, photos and saved sessions
 are outside that scope. The operation preflights the complete known set, refuses
@@ -201,7 +209,7 @@ model inspector and reports build capabilities, model verification, runtime
 presence and override presence. It neither initializes a graphical window nor
 loads ONNX Runtime. `files_ready` is file readiness for the enabled build, not
 proof of ABI compatibility, successful inference or UI health. A minimal build
-reports AI as disabled rather than requiring AI files. `--check-runtime` additionally exercises all six native AI sessions through the
+reports AI as disabled rather than requiring AI files. `--check-runtime` additionally exercises all seven native AI sessions through the
 shared production services on an embedded licensed fixture, then repeats the work
 to check session reuse. The default is CPU; `--runtime-backend` selects cpu,
 auto, coreml, cuda or directml without changing saved preferences. Per-model JSON

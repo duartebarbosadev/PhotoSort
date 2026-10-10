@@ -157,48 +157,7 @@ impl Models {
             stride > 0 && stride.checked_mul(batch) == Some(input.len()),
             "Image tensor length mismatch"
         );
-        let fingerprint = Fingerprint::read(path)?;
-        if self
-            .sessions
-            .get(kind)
-            .is_none_or(|(p, f, _, _)| p != path || *f != fingerprint)
-        {
-            let runtime = runtime_path()
-                .context("Install ONNX Runtime or set ORT_DYLIB_PATH to its native library")?;
-            anyhow::ensure!(
-                runtime.is_file(),
-                "ONNX Runtime library is missing: {}",
-                runtime.display()
-            );
-            ort::init_from(&runtime)?
-                .with_name("PhotoSort")
-                .with_telemetry(false)
-                .commit();
-            self.sessions.remove(kind);
-            self.processing.preparing(kind, self.backend);
-            let (session, backend, detail) = match execution::create(
-                path,
-                kind,
-                self.cpu_threads,
-                self.backend,
-                &cancelled,
-                self.compiled_cache.as_ref(),
-            ) {
-                Ok(created) => created,
-                Err(error) => {
-                    self.processing.report(
-                        kind,
-                        self.backend,
-                        format!("Initialization stopped: {error}"),
-                    );
-                    return Err(error);
-                }
-            };
-            self.processing.report(kind, backend, detail);
-            self.sessions
-                .insert(kind, (path.to_owned(), fingerprint, session, backend));
-            self.initializations += 1;
-        }
+        let fingerprint = self.ensure_session(kind, path, &cancelled)?;
         let dynamic_batch = self.sessions.get(kind).is_some_and(|(_, _, session, _)| {
             matches!(session.inputs()[0].dtype(), ort::value::ValueType::Tensor { shape, .. }
                 if shape.len() == 4 && shape[0] == -1)
@@ -227,6 +186,90 @@ impl Models {
         anyhow::ensure!(!cancelled(), "Inference cancelled");
         let tensor =
             ort::value::Tensor::from_array(([batch, 3, size, size], input.into_boxed_slice()))?;
+        self.run_with_fallback(kind, path, fingerprint, tensor, batch, &cancelled)
+    }
+    #[cfg(feature = "onnx")]
+    /// Points input `[1, count, 2]`, such as Face Mesh landmarks for blendshapes.
+    pub(crate) fn infer_points(
+        &mut self,
+        kind: &'static str,
+        path: &Path,
+        points: Vec<f32>,
+    ) -> Result<Vec<Vec<f32>>> {
+        let run_cancellation = self.cancellation.clone();
+        let cancelled = || run_cancellation.as_ref().is_some_and(|check| check());
+        anyhow::ensure!(!cancelled(), "Inference cancelled");
+        anyhow::ensure!(
+            !points.is_empty() && points.len().is_multiple_of(2),
+            "Point tensor length mismatch"
+        );
+        let fingerprint = self.ensure_session(kind, path, &cancelled)?;
+        let tensor =
+            ort::value::Tensor::from_array(([1, points.len() / 2, 2], points.into_boxed_slice()))?;
+        self.run_with_fallback(kind, path, fingerprint, tensor, 1, &cancelled)
+    }
+    #[cfg(feature = "onnx")]
+    fn ensure_session(
+        &mut self,
+        kind: &'static str,
+        path: &Path,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Fingerprint> {
+        let fingerprint = Fingerprint::read(path)?;
+        if self
+            .sessions
+            .get(kind)
+            .is_none_or(|(p, f, _, _)| p != path || *f != fingerprint)
+        {
+            let runtime = runtime_path()
+                .context("Install ONNX Runtime or set ORT_DYLIB_PATH to its native library")?;
+            anyhow::ensure!(
+                runtime.is_file(),
+                "ONNX Runtime library is missing: {}",
+                runtime.display()
+            );
+            ort::init_from(&runtime)?
+                .with_name("PhotoSort")
+                .with_telemetry(false)
+                .commit();
+            self.sessions.remove(kind);
+            self.processing.preparing(kind, self.backend);
+            let (session, backend, detail) = match execution::create(
+                path,
+                kind,
+                self.cpu_threads,
+                self.backend,
+                cancelled,
+                self.compiled_cache.as_ref(),
+            ) {
+                Ok(created) => created,
+                Err(error) => {
+                    self.processing.report(
+                        kind,
+                        self.backend,
+                        format!("Initialization stopped: {error}"),
+                    );
+                    return Err(error);
+                }
+            };
+            self.processing.report(kind, backend, detail);
+            self.sessions
+                .insert(kind, (path.to_owned(), fingerprint, session, backend));
+            self.initializations += 1;
+        }
+        Ok(fingerprint)
+    }
+    #[cfg(feature = "onnx")]
+    /// One attempt on the configured provider, then a single CPU retry.
+    fn run_with_fallback(
+        &mut self,
+        kind: &'static str,
+        path: &Path,
+        fingerprint: Fingerprint,
+        tensor: ort::value::Tensor<f32>,
+        batch: usize,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<Vec<f32>>> {
         let first = execution::run(
             &mut self
                 .sessions
@@ -252,7 +295,7 @@ impl Models {
             format!("CPU fallback after inference error: {error}"),
         );
         let (mut session, _, _) =
-            execution::create(path, kind, self.cpu_threads, Backend::Cpu, &cancelled, None)?;
+            execution::create(path, kind, self.cpu_threads, Backend::Cpu, cancelled, None)?;
         self.initializations += 1;
         let result = execution::run(&mut session, &tensor, batch);
         self.inferences += 1;
@@ -260,6 +303,15 @@ impl Models {
             .insert(kind, (path.to_owned(), fingerprint, session, Backend::Cpu));
         anyhow::ensure!(!cancelled(), "Inference cancelled");
         result
+    }
+    #[cfg(not(feature = "onnx"))]
+    pub(crate) fn infer_points(
+        &mut self,
+        _kind: &'static str,
+        _path: &Path,
+        _points: Vec<f32>,
+    ) -> Result<Vec<Vec<f32>>> {
+        anyhow::bail!("This build has no ONNX support")
     }
     #[cfg(not(feature = "onnx"))]
     fn infer_batch_all(
@@ -602,7 +654,15 @@ pub fn recognition_signature() -> String {
     model_signature(&[super::face_groups::MODEL])
 }
 pub fn face_signature() -> String {
-    model_signature(&["face_detector.onnx", "face_landmarks_detector.onnx"])
+    format!(
+        "{}:{}",
+        super::faces::RECIPE,
+        model_signature(&[
+            "face_detector.onnx",
+            "face_landmarks_detector.onnx",
+            "face_blendshapes.onnx",
+        ])
+    )
 }
 fn model_signature(names: &[&str]) -> String {
     let mut hash = blake3::Hasher::new();

@@ -263,8 +263,13 @@ impl PhotoSortApp {
                         use crate::core::metadata::WritePolicy;
                         ui.selectable_value(&mut draft.metadata_writes,WritePolicy::EmbedWhenSupported,"Embed where supported");
                         ui.selectable_value(&mut draft.metadata_writes,WritePolicy::SidecarOnly,"Sidecars only");
+                        ui.selectable_value(&mut draft.metadata_writes,WritePolicy::EmbedOrRotatePixels,"Embed, or rotate pixels");
                     });
-                    ui.label("Existing XMP sidecars remain authoritative. Unsupported formats use a sidecar. Review shows the destination before applying; photo pixels are never re-encoded.");
+                    ui.label(if draft.metadata_writes == crate::core::metadata::WritePolicy::EmbedOrRotatePixels {
+                        "Like Embed where supported, but rotating a file that cannot store orientation (such as BMP) rewrites its pixels instead of using a sidecar. Pixels and colour profile are kept exactly; other data stored inside those files is not. Review lists each one before applying."
+                    } else {
+                        "Existing XMP sidecars remain authoritative. Unsupported formats use a sidecar. Review shows the destination before applying; photo pixels are not re-encoded."
+                    });
                     ui.separator();
                     ui.label("AI execution");
                     egui::ComboBox::from_id_salt("inference-backend")

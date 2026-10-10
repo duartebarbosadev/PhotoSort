@@ -105,7 +105,7 @@ selects a diagnostic backend through the same production registry and fallback
 policy. This uses the embedded licensed fixture and does not require a photo
 library or change the saved backend preference.
 
-Inspect `requested_backend` and all six `model_providers` records in its JSON,
+Inspect `requested_backend` and all seven `model_providers` records in its JSON,
 including fallback details. Native compiler/runtime output is routed to stderr
 for the command lifetime, including shutdown, so stdout remains JSON. `passed` and exit status describe successful inference
 and session reuse, allowing CPU fallback. `accelerated_models` and `cpu_models`
@@ -131,19 +131,23 @@ the probe's performance numbers remain isolated measurements, not integrated-app
 benchmarks. See `diagnostics/coreml-cache-evaluation-2026-10-06/README.md`.
 
 
-## Apple Silicon CPU preparation reuse
+## Aesthetic model: folded offline instead of prepared per machine
 
-The shared cache also retains the verified aesthetic model's CPU-optimized ONNX
-graph when the disk budget can cover twice its source size. Subsequent sessions
-skip graph optimization, using runtime/source/OS/hardware/thread/policy identity
-and verified cache contents. The artifact is about 510 MiB within the existing
-photo-cache budget. Small/disabled caches and custom exports use the source model.
-Cache failures fall back to ordinary CPU initialization; clearing prepared files
-releases their sessions while retaining ordinary CPU sessions.
+Earlier builds kept a per-machine CPU-optimized copy of the aesthetic graph (about
+510 MiB) because ONNX Runtime's constant folding of the 378 MB export peaked near
+3.5 GiB on every uncached load. The bundled model is now folded once, offline, with
+the hardware-independent basic optimizations (`examples/fold_model.rs`, outputs
+bit-identical). A first load now peaks under 1 GiB and takes about 0.2 s, so the
+per-machine CPU cache was removed; maintenance deletes old `.onnx-cache` entries.
+Core ML program caching is unchanged. On the 517-photo sample library every
+aesthetic score and Pick Best group is identical to the unfolded model at 8 and 4
+threads. Back to back on the same machine, a fresh Quality analysis peaked at a
+2.44 GiB memory footprint instead of 4.6 GiB (RSS 2.4–2.7 vs 3.6–4.2 GiB).
 
-First preparation still has a large memory peak. Fresh-process Quality runs with
-uncached photos reduced peak RSS about 56–76% after preparing the aesthetic model,
-with unchanged results across all 263 authorized photo paths. This is measured on
-the local Apple Silicon machine, not CUDA/DirectML or broad accuracy validation.
-See [the preparation report](diagnostics/offline-model-2026-10-08/README.md) for
-measurements, storage costs and verification limits.
+All seven models compile for Core ML. The face-landmarks export had pooling layers
+with `auto_pad=VALID` and the blendshape export convolutions with no `pads`
+attribute; both mean zero padding but the Core ML converter requires explicit pads,
+so `scripts/explicit_pads.py` writes them (bit-identical on CPU). On the sample
+library Core ML and CPU find the same 76 faces, the same closed-eye photos and the
+same groups. A fresh Core ML run still pays one-time compilation, so CPU stays the
+default.

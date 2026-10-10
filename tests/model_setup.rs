@@ -19,7 +19,7 @@ fn wait(worker: &Worker) -> model_assets::State {
     }
 }
 #[test]
-#[ignore = "Verifies all six local prepared model assets and restores a disposable copy"]
+#[ignore = "Verifies every local prepared model asset and restores a disposable copy"]
 fn prepared_bundle_verifies_once_and_import_reuses_the_streamed_checksum() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources");
     let dir = tempfile::tempdir().unwrap();
@@ -28,14 +28,14 @@ fn prepared_bundle_verifies_once_and_import_reuses_the_streamed_checksum() {
     let first = wait(&worker);
     assert!(first.error.is_none(), "{:?}", first.error);
     let first = first.snapshot.unwrap();
-    assert_eq!(first.rows.len(), 6);
+    assert_eq!(first.rows.len(), photosort::core::model_assets::ALL.len());
     assert!(
         first
             .rows
             .iter()
             .all(|r| matches!(r.health, Health::Verified(_)))
     );
-    assert_eq!(first.hash_reads, 6);
+    assert_eq!(first.hash_reads, photosort::core::model_assets::ALL.len());
     worker.start(Work::Inspect).unwrap();
     let second = wait(&worker).snapshot.unwrap();
     assert_eq!(

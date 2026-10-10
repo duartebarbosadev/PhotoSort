@@ -28,7 +28,7 @@ fn write_png(path: &Path, icc: Option<&[u8]>) {
     std::fs::write(path, bytes).unwrap();
 }
 
-fn plan(root: &Path, decision: Decision) -> (Catalog, Plan) {
+fn plan(root: &Path, decision: Decision, policy: WritePolicy) -> (Catalog, Plan) {
     let catalog = Catalog::scan(root, || false, |_| {}).unwrap();
     let decisions: HashMap<MediaId, Decision> = catalog
         .media
@@ -40,7 +40,7 @@ fn plan(root: &Path, decision: Decision) -> (Catalog, Plan) {
         &catalog,
         &decisions,
         false,
-        WritePolicy::EmbedWhenSupported,
+        policy,
         |m| pipeline.metadata(m),
         || false,
     )
@@ -132,25 +132,26 @@ fn multi_page_tiff_is_refused_without_changes() {
     assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
+fn target(plan: &Plan) -> WriteTarget {
+    match &plan.actions[0] {
+        Action::Metadata { target, .. } => *target,
+        _ => unreachable!(),
+    }
+}
+
 #[test]
-fn bmp_rotation_is_offered_and_applies_only_after_conversion() {
+fn bmp_rotates_pixels_only_when_the_setting_asks_for_it() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("scan.bmp");
     pattern().save(&path).unwrap();
-    let (catalog, mut plan) = plan(temp.path(), turn());
-    assert_eq!(
-        plan.pixel_rotation_offer,
-        vec![catalog.media[0].path.clone()]
-    );
-    assert!(matches!(
-        plan.actions[0],
-        Action::Metadata {
-            target: WriteTarget::Sidecar,
-            ..
-        }
-    ));
-    assert_eq!(plan.use_pixel_rotation(), 1);
-    assert!(plan.pixel_rotation_offer.is_empty());
+    for policy in [WritePolicy::EmbedWhenSupported, WritePolicy::SidecarOnly] {
+        assert_eq!(
+            target(&plan(temp.path(), turn(), policy).1),
+            WriteTarget::Sidecar
+        );
+    }
+    let (catalog, plan) = plan(temp.path(), turn(), WritePolicy::EmbedOrRotatePixels);
+    assert_eq!(target(&plan), WriteTarget::Pixels);
     let report =
         operations::execute(&plan, &temp.path().join("journal"), || false, |_, _| {}).unwrap();
     assert!(report.errors.is_empty(), "{:?}", report.errors);
@@ -168,7 +169,8 @@ fn bmp_rotation_is_offered_and_applies_only_after_conversion() {
 }
 
 #[test]
-fn no_offer_with_a_rating_an_existing_sidecar_or_unsupported_format() {
+fn sidecar_is_kept_with_a_rating_an_existing_sidecar_or_unsupported_format() {
+    let pixels = WritePolicy::EmbedOrRotatePixels;
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("scan.bmp");
     pattern().save(&path).unwrap();
@@ -177,12 +179,21 @@ fn no_offer_with_a_rating_an_existing_sidecar_or_unsupported_format() {
         rating: Some(3),
         ..Default::default()
     };
-    assert!(plan(temp.path(), rated).1.pixel_rotation_offer.is_empty());
+    assert_eq!(
+        target(&plan(temp.path(), rated, pixels).1),
+        WriteTarget::Sidecar
+    );
 
     metadata::write_sidecar(&path, Some(2), None).unwrap();
-    assert!(plan(temp.path(), turn()).1.pixel_rotation_offer.is_empty());
+    assert_eq!(
+        target(&plan(temp.path(), turn(), pixels).1),
+        WriteTarget::Sidecar
+    );
 
     let other = tempfile::tempdir().unwrap();
     pattern().save(other.path().join("photo.gif")).unwrap();
-    assert!(plan(other.path(), turn()).1.pixel_rotation_offer.is_empty());
+    assert_eq!(
+        target(&plan(other.path(), turn(), pixels).1),
+        WriteTarget::Sidecar
+    );
 }

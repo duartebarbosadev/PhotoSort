@@ -63,13 +63,11 @@ pub(crate) fn key(
 #[derive(Clone, Copy)]
 pub(crate) enum Format {
     CoreMl,
-    Onnx,
 }
 impl Format {
     fn suffix(self) -> &'static str {
         match self {
             Self::CoreMl => "coreml",
-            Self::Onnx => "onnx-cache",
         }
     }
 }

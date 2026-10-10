@@ -181,6 +181,10 @@ pub fn maintain(
             let lock = namespace
                 .as_ref()
                 .and_then(|_| compiled::lease(&entry.path()).ok());
+            if lock.is_some() && max_bytes.is_some() && compiled::retired(&entry.path()) {
+                compiled::remove(&entry.path(), &cancelled)?;
+                continue;
+            }
             let (bytes, count) = compiled::usage(&entry.path(), &cancelled)?;
             usage.disk_bytes = usage.disk_bytes.saturating_add(bytes);
             usage.files += count;

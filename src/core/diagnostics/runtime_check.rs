@@ -146,12 +146,12 @@ fn run(
             first_initializations = report.initializations;
         }
     }
-    report.sessions_reused =
-        first_initializations >= 6 && report.initializations == first_initializations;
+    report.sessions_reused = first_initializations >= crate::core::model_assets::ALL.len()
+        && report.initializations == first_initializations;
     report.passed = report.sessions_reused && report.inferences >= 12;
     if !report.passed {
         report.steps.push(Step { name: "session_reuse", pass: 2, passed: false,
-            detail: format!("Expected at least six initializations with no second-pass reinitialization and at least twelve inferences; got {} initializations and {} inferences", report.initializations, report.inferences), elapsed_ms: 0 });
+            detail: format!("Expected one initialization per catalogued model ({}) with no second-pass reinitialization and at least twelve inferences; got {} initializations and {} inferences", crate::core::model_assets::ALL.len(), report.initializations, report.inferences), elapsed_ms: 0 });
     }
     if report.passed {
         report.diagnostics.runtime.load_verified = true;
@@ -317,7 +317,7 @@ mod tests {
                     calls += 1;
                     Outcome {
                         result: Ok("valid".into()),
-                        initializations: if reuse || calls <= 5 { 6 } else { 12 },
+                        initializations: if reuse || calls <= 5 { 7 } else { 14 },
                         inferences: calls * 2,
                     }
                 },
@@ -377,7 +377,7 @@ mod completion_tests {
                 }
                 Outcome {
                     result: Ok("valid".into()),
-                    initializations: 6,
+                    initializations: 7,
                     inferences: calls * 2,
                 }
             },
@@ -392,7 +392,7 @@ mod completion_tests {
 mod acceleration_probe {
     use super::*;
     #[test]
-    #[ignore = "Exercises all six installed models with Apple Core ML, including two-pass session reuse"]
+    #[ignore = "Exercises every installed model with Apple Core ML, including two-pass session reuse"]
     fn all_models_coreml_runtime_check() -> Result<()> {
         let report = check_runtime_with_backend(Backend::CoreMl, &|| false)?;
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -401,8 +401,8 @@ mod acceleration_probe {
             "Runtime check failed"
         );
         ensure!(
-            report.model_providers.len() == 6,
-            "Expected six model provider records"
+            report.model_providers.len() == crate::core::model_assets::ALL.len(),
+            "Expected one provider record per catalogued model"
         );
         ensure!(report.accelerated_models > 0, "No model selected Core ML");
         Ok(())
@@ -437,8 +437,8 @@ mod backend_checks {
                     calls += 1;
                     Outcome {
                         result: Ok("valid after CPU fallback".into()),
-                        // Six models plus replacement of one failed accelerator.
-                        initializations: if reinitialize && calls > 5 { 8 } else { 7 },
+                        // Seven models plus replacement of one failed accelerator.
+                        initializations: if reinitialize && calls > 5 { 9 } else { 8 },
                         inferences: calls * 2 + 1,
                     }
                 },

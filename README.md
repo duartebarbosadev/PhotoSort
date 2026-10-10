@@ -29,11 +29,13 @@ open ".tools/native-vips/PhotoSort Rust.app"
 ```
 
 The older `.tools/native/PhotoSort Rust.app` is a previous build. The current
-bundle's source/executable hashes, full test results and native interaction checks
-are recorded in [the current validation report](docs/diagnostics/cache-folder-2026-10-09/README.md).
-The [completion audit](docs/history/COMPLETION_AUDIT.md) separates covered workflows,
-intentional redesigns and remaining work. These checks cover this macOS development
-build; they do not establish Windows, CUDA or DirectML runtime readiness.
+bundle was built from `d436ad2` (10 October 2026) after the full default and minimal
+suites, strict clippy and fmt passed; `--diagnostics`, `--check-runtime` and
+`--smoke-test` pass on it. Earlier native interaction checks are in
+`docs/diagnostics/` and [the validation log](docs/history/VALIDATION-LOG.md).
+[PARITY.md](docs/PARITY.md) lists covered workflows and remaining work. These checks
+cover this macOS development build; they do not establish Windows, CUDA or DirectML
+runtime readiness.
 
 To rebuild the current variant using the existing verified SIMD prefix, keep
 compiler output temporary and clean it after packaging:
@@ -87,7 +89,7 @@ also works with the JSON diagnostic commands and leaves stdout as JSON.
 `--check-runtime` goes further: it verifies the files, loads the native inference
 engine and runs two CPU passes on an embedded licensed fixture through the shared
 scene, aesthetic, face geometry, recognition and orientation services. Its JSON
-reports each stage, counters and session reuse. All six model sessions must be
+reports each stage, counters and session reuse. All seven model sessions must be
 reused on the second pass; replacing a failed accelerator during the first pass
 is allowed. It uses one inference thread, never opens a
 window or a photo library, and writes no analysis cache. It exits with failure in
@@ -106,7 +108,7 @@ photosort --check-runtime --runtime-backend coreml
 The JSON includes `requested_backend`, `model_providers` (with fallback reasons),
 `accelerated_models` and `cpu_models`. **A successful exit validates inference,
 including CPU fallback; it does not prove the requested accelerator was selected.**
-Check all six provider records. Native compiler/runtime messages go to stderr,
+Check all seven provider records. Native compiler/runtime messages go to stderr,
 keeping stdout valid JSON even during native shutdown. The two counts summarize configured sessions only
 after a complete successful check, not individual operator placement. This command
 does not change Settings or persist PhotoSort prepared-model caches; native
@@ -164,10 +166,10 @@ format supports it, or use sidecars only. Existing XMP sidecars remain authorita
 unsupported formats use a sidecar. The review plan names the destination. Embedded
 edits modify and verify an independent temporary copy before replacing the photo;
 pixels are not re-encoded. RAW/JPEG pairs sharing a sidecar must agree on its edits.
-When a rotation can only live in a sidecar because the file cannot store orientation
-itself (BMP, or PNG/TIFF in minimal builds), the review plan offers to rotate the
-pixels instead. This is lossless, keeps the colour profile and only happens after
-an explicit confirmation; other data stored inside such files is not carried over.
+A third choice, "Embed, or rotate pixels", rotates the pixels of files that cannot
+store orientation themselves (BMP, or PNG/TIFF in minimal builds) instead of using a
+sidecar. It is off by default, lossless, keeps the colour profile and is listed in
+the review plan; other data stored inside such files is not carried over.
 
 Settings also offers CPU, Automatic, Apple Core ML, NVIDIA CUDA and Windows
 DirectML inference. CPU remains the default. Provider/model failures fall back to

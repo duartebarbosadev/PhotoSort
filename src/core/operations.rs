@@ -209,35 +209,6 @@ pub struct Plan {
     /// Completed prerequisites from an earlier attempt, for conditional cleanup.
     #[serde(default)]
     pub completed_dependencies: HashSet<PathBuf>,
-    /// Rotations that can only be kept in a sidecar because the file cannot store
-    /// orientation itself. Plan review may offer to rotate their pixels instead.
-    #[serde(default)]
-    pub pixel_rotation_offer: Vec<PathBuf>,
-}
-impl Plan {
-    /// Switch the offered sidecar rotations to lossless pixel rotation, after the
-    /// user has confirmed. Returns how many actions changed.
-    pub fn use_pixel_rotation(&mut self) -> usize {
-        let offer: HashSet<_> = std::mem::take(&mut self.pixel_rotation_offer)
-            .into_iter()
-            .collect();
-        let mut changed = 0;
-        for action in &mut self.actions {
-            if let Action::Metadata {
-                source,
-                sidecar_before: None,
-                target: target @ metadata::WriteTarget::Sidecar,
-                rating: None,
-                orientation: Some(2..=8),
-            } = action
-                && offer.contains(&source.path)
-            {
-                *target = metadata::WriteTarget::Pixels;
-                changed += 1;
-            }
-        }
-        changed
-    }
 }
 #[derive(Debug, Default)]
 pub struct Report {
@@ -534,7 +505,7 @@ pub fn decisions_plan_with_metadata(
         {
             continue;
         }
-        let meta = if d.turns > 0 || policy == metadata::WritePolicy::EmbedWhenSupported {
+        let meta = if d.turns > 0 || policy.embeds() {
             load(media)?
         } else {
             Metadata::default()
@@ -559,7 +530,6 @@ pub fn decisions_plan_with_metadata(
     for media in &catalog.media {
         *stems.entry(media.path.with_extension("")).or_default() += 1;
     }
-    let mut pixel_rotation_offer = Vec::new();
     for (media, d, sidecar, mut target, orientation, embeddable) in prepared {
         anyhow::ensure!(!cancelled(), "File planning cancelled");
         // A planned shared sidecar must never silently override a companion's
@@ -580,8 +550,9 @@ pub fn decisions_plan_with_metadata(
         }
         let sidecar_before = Fingerprint::read(&sidecar).ok();
         // Only a rotation-only edit on a file that cannot hold orientation and has
-        // no sidecar (its own or a companion's) may later switch to pixels.
-        if policy == metadata::WritePolicy::EmbedWhenSupported
+        // no sidecar (its own or a companion's) may rotate pixels, so a leftover
+        // sidecar orientation can never rotate the image twice.
+        if policy == metadata::WritePolicy::EmbedOrRotatePixels
             && target == metadata::WriteTarget::Sidecar
             && !embeddable
             && d.rating.is_none()
@@ -590,7 +561,7 @@ pub fn decisions_plan_with_metadata(
             && stems.get(&media.path.with_extension("")) == Some(&1)
             && super::reencode::supported(&media.path)
         {
-            pixel_rotation_offer.push(media.path.clone());
+            target = metadata::WriteTarget::Pixels;
         }
         actions.push(Action::Metadata {
             source: Source {
@@ -606,7 +577,6 @@ pub fn decisions_plan_with_metadata(
     Ok(Plan {
         actions,
         description: "Apply reviewed ratings, rotations and Trash marks".into(),
-        pixel_rotation_offer,
         ..Default::default()
     })
 }

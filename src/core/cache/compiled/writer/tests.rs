@@ -59,53 +59,21 @@ fn stable_native_cache_reuses_verified_bytes_and_holds_a_process_lease() {
     assert!(!path.exists());
 }
 #[test]
-fn onnx_and_coreml_entries_share_budget_without_aliasing() {
+fn retired_prepared_cpu_entries_are_removed_by_maintenance() {
     let (_temp, root) = root();
-    let coreml = ready(&root, 1, b"coreml");
-    let mut onnx = Lease::acquire(
-        Format::Onnx,
-        &root,
-        &format!("{:064x}", 1),
-        1_000_000,
-        &|| false,
-    )
-    .unwrap();
-    fs::write(onnx.path.join("optimized.onnx"), b"onnx").unwrap();
-    onnx.complete(&|| false).unwrap();
-    assert_ne!(coreml.path, onnx.path);
-    let usage = crate::core::cache::maintain(&root, Some(0), || false).unwrap();
-    assert!(usage.disk_bytes > 0 && usage.disk_bytes == usage.pinned_disk_bytes);
-    let path = onnx.path.clone();
-    drop(onnx);
-    let reused = Lease::acquire(
-        Format::Onnx,
-        &root,
-        &format!("{:064x}", 1),
-        1_000_000,
-        &|| false,
-    )
-    .unwrap();
-    assert!(reused.reused);
-    drop(reused);
-    fs::write(path.join("optimized.onnx"), b"torn").unwrap();
-    let fresh = Lease::acquire(
-        Format::Onnx,
-        &root,
-        &format!("{:064x}", 1),
-        1_000_000,
-        &|| false,
-    )
-    .unwrap();
-    assert!(!fresh.reused && !path.join("optimized.onnx").exists());
-    drop(fresh);
-    drop(coreml);
-    assert_eq!(
-        crate::core::cache::maintain(&root, Some(0), || false)
-            .unwrap()
-            .disk_bytes,
-        0
-    );
-    assert!(!path.exists());
+    drop(ready(&root, 1, b"coreml"));
+    let legacy = root.join(format!("{:064x}.onnx-cache", 2));
+    fs::create_dir(&legacy).unwrap();
+    fs::write(legacy.join(".owner"), OWNER).unwrap();
+    fs::write(legacy.join("optimized.onnx"), vec![0; 4096]).unwrap();
+    // Measuring alone never deletes; maintenance with any budget drops the
+    // retired format but keeps the reusable Core ML program.
+    crate::core::cache::maintain(&root, None, || false).unwrap();
+    assert!(legacy.exists());
+    let usage = crate::core::cache::maintain(&root, Some(1_000_000), || false).unwrap();
+    assert!(!legacy.exists());
+    assert!(root.join(format!("{:064x}.coreml", 1)).exists());
+    assert!(usage.disk_bytes > 0 && usage.disk_bytes < 4096 + 1_000);
 }
 #[test]
 fn changed_weights_runtime_or_recipe_cannot_reuse_an_old_directory() {
