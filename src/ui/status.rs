@@ -118,12 +118,14 @@ mod tests {
         let mut app = app(&temp);
         app.step = Step::Cull;
         app.finish_pick_analysis();
-        assert!(app.status.contains("choose Keep/Trash"));
+        // An empty fixture: no groups and nothing to clean up.
+        assert!(app.status.contains("No similar photos found"));
         assert_eq!(app.status_scope, Some((Step::PickBest, None)));
-        assert!(!app.workflow_status().contains("Keep/Trash"));
+        assert!(!app.workflow_status().contains("similar photos"));
         app.finish_delete_analysis();
+        assert!(app.status.contains("Nothing to clean up"));
         assert_eq!(app.status_scope, Some((Step::EasyDelete, None)));
-        assert!(!app.workflow_status().contains("provisional"));
+        assert!(!app.workflow_status().contains("clean up"));
         app.finish_rotation_detection();
         assert_eq!(app.status_scope, Some((Step::Rotation, None)));
         assert!(!app.workflow_status().contains("rotation suggestions"));

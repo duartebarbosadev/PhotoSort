@@ -46,10 +46,11 @@ impl PhotoSortApp {
         self.pick_run = None;
         self.set_workflow_status(
             Step::PickBest,
-            format!(
-                "{} clusters ready · choose Keep/Trash, then confirm",
-                self.pick_review.tournaments().len()
-            ),
+            match self.pick_review.tournaments().len() {
+                0 => "No similar photos found · every photo is one of a kind".into(),
+                1 => "1 group of similar photos · choose Keep/Trash, then confirm".into(),
+                n => format!("{n} groups of similar photos · choose Keep/Trash, then confirm"),
+            },
         );
         if self.step == Step::PickBest {
             self.sync_pick_view();
@@ -150,7 +151,7 @@ impl PhotoSortApp {
         ui.horizontal_wrapped(|ui| {
             egui::ComboBox::from_id_salt("pick_cluster")
                 .selected_text(format!(
-                    "Cluster {} / {} · {} photos",
+                    "Group {} / {} · {} photos",
                     current + 1,
                     self.pick_review.tournaments().len(),
                     t.cluster.ordered.len()
@@ -172,7 +173,7 @@ impl PhotoSortApp {
                                             &mut selected_cluster,
                                             i,
                                             format!(
-                                                "Cluster {} · {} photos · {}",
+                                                "Group {} · {} photos · {}",
                                                 i + 1,
                                                 t.cluster.ordered.len(),
                                                 if t.finalized {
@@ -273,7 +274,7 @@ impl PhotoSortApp {
                 .count();
             ui.label(
                 RichText::new(format!(
-                    "{complete} of {} clusters complete",
+                    "{complete} of {} groups complete",
                     self.pick_review.tournaments().len()
                 ))
                 .small()

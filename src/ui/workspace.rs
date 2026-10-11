@@ -38,6 +38,8 @@ mod rotation;
 mod selection;
 #[path = "shortcuts.rs"]
 mod shortcuts;
+#[path = "states.rs"]
+mod states;
 #[path = "status.rs"]
 mod status;
 #[path = "tree_controls.rs"]
@@ -236,6 +238,7 @@ pub struct PhotoSortApp {
     busy: bool,
     analysis_run: Option<u64>,
     progress: Option<(usize, usize)>,
+    progress_started: Option<Instant>,
     stats: Stats,
     plan: Option<Plan>,
     plan_rows: plan_review::Rows,
@@ -457,6 +460,7 @@ impl PhotoSortApp {
             busy: false,
             analysis_run: None,
             progress: None,
+            progress_started: None,
             stats: Stats::default(),
             plan: None,
             plan_rows: plan_review::Rows::default(),
@@ -1443,6 +1447,7 @@ impl PhotoSortApp {
         }
         self.was_wide = wide;
         let compact = ctx.content_rect().width() < 1000.0;
+        self.track_progress_clock();
         self.header(ctx);
         self.footer(ctx);
         if self.inspector && self.catalog.is_some() && ctx.content_rect().width() > 1180.0 {
@@ -1487,25 +1492,17 @@ impl PhotoSortApp {
                     self.toolbar(ui);
                     self.navigator_panel(ui);
                     if self.step == Step::PickBest && self.pick_run.is_some() {
-                        ui.centered_and_justified(|ui| {ui.label("Preparing Pick Best clusters… Use Cancel analysis to stop.");});
+                        self.working_state(ui, "Finding similar photos", "Grouping bursts and near-identical frames, then scoring each photo.");
                     } else if self.step == Step::EasyDelete && self.delete_run.is_some() {
-                        ui.centered_and_justified(|ui| { ui.label("Preparing Easy Delete reviews… Use Cancel analysis to stop."); });
+                        self.working_state(ui, "Looking for photos to clean up", "Checking for duplicates, near-duplicates, and blurry or badly exposed shots.");
                     } else if self.step == Step::Rotation && self.rotation_run.is_some() {
-                        ui.centered_and_justified(|ui| { ui.label("Preparing rotation suggestions… Use Cancel analysis to stop."); });
-                    } else if self.media.is_empty() {
-                        ui.centered_and_justified(|ui| {
-                            ui.label(if self.scanning {
-                                "Finding your photos…"
-                            } else {
-                                "No supported media found in this folder."
-                            });
-                        });
+                        self.working_state(ui, "Checking orientation", "Looking at each photo to find the ones that are sideways or upside down.");
+                    } else if self.media.is_empty() && self.scanning {
+                        self.working_state(ui, "Finding your photos", "Reading the folder and its subfolders.");
                     } else if self.filtered.is_empty() && self.browse_run.is_some() && self.step == Step::Cull {
-                        ui.spinner(); ui.label("Updating library view…");
-                    } else if self.filtered.is_empty() {
-                        ui.label(if self.step == Step::Rotation && self.rotation_queue_only {
-                            "No rotation suggestions remain. Turn off Suggestions only to review any photo manually."
-                        } else if self.step == Step::PickBest { "No comparable clusters. Analyze the library to find similar photos." } else if self.step == Step::EasyDelete { "No reviews match. Analyze the library or enable more categories." } else { "No photos match these filters." });
+                        self.working_state(ui, "Updating the view", "Applying the search and filters.");
+                    } else if self.media.is_empty() || self.filtered.is_empty() {
+                        self.empty_state(ui);
                     } else if self.organize_editor.is_some() {
                         // The editor owns the visible content. Do not render or
                         // submit hidden image/detail requests behind its modal.

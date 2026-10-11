@@ -235,8 +235,11 @@ impl PhotoSortApp {
                         }
                     }
                     if let Some((done, total)) = self.progress {
-                        ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32)
+                        let bar = ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32)
                             .desired_width(160.0).desired_height(14.0).text(RichText::new(format!("{done} / {total}")).small()));
+                        if let Some(timing) = self.progress_timing() {
+                            bar.on_hover_text(timing);
+                        }
                     } else if self.apply_stop.is_none() {
                         ui.label(RichText::new(format!("{} photos", self.filtered.len())).small().color(MUTED))
                             .on_hover_text(format!("{:.0} MB of previews in memory", self.stats.resident_bytes as f64 / 1048576.0));

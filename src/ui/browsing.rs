@@ -2,6 +2,15 @@ use super::*;
 use crate::core::browsing::{GroupSort, RatingFilter, Sort};
 
 impl PhotoSortApp {
+    pub(super) fn clear_browse_filters(&mut self) {
+        self.browse.rating = RatingFilter::All;
+        self.browse.group = None;
+        self.browse.date = None;
+        self.browse.folder = Default::default();
+        self.filter = Filter::All;
+        self.query.clear();
+        self.filter_dirty = true;
+    }
     fn browse_item(&self, id: MediaId) -> crate::core::browsing::Update {
         crate::core::browsing::Update {
             embedding: self.embeddings.get(&id).cloned(),
@@ -283,13 +292,7 @@ impl PhotoSortApp {
                     ui.end_row();
                 }
                 if ui.button("Clear browse filters").clicked() {
-                    self.browse.rating = RatingFilter::All;
-                    self.browse.group = None;
-                    self.browse.date = None;
-                    self.browse.folder = Default::default();
-                    self.filter = Filter::All;
-                    self.query.clear();
-                    self.filter_dirty = true;
+                    self.clear_browse_filters();
                 }
             });
         ui.horizontal_wrapped(|ui| {

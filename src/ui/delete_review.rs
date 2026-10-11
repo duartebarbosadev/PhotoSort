@@ -41,10 +41,11 @@ impl PhotoSortApp {
         self.filter_dirty = true;
         self.set_workflow_status(
             Step::EasyDelete,
-            format!(
-                "{} reviews · choices stay provisional until confirmed",
-                self.delete_review.entries().len()
-            ),
+            match self.delete_review.entries().len() {
+                0 => "Nothing to clean up · no duplicates or problem shots found".into(),
+                1 => "1 suggestion · choices stay provisional until confirmed".into(),
+                n => format!("{n} suggestions · choices stay provisional until confirmed"),
+            },
         );
     }
     pub(super) fn delete_review_ids(&self) -> Vec<MediaId> {
@@ -157,9 +158,10 @@ impl PhotoSortApp {
                 }
                 divider(ui);
             }
-            if ui
+            if !self.filtered.is_empty()
+                && ui
                 .add_enabled(
-                    !self.filtered.is_empty(),
+                    true,
                     egui::Button::new(format!("Accept suggestions ({} shown)", self.filtered.len())),
                 )
                 .on_hover_text("Confirm the suggested Keep/Trash choice for every photo in the categories shown · A")

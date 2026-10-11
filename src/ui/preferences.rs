@@ -378,7 +378,7 @@ pub(super) fn workflow_hint(step: Step) -> &'static str {
             "1/2 · Original/Correction   Q/E · Rotate   Enter · Confirm   R · Reset   Shift+R · Reset all   Shift+Enter · Apply confirmed"
         }
         Step::PickBest => {
-            "1/2 · Keep/Trash   Left/Right · Cluster   Up/Down · Comparison   C · Focus   K · Keep all   Enter · Confirm   R · Reset"
+            "1/2 · Keep/Trash   Left/Right · Group   Up/Down · Comparison   C · Focus   K · Keep all   Enter · Confirm   R · Reset"
         }
         Step::Cull => {
             "Left/Right · Cycle   Up/Down · Browse   Ctrl/Cmd+arrows · Bypass movement filters   D · Mark   R · Rotate   Ctrl/Cmd+0–5 · Rate   Shift+Enter · Review"
