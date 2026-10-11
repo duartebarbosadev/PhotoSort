@@ -431,8 +431,14 @@ impl PhotoSortApp {
                         }
                     }
                     divider(ui);
-                    ui.checkbox(&mut self.companions, "Keep RAW + JPEG + XMP together")
-                        .on_hover_text("Move sidecars and paired RAW files with their photo");
+                    if ui
+                        .checkbox(&mut self.companions, "Keep RAW + JPEG + XMP together")
+                        .on_hover_text("Move sidecars and paired RAW files with their photo")
+                        .changed()
+                    {
+                        self.preferences.keep_companions = self.companions;
+                        self.save_preferences();
+                    }
                     if ui
                         .add_enabled(self.can_edit_folders(), egui::Button::new("Edit folders…"))
                         .clicked()

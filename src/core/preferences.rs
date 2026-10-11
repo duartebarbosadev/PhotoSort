@@ -21,6 +21,8 @@ pub struct Preferences {
     pub navigation: super::navigation::Preferences,
     pub hidden_steps: HashSet<Step>,
     pub recent_folders: Vec<PathBuf>,
+    /// Organize moves RAW, JPEG and XMP companions together.
+    pub keep_companions: bool,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -37,6 +39,7 @@ impl Default for Preferences {
             similarity_distance: super::regional::DEFAULT_EPS,
             hidden_steps: HashSet::new(),
             recent_folders: vec![],
+            keep_companions: true,
         }
     }
 }

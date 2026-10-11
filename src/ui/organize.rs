@@ -750,7 +750,7 @@ impl Editor {
         decisions: &HashMap<MediaId, Decision>,
     ) -> Option<Command> {
         let mut command = None;
-        ui.strong("Files · before / after");
+        ui.label(RichText::new("Files").font(semibold(14.0)));
         ui.horizontal(|ui| {
             if ui.button("Select all").clicked() {
                 self.select_all_files();
@@ -797,8 +797,9 @@ impl Editor {
                     ui.push_id(id.0, |ui| {
                         let marked = decisions.get(&id).is_some_and(|d| d.rejected);
                         let title = if marked { RichText::new(format!("{name} · Trash")).color(RED) } else { RichText::new(&name) };
+                        // The grow atom left-aligns the name across the full row.
                         let response = ui.add_sized([ui.available_width(), button_row_height(ui)],
-                            egui::Button::selectable(selected, title).truncate().sense(collection_controls::pointer_sense(true)));
+                            egui::Button::selectable(selected, (title, egui::Atom::grow())).truncate().sense(collection_controls::pointer_sense(true)));
                         keyboard.focus_on_click(&response);
                         if focused && self.file_cursor == Some(i) {
                             ui.painter().rect_stroke(response.rect, 2., ui.visuals().selection.stroke, StrokeKind::Inside);
@@ -830,8 +831,19 @@ impl Editor {
                         if let Some(drop) = self.drop_target(ui, &response, &after) { command = Some(drop); }
                         let before_path = std::path::Path::new(&before).join(&name);
                         let after_path = std::path::Path::new(&after).join(&after_name);
-                        ui.add(egui::Label::new(RichText::new(format!("{}  >  {}", before_path.display(), after_path.display())).small().color(MUTED)).truncate())
-                            .on_hover_text(format!("Before: {}\nAfter: {}\nDrag selected files onto a destination folder. Double-click a file to rename it.", before_path.display(), after_path.display()));
+                        let line = if before_path == after_path {
+                            RichText::new(format!("Stays in {}", if before.as_os_str().is_empty() { "Library root".into() } else { before.display().to_string() })).small().color(FAINT)
+                        } else {
+                            RichText::new(format!("{}  →  {}", before_path.display(), after_path.display())).small().color(ACCENT)
+                        };
+                        // Align with the name inside the row button above,
+                        // without adding height: rows have a fixed pitch.
+                        egui::Frame::new()
+                            .inner_margin(egui::Margin { left: ui.spacing().button_padding.x as i8, ..Default::default() })
+                            .show(ui, |ui| {
+                                ui.add(egui::Label::new(line).truncate())
+                                .on_hover_text(format!("Before: {}\nAfter: {}\nDrag selected files onto a destination folder. Double-click a file to rename it.", before_path.display(), after_path.display()));
+                            });
                     });
                 }
             });
@@ -919,7 +931,7 @@ impl Editor {
         let owned_drag = egui::DragAndDrop::payload::<FolderDrag>(ui.ctx())
             .is_some_and(|payload| Arc::ptr_eq(&payload.owner, &self.drag_owner));
         let pointer = ui.ctx().pointer_interact_pos();
-        ui.strong("Destination folders");
+        ui.label(RichText::new("Destination folders").font(semibold(14.0)));
         let mut scroll = egui::ScrollArea::vertical().id_salt("organize_folders");
         if let Some(offset) = self.restore_scroll[1].take() {
             scroll = scroll.vertical_scroll_offset(offset);
@@ -980,8 +992,15 @@ impl Editor {
                         ui.horizontal(|ui| {
                             ui.add_space((depth as f32 * 12.0).min(96.0));
                             expansion_changed |= tree_controls::expander(ui, &self.tree, i, &mut self.collapsed, &keyboard);
-                            let response = ui.add_sized([ui.available_width(), row_height], egui::Button::selectable(self.selected_folders.contains(&path), format!("{} · {count}", folder_title(&path)))
+                            let title = folder_title(&path);
+                            let response = ui.add_sized([ui.available_width(), row_height], egui::Button::selectable(
+                                    self.selected_folders.contains(&path),
+                                    (RichText::new(title), egui::Atom::grow(), RichText::new(count.to_string()).small().color(MUTED)),
+                                )
                                 .truncate().sense(tree_controls::pointer_sense(true)));
+                            let spoken = format!("{title}, {count} files");
+                            let selected = self.selected_folders.contains(&path);
+                            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, &spoken));
                             keyboard.focus_on_click(&response);
                             if self.folder == path {
                                 ui.painter().rect_stroke(response.rect, 2., ui.visuals().selection.stroke, StrokeKind::Inside);
@@ -1524,8 +1543,8 @@ impl PhotoSortApp {
                 ui.menu_button("Actions", |ui| self.clear_trash_menu_item(ui));
             });
             if width >= 680.0 {
-                ui.label("Drag files onto folders, drag folders to nest them, or select a file to rename it.");
-                ui.label(RichText::new("Preview moves, then Apply to change files. Photo companions move and rename together when enabled. Added empty folders are included in the reviewed plan.").small().color(MUTED));
+                ui.label(RichText::new("Drag files onto folders and folders into each other; double-click a file to rename it. Nothing changes on disk until you preview and apply the moves.").color(MUTED))
+                    .on_hover_text("Photo companions move and rename together when enabled. Added empty folders are included in the reviewed plan.");
             } else {
                 ui.label("Drag files or folders to arrange them. Preview moves before applying.")
                     .on_hover_text("Photo companions move and rename together when enabled. Added empty folders are included in the reviewed plan.");

@@ -308,7 +308,10 @@ impl PhotoSortApp {
         let mut app = Self::with_runtime(runtime, None);
         let path = crate::core::preferences::Preferences::path();
         match crate::core::preferences::Preferences::load(&path) {
-            Ok(preferences) => app.preferences = preferences,
+            Ok(preferences) => {
+                app.companions = preferences.keep_companions;
+                app.preferences = preferences;
+            }
             Err(e) => app.error = Some(format!("Preferences could not be loaded: {e}")),
         }
         app.crash_notice = crate::core::crash::unseen_report(&crate::core::crash::directory())
@@ -1563,6 +1566,9 @@ impl PhotoSortApp {
     }
     pub fn gallery_review(&mut self, review: bool) {
         self.review = review;
+    }
+    pub fn gallery_organize_editor(&mut self) {
+        self.open_organize_editor();
     }
     pub fn gallery_about(&mut self) {
         self.about = true;
