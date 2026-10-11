@@ -503,3 +503,33 @@ fn details_panel_compares_every_open_photo_and_returns_to_one_photo() {
     assert!(single.iter().all(|t| t != "Off"));
     app.runtime.shutdown();
 }
+
+#[test]
+fn wheel_zoom_keeps_the_point_under_the_pointer_and_fit_recentres() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut app = PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, cache.path().into()), None);
+    app.fit_view();
+    app.zoom_view(2.0);
+    let mut view = app.view_for(app.focused_slot);
+    view.pan = [10.0, -5.0];
+    app.set_view(app.focused_slot, view);
+    let anchor = egui::vec2(100.0, 50.0);
+    // Screen offsets scale with zoom, so (anchor - pan) / zoom is the image
+    // point under the pointer; it must not move.
+    let under = |v: InspectionView| {
+        [
+            (anchor.x - v.pan[0]) / v.zoom,
+            (anchor.y - v.pan[1]) / v.zoom,
+        ]
+    };
+    let before = under(app.view_for(app.focused_slot));
+    app.zoom_view_at(1.5, anchor);
+    let after = app.view_for(app.focused_slot);
+    assert!((after.zoom - 3.0).abs() < 1e-5);
+    for (now, then) in under(after).into_iter().zip(before) {
+        assert!((now - then).abs() < 1e-3);
+    }
+    app.zoom_view_at(0.1, anchor);
+    assert_eq!(app.view_for(app.focused_slot).pan, [0.0, 0.0]);
+    app.runtime.shutdown();
+}

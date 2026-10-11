@@ -346,7 +346,7 @@ impl PhotoSortApp {
             step_hint(
                 ui,
                 &format!(
-                    "Suggested keeper: {name} (score {score:.0}). {}",
+                    "Suggested keeper: {name} (score {score:.1}). {}",
                     if c.confirmed {
                         "Choices confirmed."
                     } else {

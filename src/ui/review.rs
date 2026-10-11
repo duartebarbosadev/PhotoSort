@@ -165,9 +165,25 @@ impl PhotoSortApp {
             },
         );
     }
+    /// Zooms around the centre of the view (keyboard and slider).
     pub(super) fn zoom_view(&mut self, factor: f32) {
+        self.zoom_view_at(factor, egui::Vec2::ZERO);
+    }
+    /// Zooms keeping the image point at `anchor` (relative to the slot's
+    /// centre) under the pointer. Back at fit or smaller, the image recentres.
+    pub(super) fn zoom_view_at(&mut self, factor: f32, anchor: egui::Vec2) {
         let mut view = self.view_for(self.focused_slot);
-        view.zoom = (view.zoom * factor).clamp(InspectionView::MIN_ZOOM, InspectionView::MAX_ZOOM);
+        let old = view.zoom;
+        view.zoom = (old * factor).clamp(InspectionView::MIN_ZOOM, InspectionView::MAX_ZOOM);
+        let ratio = view.zoom / old.max(f32::EPSILON);
+        if !view.actual_size && view.zoom <= 1.0 {
+            view.pan = [0.0, 0.0];
+        } else {
+            view.pan = [
+                anchor.x - (anchor.x - view.pan[0]) * ratio,
+                anchor.y - (anchor.y - view.pan[1]) * ratio,
+            ];
+        }
         self.set_view(self.focused_slot, view);
     }
     pub(super) fn toggle_sync(&mut self) {
@@ -388,10 +404,15 @@ impl PhotoSortApp {
                     }))
                     .frame(false),
                 )
-                .on_hover_text(format!("Rate {star} · Ctrl/Cmd+{star}"))
+                .on_hover_text(if rating == star {
+                    "Clear rating · Ctrl/Cmd+0".to_owned()
+                } else {
+                    format!("Rate {star} · Ctrl/Cmd+{star}")
+                })
                 .clicked()
             {
-                self.rating(active, star);
+                // Clicking the current rating again clears it.
+                self.rating(active, if rating == star { 0 } else { star });
             }
         }
         if ui.small_button("Clear rating").clicked() {
@@ -706,7 +727,24 @@ impl PhotoSortApp {
                     self.media[index].name()
                 )
             } else {
-                format!("{} / {}", slot + 1, self.media[index].name())
+                let mut label = format!("{} / {}", slot + 1, self.media[index].name());
+                // Pick Best ranks by its cluster score; elsewhere show the
+                // photo's quality score once analysis has run.
+                let score = (self.step == Step::PickBest)
+                    .then(|| self.pick_review.current())
+                    .flatten()
+                    .and_then(|t| t.cluster.scores.get(&id).copied())
+                    .or_else(|| self.analysis.get(&id).map(|a| a.score));
+                if let Some(score) = score {
+                    label.push_str(&format!(" · score {score:.1}"));
+                }
+                if let Some(analysis) = self.analysis.get(&id) {
+                    for issue in &analysis.issues {
+                        label.push_str(" · ");
+                        label.push_str(issue);
+                    }
+                }
+                label
             };
             // Leave room for the Keep/Trash pill in the top-right corner.
             let pill = matches!(self.step, Step::EasyDelete | Step::PickBest) || d.rejected;
@@ -770,7 +808,10 @@ impl PhotoSortApp {
             let delta = ui.input(|i| i.smooth_scroll_delta.y);
             if delta.abs() > 0.0 {
                 self.focused_slot = slot;
-                self.zoom_view((delta * 0.003).exp());
+                let anchor = response
+                    .hover_pos()
+                    .map_or(egui::Vec2::ZERO, |pointer| pointer - rect.center());
+                self.zoom_view_at((delta * 0.003).exp(), anchor);
             }
         }
         if pan.is_none() && response.double_clicked() {

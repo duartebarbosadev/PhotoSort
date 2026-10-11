@@ -201,6 +201,7 @@ impl PhotoSortApp {
                 ("Unmark selected", Change::Trash(false)),
                 ("Rotate selected clockwise", Change::Rotate(1)),
                 ("Rotate selected counterclockwise", Change::Rotate(3)),
+                ("Rotate selected 180°", Change::Rotate(2)),
             ] {
                 if ui.button(label).clicked() {
                     self.stage_selection(change);

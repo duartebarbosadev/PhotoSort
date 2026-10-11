@@ -474,6 +474,18 @@ impl PhotoSortApp {
                 self.review = true;
                 ui.close();
             }
+            ui.menu_button("Rotate", |ui| {
+                for (label, turns) in [
+                    ("Clockwise · R", 1),
+                    ("Counterclockwise · Shift+R", 3),
+                    ("180° · Alt+R", 2),
+                ] {
+                    if ui.button(label).clicked() {
+                        self.rotate(id, turns);
+                        ui.close();
+                    }
+                }
+            });
             if ui
                 .button(if self.decision(id).rejected {
                     "Unmark"
