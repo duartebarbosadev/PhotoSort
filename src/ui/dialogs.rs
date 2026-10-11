@@ -159,11 +159,11 @@ impl PhotoSortApp {
                         ),
                         (
                             "1-9 / F3",
-                            "Focus comparison photo / toggle synchronized views",
+                            "Focus comparison photo (in single view: nth photo of its group) / toggle synchronized views",
                         ),
                         (
                             "Drag / Scroll canvas",
-                            "Pan / zoom the focused photo or synchronized set",
+                            "Pan / zoom toward the pointer for the focused photo or synchronized set",
                         ),
                         ("Shift + Enter", "Review staged changes"),
                     ];

@@ -584,3 +584,24 @@ fn a_similarity_group_opens_as_one_comparison() {
     assert!(!app.review && app.comparison.is_empty());
     app.runtime.shutdown();
 }
+
+#[test]
+fn digits_pick_within_the_active_photos_group_in_single_view() {
+    let (_dir, mut app) = fixture();
+    app.cull_groups = Arc::new(
+        [(1, 3), (4, 3), (6, 3)]
+            .into_iter()
+            .map(|(id, g)| (MediaId(id), g))
+            .collect(),
+    );
+    app.review = true;
+    app.active = Some(MediaId(4));
+    app.numeric_key(egui::Key::Num3, egui::Modifiers::NONE);
+    assert_eq!(app.active, Some(MediaId(6)));
+    app.numeric_key(egui::Key::Num1, egui::Modifiers::NONE);
+    assert_eq!(app.active, Some(MediaId(1)));
+    // Past the end of the group, nothing changes.
+    app.numeric_key(egui::Key::Num7, egui::Modifiers::NONE);
+    assert_eq!(app.active, Some(MediaId(1)));
+    app.runtime.shutdown();
+}

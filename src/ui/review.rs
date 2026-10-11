@@ -799,7 +799,7 @@ impl PhotoSortApp {
         // rated without changing focus. Single view keeps the toolbar stars.
         if matches!(self.step, Step::Cull | Step::Organize)
             && self.comparison_ids().len() > 1
-            && !self.organize_previewing()
+            && self.organize_preview().is_none()
         {
             self.slot_stars(ui, rect, id);
         }

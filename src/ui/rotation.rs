@@ -132,10 +132,11 @@ impl PhotoSortApp {
         self.filter_dirty = true;
         self.set_workflow_status(
             Step::Rotation,
-            format!(
-                "{} rotation suggestions · confirm choices before applying",
-                self.rotation_review.ids().len()
-            ),
+            match self.rotation_review.ids().len() {
+                0 => "No rotation suggestions · every photo looks upright".to_owned(),
+                1 => "1 rotation suggestion · confirm it before applying".to_owned(),
+                n => format!("{n} rotation suggestions · confirm choices before applying"),
+            } + &self.failure_note(),
         );
     }
     pub(super) fn rotation_controls(&mut self, ui: &mut egui::Ui) {
