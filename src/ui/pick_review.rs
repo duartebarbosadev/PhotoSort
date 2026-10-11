@@ -47,10 +47,10 @@ impl PhotoSortApp {
         self.set_workflow_status(
             Step::PickBest,
             match self.pick_review.tournaments().len() {
-                0 => "No similar photos found · every photo is one of a kind".into(),
-                1 => "1 group of similar photos · choose Keep/Trash, then confirm".into(),
+                0 => "No similar photos found · every photo is one of a kind".to_owned(),
+                1 => "1 group of similar photos · choose Keep/Trash, then confirm".to_owned(),
                 n => format!("{n} groups of similar photos · choose Keep/Trash, then confirm"),
-            },
+            } + &self.failure_note(),
         );
         if self.step == Step::PickBest {
             self.sync_pick_view();

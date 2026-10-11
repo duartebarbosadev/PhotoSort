@@ -221,6 +221,8 @@ pub struct PhotoSortApp {
     metadata_run: Option<u64>,
     metadata_progress: Option<(usize, usize)>,
     metadata_failures: HashMap<MediaId, String>,
+    /// Photos the current or last analysis could not process, with the cause.
+    analysis_failures: HashMap<MediaId, String>,
     review: bool,
     inspector: bool,
     was_wide: bool,
@@ -448,6 +450,7 @@ impl PhotoSortApp {
             metadata_run: None,
             metadata_progress: None,
             metadata_failures: HashMap::new(),
+            analysis_failures: HashMap::new(),
             review: false,
             inspector: true,
             was_wide: true,
@@ -1040,6 +1043,7 @@ impl PhotoSortApp {
                     false, // Keep completed group memberships during reanalysis.
                 );
                 self.analysis_run = Some(run);
+                self.analysis_failures.clear();
                 self.progress = Some((0, self.media.len()));
                 self.set_status("Analyzing locally · previews stay available".into());
             }

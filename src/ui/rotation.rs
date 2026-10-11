@@ -100,6 +100,7 @@ impl PhotoSortApp {
                     self.rotations.clear();
                     self.rotation_run = Some(run);
                     self.analysis_run = Some(run);
+                    self.analysis_failures.clear();
                     self.progress = Some((0, self.media.len()));
                     self.set_status("Detecting orientations locally…".into());
                 }

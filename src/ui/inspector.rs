@@ -113,6 +113,16 @@ impl PhotoSortApp {
             ui.colored_label(egui::Color32::from_rgb(233, 191, 116), "Preview warning");
             ui.label(warning);
         }
+        if let Some(error) = self.analysis_failures.get(&id) {
+            ui.add_space(10.0);
+            ui.colored_label(RED, "This photo could not be analyzed");
+            ui.add(egui::Label::new(RichText::new(error).small().color(MUTED)).wrap());
+            ui.label(
+                RichText::new("It gets no suggestions and is never marked for Trash automatically. Analyze again to retry.")
+                    .small()
+                    .color(MUTED),
+            );
+        }
         if let Some(error) = self.failures.get(&id) {
             ui.add_space(10.0);
             ui.colored_label(RED, error);

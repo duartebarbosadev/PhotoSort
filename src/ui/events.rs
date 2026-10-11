@@ -276,25 +276,32 @@ impl PhotoSortApp {
         }
     }
 
-    fn on_analysis_error(&mut self, run: u64, id: MediaId, error: String) {
-        if self.analysis_run == Some(run) {
-            self.set_status(format!(
-                "Analysis skipped {}: {error}",
-                self.index
-                    .get(&id)
-                    .map(|&i| self.media[i].name())
-                    .unwrap_or_default()
-            ));
-            self.error = Some(error);
-            if self.pick_run == Some(run) || self.delete_run == Some(run) {
-                let deleting = self.delete_run == Some(run);
-                self.runtime.cancel_analysis();
-                self.delete_run = None;
-                self.analysis_run = None;
-                self.pick_run = None;
-                self.progress = None;
-                self.set_workflow_status(if deleting { Step::EasyDelete } else { Step::PickBest }, if deleting {"Easy Delete stopped: a photo could not be analyzed. Existing reviews retained."}else{"Pick Best stopped: every photo must be scored. Existing reviews retained."}.into());
-            }
+    pub(super) fn on_analysis_error(&mut self, run: u64, id: MediaId, error: String) {
+        if self.analysis_run != Some(run) {
+            return;
+        }
+        // One unreadable photo must not stop the library's analysis. Record
+        // it, keep going, and report the count when the step's results land.
+        // Pick Best leaves out groups with an unscored member; Easy Delete
+        // simply has no suggestion for it. Nothing unanalyzed is ever marked.
+        tracing::warn!(?id, %error, "photo could not be analyzed");
+        let name = self
+            .index
+            .get(&id)
+            .map(|&i| self.media[i].name())
+            .unwrap_or_default();
+        self.analysis_failures.insert(id, error);
+        self.set_status(format!(
+            "{name} could not be analyzed · {} so far · analysis continues",
+            self.analysis_failures.len()
+        ));
+    }
+    /// " · 2 photos could not be analyzed", for completion statuses.
+    pub(super) fn failure_note(&self) -> String {
+        match self.analysis_failures.len() {
+            0 => String::new(),
+            1 => " · 1 photo could not be analyzed (see Details)".into(),
+            n => format!(" · {n} photos could not be analyzed (see Details)"),
         }
     }
 
@@ -475,9 +482,10 @@ impl PhotoSortApp {
                 self.finish_delete_analysis();
             } else {
                 self.set_status(format!(
-                    "Analysis ready · {} photos · {} exact duplicates",
+                    "Analysis ready · {} photos · {} exact duplicates{}",
                     self.analysis.len(),
-                    self.duplicates.len()
+                    self.duplicates.len(),
+                    self.failure_note()
                 ));
             }
         }

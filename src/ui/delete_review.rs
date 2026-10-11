@@ -42,10 +42,10 @@ impl PhotoSortApp {
         self.set_workflow_status(
             Step::EasyDelete,
             match self.delete_review.entries().len() {
-                0 => "Nothing to clean up · no duplicates or problem shots found".into(),
-                1 => "1 suggestion · choices stay provisional until confirmed".into(),
+                0 => "Nothing to clean up · no duplicates or problem shots found".to_owned(),
+                1 => "1 suggestion · choices stay provisional until confirmed".to_owned(),
                 n => format!("{n} suggestions · choices stay provisional until confirmed"),
-            },
+            } + &self.failure_note(),
         );
     }
     pub(super) fn delete_review_ids(&self) -> Vec<MediaId> {
