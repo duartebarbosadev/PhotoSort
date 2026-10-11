@@ -126,6 +126,7 @@ fn main() -> anyhow::Result<()> {
     for (name, open) in [
         ("11-settings", Dialog::Settings),
         ("12-plan-review", Dialog::PlanReview),
+        ("15-about", Dialog::About),
     ] {
         let folder = library.path().to_path_buf();
         let mut harness = Harness::builder()
@@ -138,6 +139,7 @@ fn main() -> anyhow::Result<()> {
         match open {
             Dialog::Settings => harness.state_mut().gallery_settings(),
             Dialog::PlanReview => harness.state_mut().gallery_plan_review(3),
+            Dialog::About => harness.state_mut().gallery_about(),
         }
         settle(&mut harness);
         let image = harness.render().map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -179,6 +181,7 @@ fn main() -> anyhow::Result<()> {
 enum Dialog {
     Settings,
     PlanReview,
+    About,
 }
 
 /// Step frames until background work settles (or ~20 s pass).

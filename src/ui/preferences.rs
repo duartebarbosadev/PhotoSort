@@ -351,18 +351,102 @@ impl PhotoSortApp {
             }
         }
         if self.about {
+            let mut open = self.about;
+            let mut folder = None;
             egui::Window::new("About PhotoSort")
-                .open(&mut self.about)
+                .open(&mut open)
                 .resizable(false)
+                .collapsible(false)
+                .default_width(380.0)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
                 .show(ctx, |ui| {
-                    ui.heading("PhotoSort Rust");
-                    ui.label(format!(
-                        "Version {} · native preview",
-                        env!("CARGO_PKG_VERSION")
-                    ));
-                    ui.label("Local photo organization and review. Built with Rust and egui.");
-                    ui.label("Apache-2.0 license");
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(egui_phosphor::regular::APERTURE)
+                                .size(30.0)
+                                .color(ACCENT),
+                        );
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new("PhotoSort").font(semibold(18.0)));
+                            ui.label(
+                                RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                                    .small()
+                                    .color(MUTED),
+                            );
+                        });
+                    });
+                    ui.add_space(S2);
+                    ui.label("Sort, clean up and pick the keepers from your photos. Everything runs on this computer.");
+                    ui.add_space(S3);
+                    ui.label(RichText::new("Built with").font(medium(12.5)));
+                    let backend = self
+                        .runtime
+                        .processing
+                        .status()
+                        .first()
+                        .map_or("CPU".to_owned(), |s| s.backend.label().to_owned());
+                    for (label, value) in [
+                        ("Interface", "egui and wgpu".to_owned()),
+                        ("AI models", format!("ONNX Runtime · {backend}")),
+                        (
+                            "Images",
+                            if cfg!(feature = "native-imaging") { "libvips" } else { "image-rs" }.to_owned(),
+                        ),
+                        (
+                            "Metadata",
+                            if cfg!(feature = "metadata-native") { "Exiv2" } else { "kamadak-exif" }.to_owned(),
+                        ),
+                        ("Typeface", "IBM Plex Sans".to_owned()),
+                    ] {
+                        ui.horizontal(|ui| {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(96.0, 18.0),
+                                egui::Layout::left_to_right(Align::Center),
+                                |ui| {
+                                    ui.set_width(96.0);
+                                    ui.label(RichText::new(label).color(MUTED));
+                                },
+                            );
+                            ui.label(value);
+                        });
+                    }
+                    ui.add_space(S3);
+                    ui.horizontal_wrapped(|ui| {
+                        let models = crate::core::models::resource_roots()
+                            .into_iter()
+                            .map(|root| root.join("models"))
+                            .find(|path| path.is_dir());
+                        if ui
+                            .add_enabled(models.is_some(), egui::Button::new("Models folder"))
+                            .clicked()
+                        {
+                            folder = models;
+                        }
+                        if ui.button("Crash reports").on_hover_text("Reports stay on this computer").clicked() {
+                            let path = crate::core::crash::directory();
+                            let _ = std::fs::create_dir_all(&path);
+                            folder = Some(path);
+                        }
+                        if let Some(repository) = option_env!("PHOTOSORT_RELEASE_REPOSITORY")
+                            && ui.button("Project page").clicked()
+                        {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(format!(
+                                "https://github.com/{repository}"
+                            )));
+                        }
+                    });
+                    ui.add_space(S2);
+                    ui.label(RichText::new("Apache-2.0 license. Fonts: SIL Open Font License 1.1.").small().color(FAINT));
                 });
+            self.about = open;
+            if let Some(path) = folder
+                && let Ok(request) = crate::core::desktop::Request::for_path(
+                    &path,
+                    crate::core::desktop::Action::OpenFolder,
+                )
+            {
+                self.dispatch_desktop(request);
+            }
         }
     }
 }

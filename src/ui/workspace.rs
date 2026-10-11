@@ -1557,6 +1557,9 @@ impl PhotoSortApp {
     pub fn gallery_review(&mut self, review: bool) {
         self.review = review;
     }
+    pub fn gallery_about(&mut self) {
+        self.about = true;
+    }
     pub fn gallery_settings(&mut self) {
         self.preferences_draft = Some(self.preferences.clone());
     }

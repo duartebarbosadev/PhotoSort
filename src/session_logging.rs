@@ -41,7 +41,22 @@ impl Drop for Guard {
 }
 
 pub fn start(path: Option<&Path>, level: Option<tracing::Level>) -> anyhow::Result<Option<Guard>> {
-    let Some(path) = path else { return Ok(None) };
+    let Some(path) = path else {
+        // Without a log file, warnings and errors still reach the terminal.
+        let console = tracing_subscriber::registry()
+            .with(
+                Targets::new()
+                    .with_target("photosort", tracing::Level::WARN)
+                    .with_target("photosort_imaging_vips", tracing::Level::WARN),
+            )
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_thread_names(true)
+                    .with_writer(io::stderr),
+            );
+        tracing::dispatcher::set_global_default(tracing::Dispatch::new(console))?;
+        return Ok(None);
+    };
     let (dispatch, guard) = prepare(path, level.unwrap_or(tracing::Level::INFO))?;
     tracing::dispatcher::set_global_default(dispatch)?;
     eprintln!(
