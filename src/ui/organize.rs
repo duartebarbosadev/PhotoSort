@@ -1543,6 +1543,12 @@ impl PhotoSortApp {
         self.inspection_view = InspectionView::default();
         self.organize_editor.as_mut().unwrap().preview = Some(preview);
     }
+    /// The folder editor's read-only selection preview is on screen.
+    pub(super) fn organize_previewing(&self) -> bool {
+        self.organize_editor
+            .as_ref()
+            .is_some_and(|e| e.preview.is_some())
+    }
     fn end_organize_preview(&mut self) {
         let Some(preview) = self.organize_editor.as_mut().and_then(|e| e.preview.take()) else {
             return;

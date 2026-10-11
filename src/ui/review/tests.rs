@@ -533,3 +533,68 @@ fn wheel_zoom_keeps_the_point_under_the_pointer_and_fit_recentres() {
     assert_eq!(app.view_for(app.focused_slot).pan, [0.0, 0.0]);
     app.runtime.shutdown();
 }
+
+#[test]
+fn each_compared_photo_can_be_rated_from_its_own_stars() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut app = PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, cache.path().into()), None);
+    let id = MediaId(5);
+    app.media = vec![Media {
+        id,
+        path: cache.path().join("photo.jpg"),
+        kind: MediaKind::Photo,
+        fingerprint: Fingerprint::default(),
+    }];
+    app.index.insert(id, 0);
+    app.filtered = vec![0];
+    app.step = Step::Cull;
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let run = |app: &mut PhotoSortApp, events: Vec<egui::Event>| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 300.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let slot = ui.max_rect();
+                    app.slot_stars(ui, slot, id);
+                });
+            },
+        )
+    };
+    let output = run(&mut app, vec![]);
+    let tree = output.platform_output.accesskit_update.unwrap();
+    let bounds = tree
+        .nodes
+        .iter()
+        .find(|(_, n)| n.label() == Some("Rate 3"))
+        .and_then(|(_, n)| n.bounds())
+        .expect("Rate 3 star");
+    let at = egui::pos2(
+        ((bounds.x0 + bounds.x1) / 2.0) as f32,
+        ((bounds.y0 + bounds.y1) / 2.0) as f32,
+    );
+    for pressed in [true, false] {
+        run(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert_eq!(app.selected_rating(id), 3);
+    app.runtime.shutdown();
+}

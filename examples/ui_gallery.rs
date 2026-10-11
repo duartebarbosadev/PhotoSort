@@ -128,6 +128,7 @@ fn main() -> anyhow::Result<()> {
         ("12-plan-review", Dialog::PlanReview),
         ("15-about", Dialog::About),
         ("16-organize-editor", Dialog::OrganizeEditor),
+        ("17-cull-compare", Dialog::Compare),
     ] {
         let folder = library.path().to_path_buf();
         let mut harness = Harness::builder()
@@ -141,6 +142,7 @@ fn main() -> anyhow::Result<()> {
             Dialog::Settings => harness.state_mut().gallery_settings(),
             Dialog::PlanReview => harness.state_mut().gallery_plan_review(3),
             Dialog::About => harness.state_mut().gallery_about(),
+            Dialog::Compare => harness.state_mut().gallery_compare(3),
             Dialog::OrganizeEditor => {
                 harness.state_mut().gallery_step(Step::Organize);
                 settle(&mut harness);
@@ -189,6 +191,7 @@ enum Dialog {
     PlanReview,
     About,
     OrganizeEditor,
+    Compare,
 }
 
 /// Step frames until background work settles (or ~20 s pass).

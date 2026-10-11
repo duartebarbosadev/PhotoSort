@@ -1579,6 +1579,19 @@ impl PhotoSortApp {
     pub fn gallery_organize_editor(&mut self) {
         self.open_organize_editor();
     }
+    /// Compares the first `count` shown photos.
+    pub fn gallery_compare(&mut self, count: usize) {
+        self.comparison = self
+            .filtered
+            .iter()
+            .take(count)
+            .map(|i| self.media[*i].id)
+            .collect();
+        if let Some(first) = self.comparison.first().copied() {
+            self.set_active(first);
+        }
+        self.review = true;
+    }
     pub fn gallery_about(&mut self) {
         self.about = true;
     }

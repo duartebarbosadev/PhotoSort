@@ -392,6 +392,11 @@ impl PhotoSortApp {
             self.review_view_controls(ui);
             return;
         }
+        // A comparison rates each photo from its own stars on the canvas.
+        if matches!(self.step, Step::Cull | Step::Organize) && self.comparison_ids().len() > 1 {
+            self.review_view_controls(ui);
+            return;
+        }
         ui.add_space(S2);
         let rating = self.selected_rating(active);
         for star in 1..=5 {
@@ -790,6 +795,14 @@ impl PhotoSortApp {
         } else if d.rejected {
             decision_pill(ui.painter(), rect, false);
         }
+        // In a comparison each photo carries its own stars, so several can be
+        // rated without changing focus. Single view keeps the toolbar stars.
+        if matches!(self.step, Step::Cull | Step::Organize)
+            && self.comparison_ids().len() > 1
+            && !self.organize_previewing()
+        {
+            self.slot_stars(ui, rect, id);
+        }
         if pan.is_none() && response.clicked() && self.step == Step::EasyDelete {
             self.toggle_delete_candidate(slot as usize);
         }
@@ -905,4 +918,57 @@ fn decision_pill(painter: &egui::Painter, slot: egui::Rect, keep: bool) {
     let rect = Align2::RIGHT_TOP.anchor_size(slot.right_top() + egui::vec2(-S2, S2), size);
     painter.rect_filled(rect, size.y / 2.0, fill);
     painter.galley(rect.min + egui::vec2(10.0, 4.0), galley, Color32::BLACK);
+}
+
+impl PhotoSortApp {
+    /// Five frameless stars over a comparison slot's bottom-left corner.
+    fn slot_stars(&mut self, ui: &mut egui::Ui, slot: egui::Rect, id: MediaId) {
+        let rating = self.selected_rating(id);
+        let size = egui::vec2(22.0, 22.0);
+        let origin = slot.left_bottom() + egui::vec2(S2, -S2 - size.y);
+        let backdrop = egui::Rect::from_min_size(
+            origin - egui::vec2(4.0, 2.0),
+            egui::vec2(size.x * 5.0 + 8.0, size.y + 4.0),
+        );
+        ui.painter()
+            .rect_filled(backdrop, R_CONTROL, Color32::from_black_alpha(150));
+        let responses: Vec<_> = (1..=5u8)
+            .map(|star| {
+                let rect = egui::Rect::from_min_size(
+                    origin + egui::vec2(size.x * f32::from(star - 1), 0.0),
+                    size,
+                );
+                let id = ui.id().with(("slot-star", id, star));
+                (star, ui.interact(rect, id, Sense::click()))
+            })
+            .collect();
+        // Hovering previews the rating a click would set.
+        let shown = responses
+            .iter()
+            .find(|(_, r)| r.hovered())
+            .map_or(rating, |(star, _)| *star);
+        for (star, response) in responses {
+            ui.painter().text(
+                response.rect.center(),
+                Align2::CENTER_CENTER,
+                "★",
+                FontId::proportional(16.0),
+                if star <= shown {
+                    ACCENT
+                } else {
+                    Color32::from_gray(150)
+                },
+            );
+            let label = if rating == star {
+                "Clear rating".to_owned()
+            } else {
+                format!("Rate {star}")
+            };
+            response
+                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+            if response.on_hover_text(&label).clicked() {
+                self.rating(id, if rating == star { 0 } else { star });
+            }
+        }
+    }
 }
