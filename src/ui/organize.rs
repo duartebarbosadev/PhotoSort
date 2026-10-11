@@ -620,7 +620,7 @@ impl Editor {
         // Rendered once per frame, either in a column or the compact tab.
         // Global scope preserves egui state when that parent changes.
         ui.scope_builder(
-            egui::UiBuilder::new().id(("organize_file_panel", &self.catalog.root)),
+            egui::UiBuilder::new().id(egui::Id::new(("organize_file_panel", &self.catalog.root))),
             |ui| self.photo_contents(ui, height, decisions),
         )
         .inner
@@ -873,7 +873,7 @@ impl Editor {
         // Rendered once per frame, either in a column or the compact tab.
         // Global scope preserves egui state when that parent changes.
         ui.scope_builder(
-            egui::UiBuilder::new().id(("organize_folder_panel", &self.catalog.root)),
+            egui::UiBuilder::new().id(egui::Id::new(("organize_folder_panel", &self.catalog.root))),
             |ui| self.folder_contents(ui, height, decisions),
         )
         .inner

@@ -269,8 +269,8 @@ mod tests {
         assert!(!app.rotation_review.choice(id).unwrap().selected);
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.rotation_controls(ui));
+        let output = ctx.run_test(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.rotation_controls(ui));
         });
         fn has_warning(shape: &egui::Shape) -> bool {
             match shape {

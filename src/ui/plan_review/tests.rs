@@ -91,7 +91,7 @@ fn review_virtualization_reaches_last_file_without_materializing_other_rows() {
         }
         let mut output = None;
         for _ in 0..3 {
-            output = Some(ctx.run(
+            output = Some(ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -99,8 +99,8 @@ fn review_virtualization_reaches_last_file_without_materializing_other_rows() {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         let shown =
                             file_rows(ui, &plan, &index, Some(Path::new("/library")), 220.0);
                         assert!(shown.inner <= 6, "{} rendered rows", shown.inner);
@@ -162,12 +162,15 @@ fn shared_review_exposes_names_and_keeps_apply_visible_in_compact_and_retry_view
             ] {
                 let mut output = None;
                 for _ in 0..3 {
-                    output = Some(ctx.run(
+                    output = Some(ctx.run_test(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                             ..Default::default()
                         },
-                        |ctx| app.plan_review_dialog(ctx),
+                        |ui| {
+                            let ctx = &ui.ctx().clone();
+                            app.plan_review_dialog(ctx)
+                        },
                     ));
                 }
                 let tree = output.unwrap().platform_output.accesskit_update.unwrap();
@@ -252,12 +255,15 @@ fn destination_editor_virtualizes_large_plans_and_keeps_compact_controls_visible
     for size in [egui::vec2(600., 500.), egui::vec2(1280., 800.)] {
         let mut output = None;
         for _ in 0..3 {
-            output = Some(ctx.run(
+            output = Some(ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
                 },
-                |ctx| app.plan_review_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.plan_review_dialog(ctx)
+                },
             ));
         }
         let tree = output.unwrap().platform_output.accesskit_update.unwrap();
@@ -309,7 +315,7 @@ fn review_names_lossless_pixel_rotations() {
     ctx.enable_accesskit();
     let mut output = None;
     for _ in 0..3 {
-        output = Some(ctx.run(
+        output = Some(ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -317,7 +323,10 @@ fn review_names_lossless_pixel_rotations() {
                 )),
                 ..Default::default()
             },
-            |ctx| app.plan_review_dialog(ctx),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.plan_review_dialog(ctx)
+            },
         ));
     }
     let tree = output.unwrap().platform_output.accesskit_update.unwrap();

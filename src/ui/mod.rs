@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod test_frame;
 mod theme;
 mod workspace;
 pub use workspace::PhotoSortApp;

@@ -224,7 +224,7 @@ fn group_target_picker_virtualizes_large_libraries_at_compact_and_wide_sizes() {
     let ctx = egui::Context::default();
     theme_install(&ctx);
     for width in [320., 480., 1200.] {
-        let out = ctx.run(
+        let out = ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -232,8 +232,8 @@ fn group_target_picker_virtualizes_large_libraries_at_compact_and_wide_sizes() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.group_targets(ui));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.group_targets(ui));
             },
         );
         assert!(
@@ -484,7 +484,7 @@ fn scene_edit_cancel_keeps_completed_groups_and_folder_drafts_are_guarded() {
     let ctx = egui::Context::default();
     theme_install(&ctx);
     for width in [320., 600., 1200.] {
-        let output = ctx.run(
+        let output = ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -492,8 +492,8 @@ fn scene_edit_cancel_keeps_completed_groups_and_folder_drafts_are_guarded() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.group_targets(ui));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.group_targets(ui));
             },
         );
         assert!(output.shapes.len() < 180);

@@ -101,10 +101,10 @@ fn comparison_menu_pointer_action_is_bounded_and_compact() {
             )),
             ..Default::default()
         };
-        let mut draw = |ctx: &egui::Context| {
-            egui::CentralPanel::default().show(ctx, |ui| app.review_context_menu(ui, MediaId(1)));
+        let mut draw = |ui: &mut egui::Ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.review_context_menu(ui, MediaId(1)));
         };
-        let output = ctx.run(input(), &mut draw);
+        let output = ctx.run_test(input(), &mut draw);
         let tree = output.platform_output.accesskit_update.unwrap();
         let (_, node) = tree
             .nodes
@@ -130,7 +130,7 @@ fn comparison_menu_pointer_action_is_bounded_and_compact() {
                 modifiers: egui::Modifiers::NONE,
             },
         ];
-        let _ = ctx.run(raw, &mut draw);
+        let _ = ctx.run_test(raw, &mut draw);
         assert!(app.decision(MediaId(0)).rejected && app.decision(MediaId(2)).rejected);
         assert!(!app.decision(MediaId(1)).rejected && !app.decision(MediaId(9)).rejected);
         assert!(app.requested.is_empty() && app.inspection_wanted.is_empty());
@@ -156,8 +156,8 @@ fn zoom_controls_report_the_same_limits_and_values_as_keyboard_and_wheel() {
             let ctx = egui::Context::default();
             theme_install(&ctx);
             ctx.enable_accesskit();
-            let output = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.review_ratings(ui, MediaId(1)));
+            let output = ctx.run_test(egui::RawInput::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.review_ratings(ui, MediaId(1)));
             });
             let tree = output.platform_output.accesskit_update.unwrap();
             let slider = tree
@@ -222,7 +222,7 @@ fn adequate_previews_do_not_request_idle_originals_in_any_workflow() {
         );
         let draw = |app: &mut PhotoSortApp| {
             app.inspection_wanted.clear();
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -230,8 +230,8 @@ fn adequate_previews_do_not_request_idle_originals_in_any_workflow() {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         app.photo_canvas(ui, id, 0, egui::vec2(640., 400.), false);
                     });
                 },
@@ -286,7 +286,7 @@ fn shared_canvas_pans_each_pointer_gesture_once_across_frame_boundaries() {
             theme_install(&ctx);
             let frame = |app: &mut PhotoSortApp, events| {
                 app.inspection_wanted.clear();
-                let _ = ctx.run(
+                let _ = ctx.run_test(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -295,8 +295,8 @@ fn shared_canvas_pans_each_pointer_gesture_once_across_frame_boundaries() {
                         events,
                         ..Default::default()
                     },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
                             app.photo_canvas(ui, id, 0, egui::vec2(640.0, 400.0), false);
                         });
                     },
@@ -378,8 +378,8 @@ fn entering_easy_delete_before_analysis_renders_an_empty_review_safely() {
     app.set_step(Step::EasyDelete);
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| app.review_canvas(ui));
+    let _ = ctx.run_test(egui::RawInput::default(), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| app.review_canvas(ui));
     });
 }
 #[test]
@@ -396,7 +396,7 @@ fn a_single_comparison_row_fits_the_short_canvas_without_clipping() {
     app.set_step(Step::Rotation);
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    let output = ctx.run(
+    let output = ctx.run_test(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -404,8 +404,8 @@ fn a_single_comparison_row_fits_the_short_canvas_without_clipping() {
             )),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.review_canvas(ui));
+        |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.review_canvas(ui));
         },
     );
     let panels: Vec<_> = output
@@ -460,7 +460,7 @@ fn details_panel_compares_every_open_photo_and_returns_to_one_photo() {
     let texts = |app: &mut PhotoSortApp| -> Vec<String> {
         let mut output = None;
         for _ in 0..2 {
-            output = Some(ctx.run(
+            output = Some(ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -468,8 +468,8 @@ fn details_panel_compares_every_open_photo_and_returns_to_one_photo() {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| app.inspector(ui))
                     });
                 },
@@ -552,7 +552,7 @@ fn each_compared_photo_can_be_rated_from_its_own_stars() {
     theme_install(&ctx);
     ctx.enable_accesskit();
     let run = |app: &mut PhotoSortApp, events: Vec<egui::Event>| {
-        ctx.run(
+        ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -561,8 +561,8 @@ fn each_compared_photo_can_be_rated_from_its_own_stars() {
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     let slot = ui.max_rect();
                     app.slot_stars(ui, slot, id);
                 });

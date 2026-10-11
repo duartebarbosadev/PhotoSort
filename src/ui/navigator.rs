@@ -74,11 +74,11 @@ impl PhotoSortApp {
         if ui.available_width() >= 780. {
             ui.ctx()
                 .data_mut(|data| data.remove::<(bool, u64)>(popup_state));
-            egui::SidePanel::left("library_tree_panel")
+            egui::Panel::left("library_tree_panel")
                 .resizable(true)
-                .default_width(220.)
-                .width_range(180.0..=300.0)
-                .show_inside(ui, |ui| self.navigator_contents(ui, ui.available_height()));
+                .default_size(220.)
+                .size_range(180.0..=300.0)
+                .show(ui, |ui| self.navigator_contents(ui, ui.available_height()));
         } else {
             // A stacked tree can consume the entire photo viewport in a short
             // window. Reuse the same virtualized navigator in a bounded overlay.
@@ -122,7 +122,7 @@ impl PhotoSortApp {
     fn navigator_contents(&mut self, ui: &mut egui::Ui, height: f32) {
         // Only one presentation is rendered: inline panel or compact popup.
         ui.scope_builder(
-            egui::UiBuilder::new().id(("library_navigator", &self.root)),
+            egui::UiBuilder::new().id(egui::Id::new(("library_navigator", &self.root))),
             |ui| self.navigator_body(ui, height),
         );
     }

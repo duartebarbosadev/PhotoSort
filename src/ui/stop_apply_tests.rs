@@ -104,13 +104,13 @@ fn frame(
     size: Vec2,
     events: Vec<egui::Event>,
 ) -> Vec<(String, egui::Rect)> {
-    let out = ctx.run(
+    let out = ctx.run_test(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
             events,
             ..Default::default()
         },
-        |ctx| app.footer(ctx),
+        |ui| app.footer(ui),
     );
     out.platform_output
         .accesskit_update

@@ -31,7 +31,7 @@ fn organize_trash_menus_share_state_for_mixed_files_and_folder_descendants() {
             theme_install(&ctx);
             ctx.enable_accesskit();
             let frame = |app: &mut PhotoSortApp, events| {
-                ctx.run(
+                ctx.run_test(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -40,7 +40,10 @@ fn organize_trash_menus_share_state_for_mixed_files_and_folder_descendants() {
                         events,
                         ..Default::default()
                     },
-                    |ctx| app.organize_dialog(ctx),
+                    |ui| {
+                        let ctx = &ui.ctx().clone();
+                        app.organize_dialog(ctx)
+                    },
                 )
             };
             let click = |pos, button| {
@@ -148,7 +151,7 @@ fn folder_expansion_editor_controls_persist_without_repeating_image_work() {
         theme_install(&ctx);
         ctx.enable_accesskit();
         let frame = |app: &mut PhotoSortApp, events| {
-            ctx.run(
+            ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -157,7 +160,10 @@ fn folder_expansion_editor_controls_persist_without_repeating_image_work() {
                     events,
                     ..Default::default()
                 },
-                |ctx| app.organize_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                },
             )
         };
         let click = |pos, button| {
@@ -293,18 +299,24 @@ fn folder_ranges_pointer_keyboard_and_resume_use_visible_order_without_image_wor
         let projection = editor.visible_folders.as_ptr();
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        let frame = |app: &mut PhotoSortApp, events, modifiers| {
-            let _ = ctx.run(
+        let frame = |app: &mut PhotoSortApp, events: Vec<egui::Event>, modifiers| {
+            // egui 0.36 carries modifier state as an event, not a RawInput field.
+            let events = std::iter::once(egui::Event::ModifiersChanged(modifiers))
+                .chain(events)
+                .collect();
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
                         egui::vec2(width, 900.),
                     )),
                     events,
-                    modifiers,
                     ..Default::default()
                 },
-                |ctx| app.organize_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                },
             );
         };
         let click = |app: &mut PhotoSortApp, path: &str, modifiers: egui::Modifiers| {
@@ -505,7 +517,7 @@ fn tree_keyboard_organize_keeps_drafts_and_file_selection_and_reveals_virtual_ro
         let ctx = egui::Context::default();
         theme_install(&ctx);
         let frame = |app: &mut PhotoSortApp, events| {
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -514,7 +526,10 @@ fn tree_keyboard_organize_keeps_drafts_and_file_selection_and_reveals_virtual_ro
                     events,
                     ..Default::default()
                 },
-                |ctx| app.organize_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                },
             );
         };
         for _ in 0..3 {
@@ -804,13 +819,16 @@ fn selective_reset_menu_preserves_other_edits_names_and_selection_at_all_sizes()
             theme_install(&ctx);
             ctx.enable_accesskit();
             let frame = |app: &mut PhotoSortApp, events| {
-                ctx.run(
+                ctx.run_test(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         events,
                         ..Default::default()
                     },
-                    |ctx| app.organize_dialog(ctx),
+                    |ui| {
+                        let ctx = &ui.ctx().clone();
+                        app.organize_dialog(ctx)
+                    },
                 )
             };
             for _ in 0..3 {
@@ -902,7 +920,10 @@ fn selective_reset_waits_for_generated_metadata_and_survives_keep_reopen() {
     });
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    let _ = ctx.run(Default::default(), |ctx| app.organize_dialog(ctx));
+    let _ = ctx.run_test(Default::default(), |ui| {
+        let ctx = &ui.ctx().clone();
+        app.organize_dialog(ctx)
+    });
     let editor = app.organize_editor.take().unwrap();
     assert_eq!(editor.draft.labels()[&MediaId(0)], "trip");
     app.finish_organize_edit(editor, 2);
@@ -919,7 +940,10 @@ fn selective_reset_waits_for_generated_metadata_and_survives_keep_reopen() {
         files: HashSet::from([MediaId(0)]),
         ..Default::default()
     });
-    let _ = ctx.run(Default::default(), |ctx| app.organize_dialog(ctx));
+    let _ = ctx.run_test(Default::default(), |ui| {
+        let ctx = &ui.ctx().clone();
+        app.organize_dialog(ctx)
+    });
     assert_eq!(
         app.organize_editor.as_ref().unwrap().draft.labels()[&MediaId(0)],
         "Custom"
@@ -950,7 +974,7 @@ fn responsive_editor_keeps_each_scroll_and_selection_without_repeating_work() {
     let ctx = egui::Context::default();
     theme_install(&ctx);
     let frame = |app: &mut PhotoSortApp, width, events| {
-        let _ = ctx.run(
+        let _ = ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -959,7 +983,10 @@ fn responsive_editor_keeps_each_scroll_and_selection_without_repeating_work() {
                 events,
                 ..Default::default()
             },
-            |ctx| app.organize_dialog(ctx),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.organize_dialog(ctx)
+            },
         );
     };
     let editor = app.organize_editor.as_mut().unwrap();
@@ -1009,6 +1036,7 @@ fn responsive_editor_keeps_each_scroll_and_selection_without_repeating_work() {
             vec![
                 egui::Event::PointerMoved(viewport.center()),
                 egui::Event::MouseWheel {
+                    phase: egui::TouchPhase::Move,
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, -100.0),
                     modifiers: Default::default(),
@@ -1068,7 +1096,7 @@ fn virtual_editor_rows_keep_exact_pitch_and_last_entries_visible_without_image_w
                 editor.restore_scroll[usize::from(folders)] =
                     Some(if end { 1_000_000.0 } else { 0.0 });
                 for _ in 0..3 {
-                    let _ = ctx.run(
+                    let _ = ctx.run_test(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
                                 egui::Pos2::ZERO,
@@ -1076,8 +1104,8 @@ fn virtual_editor_rows_keep_exact_pitch_and_last_entries_visible_without_image_w
                             )),
                             ..Default::default()
                         },
-                        |ctx| {
-                            egui::CentralPanel::default().show(ctx, |ui| {
+                        |ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
                                 if folders {
                                     editor.structure(ui, 380.0, &HashMap::new());
                                 } else {
@@ -1100,7 +1128,7 @@ fn virtual_editor_rows_keep_exact_pitch_and_last_entries_visible_without_image_w
                 } else {
                     editor.rows.len()
                 };
-                let gap = ctx.style().spacing.item_spacing.y;
+                let gap = ctx.global_style().spacing.item_spacing.y;
                 assert!(
                     (content.y - (count as f32 * (height + gap) - gap)).abs() <= height + gap,
                     "{key}: content {content:?} height {height}"
@@ -1249,13 +1277,16 @@ fn editor_context_menu_copies_clicked_source_at_compact_and_wide_sizes() {
         theme_install(&ctx);
         ctx.enable_accesskit();
         let frame = |app: &mut PhotoSortApp, events| {
-            ctx.run(
+            ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     events,
                     ..Default::default()
                 },
-                |ctx| app.organize_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                },
             )
         };
         for _ in 0..3 {
@@ -1375,7 +1406,7 @@ fn enter_commits_a_focused_file_name_after_the_widget_releases_focus() {
     let ctx = egui::Context::default();
     theme_install(&ctx);
     let mut frame = |events| {
-        let _ = ctx.run(
+        let _ = ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1384,7 +1415,10 @@ fn enter_commits_a_focused_file_name_after_the_widget_releases_focus() {
                 events,
                 ..Default::default()
             },
-            |ctx| app.organize_dialog(ctx),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.organize_dialog(ctx)
+            },
         );
     };
     for _ in 0..3 {
@@ -1432,7 +1466,7 @@ fn file_keyboard_ranges_marks_rename_and_resume_share_cached_editor_state() {
         let ctx = egui::Context::default();
         theme_install(&ctx);
         let frame = |app: &mut PhotoSortApp, events| {
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1441,7 +1475,10 @@ fn file_keyboard_ranges_marks_rename_and_resume_share_cached_editor_state() {
                     events,
                     ..Default::default()
                 },
-                |ctx| app.organize_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                },
             );
         };
         let key = |key, shift, command, repeat| egui::Event::Key {
@@ -1576,7 +1613,7 @@ fn file_keyboard_large_list_reveals_end_home_and_preserves_pointer_toggle_behavi
         let ctx = egui::Context::default();
         theme_install(&ctx);
         let frame = |app: &mut PhotoSortApp, events| {
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1585,7 +1622,10 @@ fn file_keyboard_large_list_reveals_end_home_and_preserves_pointer_toggle_behavi
                     events,
                     ..Default::default()
                 },
-                |ctx| app.organize_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                },
             );
         };
         for _ in 0..3 {
@@ -1633,12 +1673,15 @@ fn file_name_entry_and_errors_fit_compact_and_wide_editor_windows() {
         let ctx = egui::Context::default();
         theme_install(&ctx);
         for _ in 0..3 {
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
                 },
-                |ctx| app.organize_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                },
             );
         }
         let rect = ctx
@@ -1840,7 +1883,10 @@ fn pending_analysis_blocks_editor_and_modal_blocks_workflow_keyboard() {
         repeat: false,
         modifiers: egui::Modifiers::NONE,
     });
-    let _ = ctx.run(input, |ctx| app.keyboard(ctx));
+    let _ = ctx.run_test(input, |ui| {
+        let ctx = &ui.ctx().clone();
+        app.keyboard(ctx)
+    });
     assert!(
         app.inspector,
         "Editor keystrokes must not toggle the underlying inspector"
@@ -1884,7 +1930,10 @@ fn editor_and_footer_fit_wide_and_compact_windows() {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
                 };
-                let _ = ctx.run(input, |ctx| app.organize_dialog(ctx));
+                let _ = ctx.run_test(input, |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                });
             }
             let rect = ctx
                 .memory(|m| m.area_rect(egui::Id::new("organize_editor")))
@@ -2075,8 +2124,8 @@ fn drop_target_scopes_payload_to_editor_and_escape_cancels_drag() {
     theme_install(&ctx);
     let mut rect = egui::Rect::NOTHING;
     let mut dropped = None;
-    let _ = ctx.run(Default::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let _ = ctx.run_test(Default::default(), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             rect = ui.button("target").rect;
         });
     });
@@ -2104,8 +2153,8 @@ fn drop_target_scopes_payload_to_editor_and_escape_cancels_drag() {
             ],
             ..Default::default()
         };
-        let _ = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_test(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let response = ui.button("target");
                 dropped = editor.drop_target(ui, &response, "target");
             });
@@ -2121,11 +2170,11 @@ fn drop_target_scopes_payload_to_editor_and_escape_cancels_drag() {
         repeat: false,
         modifiers: Default::default(),
     });
-    let _ = ctx.run(input, |_| {});
+    let _ = ctx.run_test(input, |_| {});
     assert!(!egui::DragAndDrop::has_any_payload(&ctx));
     assert_eq!(editor.draft.labels()[&MediaId(0)], "trip");
     for cancellation in 0..4 {
-        let _ = ctx.run(
+        let _ = ctx.run_test(
             egui::RawInput {
                 events: vec![
                     egui::Event::PointerMoved(position),
@@ -2138,7 +2187,10 @@ fn drop_target_scopes_payload_to_editor_and_escape_cancels_drag() {
                 ],
                 ..Default::default()
             },
-            |ctx| editor.begin_drag_frame(ctx),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                editor.begin_drag_frame(ctx)
+            },
         );
         assert!(editor.drag.start().is_some());
         let mut input = egui::RawInput {
@@ -2159,9 +2211,12 @@ fn drop_target_scopes_payload_to_editor_and_escape_cancels_drag() {
         }
         egui::DragAndDrop::set_payload(&ctx, editor.file_drag(MediaId(0)));
         if cancellation == 3 {
-            let _ = ctx.run(Default::default(), |_| {});
+            let _ = ctx.run_test(Default::default(), |_| {});
         }
-        let _ = ctx.run(input, |ctx| editor.begin_drag_frame(ctx));
+        let _ = ctx.run_test(input, |ui| {
+            let ctx = &ui.ctx().clone();
+            editor.begin_drag_frame(ctx)
+        });
         assert!(editor.drag.start().is_none());
         assert!(editor.completed_drag.is_none());
         assert!(
@@ -2177,7 +2232,7 @@ fn hover_frame(
     width: f32,
     events: Vec<egui::Event>,
 ) {
-    let _ = ctx.run(
+    let _ = ctx.run_test(
         egui::RawInput {
             time: Some(time),
             screen_rect: Some(egui::Rect::from_min_size(
@@ -2187,7 +2242,10 @@ fn hover_frame(
             events,
             ..Default::default()
         },
-        |ctx| app.organize_dialog(ctx),
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            app.organize_dialog(ctx)
+        },
     );
 }
 fn hover_rect(ctx: &egui::Context, path: &str) -> egui::Pos2 {
@@ -2453,7 +2511,10 @@ fn pointer_drags_in_scrollable_modal_reach_shared_draft() {
                 events,
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| app.organize_dialog(ctx));
+            let _ = ctx.run_test(input, |ui| {
+                let ctx = &ui.ctx().clone();
+                app.organize_dialog(ctx)
+            });
         };
         for _ in 0..3 {
             frame(&mut app, vec![]);
@@ -2560,7 +2621,10 @@ fn compact_drag_can_switch_tabs_without_losing_its_selection() {
             events,
             ..Default::default()
         };
-        let _ = ctx.run(input, |ctx| app.organize_dialog(ctx));
+        let _ = ctx.run_test(input, |ui| {
+            let ctx = &ui.ctx().clone();
+            app.organize_dialog(ctx)
+        });
     };
     for _ in 0..3 {
         frame(&mut app, vec![]);
@@ -2613,7 +2677,7 @@ fn organize_selected_media_preview_is_available_without_accepting_edits() {
     ctx.enable_accesskit();
     let mut labels = Vec::new();
     for _ in 0..3 {
-        let output = ctx.run(
+        let output = ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2621,7 +2685,10 @@ fn organize_selected_media_preview_is_available_without_accepting_edits() {
                 )),
                 ..Default::default()
             },
-            |ctx| app.organize_dialog(ctx),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.organize_dialog(ctx)
+            },
         );
         labels = output
             .platform_output
@@ -2852,12 +2919,15 @@ fn organize_preview_video_uses_shared_player_and_pauses_for_other_dialogs() {
     let ctx = egui::Context::default();
     theme_install(&ctx);
     let sync = |app: &mut PhotoSortApp, focused| {
-        let _ = ctx.run(
+        let _ = ctx.run_test(
             egui::RawInput {
                 focused,
                 ..Default::default()
             },
-            |ctx| app.sync_playback(ctx),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.sync_playback(ctx)
+            },
         );
     };
     sync(&mut app, true);
@@ -3054,7 +3124,7 @@ fn action_frame(app: &mut PhotoSortApp, ctx: &egui::Context, width: f32, events:
             std::iter::once(event).chain(release)
         })
         .collect();
-    let _ = ctx.run(
+    let _ = ctx.run_test(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -3063,7 +3133,10 @@ fn action_frame(app: &mut PhotoSortApp, ctx: &egui::Context, width: f32, events:
             events,
             ..Default::default()
         },
-        |ctx| app.organize_dialog(ctx),
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            app.organize_dialog(ctx)
+        },
     );
 }
 fn action_key(key: egui::Key, modifiers: egui::Modifiers, repeat: bool) -> egui::Event {
@@ -3281,7 +3354,7 @@ fn organize_action_create_and_rename_folder_use_the_existing_draft_commands() {
             );
             action_frame(&mut app, &ctx, width, vec![]);
             assert!(app.organize_editor.as_ref().unwrap().compact_folders);
-            assert!(ctx.wants_keyboard_input());
+            assert!(ctx.egui_wants_keyboard_input());
             action_frame(
                 &mut app,
                 &ctx,
@@ -3592,7 +3665,7 @@ fn f2_and_new_folder_keys_open_the_editor_from_the_organize_grid() {
     app.organize_editor = None;
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    let _ = ctx.run(
+    let _ = ctx.run_test(
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::F2,
@@ -3603,7 +3676,10 @@ fn f2_and_new_folder_keys_open_the_editor_from_the_organize_grid() {
             }],
             ..Default::default()
         },
-        |ctx| app.keyboard(ctx),
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            app.keyboard(ctx)
+        },
     );
     assert!(
         app.organize_editor

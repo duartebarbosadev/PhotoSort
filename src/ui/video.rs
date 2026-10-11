@@ -363,23 +363,27 @@ mod tests {
         let (mut app, _root) = app();
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        let _ = ctx.run(input(true, egui::vec2(800.0, 600.0)), |ctx| {
+        let _ = ctx.run_test(input(true, egui::vec2(800.0, 600.0)), |ui| {
+            let ctx = &ui.ctx().clone();
             app.sync_playback(ctx)
         });
         app.runtime.playback.toggle();
         assert!(app.runtime.playback.snapshot().play_requested);
-        let _ = ctx.run(input(false, egui::vec2(800.0, 600.0)), |ctx| {
+        let _ = ctx.run_test(input(false, egui::vec2(800.0, 600.0)), |ui| {
+            let ctx = &ui.ctx().clone();
             app.sync_playback(ctx)
         });
         assert!(!app.runtime.playback.snapshot().play_requested);
         for step in Step::ALL {
             app.step = step;
-            let _ = ctx.run(input(true, egui::vec2(800.0, 600.0)), |ctx| {
+            let _ = ctx.run_test(input(true, egui::vec2(800.0, 600.0)), |ui| {
+                let ctx = &ui.ctx().clone();
                 app.sync_playback(ctx)
             });
             app.runtime.playback.toggle();
             app.help = true;
-            let _ = ctx.run(input(true, egui::vec2(800.0, 600.0)), |ctx| {
+            let _ = ctx.run_test(input(true, egui::vec2(800.0, 600.0)), |ui| {
+                let ctx = &ui.ctx().clone();
                 app.sync_playback(ctx)
             });
             assert!(!app.runtime.playback.snapshot().play_requested);
@@ -387,18 +391,21 @@ mod tests {
         }
         app.runtime.playback.toggle();
         app.active = Some(MediaId(2));
-        let _ = ctx.run(input(true, egui::vec2(800.0, 600.0)), |ctx| {
+        let _ = ctx.run_test(input(true, egui::vec2(800.0, 600.0)), |ui| {
+            let ctx = &ui.ctx().clone();
             app.sync_playback(ctx)
         });
         assert_eq!(app.runtime.playback.snapshot().id, Some(MediaId(2)));
         assert!(!app.runtime.playback.snapshot().play_requested);
         app.active = Some(MediaId(3));
-        let _ = ctx.run(input(true, egui::vec2(800.0, 600.0)), |ctx| {
+        let _ = ctx.run_test(input(true, egui::vec2(800.0, 600.0)), |ui| {
+            let ctx = &ui.ctx().clone();
             app.sync_playback(ctx)
         });
         assert!(app.runtime.playback.snapshot().id.is_none());
         app.active = Some(MediaId(1));
-        let _ = ctx.run(input(true, egui::vec2(800.0, 600.0)), |ctx| {
+        let _ = ctx.run_test(input(true, egui::vec2(800.0, 600.0)), |ui| {
+            let ctx = &ui.ctx().clone();
             app.sync_playback(ctx)
         });
         app.runtime.next_epoch();
@@ -410,7 +417,8 @@ mod tests {
         let (mut app, _root) = app();
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        let _ = ctx.run(input(true, egui::vec2(800.0, 600.0)), |ctx| {
+        let _ = ctx.run_test(input(true, egui::vec2(800.0, 600.0)), |ui| {
+            let ctx = &ui.ctx().clone();
             app.sync_playback(ctx)
         });
         let until = Instant::now() + Duration::from_secs(2);
@@ -426,8 +434,8 @@ mod tests {
             egui::vec2(1200.0, 700.0),
         ] {
             for _ in 0..2 {
-                let _ = ctx.run(input(true, size + egui::vec2(16.0, 16.0)), |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                let _ = ctx.run_test(input(true, size + egui::vec2(16.0, 16.0)), |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         let top = ui.cursor().top();
                         let left = ui.cursor().left();
                         app.video_canvas(ui, MediaId(1), 0, size);
@@ -462,7 +470,8 @@ mod tests {
         let ctx = egui::Context::default();
         theme_install(&ctx);
         ctx.enable_accesskit();
-        let _ = ctx.run(input(true, egui::vec2(800.0, 600.0)), |ctx| {
+        let _ = ctx.run_test(input(true, egui::vec2(800.0, 600.0)), |ui| {
+            let ctx = &ui.ctx().clone();
             app.sync_playback(ctx)
         });
         let until = Instant::now() + Duration::from_secs(2);
@@ -482,15 +491,17 @@ mod tests {
             let mut slot = egui::Rect::NOTHING;
             let mut output = None;
             for _ in 0..3 {
-                output = Some(ctx.run(input(true, size + egui::vec2(40.0, 40.0)), |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        // Review's photo slots have a horizontal parent layout.
-                        ui.horizontal_top(|ui| {
-                            slot = egui::Rect::from_min_size(ui.cursor().min, size);
-                            app.video_canvas(ui, MediaId(1), 0, size);
+                output = Some(
+                    ctx.run_test(input(true, size + egui::vec2(40.0, 40.0)), |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            // Review's photo slots have a horizontal parent layout.
+                            ui.horizontal_top(|ui| {
+                                slot = egui::Rect::from_min_size(ui.cursor().min, size);
+                                app.video_canvas(ui, MediaId(1), 0, size);
+                            });
                         });
-                    });
-                }));
+                    }),
+                );
             }
             let tree = output.unwrap().platform_output.accesskit_update.unwrap();
             for label in if compact {
@@ -546,7 +557,8 @@ mod tests {
         let (mut app, _root) = app();
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        let _ = ctx.run(input(true, egui::vec2(800.0, 600.0)), |ctx| {
+        let _ = ctx.run_test(input(true, egui::vec2(800.0, 600.0)), |ui| {
+            let ctx = &ui.ctx().clone();
             app.sync_playback(ctx)
         });
         let until = Instant::now() + Duration::from_secs(2);
@@ -561,11 +573,14 @@ mod tests {
             let mut texture = None;
             for height in [120.0, 131.0, 160.0, 200.0, 220.0, 320.0] {
                 let size = egui::vec2(640.0, height);
-                let output = ctx.run(input(true, size + egui::vec2(40.0, 40.0)), |ctx| {
-                    app.sync_playback(ctx);
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        app.video_canvas(ui, MediaId(1), 0, size);
-                    });
+                let output = ctx.run_test(input(true, size + egui::vec2(40.0, 40.0)), |ui| {
+                    let ctx = &ui.ctx().clone();
+                    {
+                        app.sync_playback(ctx);
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            app.video_canvas(ui, MediaId(1), 0, size);
+                        });
+                    }
                 });
                 let current = app.video_texture.as_ref().unwrap().2.id();
                 if let Some(previous) = texture {
@@ -609,9 +624,12 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         });
-        let _ = ctx.run(raw, |ctx| {
-            app.keyboard(ctx);
-            app.sync_playback(ctx);
+        let _ = ctx.run_test(raw, |ui| {
+            let ctx = &ui.ctx().clone();
+            {
+                app.keyboard(ctx);
+                app.sync_playback(ctx);
+            }
         });
         assert!(app.runtime.playback.snapshot().play_requested);
         assert_eq!(app.active, Some(MediaId(1)));
@@ -628,7 +646,10 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::ALT,
         });
-        let _ = ctx.run(raw, |ctx| app.keyboard(ctx));
+        let _ = ctx.run_test(raw, |ui| {
+            let ctx = &ui.ctx().clone();
+            app.keyboard(ctx)
+        });
         assert_eq!(app.active, Some(MediaId(1)));
         app.runtime.shutdown();
     }

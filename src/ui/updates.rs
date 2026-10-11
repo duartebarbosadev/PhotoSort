@@ -147,7 +147,10 @@ mod tests {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
                 };
-                output = Some(ctx.run(input, |ctx| app.render_updates_dialog(ctx, state.clone())));
+                output = Some(ctx.run_test(input, |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.render_updates_dialog(ctx, state.clone())
+                }));
             }
             let tree = output.unwrap().platform_output.accesskit_update.unwrap();
             for label in [
@@ -189,9 +192,12 @@ mod tests {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
                 };
-                let _ = ctx.run(input, |ctx| {
-                    app.keyboard(ctx);
-                    app.updates_dialog(ctx);
+                let _ = ctx.run_test(input, |ui| {
+                    let ctx = &ui.ctx().clone();
+                    {
+                        app.keyboard(ctx);
+                        app.updates_dialog(ctx);
+                    }
                 });
                 assert_eq!(app.step, step);
                 assert!(app.decisions.is_empty() && app.requested.is_empty());

@@ -201,7 +201,7 @@ fn clear_all_trash_does_not_resurrect_marks_from_confirmed_keep_all_reviews() {
     assert!(!app.decision(MediaId(0)).rejected && !app.decision(MediaId(2)).rejected);
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    let _ = ctx.run(
+    let _ = ctx.run_test(
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::D,
@@ -212,7 +212,10 @@ fn clear_all_trash_does_not_resurrect_marks_from_confirmed_keep_all_reviews() {
             }],
             ..Default::default()
         },
-        |ctx| app.keyboard(ctx),
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            app.keyboard(ctx)
+        },
     );
     assert!(app.decisions.values().all(|d| !d.rejected));
     app.delete_review.reset_all(&mut app.decisions);
@@ -230,7 +233,7 @@ fn clear_all_trash_does_not_resurrect_marks_from_confirmed_keep_all_reviews() {
     app.runtime.shutdown();
 }
 fn clear_key(app: &mut PhotoSortApp, ctx: &egui::Context, modifiers: egui::Modifiers) {
-    let _ = ctx.run(
+    let _ = ctx.run_test(
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::D,
@@ -241,7 +244,10 @@ fn clear_key(app: &mut PhotoSortApp, ctx: &egui::Context, modifiers: egui::Modif
             }],
             ..Default::default()
         },
-        |ctx| app.keyboard(ctx),
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            app.keyboard(ctx)
+        },
     );
 }
 #[test]
@@ -386,6 +392,17 @@ fn clear_all_trash_after_keep_reviewing_invalidates_only_the_cached_plan() {
     let size = egui::vec2(640., 600.);
     click_label(&mut app, &ctx, size, "Keep reviewing");
     assert!(!app.plan_open && app.plan.is_some());
+    // The visible grid loads its previews; let that settle so the check
+    // below measures only what clearing the marks does.
+    use super::super::compact_cull_tests::rendered;
+    for _ in 0..200 {
+        rendered(&mut app, &ctx, size);
+        if app.requested.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let image_work = (app.stats.decodes, app.stats.metadata_reads);
     assert!(
         app.can_clear_trash_marks(),
         "A closed cached preview blocked clearing marks"
@@ -400,7 +417,11 @@ fn clear_all_trash_after_keep_reviewing_invalidates_only_the_cached_plan() {
         app.file_names.get(&id).map(String::as_str),
         Some("retained-name.JPG")
     );
-    assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+    assert_eq!(
+        (app.stats.decodes, app.stats.metadata_reads),
+        image_work,
+        "clearing marks decodes nothing"
+    );
     app.runtime.shutdown();
 }
 #[test]
@@ -437,14 +458,14 @@ fn clear_all_trash_shortcut_preserves_text_and_requires_exact_modifiers() {
     let field = egui::Id::new("clear-test-input");
     let mut text = "unfinished".to_string();
     for _ in 0..2 {
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_test(Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.add(egui::TextEdit::singleline(&mut text).id(field))
                     .request_focus();
             });
         });
     }
-    assert!(ctx.wants_keyboard_input());
+    assert!(ctx.egui_wants_keyboard_input());
     clear_key(&mut app, &ctx, egui::Modifiers::ALT);
     assert!(app.decision(MediaId(0)).rejected);
     assert_eq!(text, "unfinished");

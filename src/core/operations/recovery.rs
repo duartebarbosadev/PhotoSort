@@ -92,7 +92,7 @@ impl Records<'_> {
         let mut newline = [0];
         self.reader.read_exact(&mut newline)?;
         ensure!(
-            newline == [b'\n'],
+            newline == *b"\n",
             "Recovery record has no newline delimiter"
         );
         self.offset = end + 1;

@@ -160,7 +160,7 @@ fn palette_analysis_filters_colors_instead_of_aliasing_palette_indices() {
     let asset = pipeline.analysis(&media, || false).unwrap();
     assert_eq!(asset.pixels.dimensions(), (1024, 1));
     let interior = &asset.pixels.as_raw()[16..asset.pixels.len() - 16];
-    for pixel in interior.chunks_exact(4) {
+    for pixel in interior.as_chunks::<4>().0 {
         assert!(pixel[..3].iter().all(|v| (127..=128).contains(v)));
     }
 }

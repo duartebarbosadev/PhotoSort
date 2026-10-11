@@ -104,9 +104,12 @@ fn organize_mode_keys_share_toolbar_state_without_repeating_expensive_work() {
                 egui::Pos2::ZERO,
                 egui::vec2(width, 900.0),
             ));
-            let out = ctx.run(events, |ctx| {
-                app.keyboard(ctx);
-                egui::CentralPanel::default().show(ctx, |ui| app.toolbar(ui));
+            let out = ctx.run_test(events, |ui| {
+                let ctx = &ui.ctx().clone();
+                {
+                    app.keyboard(ctx);
+                    egui::CentralPanel::default().show(ui, |ui| app.toolbar(ui));
+                }
             });
             assert_eq!(app.group_mode, expected);
             assert!(app.pending_bookmark.is_none());
@@ -140,7 +143,8 @@ fn organize_mode_location_reuses_one_metadata_run_and_cached_results() {
     let ctx = egui::Context::default();
     theme_install(&ctx);
     for _ in 0..2 {
-        let _ = ctx.run(input(&[(egui::Key::Num5, egui::Modifiers::ALT)]), |ctx| {
+        let _ = ctx.run_test(input(&[(egui::Key::Num5, egui::Modifiers::ALT)]), |ui| {
+            let ctx = &ui.ctx().clone();
             app.keyboard(ctx)
         });
         assert_eq!(app.group_mode, GroupMode::Location);
@@ -175,8 +179,8 @@ fn organize_mode_keys_preserve_text_modal_and_workflow_ownership() {
         let mut text = String::new();
         match blocker {
             "text" => {
-                let _ = ctx.run(input(&[]), |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                let _ = ctx.run_test(input(&[]), |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         ui.add(egui::TextEdit::singleline(&mut text).id(field))
                             .request_focus();
                     });
@@ -192,7 +196,8 @@ fn organize_mode_keys_preserve_text_modal_and_workflow_ownership() {
             "welcome" => app.root = None,
             _ => unreachable!(),
         }
-        let _ = ctx.run(input(&[(egui::Key::Num3, egui::Modifiers::ALT)]), |ctx| {
+        let _ = ctx.run_test(input(&[(egui::Key::Num3, egui::Modifiers::ALT)]), |ui| {
+            let ctx = &ui.ctx().clone();
             app.keyboard(ctx)
         });
         assert_eq!(app.group_mode, GroupMode::Current, "{blocker}");
@@ -212,7 +217,8 @@ fn organize_mode_keys_preserve_text_modal_and_workflow_ownership() {
             app.group_mode = GroupMode::Camera;
             let ctx = egui::Context::default();
             theme_install(&ctx);
-            let _ = ctx.run(input(&[(egui::Key::Num4, modifiers)]), |ctx| {
+            let _ = ctx.run_test(input(&[(egui::Key::Num4, modifiers)]), |ui| {
+                let ctx = &ui.ctx().clone();
                 app.keyboard(ctx)
             });
             assert_eq!(
@@ -231,7 +237,7 @@ fn organize_mode_keys_preserve_text_modal_and_workflow_ownership() {
         let mut app = app(Step::Organize);
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        let _ = ctx.run(
+        let _ = ctx.run_test(
             input(&[(
                 egui::Key::Num5,
                 egui::Modifiers {
@@ -239,7 +245,10 @@ fn organize_mode_keys_preserve_text_modal_and_workflow_ownership() {
                     ..command
                 },
             )]),
-            |ctx| app.keyboard(ctx),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.keyboard(ctx)
+            },
         );
         assert_eq!(app.step, Step::Cull);
         assert_eq!(app.group_mode, GroupMode::Current);
@@ -255,7 +264,8 @@ fn view_keys_share_actions_and_never_become_ratings_or_guided_choices() {
         let ctx = egui::Context::default();
         theme_install(&ctx);
         app.library_layout = library::Layout::Grid;
-        let _ = ctx.run(input(&[(egui::Key::Num1, egui::Modifiers::ALT)]), |ctx| {
+        let _ = ctx.run_test(input(&[(egui::Key::Num1, egui::Modifiers::ALT)]), |ui| {
+            let ctx = &ui.ctx().clone();
             app.keyboard(ctx)
         });
         assert_eq!(app.active, Some(MediaId(7)));
@@ -275,13 +285,15 @@ fn view_keys_share_actions_and_never_become_ratings_or_guided_choices() {
     theme_install(&ctx);
     for (key, mode) in [(egui::Key::F, Mode::Folders), (egui::Key::S, Mode::Groups)] {
         app.navigator.enabled = false;
-        let _ = ctx.run(input(&[(key, egui::Modifiers::NONE)]), |ctx| {
+        let _ = ctx.run_test(input(&[(key, egui::Modifiers::NONE)]), |ui| {
+            let ctx = &ui.ctx().clone();
             app.keyboard(ctx)
         });
         assert!(app.navigator.enabled && !app.review);
         assert_eq!(app.navigator.mode, mode);
         assert!(app.filter_dirty);
-        let _ = ctx.run(input(&[(key, egui::Modifiers::NONE)]), |ctx| {
+        let _ = ctx.run_test(input(&[(key, egui::Modifiers::NONE)]), |ui| {
+            let ctx = &ui.ctx().clone();
             app.keyboard(ctx)
         });
         assert!(!app.navigator.enabled);
@@ -323,22 +335,27 @@ fn modified_unbound_keys_do_not_change_photos_in_any_workflow() {
             let before = app.inspector;
             let ctx = egui::Context::default();
             theme_install(&ctx);
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 input(&[
                     (egui::Key::R, command),
                     (egui::Key::D, command),
                     (egui::Key::I, command),
                     (egui::Key::Delete, command),
                 ]),
-                |ctx| app.keyboard(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.keyboard(ctx)
+                },
             );
             assert!(app.decisions.is_empty() && !app.plan_open);
             assert_eq!(app.inspector, before);
-            let _ = ctx.run(input(&[(egui::Key::Plus, command)]), |ctx| {
+            let _ = ctx.run_test(input(&[(egui::Key::Plus, command)]), |ui| {
+                let ctx = &ui.ctx().clone();
                 app.keyboard(ctx)
             });
             assert_eq!(app.inspection_view.zoom, 1.25);
-            let _ = ctx.run(input(&[(egui::Key::Minus, command)]), |ctx| {
+            let _ = ctx.run_test(input(&[(egui::Key::Minus, command)]), |ui| {
+                let ctx = &ui.ctx().clone();
                 app.keyboard(ctx)
             });
             assert_eq!(app.inspection_view.zoom, 1.0);
@@ -359,9 +376,12 @@ fn find_shortcut_replaces_existing_query_in_the_real_toolbar() {
                         egui::Pos2::ZERO,
                         egui::vec2(width, 700.0),
                     ));
-                    let _ = ctx.run(events, |ctx| {
-                        app.keyboard(ctx);
-                        egui::CentralPanel::default().show(ctx, |ui| app.toolbar(ui));
+                    let _ = ctx.run_test(events, |ui| {
+                        let ctx = &ui.ctx().clone();
+                        {
+                            app.keyboard(ctx);
+                            egui::CentralPanel::default().show(ui, |ui| app.toolbar(ui));
+                        }
                     });
                 };
                 frame(input(&[]));
@@ -409,7 +429,8 @@ fn find_does_not_replace_selection_when_another_owner_blocks_it() {
                 input.keys_down.insert(egui::Key::F);
             }),
         }
-        let _ = ctx.run(input(&[(egui::Key::F, egui::Modifiers::COMMAND)]), |ctx| {
+        let _ = ctx.run_test(input(&[(egui::Key::F, egui::Modifiers::COMMAND)]), |ui| {
+            let ctx = &ui.ctx().clone();
             app.keyboard(ctx)
         });
         assert_eq!(
@@ -432,28 +453,35 @@ fn search_focus_handles_text_input_but_dialogs_and_busy_state_keep_ownership() {
     theme_install(&ctx);
     let search = egui::Id::new("library_search");
     let mut text = String::new();
-    let _ = ctx.run(input(&[(egui::Key::F, egui::Modifiers::COMMAND)]), |ctx| {
-        app.keyboard(ctx);
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add(egui::TextEdit::singleline(&mut text).id(search));
-        });
+    let _ = ctx.run_test(input(&[(egui::Key::F, egui::Modifiers::COMMAND)]), |ui| {
+        let ctx = &ui.ctx().clone();
+        {
+            app.keyboard(ctx);
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.add(egui::TextEdit::singleline(&mut text).id(search));
+            });
+        }
     });
     assert_eq!(ctx.memory(|m| m.focused()), Some(search));
-    let _ = ctx.run(
+    let _ = ctx.run_test(
         input(&[
             (egui::Key::R, egui::Modifiers::NONE),
             (egui::Key::Num1, egui::Modifiers::ALT),
         ]),
-        |ctx| {
-            app.keyboard(ctx);
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.add(egui::TextEdit::singleline(&mut text).id(search));
-            });
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            {
+                app.keyboard(ctx);
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut text).id(search));
+                });
+            }
         },
     );
     assert!(app.decisions.is_empty());
     assert_eq!(app.library_layout, library::Layout::Grid);
-    let _ = ctx.run(input(&[(egui::Key::F12, egui::Modifiers::NONE)]), |ctx| {
+    let _ = ctx.run_test(input(&[(egui::Key::F12, egui::Modifiers::NONE)]), |ui| {
+        let ctx = &ui.ctx().clone();
         app.keyboard(ctx)
     });
     assert!(app.about);
@@ -461,12 +489,15 @@ fn search_focus_handles_text_input_but_dialogs_and_busy_state_keep_ownership() {
         app.about = false;
         app.busy = busy;
         app.help = !busy;
-        let _ = ctx.run(
+        let _ = ctx.run_test(
             input(&[
                 (egui::Key::F12, egui::Modifiers::NONE),
                 (egui::Key::O, egui::Modifiers::COMMAND),
             ]),
-            |ctx| app.keyboard(ctx),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.keyboard(ctx)
+            },
         );
         assert!(!app.about); // Open must also be left untouched; no native picker.
     }
@@ -476,11 +507,13 @@ fn repeated_global_keys_and_search_without_a_search_field_are_harmless() {
     let mut app = app(Step::PickBest);
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    let _ = ctx.run(input(&[(egui::Key::F, egui::Modifiers::COMMAND)]), |ctx| {
+    let _ = ctx.run_test(input(&[(egui::Key::F, egui::Modifiers::COMMAND)]), |ui| {
+        let ctx = &ui.ctx().clone();
         app.keyboard(ctx)
     });
     assert!(ctx.memory(|m| m.focused()).is_none());
-    let _ = ctx.run(input(&[(egui::Key::F12, egui::Modifiers::NONE)]), |ctx| {
+    let _ = ctx.run_test(input(&[(egui::Key::F12, egui::Modifiers::NONE)]), |ui| {
+        let ctx = &ui.ctx().clone();
         app.keyboard(ctx)
     });
     assert!(app.about);
@@ -491,7 +524,10 @@ fn repeated_global_keys_and_search_without_a_search_field_are_harmless() {
     if let egui::Event::Key { repeat, .. } = &mut repeated.events[0] {
         *repeat = true;
     }
-    let _ = ctx.run(repeated, |ctx| app.keyboard(ctx));
+    let _ = ctx.run_test(repeated, |ui| {
+        let ctx = &ui.ctx().clone();
+        app.keyboard(ctx)
+    });
     assert!(!app.about);
 }
 #[test]
@@ -506,7 +542,7 @@ fn opening_a_departure_guard_stops_later_photo_keys_in_the_same_frame() {
     );
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    let _ = ctx.run(
+    let _ = ctx.run_test(
         input(&[
             (
                 egui::Key::Num1,
@@ -518,7 +554,10 @@ fn opening_a_departure_guard_stops_later_photo_keys_in_the_same_frame() {
             ),
             (egui::Key::R, egui::Modifiers::NONE),
         ]),
-        |ctx| app.keyboard(ctx),
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            app.keyboard(ctx)
+        },
     );
     assert!(app.departure.is_some());
     assert_eq!(app.decisions[&MediaId(7)].turns, 0);
@@ -538,12 +577,15 @@ fn analysis_shortcut_uses_workflow_owner_and_preserves_active_work() {
             );
             let ctx = egui::Context::default();
             theme_install(&ctx);
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 input(&[
                     (egui::Key::S, modifiers),
                     (egui::Key::R, egui::Modifiers::NONE),
                 ]),
-                |ctx| app.keyboard(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.keyboard(ctx)
+                },
             );
             if step == Step::Rotation {
                 // Minimal builds have no model; the same action opens setup.
@@ -563,7 +605,10 @@ fn analysis_shortcut_uses_workflow_owner_and_preserves_active_work() {
                 app.analyze_current_workflow();
                 app.analyze();
                 assert_eq!(app.analysis_run, Some(run));
-                let _ = ctx.run(input(&[(egui::Key::S, modifiers)]), |ctx| app.keyboard(ctx));
+                let _ = ctx.run_test(input(&[(egui::Key::S, modifiers)]), |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.keyboard(ctx)
+                });
                 assert_eq!(app.analysis_run, Some(run));
                 app.cancel_analysis();
                 assert!(app.analysis_run.is_none());
@@ -598,7 +643,8 @@ fn analysis_shortcut_respects_availability_modal_and_modifier_guards() {
                 _ => app.analysis_run = Some(42),
             }
             let before = app.analysis_run;
-            let _ = ctx.run(input(&[(egui::Key::S, egui::Modifiers::COMMAND)]), |ctx| {
+            let _ = ctx.run_test(input(&[(egui::Key::S, egui::Modifiers::COMMAND)]), |ui| {
+                let ctx = &ui.ctx().clone();
                 app.keyboard(ctx)
             });
             assert_eq!(app.analysis_run, before, "{step:?}, guard={guard}");
@@ -629,9 +675,12 @@ fn settings_access_keys_open_the_existing_draft_without_photo_work() {
             let before = serde_json::to_vec(&app.preferences).unwrap();
             let ctx = egui::Context::default();
             theme_install(&ctx);
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 input(&[(key, modifiers), (egui::Key::R, egui::Modifiers::NONE)]),
-                |ctx| app.keyboard(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.keyboard(ctx)
+                },
             );
             assert!(app.preferences_draft.is_some(), "{step:?}: {key:?}");
             assert_eq!(
@@ -677,7 +726,8 @@ fn settings_access_respects_existing_modal_popup_repeat_and_modifier_guards() {
                     i.keys_down.insert(key);
                 }),
             }
-            let _ = ctx.run(input(&[(key, egui::Modifiers::NONE)]), |ctx| {
+            let _ = ctx.run_test(input(&[(key, egui::Modifiers::NONE)]), |ui| {
+                let ctx = &ui.ctx().clone();
                 app.keyboard(ctx)
             });
             assert!(app.preferences_draft.is_none(), "guard={guard}");

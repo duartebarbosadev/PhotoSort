@@ -123,7 +123,7 @@ fn model_dialog_fits_compact_and_wide_windows_without_loading_models_or_images()
             Some("A transfer could not complete. Existing files remain available. ".repeat(8));
         for (width, height) in [(480., 640.), (800., 600.), (1200., 900.)] {
             for _ in 0..2 {
-                let out = ctx.run(
+                let out = ctx.run_test(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -131,7 +131,10 @@ fn model_dialog_fits_compact_and_wide_windows_without_loading_models_or_images()
                         )),
                         ..Default::default()
                     },
-                    |ctx| app.render_model_setup(ctx, &state),
+                    |ui| {
+                        let ctx = &ui.ctx().clone();
+                        app.render_model_setup(ctx, &state)
+                    },
                 );
                 assert!(out.shapes.len() < 500);
                 let rect = ctx
@@ -343,7 +346,7 @@ fn repaired_models_update_footer_and_dialog_without_restarting_analysis() {
     ctx.enable_accesskit();
     let mut labels = Vec::new();
     for _ in 0..3 {
-        let out = ctx.run(
+        let out = ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -351,7 +354,10 @@ fn repaired_models_update_footer_and_dialog_without_restarting_analysis() {
                 )),
                 ..Default::default()
             },
-            |ctx| app.render_model_setup(ctx, &state),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.render_model_setup(ctx, &state)
+            },
         );
         labels = out
             .platform_output
@@ -381,7 +387,8 @@ fn repaired_models_update_footer_and_dialog_without_restarting_analysis() {
     }
     app.set_step(Step::Organize);
     for _ in 0..3 {
-        let out = ctx.run(egui::RawInput::default(), |ctx| {
+        let out = ctx.run_test(egui::RawInput::default(), |ui| {
+            let ctx = &ui.ctx().clone();
             app.render_model_setup(ctx, &state)
         });
         labels = out

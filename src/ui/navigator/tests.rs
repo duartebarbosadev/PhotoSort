@@ -40,7 +40,7 @@ fn folder_expansion_navigator_context_menu_survives_compact_popup() {
         theme_install(&ctx);
         ctx.enable_accesskit();
         let frame = |app: &mut PhotoSortApp, events| {
-            ctx.run(
+            ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -49,9 +49,12 @@ fn folder_expansion_navigator_context_menu_survives_compact_popup() {
                     events,
                     ..Default::default()
                 },
-                |ctx| {
-                    app.keyboard(ctx);
-                    egui::CentralPanel::default().show(ctx, |ui| app.navigator_panel(ui));
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    {
+                        app.keyboard(ctx);
+                        egui::CentralPanel::default().show(ui, |ui| app.navigator_panel(ui));
+                    }
                 },
             )
         };
@@ -168,7 +171,7 @@ fn tree_keyboard_navigator_reuses_worker_tree_and_accepts_input_during_refilter(
         let ctx = egui::Context::default();
         theme_install(&ctx);
         let frame = |app: &mut PhotoSortApp, events| {
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -177,9 +180,12 @@ fn tree_keyboard_navigator_reuses_worker_tree_and_accepts_input_during_refilter(
                     events,
                     ..Default::default()
                 },
-                |ctx| {
-                    app.keyboard(ctx);
-                    egui::CentralPanel::default().show(ctx, |ui| app.navigator_panel(ui));
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    {
+                        app.keyboard(ctx);
+                        egui::CentralPanel::default().show(ui, |ui| app.navigator_panel(ui));
+                    }
                 },
             );
         };
@@ -292,7 +298,7 @@ fn responsive_navigator_keeps_scroll_across_panel_and_popup_without_image_work()
     let ctx = egui::Context::default();
     theme_install(&ctx);
     let frame = |app: &mut PhotoSortApp, width, events| {
-        let _ = ctx.run(
+        let _ = ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -301,8 +307,8 @@ fn responsive_navigator_keeps_scroll_across_panel_and_popup_without_image_work()
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.navigator_panel(ui));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.navigator_panel(ui));
             },
         );
     };
@@ -374,6 +380,7 @@ fn responsive_navigator_keeps_scroll_across_panel_and_popup_without_image_work()
         vec![
             egui::Event::PointerMoved(viewport.center()),
             egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, -100.0),
                 modifiers: Default::default(),
@@ -428,7 +435,7 @@ fn large_navigator_renders_only_visible_rows_at_compact_and_wide_sizes() {
     for width in [480., 800., 1200.] {
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        let output = ctx.run(
+        let output = ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -436,8 +443,8 @@ fn large_navigator_renders_only_visible_rows_at_compact_and_wide_sizes() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     app.navigator_panel(ui);
                     assert!(ui.min_rect().right() <= width + 1.);
                 });
@@ -486,8 +493,8 @@ fn empty_filtered_scope_keeps_navigation_available_and_other_workflows_stay_isol
     let ctx = egui::Context::default();
     theme_install(&ctx);
     let mut shown = false;
-    let _ = ctx.run(Default::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let _ = ctx.run_test(Default::default(), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             let before = ui.cursor();
             app.navigator_panel(ui);
             shown = ui.cursor() != before;
@@ -495,8 +502,8 @@ fn empty_filtered_scope_keeps_navigation_available_and_other_workflows_stay_isol
     });
     assert!(shown);
     app.step = Step::Organize;
-    let _ = ctx.run(Default::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let _ = ctx.run_test(Default::default(), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             let before = ui.cursor();
             app.navigator_panel(ui);
             assert_eq!(ui.cursor(), before);

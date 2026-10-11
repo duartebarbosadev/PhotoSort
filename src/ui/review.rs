@@ -262,7 +262,7 @@ impl PhotoSortApp {
             })
             .scroll_source(egui::scroll_area::ScrollSource {
                 scroll_bar: true,
-                drag: false,
+                drag: egui::scroll_area::DragScroll::Never,
                 mouse_wheel: false,
             })
             .max_height(height)

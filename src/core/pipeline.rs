@@ -971,7 +971,7 @@ fn compact_opaque_proxy(
     if let DynamicImage::ImageRgba8(rgba) = &image {
         for chunk in rgba.as_raw().chunks(64 * 1024) {
             anyhow::ensure!(!cancelled(), "Image preparation cancelled");
-            if chunk.chunks_exact(4).any(|pixel| pixel[3] != 255) {
+            if chunk.as_chunks::<4>().0.iter().any(|pixel| pixel[3] != 255) {
                 return Ok(image);
             }
         }

@@ -231,13 +231,16 @@ mod tests {
             theme_install(&ctx);
             if smoke {
                 app = app.with_smoke_test(Duration::from_millis(200));
-                let _ = ctx.run(
+                let _ = ctx.run_test(
                     egui::RawInput {
                         time: Some(0.0),
                         ..Default::default()
                     },
-                    |ctx| {
-                        assert!(!app.smoke_close_requested(ctx));
+                    |ui| {
+                        let ctx = &ui.ctx().clone();
+                        {
+                            assert!(!app.smoke_close_requested(ctx));
+                        }
                     },
                 );
             }
@@ -252,7 +255,7 @@ mod tests {
                 repeat: false,
                 modifiers: egui::Modifiers::NONE,
             });
-            let output = ctx.run(input, |ctx| app.update_workspace(ctx, !smoke));
+            let output = ctx.run_test(input, |ui| app.update_workspace(ui, !smoke));
             assert!(app.decisions[&MediaId(1)].rejected);
             assert!(!app.close_authorized);
             assert!(matches!(app.departure, Some(Destination::Close)));

@@ -102,14 +102,17 @@ fn embedded_rotation_plan_keeps_its_destination_and_unapplied_rating_after_reloa
     assert_eq!(app.rotation_review.pending_count(), 0);
 }
 fn smoke_frame(app: &mut PhotoSortApp, ctx: &egui::Context, time: f64) -> egui::FullOutput {
-    ctx.run(
+    ctx.run_test(
         egui::RawInput {
             time: Some(time),
             ..Default::default()
         },
-        |ctx| {
-            let requested = app.smoke_close_requested(ctx);
-            app.handle_close_request(ctx, requested);
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            {
+                let requested = app.smoke_close_requested(ctx);
+                app.handle_close_request(ctx, requested);
+            }
         },
     )
 }
@@ -121,31 +124,31 @@ fn smoke_exit_starts_on_first_frame_and_requests_normal_close_once() {
             .with_smoke_test(Duration::from_millis(200));
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    let first = ctx.run(
+    let first = ctx.run_test(
         egui::RawInput {
             time: Some(100.0),
             ..Default::default()
         },
-        |ctx| app.update_workspace(ctx, false),
+        |ui| app.update_workspace(ui, false),
     );
     assert!(!app.close_authorized);
     assert!(
         first.viewport_output[&egui::ViewportId::ROOT].repaint_delay <= Duration::from_millis(200)
     );
-    let _ = ctx.run(
+    let _ = ctx.run_test(
         egui::RawInput {
             time: Some(100.1),
             ..Default::default()
         },
-        |ctx| app.update_workspace(ctx, false),
+        |ui| app.update_workspace(ui, false),
     );
     assert!(!app.close_authorized);
-    let last = ctx.run(
+    let last = ctx.run_test(
         egui::RawInput {
             time: Some(100.3),
             ..Default::default()
         },
-        |ctx| app.update_workspace(ctx, false),
+        |ui| app.update_workspace(ui, false),
     );
     assert!(app.close_authorized && app.smoke_exit.is_none());
     assert!(
@@ -221,7 +224,10 @@ fn close_request(app: &mut PhotoSortApp, native: bool) -> egui::FullOutput {
             .events
             .push(egui::ViewportEvent::Close);
     }
-    ctx.run(input, |ctx| app.handle_close_request(ctx, native))
+    ctx.run_test(input, |ui| {
+        let ctx = &ui.ctx().clone();
+        app.handle_close_request(ctx, native)
+    })
 }
 #[test]
 fn native_quit_and_window_close_share_staged_change_guards_in_every_workflow() {
@@ -428,7 +434,7 @@ fn case_only_file_edit_uses_shared_review_and_preserves_staged_rating_after_relo
     ctx.enable_accesskit();
     let mut output = None;
     for _ in 0..3 {
-        output = Some(ctx.run(
+        output = Some(ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -436,7 +442,10 @@ fn case_only_file_edit_uses_shared_review_and_preserves_staged_rating_after_relo
                 )),
                 ..Default::default()
             },
-            |ctx| app.plan_review_dialog(ctx),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.plan_review_dialog(ctx)
+            },
         ));
     }
     let tree = output.unwrap().platform_output.accesskit_update.unwrap();
@@ -578,7 +587,10 @@ fn departure_modal_remains_usable_during_analysis_and_discard_rejects_late_resul
         )),
         ..Default::default()
     };
-    let output = ctx.run(input, |ctx| app.organize_departure_dialog(ctx));
+    let output = ctx.run_test(input, |ui| {
+        let ctx = &ui.ctx().clone();
+        app.organize_departure_dialog(ctx)
+    });
     assert!(
         !output.shapes.is_empty(),
         "Background analysis must not hide resolution choices"

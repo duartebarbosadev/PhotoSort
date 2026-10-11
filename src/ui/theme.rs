@@ -49,8 +49,15 @@ pub fn semibold(size: f32) -> FontId {
 /// Height of a one-line framed button, shared with virtualized list geometry.
 /// show_rows adds item spacing itself; its row height must match the widget.
 pub(super) fn button_row_height(ui: &egui::Ui) -> f32 {
-    (ui.text_style_height(&TextStyle::Button) + 2.0 * ui.spacing().button_padding.y)
-        .max(ui.spacing().interact_size.y)
+    // Buttons lay out their text in the Body style (egui 0.36) and size to the
+    // galley, which egui rounds to whole pixels; measure exactly that.
+    let font = TextStyle::Body.resolve(ui.style());
+    let text = ui
+        .painter()
+        .layout_no_wrap("Ag".into(), font, Color32::WHITE)
+        .size()
+        .y;
+    (text + 2.0 * ui.spacing().button_padding.y).max(ui.spacing().interact_size.y)
 }
 
 /// The screen's main action: accent fill, dark text.
@@ -157,7 +164,7 @@ pub fn install(ctx: &egui::Context) {
     }
     ctx.set_fonts(fonts);
 
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     let mut visuals = egui::Visuals::dark();
     visuals.panel_fill = PANEL;
     visuals.window_fill = PANEL;
@@ -211,12 +218,13 @@ pub fn install(ctx: &egui::Context) {
     ] {
         style.text_styles.insert(text, font);
     }
-    ctx.set_style(style);
+    ctx.set_global_style(style);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::test_frame::TestFrame;
 
     #[test]
     fn virtual_button_rows_match_themed_widgets_and_reach_last_item() {
@@ -225,15 +233,15 @@ mod tests {
                 let ctx = egui::Context::default();
                 install(&ctx);
                 install(&ctx);
-                ctx.style_mut(|s| {
+                ctx.global_style_mut(|s| {
                     s.spacing.button_padding.y = padding;
                     s.text_styles
-                        .insert(TextStyle::Button, FontId::proportional(font_size));
+                        .insert(TextStyle::Body, FontId::proportional(font_size));
                 });
                 for position in [0, 50_000, 99_999] {
                     for _ in 0..3 {
-                        let _ = ctx.run(Default::default(), |ctx| {
-                            egui::CentralPanel::default().show(ctx, |ui| {
+                        let _ = ctx.run_test(Default::default(), |ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
                                 let height = button_row_height(ui);
                                 let pitch = height + ui.spacing().item_spacing.y;
                                 let mut painted = Vec::new();
@@ -292,28 +300,31 @@ mod tests {
         let ctx = egui::Context::default();
         install(&ctx);
         install(&ctx);
-        let styles = ctx.style().text_styles.clone();
-        let _ = ctx.run(Default::default(), |ctx| {
-            ctx.fonts_mut(|fonts| {
-                // Navigation, confirmation, rotation, comparison, disclosure,
-                // ratings and measurement labels used throughout the app.
-                let controls =
-                    "Confirm →  ↶ Left (Q)  Right (E) ↷  ←  ↔  ⌄  ★  −  ×  °  ·  –  ’  …";
-                for style in [
-                    TextStyle::Body,
-                    TextStyle::Button,
-                    TextStyle::Small,
-                    TextStyle::Heading,
-                ] {
-                    let font = styles[&style].clone();
-                    for ch in controls.chars() {
-                        assert!(
-                            fonts.has_glyph(&font, ch),
-                            "Missing proportional glyph {ch:?} in {style:?}"
-                        );
+        let styles = ctx.global_style().text_styles.clone();
+        let _ = ctx.run_test(Default::default(), |ui| {
+            let ctx = &ui.ctx().clone();
+            {
+                ctx.fonts_mut(|fonts| {
+                    // Navigation, confirmation, rotation, comparison, disclosure,
+                    // ratings and measurement labels used throughout the app.
+                    let controls =
+                        "Confirm →  ↶ Left (Q)  Right (E) ↷  ←  ↔  ⌄  ★  −  ×  °  ·  –  ’  …";
+                    for style in [
+                        TextStyle::Body,
+                        TextStyle::Button,
+                        TextStyle::Small,
+                        TextStyle::Heading,
+                    ] {
+                        let font = styles[&style].clone();
+                        for ch in controls.chars() {
+                            assert!(
+                                fonts.has_glyph(&font, ch),
+                                "Missing proportional glyph {ch:?} in {style:?}"
+                            );
+                        }
                     }
-                }
-            });
+                });
+            }
         });
     }
 }

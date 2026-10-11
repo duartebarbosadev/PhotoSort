@@ -46,6 +46,8 @@ mod status;
 mod tree_controls;
 #[path = "video.rs"]
 mod video;
+#[cfg(test)]
+use super::test_frame::TestFrame;
 use super::theme::*;
 use crate::core::{
     analysis::Analysis,
@@ -1451,7 +1453,8 @@ fn paint_image(
 impl PhotoSortApp {
     // Shared frame boundary lets input and native-close ordering be verified
     // without constructing a GPU window or replacing the native delegate.
-    fn update_workspace(&mut self, ctx: &egui::Context, native_requested: bool) {
+    fn update_workspace(&mut self, root: &mut egui::Ui, native_requested: bool) {
+        let ctx = &root.ctx().clone();
         self.check_updates_at_startup();
         self.tick += 1;
         self.poll(ctx);
@@ -1467,20 +1470,20 @@ impl PhotoSortApp {
         self.was_wide = wide;
         let compact = ctx.content_rect().width() < 1000.0;
         self.track_progress_clock();
-        self.header(ctx);
-        self.footer(ctx);
+        self.header(root);
+        self.footer(root);
         if self.inspector && self.catalog.is_some() && ctx.content_rect().width() > 1180.0 {
-            egui::SidePanel::right("inspector")
+            egui::Panel::right("inspector")
                 .resizable(true)
-                .default_width(300.0)
-                .width_range(260.0..=440.0)
+                .default_size(300.0)
+                .size_range(260.0..=440.0)
                 .frame(
                     egui::Frame::new()
                         .fill(PANEL)
                         .inner_margin(S4 as i8)
                         .stroke(Stroke::new(1.0, LINE)),
                 )
-                .show(ctx, |ui| {
+                .show(root, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
                 });
         }
@@ -1490,7 +1493,7 @@ impl PhotoSortApp {
                     .fill(BG)
                     .inner_margin(if compact { 12 } else { 16 }),
             )
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 if self.root.is_none() {
                     self.welcome(ui);
                 } else {
@@ -1535,7 +1538,13 @@ impl PhotoSortApp {
         if self.inspector && self.catalog.is_some() && ctx.content_rect().width() <= 1180.0 {
             self.inspector_drawer(ctx);
         }
-        let dropped = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone()));
+        let dropped = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_path_buf())
+                .find(|path| path.is_absolute())
+        });
         if let Some(path) = dropped {
             self.open(if path.is_dir() {
                 path
@@ -1623,12 +1632,12 @@ impl PhotoSortApp {
 }
 
 impl eframe::App for PhotoSortApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let native_requested = self
             .native_quit
             .as_ref()
             .is_some_and(|handler| handler.take_requested());
-        self.update_workspace(ctx, native_requested);
+        self.update_workspace(ui, native_requested);
     }
     fn on_exit(&mut self) {
         self.checkpoint_bookmarks();
@@ -1722,18 +1731,21 @@ mod keyboard_tests {
                 repeat: false,
                 modifiers: egui::Modifiers::NONE,
             });
-            let _ = ctx.run(input, |ctx| {
-                assert_eq!(pressed_keys(ctx, rotation).len(), usize::from(rotation));
-                assert_eq!(
-                    ctx.input(|i| i.events.iter().any(|e| matches!(
-                        e,
-                        egui::Event::Key {
-                            key: egui::Key::Enter,
-                            ..
-                        }
-                    ))),
-                    !rotation
-                );
+            let _ = ctx.run_test(input, |ui| {
+                let ctx = &ui.ctx().clone();
+                {
+                    assert_eq!(pressed_keys(ctx, rotation).len(), usize::from(rotation));
+                    assert_eq!(
+                        ctx.input(|i| i.events.iter().any(|e| matches!(
+                            e,
+                            egui::Event::Key {
+                                key: egui::Key::Enter,
+                                ..
+                            }
+                        ))),
+                        !rotation
+                    );
+                }
             });
         }
     }
@@ -1759,13 +1771,16 @@ mod keyboard_tests {
             });
         }
         let mut captured = Vec::new();
-        let _ = ctx.run(input, |ctx| {
-            captured = pressed_keys(ctx, false);
-            assert!(ctx.input(|i| {
-                i.events
-                    .iter()
-                    .all(|event| !matches!(event, egui::Event::Key { .. }))
-            }));
+        let _ = ctx.run_test(input, |ui| {
+            let ctx = &ui.ctx().clone();
+            {
+                captured = pressed_keys(ctx, false);
+                assert!(ctx.input(|i| {
+                    i.events
+                        .iter()
+                        .all(|event| !matches!(event, egui::Event::Key { .. }))
+                }));
+            }
         });
         assert_eq!(
             captured,

@@ -69,13 +69,13 @@ pub(super) fn frame(
     size: Vec2,
     events: Vec<egui::Event>,
 ) -> Vec<(String, egui::Rect)> {
-    let out = ctx.run(
+    let out = ctx.run_test(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
             events,
             ..Default::default()
         },
-        |ctx| app.update_workspace(ctx, false),
+        |ui| app.update_workspace(ui, false),
     );
     out.platform_output
         .accesskit_update
@@ -270,6 +270,7 @@ fn choose_five_stars(app: &mut PhotoSortApp, ctx: &egui::Context, size: Vec2) {
         vec![
             egui::Event::PointerMoved(first),
             egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0., -600.),
                 modifiers: Default::default(),

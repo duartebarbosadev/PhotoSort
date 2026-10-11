@@ -13,14 +13,17 @@ fn settings_errors_are_bounded_and_dismissible_without_hiding_footer_or_losing_d
         let mut time = 0.;
         let mut frame = |app: &mut PhotoSortApp, events| {
             time += 0.1;
-            ctx.run(
+            ctx.run_test(
                 egui::RawInput {
                     time: Some(time),
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     events,
                     ..Default::default()
                 },
-                |ctx| app.dialogs(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.dialogs(ctx)
+                },
             )
         };
         let mut output = frame(&mut app, vec![]);
@@ -130,14 +133,17 @@ fn cache_folder_settings_uses_injected_location_in_every_workflow_without_extra_
             let mut time = 0.;
             let mut frame = |app: &mut PhotoSortApp, events| {
                 time += 0.1;
-                ctx.run(
+                ctx.run_test(
                     egui::RawInput {
                         time: Some(time),
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         events,
                         ..Default::default()
                     },
-                    |ctx| app.preferences_dialog(ctx),
+                    |ui| {
+                        let ctx = &ui.ctx().clone();
+                        app.preferences_dialog(ctx)
+                    },
                 )
             };
             let mut output = frame(&mut app, vec![]);
@@ -362,7 +368,7 @@ fn settings_preserve_live_history_and_render_compactly_without_image_or_analysis
     app.preferences_draft = Some(app.preferences.clone());
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    let output = ctx.run(
+    let output = ctx.run_test(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -370,7 +376,10 @@ fn settings_preserve_live_history_and_render_compactly_without_image_or_analysis
             )),
             ..Default::default()
         },
-        |ctx| app.preferences_dialog(ctx),
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            app.preferences_dialog(ctx)
+        },
     );
     assert!(!output.shapes.is_empty());
     assert!(app.analysis_run.is_none() && app.metadata_run.is_none() && app.requested.is_empty());
@@ -433,7 +442,10 @@ fn escape_cancels_settings_without_applying_draft_navigation() {
         ..Default::default()
     };
     for _ in 0..2 {
-        let _ = ctx.run(raw(), |ctx| app.preferences_dialog(ctx));
+        let _ = ctx.run_test(raw(), |ui| {
+            let ctx = &ui.ctx().clone();
+            app.preferences_dialog(ctx)
+        });
     }
     let mut input = raw();
     input.events.push(egui::Event::Key {
@@ -443,7 +455,10 @@ fn escape_cancels_settings_without_applying_draft_navigation() {
         repeat: false,
         modifiers: egui::Modifiers::NONE,
     });
-    let _ = ctx.run(input, |ctx| app.preferences_dialog(ctx));
+    let _ = ctx.run_test(input, |ui| {
+        let ctx = &ui.ctx().clone();
+        app.preferences_dialog(ctx)
+    });
     assert!(app.preferences_draft.is_none());
     assert_eq!(app.preferences.navigation.rating, None);
     assert!(app.analysis_run.is_none() && app.metadata_run.is_none());
@@ -489,13 +504,16 @@ fn settings_access_cache_and_general_anchors_keep_footer_visible_at_small_sizes(
             let mut output = None;
             for _ in 0..8 {
                 time += 0.1;
-                output = Some(ctx.run(
+                output = Some(ctx.run_test(
                     egui::RawInput {
                         time: Some(time),
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         ..Default::default()
                     },
-                    |ctx| app.preferences_dialog(ctx),
+                    |ui| {
+                        let ctx = &ui.ctx().clone();
+                        app.preferences_dialog(ctx)
+                    },
                 ));
             }
             let tree = output.unwrap().platform_output.accesskit_update.unwrap();

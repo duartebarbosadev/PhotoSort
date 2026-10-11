@@ -133,7 +133,7 @@ impl PhotoSortApp {
         if egui::Popup::is_any_open(ctx) || self.navigator_popup_open(ctx) || self.modal_active() {
             return;
         }
-        if self.application_shortcuts(ctx) || ctx.wants_keyboard_input() {
+        if self.application_shortcuts(ctx) || ctx.egui_wants_keyboard_input() {
             return;
         }
         self.video_keyboard(ctx);

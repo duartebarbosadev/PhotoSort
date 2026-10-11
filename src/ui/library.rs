@@ -61,9 +61,11 @@ impl PhotoSortApp {
                 .and_then(|index| self.filtered.iter().position(|i| i == index))
         {
             let top = (position / columns) as f32 * (row_height + ui.spacing().item_spacing.y);
-            let offset =
-                egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(egui::Id::new(id)))
-                    .map_or(0.0, |state| state.offset.y);
+            let offset = egui::scroll_area::State::load(
+                ui.ctx(),
+                ui.make_persistent_id(egui::IdSalt::new(id)),
+            )
+            .map_or(0.0, |state| state.offset.y);
             if top < offset {
                 scroll = scroll.vertical_scroll_offset(top);
             } else if top + row_height > offset + ui.available_height() {
@@ -573,7 +575,7 @@ mod tests {
                 app.rotation_review.replace_suggestions(vec![(id, turns)]);
                 for layout in [Layout::List, Layout::Icons, Layout::Grid] {
                     app.library_layout = layout;
-                    let output = ctx.run(
+                    let output = ctx.run_test(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
                                 egui::Pos2::ZERO,
@@ -581,8 +583,8 @@ mod tests {
                             )),
                             ..Default::default()
                         },
-                        |ctx| {
-                            egui::CentralPanel::default().show(ctx, |ui| {
+                        |ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
                                 app.library(ui);
                             });
                         },
@@ -637,7 +639,7 @@ mod tests {
         theme_install(&ctx);
         let render = |app: &mut PhotoSortApp, width| {
             let mut offset = None;
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -645,18 +647,23 @@ mod tests {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        app.library(ui);
-                        assert!(ui.min_rect().right() <= width);
-                        let salt =
-                            egui::Id::new(("library_rows", app.library_layout == Layout::Icons));
-                        offset = egui::scroll_area::State::load(
-                            ctx,
-                            ui.make_persistent_id(egui::Id::new(salt)),
-                        )
-                        .map(|s| s.offset.y);
-                    });
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            app.library(ui);
+                            assert!(ui.min_rect().right() <= width);
+                            let salt = egui::Id::new((
+                                "library_rows",
+                                app.library_layout == Layout::Icons,
+                            ));
+                            offset = egui::scroll_area::State::load(
+                                ctx,
+                                ui.make_persistent_id(egui::IdSalt::new(salt)),
+                            )
+                            .map(|s| s.offset.y);
+                        });
+                    }
                 },
             );
             offset.expect("rendered scroll state")

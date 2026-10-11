@@ -173,7 +173,7 @@ mod tests {
         let ctx = egui::Context::default();
         theme_install(&ctx);
         ctx.enable_accesskit();
-        let output = ctx.run(
+        let output = ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -181,7 +181,7 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| app.footer(ctx),
+            |ui| app.footer(ui),
         );
         let tree = output.platform_output.accesskit_update.unwrap();
         assert!(

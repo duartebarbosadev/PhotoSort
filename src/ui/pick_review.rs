@@ -470,7 +470,10 @@ mod tests {
                 }],
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| app.keyboard(ctx));
+            let _ = ctx.run_test(input, |ui| {
+                let ctx = &ui.ctx().clone();
+                app.keyboard(ctx)
+            });
         }
         assert!(!app.pick_focus);
         assert_eq!(app.pick_review.current().unwrap().current, 1);
@@ -562,13 +565,16 @@ mod tests {
                 }],
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| {
-                egui::Popup::open_id(ctx, egui::Id::new("comparison-menu"));
-                app.keyboard(ctx);
-                assert!(
-                    ctx.input(|i| i.key_pressed(key)),
-                    "Leave keys available to the popup"
-                );
+            let _ = ctx.run_test(input, |ui| {
+                let ctx = &ui.ctx().clone();
+                {
+                    egui::Popup::open_id(ctx, egui::Id::new("comparison-menu"));
+                    app.keyboard(ctx);
+                    assert!(
+                        ctx.input(|i| i.key_pressed(key)),
+                        "Leave keys available to the popup"
+                    );
+                }
             });
         }
         assert!(!app.pick_review.unfinished());

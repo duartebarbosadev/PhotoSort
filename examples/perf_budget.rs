@@ -71,6 +71,7 @@ fn main() -> anyhow::Result<()> {
     for i in 0..600 {
         let delta = if i < 300 { -120.0 } else { 120.0 };
         harness.event(egui::Event::MouseWheel {
+            phase: egui::TouchPhase::Move,
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, delta),
             modifiers: egui::Modifiers::NONE,
@@ -98,6 +99,7 @@ fn main() -> anyhow::Result<()> {
     settle(&mut harness, Duration::from_secs(60));
     for _ in 0..40 {
         harness.event(egui::Event::MouseWheel {
+            phase: egui::TouchPhase::Move,
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, -2000.0),
             modifiers: egui::Modifiers::NONE,

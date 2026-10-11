@@ -148,7 +148,7 @@ pub(super) use collection_controls::pointer_sense;
 impl Keyboard {
     pub(super) fn new(
         ui: &egui::Ui,
-        salt: impl std::hash::Hash,
+        salt: impl std::hash::Hash + std::fmt::Debug,
         height: f32,
         row_height: f32,
     ) -> Self {
@@ -319,15 +319,15 @@ pub(super) mod tests {
                     })
                     .collect();
                 let mut changed = false;
-                let output = ctx.run(
+                let output = ctx.run_test(
                     egui::RawInput {
                         time: Some(time),
                         focused,
                         events,
                         ..Default::default()
                     },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
                             if render {
                                 changed = hover.update(ui, &tree, target, &mut collapsed);
                             }
@@ -395,7 +395,7 @@ pub(super) mod tests {
                      tree_rect: &mut egui::Rect,
                      focus: &mut Option<egui::Id>,
                      collapsed: &mut BTreeSet<Key>| {
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -404,8 +404,8 @@ pub(super) mod tests {
                     events,
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         let keyboard = Keyboard::new(ui, "rows", 200., 24.);
                         *focus = Some(keyboard.id);
                         if let Some(result) =

@@ -10,7 +10,7 @@ fn metadata_cancel_survives_browse_completion_between_pointer_down_and_up() {
         theme_install(&ctx);
         ctx.enable_accesskit();
         let frame = |app: &mut PhotoSortApp, events| {
-            ctx.run(
+            ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -19,8 +19,8 @@ fn metadata_cancel_survives_browse_completion_between_pointer_down_and_up() {
                     events,
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| app.metadata_status(ui));
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| app.metadata_status(ui));
                 },
             )
         };
@@ -225,7 +225,7 @@ fn browse_controls_wrap_at_compact_width_and_filters_keep_visible_focus() {
     theme_install(&ctx);
     for width in [360.0, 576.0, 960.0] {
         for _ in 0..3 {
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -233,8 +233,8 @@ fn browse_controls_wrap_at_compact_width_and_filters_keep_visible_focus() {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         app.browse_controls(ui);
                         assert!(
                             ui.min_rect().right() <= width,

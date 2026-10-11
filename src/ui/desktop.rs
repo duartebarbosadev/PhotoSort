@@ -163,15 +163,15 @@ mod tests {
                 ..Default::default()
             };
             let selected = std::cell::RefCell::new(None);
-            let draw = |ctx: &egui::Context| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let draw = |ui: &mut egui::Ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     if let Some(request) = locations_menu(ui, &paths, label == "Open terminal here")
                     {
                         *selected.borrow_mut() = Some(request);
                     }
                 });
             };
-            let output = ctx.run(input(), draw);
+            let output = ctx.run_test(input(), draw);
             let tree = output.platform_output.accesskit_update.unwrap();
             let node = tree
                 .nodes
@@ -200,7 +200,7 @@ mod tests {
                     modifiers: egui::Modifiers::NONE,
                 },
             ];
-            let output = ctx.run(raw, draw);
+            let output = ctx.run_test(raw, draw);
             if label == "Open terminal here" {
                 assert_eq!(
                     *selected.borrow(),
@@ -314,7 +314,7 @@ mod tests {
             let ctx = egui::Context::default();
             theme_install(&ctx);
             ctx.enable_accesskit();
-            let output = ctx.run(
+            let output = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -322,8 +322,8 @@ mod tests {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| app.inspector(ui));
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| app.inspector(ui));
                 },
             );
             assert!(

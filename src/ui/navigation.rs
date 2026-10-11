@@ -7,18 +7,18 @@ pub(super) const HEADER_HEIGHT: f32 = 52.0;
 
 impl PhotoSortApp {
     /// One bar: brand and folder, the five steps as tabs, then the actions.
-    pub(super) fn header(&mut self, ctx: &egui::Context) {
+    pub(super) fn header(&mut self, root: &mut egui::Ui) {
         use egui_phosphor::regular as icon;
-        let compact = ctx.content_rect().width() < 1000.0;
-        egui::TopBottomPanel::top("header")
-            .exact_height(HEADER_HEIGHT)
+        let compact = root.ctx().content_rect().width() < 1000.0;
+        egui::Panel::top("header")
+            .exact_size(HEADER_HEIGHT)
             .frame(
                 egui::Frame::new()
                     .fill(PANEL)
                     .inner_margin(egui::Margin::symmetric(S4 as i8, 0))
                     .stroke(Stroke::new(1.0, LINE)),
             )
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(RichText::new(icon::APERTURE).size(20.0).color(ACCENT));
                     if !compact || self.root.is_none() {
@@ -204,16 +204,16 @@ impl PhotoSortApp {
 
     /// A single status line: what is happening on the left, progress and safe
     /// stop controls on the right, keyboard hints when there is room.
-    pub(super) fn footer(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::bottom("status")
-            .exact_height(STATUS_HEIGHT)
+    pub(super) fn footer(&mut self, root: &mut egui::Ui) {
+        egui::Panel::bottom("status")
+            .exact_size(STATUS_HEIGHT)
             .frame(
                 egui::Frame::new()
                     .fill(PANEL)
                     .inner_margin(egui::Margin::symmetric(S3 as i8, 0))
                     .stroke(Stroke::new(1.0, LINE)),
             )
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 ui.spacing_mut().button_padding = egui::vec2(S2, 2.0);
                 // Reserve controls at the right edge before fitting status text.
                 // Stop must remain reachable even with long paths in small windows.
@@ -736,7 +736,7 @@ mod cull_navigation_tests {
             let mut app = fixture();
             let ctx = egui::Context::default();
             theme_install(&ctx);
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     events: vec![egui::Event::Key {
                         key: egui::Key::ArrowDown,
@@ -747,7 +747,10 @@ mod cull_navigation_tests {
                     }],
                     ..Default::default()
                 },
-                |ctx| app.keyboard(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.keyboard(ctx)
+                },
             );
             assert_eq!(
                 app.active,
