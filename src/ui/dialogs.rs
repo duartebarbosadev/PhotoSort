@@ -147,7 +147,11 @@ impl PhotoSortApp {
                         ("I", "Toggle photo details"),
                         (
                             "F1 / F2",
-                            "Single photo, press again to return / similar comparison",
+                            "Viewer: single photo, press again to return / similar comparison",
+                        ),
+                        (
+                            "F2 / Ctrl or Cmd + Shift + N",
+                            "Organize grid: rename / new folder",
                         ),
                         (
                             "0 / A / Double-click canvas",

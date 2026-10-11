@@ -145,7 +145,9 @@ impl PhotoSortApp {
             if self.modal_active() {
                 break;
             }
-            if self.workflow_shortcut(pressed, modifiers) || self.view_shortcut(pressed, modifiers)
+            if self.workflow_shortcut(pressed, modifiers)
+                || self.organize_shortcut(pressed, modifiers)
+                || self.view_shortcut(pressed, modifiers)
             {
                 continue;
             }

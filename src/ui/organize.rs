@@ -1210,6 +1210,36 @@ impl Editor {
     }
 }
 impl PhotoSortApp {
+    /// F2 and Ctrl/Cmd+Shift+N in the Organize grid open the folder editor on
+    /// the active photo and start renaming it or naming a new folder.
+    pub(super) fn organize_shortcut(&mut self, key: egui::Key, modifiers: egui::Modifiers) -> bool {
+        let Some(action @ (EditAction::Rename | EditAction::NewFolder)) =
+            EditAction::from_key(key, modifiers)
+        else {
+            return false;
+        };
+        if self.step != Step::Organize
+            || self.review
+            || self.organize_editor.is_some()
+            || !self.can_edit_folders()
+        {
+            return false;
+        }
+        let Some(active) = self.active else {
+            return false;
+        };
+        self.open_organize_editor();
+        if let Some(editor) = self.organize_editor.as_mut() {
+            if let Some(row) = editor.rows.iter().position(|r| r.id == active) {
+                editor.file_cursor = Some(row);
+                editor.file_anchor = Some(active);
+                editor.reveal_file = true;
+            }
+            editor.edit_action(action, false);
+        }
+        true
+    }
+
     fn change_location_layout(&mut self, layout: crate::core::geography::Layout) {
         if self.step != Step::Organize
             || self.group_mode != GroupMode::Location

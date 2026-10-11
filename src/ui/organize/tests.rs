@@ -3546,3 +3546,67 @@ fn organize_action_preview_shortcuts_accept_names_then_review_without_mutation()
         app.runtime.shutdown();
     }
 }
+
+#[test]
+fn f2_and_new_folder_keys_open_the_editor_from_the_organize_grid() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["a.jpg", "b.jpg"] {
+        std::fs::write(temp.path().join(name), b"unchanged").unwrap();
+    }
+    let catalog = Catalog::scan(temp.path(), || false, |_| {}).unwrap();
+    let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+    app.output = catalog.root.display().to_string();
+    app.media = catalog.media.clone();
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+    app.catalog = Some(Arc::new(catalog));
+    app.step = Step::Organize;
+    let b = app.media.iter().find(|m| m.name() == "b.jpg").unwrap().id;
+    app.active = Some(b);
+    // Other steps and plain keys are not taken over.
+    assert!(!app.organize_shortcut(egui::Key::F3, egui::Modifiers::NONE));
+    assert!(app.organize_editor.is_none());
+    assert!(app.organize_shortcut(egui::Key::F2, egui::Modifiers::NONE));
+    let editor = app.organize_editor.as_ref().unwrap();
+    assert_eq!(editor.file_cursor.map(|i| editor.rows[i].id), Some(b));
+    assert!(
+        editor.renaming.is_some(),
+        "F2 starts renaming the active photo"
+    );
+    app.organize_editor = None;
+    let new_folder = egui::Modifiers {
+        command: true,
+        shift: true,
+        ..Default::default()
+    };
+    assert!(app.organize_shortcut(egui::Key::N, new_folder));
+    assert!(app.organize_editor.as_ref().unwrap().folder_name_focus);
+    // Through the real dispatch: pressed-key filtering and handler order.
+    app.organize_editor = None;
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    let _ = ctx.run(
+        egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::F2,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        },
+        |ctx| app.keyboard(ctx),
+    );
+    assert!(
+        app.organize_editor
+            .as_ref()
+            .is_some_and(|e| e.renaming.is_some()),
+        "F2 from the grid reaches the rename shortcut"
+    );
+    app.runtime.shutdown();
+}

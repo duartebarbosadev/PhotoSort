@@ -241,7 +241,18 @@ impl PhotoSortApp {
                             bar.on_hover_text(timing);
                         }
                     } else if self.apply_stop.is_none() {
-                        ui.label(RichText::new(format!("{} photos", self.filtered.len())).small().color(MUTED))
+                        // Thumbnails and previews still decoding for what is on screen.
+                        let loading = self.requested.len();
+                        let count = if loading > 0 && !self.scanning {
+                            format!(
+                                "Loading {loading} {} · {} photos",
+                                if loading == 1 { "preview" } else { "previews" },
+                                self.filtered.len()
+                            )
+                        } else {
+                            format!("{} photos", self.filtered.len())
+                        };
+                        ui.label(RichText::new(count).small().color(MUTED))
                             .on_hover_text(format!("{:.0} MB of previews in memory", self.stats.resident_bytes as f64 / 1048576.0));
                     }
                     let recovery_status = self.model_recovery_status(&self.runtime.model_assets.state());
@@ -269,7 +280,7 @@ impl PhotoSortApp {
                         });
                     }
                     ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
-                        if self.scanning || self.busy || self.analysis_run.is_some() {
+                        if self.scanning || self.busy || self.analysis_run.is_some() || !self.requested.is_empty() {
                             ui.add(egui::Spinner::new().size(12.0));
                         } else {
                             ui.label(RichText::new(egui_phosphor::regular::CHECK_CIRCLE).color(GREEN).small());

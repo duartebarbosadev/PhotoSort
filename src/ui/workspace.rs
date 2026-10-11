@@ -600,6 +600,8 @@ impl PhotoSortApp {
         self.face_groups = None;
         self.cull_groups = Arc::default();
         self.group_best.clear();
+        self.analysis_failures.clear();
+        self.single_view_stash.clear();
         self.automatic_groups = Arc::default();
         self.manual_groups = Arc::default();
         self.scene_groups = Arc::default();

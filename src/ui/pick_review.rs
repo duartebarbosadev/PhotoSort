@@ -177,12 +177,23 @@ impl PhotoSortApp {
                                                 i + 1,
                                                 t.cluster.ordered.len(),
                                                 if t.finalized {
-                                                    "Complete"
+                                                    let kept = t
+                                                        .cluster
+                                                        .ordered
+                                                        .iter()
+                                                        .filter(|id| {
+                                                            !self
+                                                                .decisions
+                                                                .get(id)
+                                                                .is_some_and(|d| d.rejected)
+                                                        })
+                                                        .count();
+                                                    format!("Complete · keeping {kept}")
                                                 } else if t.comparisons.iter().any(|c| c.confirmed)
                                                 {
-                                                    "In progress"
+                                                    "In progress".to_owned()
                                                 } else {
-                                                    "Not started"
+                                                    "Not started".to_owned()
                                                 }
                                             ),
                                         )
