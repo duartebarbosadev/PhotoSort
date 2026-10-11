@@ -200,3 +200,34 @@ fn lens_specification_reads_like_a_lens_name() {
     assert_eq!(spec(&[35.0, 0.0, f64::NAN, 0.0]).as_deref(), Some("35 mm"));
     assert_eq!(spec(&[0.0, 0.0, 0.0, 0.0]), None);
 }
+
+#[test]
+fn videos_show_duration_frame_rate_codec_and_bitrate() {
+    let root = tempfile::tempdir().unwrap();
+    let clip = fixture(root.path(), "clip.jpg");
+    let meta = Metadata {
+        details: Details {
+            video: Some(photosort::core::video_info::VideoInfo {
+                duration_s: 35.52,
+                frame_rate: Some(25.0),
+                codec: Some("H.264 (AVC)".into()),
+                bitrate: Some(99_229_348),
+                audio: true,
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let sections = details::sections(&[(&clip, &meta)]);
+    assert_eq!(value(&sections, "Duration"), ["0:36"]);
+    assert_eq!(value(&sections, "Frame rate"), ["25 fps"]);
+    assert_eq!(value(&sections, "Codec"), ["H.264 (AVC)"]);
+    assert_eq!(value(&sections, "Bitrate"), ["99 Mbit/s"]);
+    assert_eq!(value(&sections, "Audio"), ["Yes"]);
+    // Photos have no video rows at all.
+    assert!(
+        details::sections(&[(&clip, &Metadata::default())])
+            .iter()
+            .all(|s| s.title != "Video")
+    );
+}

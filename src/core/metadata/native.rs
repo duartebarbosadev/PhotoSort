@@ -145,6 +145,7 @@ impl Snapshot {
             color_space: code("Exif.Photo.ColorSpace"),
             // Per-channel depths are normally identical; the first one is shown.
             bit_depth: code("Exif.Image.BitsPerSample"),
+            video: None,
         };
         for (slot, key) in [
             "Exif.Photo.DateTimeOriginal",

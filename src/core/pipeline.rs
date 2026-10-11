@@ -227,7 +227,7 @@ impl Pipeline {
         // names are derived separately and must never become persisted EXIF.
         let record_key = blake3::hash(
             format!(
-                "metadata-v4-lens:heif={}:os={}:{key}",
+                "metadata-v5-video:heif={}:os={}:{key}",
                 cfg!(feature = "heif"),
                 std::env::consts::OS
             )
@@ -247,7 +247,11 @@ impl Pipeline {
             meta
         } else {
             self.stats.metadata_reads += 1;
-            metadata::read_cancellable(&media.path, cancelled)?
+            let mut meta = metadata::read_cancellable(&media.path, cancelled)?;
+            if media.kind == MediaKind::Video {
+                meta.details.video = super::video_info::probe(&media.path);
+            }
+            meta
         };
         anyhow::ensure!(
             !cancelled() && Self::key(media)? == key,

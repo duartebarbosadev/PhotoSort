@@ -124,6 +124,8 @@ pub struct Details {
     pub scene: Option<u16>,
     pub color_space: Option<u16>,
     pub bit_depth: Option<u16>,
+    #[serde(default)]
+    pub video: Option<super::video_info::VideoInfo>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

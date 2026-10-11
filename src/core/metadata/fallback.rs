@@ -71,6 +71,7 @@ pub(super) fn read(path: &Path, result: &mut Metadata, dates: &mut Dates) {
             scene: code(exif::Tag::SceneCaptureType),
             color_space: code(exif::Tag::ColorSpace),
             bit_depth: code(exif::Tag::BitsPerSample),
+            video: None,
         };
         result.width = uint(exif::Tag::PixelXDimension);
         result.height = uint(exif::Tag::PixelYDimension);

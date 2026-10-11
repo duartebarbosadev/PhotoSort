@@ -15,6 +15,7 @@ pub mod models;
 pub mod operations;
 pub mod pipeline;
 pub mod session;
+pub mod video_info;
 
 pub mod inspection;
 

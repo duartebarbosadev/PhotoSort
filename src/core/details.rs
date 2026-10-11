@@ -119,6 +119,34 @@ pub fn sections(items: &[(&Media, &Metadata)]) -> Vec<Section> {
             ],
         },
         Section {
+            title: "Video",
+            rows: vec![
+                detail("Duration", |d| {
+                    d.video
+                        .as_ref()
+                        .map(|v| super::video_info::duration(v.duration_s))
+                }),
+                detail("Frame rate", |d| {
+                    d.video
+                        .as_ref()
+                        .and_then(|v| v.frame_rate)
+                        .map(super::video_info::frame_rate)
+                }),
+                detail("Codec", |d| d.video.as_ref().and_then(|v| v.codec.clone())),
+                detail("Bitrate", |d| {
+                    d.video
+                        .as_ref()
+                        .and_then(|v| v.bitrate)
+                        .map(super::video_info::bitrate)
+                }),
+                detail("Audio", |d| {
+                    d.video
+                        .as_ref()
+                        .map(|v| if v.audio { "Yes" } else { "No" }.to_owned())
+                }),
+            ],
+        },
+        Section {
             title: "Technical",
             rows: vec![
                 detail("Color space", |d| d.color_space.map(color_space)),
