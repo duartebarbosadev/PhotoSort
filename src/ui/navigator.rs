@@ -74,11 +74,11 @@ impl PhotoSortApp {
         if ui.available_width() >= 780. {
             ui.ctx()
                 .data_mut(|data| data.remove::<(bool, u64)>(popup_state));
-            egui::SidePanel::left("library_tree_panel")
+            egui::Panel::left("library_tree_panel")
                 .resizable(true)
-                .default_width(220.)
-                .width_range(180.0..=300.0)
-                .show_inside(ui, |ui| self.navigator_contents(ui, ui.available_height()));
+                .default_size(220.)
+                .size_range(180.0..=300.0)
+                .show(ui, |ui| self.navigator_contents(ui, ui.available_height()));
         } else {
             // A stacked tree can consume the entire photo viewport in a short
             // window. Reuse the same virtualized navigator in a bounded overlay.
@@ -122,7 +122,7 @@ impl PhotoSortApp {
     fn navigator_contents(&mut self, ui: &mut egui::Ui, height: f32) {
         // Only one presentation is rendered: inline panel or compact popup.
         ui.scope_builder(
-            egui::UiBuilder::new().id(("library_navigator", &self.root)),
+            egui::UiBuilder::new().id(egui::Id::new(("library_navigator", &self.root))),
             |ui| self.navigator_body(ui, height),
         );
     }
@@ -260,6 +260,25 @@ impl PhotoSortApp {
                                     response.rect,
                                 )
                             });
+                            if let Key::Group(group) = &node.key {
+                                let group = *group;
+                                if response
+                                    .dnd_hover_payload::<super::grouping::PhotoDrag>()
+                                    .is_some()
+                                {
+                                    ui.painter().rect_stroke(
+                                        response.rect,
+                                        R_CONTROL,
+                                        Stroke::new(2.0, ACCENT),
+                                        StrokeKind::Inside,
+                                    );
+                                }
+                                if let Some(drag) =
+                                    response.dnd_release_payload::<super::grouping::PhotoDrag>()
+                                {
+                                    self.drop_on_group(&drag, group);
+                                }
+                            }
                             response.context_menu(|ui| {
                                 if tree_controls::menu(
                                     ui,
@@ -268,6 +287,21 @@ impl PhotoSortApp {
                                     &mut self.navigator.collapsed,
                                 ) {
                                     self.navigator_changed();
+                                }
+                                if let Key::Group(group) = node.key {
+                                    let count = self.group_members(group).len();
+                                    ui.separator();
+                                    if ui
+                                        .add_enabled(
+                                            (2..=9).contains(&count),
+                                            egui::Button::new(format!("Compare these {count}")),
+                                        )
+                                        .on_disabled_hover_text("Comparison shows 2 to 9 photos")
+                                        .clicked()
+                                    {
+                                        self.compare_group(group);
+                                        ui.close();
+                                    }
                                 }
                             });
                             if response

@@ -92,6 +92,7 @@ fn comparison_menu_pointer_action_is_bounded_and_compact() {
     for step in [Step::Organize, Step::Cull] {
         let (_temp, mut app) = comparison_fixture(step);
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         ctx.enable_accesskit();
         let input = || egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -100,10 +101,10 @@ fn comparison_menu_pointer_action_is_bounded_and_compact() {
             )),
             ..Default::default()
         };
-        let mut draw = |ctx: &egui::Context| {
-            egui::CentralPanel::default().show(ctx, |ui| app.review_context_menu(ui, MediaId(1)));
+        let mut draw = |ui: &mut egui::Ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.review_context_menu(ui, MediaId(1)));
         };
-        let output = ctx.run(input(), &mut draw);
+        let output = ctx.run_test(input(), &mut draw);
         let tree = output.platform_output.accesskit_update.unwrap();
         let (_, node) = tree
             .nodes
@@ -129,7 +130,7 @@ fn comparison_menu_pointer_action_is_bounded_and_compact() {
                 modifiers: egui::Modifiers::NONE,
             },
         ];
-        let _ = ctx.run(raw, &mut draw);
+        let _ = ctx.run_test(raw, &mut draw);
         assert!(app.decision(MediaId(0)).rejected && app.decision(MediaId(2)).rejected);
         assert!(!app.decision(MediaId(1)).rejected && !app.decision(MediaId(9)).rejected);
         assert!(app.requested.is_empty() && app.inspection_wanted.is_empty());
@@ -153,9 +154,10 @@ fn zoom_controls_report_the_same_limits_and_values_as_keyboard_and_wheel() {
             app.fit_view();
             app.zoom_view(factor);
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             ctx.enable_accesskit();
-            let output = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.review_ratings(ui, MediaId(1)));
+            let output = ctx.run_test(egui::RawInput::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.review_ratings(ui, MediaId(1)));
             });
             let tree = output.platform_output.accesskit_update.unwrap();
             let slider = tree
@@ -204,6 +206,7 @@ fn adequate_previews_do_not_request_idle_originals_in_any_workflow() {
         app.step = step;
         app.view_started = Instant::now() - Duration::from_secs(2);
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         let texture = ctx.load_texture(
             "preview",
             egui::ColorImage::filled([1200, 800], Color32::WHITE),
@@ -219,7 +222,7 @@ fn adequate_previews_do_not_request_idle_originals_in_any_workflow() {
         );
         let draw = |app: &mut PhotoSortApp| {
             app.inspection_wanted.clear();
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -227,8 +230,8 @@ fn adequate_previews_do_not_request_idle_originals_in_any_workflow() {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         app.photo_canvas(ui, id, 0, egui::vec2(640., 400.), false);
                     });
                 },
@@ -280,9 +283,10 @@ fn shared_canvas_pans_each_pointer_gesture_once_across_frame_boundaries() {
             app.sync_views = synced;
             app.actual_size();
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             let frame = |app: &mut PhotoSortApp, events| {
                 app.inspection_wanted.clear();
-                let _ = ctx.run(
+                let _ = ctx.run_test(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -291,8 +295,8 @@ fn shared_canvas_pans_each_pointer_gesture_once_across_frame_boundaries() {
                         events,
                         ..Default::default()
                     },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
                             app.photo_canvas(ui, id, 0, egui::vec2(640.0, 400.0), false);
                         });
                     },
@@ -373,8 +377,9 @@ fn entering_easy_delete_before_analysis_renders_an_empty_review_safely() {
     app.active = Some(MediaId(1));
     app.set_step(Step::EasyDelete);
     let ctx = egui::Context::default();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| app.review_canvas(ui));
+    theme_install(&ctx);
+    let _ = ctx.run_test(egui::RawInput::default(), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| app.review_canvas(ui));
     });
 }
 #[test]
@@ -390,7 +395,8 @@ fn a_single_comparison_row_fits_the_short_canvas_without_clipping() {
     app.active = Some(MediaId(1));
     app.set_step(Step::Rotation);
     let ctx = egui::Context::default();
-    let output = ctx.run(
+    theme_install(&ctx);
+    let output = ctx.run_test(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -398,8 +404,8 @@ fn a_single_comparison_row_fits_the_short_canvas_without_clipping() {
             )),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.review_canvas(ui));
+        |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.review_canvas(ui));
         },
     );
     let panels: Vec<_> = output
@@ -449,11 +455,12 @@ fn details_panel_compares_every_open_photo_and_returns_to_one_photo() {
         );
     }
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     ctx.enable_accesskit();
     let texts = |app: &mut PhotoSortApp| -> Vec<String> {
         let mut output = None;
         for _ in 0..2 {
-            output = Some(ctx.run(
+            output = Some(ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -461,8 +468,8 @@ fn details_panel_compares_every_open_photo_and_returns_to_one_photo() {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| app.inspector(ui))
                     });
                 },
@@ -476,7 +483,7 @@ fn details_panel_compares_every_open_photo_and_returns_to_one_photo() {
     };
     let compared = texts(&mut app);
     for text in [
-        "COMPARE DETAILS",
+        "Compare details",
         "0.jpg",
         "1.jpg",
         "2.jpg",
@@ -491,8 +498,103 @@ fn details_panel_compares_every_open_photo_and_returns_to_one_photo() {
     }
     app.comparison.clear();
     let single = texts(&mut app);
-    assert!(single.iter().all(|t| t != "COMPARE DETAILS"));
+    assert!(single.iter().all(|t| t != "Compare details"));
     assert!(single.iter().any(|t| t == "Fired (Auto)"));
     assert!(single.iter().all(|t| t != "Off"));
+    app.runtime.shutdown();
+}
+
+#[test]
+fn wheel_zoom_keeps_the_point_under_the_pointer_and_fit_recentres() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut app = PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, cache.path().into()), None);
+    app.fit_view();
+    app.zoom_view(2.0);
+    let mut view = app.view_for(app.focused_slot);
+    view.pan = [10.0, -5.0];
+    app.set_view(app.focused_slot, view);
+    let anchor = egui::vec2(100.0, 50.0);
+    // Screen offsets scale with zoom, so (anchor - pan) / zoom is the image
+    // point under the pointer; it must not move.
+    let under = |v: InspectionView| {
+        [
+            (anchor.x - v.pan[0]) / v.zoom,
+            (anchor.y - v.pan[1]) / v.zoom,
+        ]
+    };
+    let before = under(app.view_for(app.focused_slot));
+    app.zoom_view_at(1.5, anchor);
+    let after = app.view_for(app.focused_slot);
+    assert!((after.zoom - 3.0).abs() < 1e-5);
+    for (now, then) in under(after).into_iter().zip(before) {
+        assert!((now - then).abs() < 1e-3);
+    }
+    app.zoom_view_at(0.1, anchor);
+    assert_eq!(app.view_for(app.focused_slot).pan, [0.0, 0.0]);
+    app.runtime.shutdown();
+}
+
+#[test]
+fn each_compared_photo_can_be_rated_from_its_own_stars() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut app = PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, cache.path().into()), None);
+    let id = MediaId(5);
+    app.media = vec![Media {
+        id,
+        path: cache.path().join("photo.jpg"),
+        kind: MediaKind::Photo,
+        fingerprint: Fingerprint::default(),
+    }];
+    app.index.insert(id, 0);
+    app.filtered = vec![0];
+    app.step = Step::Cull;
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let run = |app: &mut PhotoSortApp, events: Vec<egui::Event>| {
+        ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 300.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let slot = ui.max_rect();
+                    app.slot_stars(ui, slot, id);
+                });
+            },
+        )
+    };
+    let output = run(&mut app, vec![]);
+    let tree = output.platform_output.accesskit_update.unwrap();
+    let bounds = tree
+        .nodes
+        .iter()
+        .find(|(_, n)| n.label() == Some("Rate 3"))
+        .and_then(|(_, n)| n.bounds())
+        .expect("Rate 3 star");
+    let at = egui::pos2(
+        ((bounds.x0 + bounds.x1) / 2.0) as f32,
+        ((bounds.y0 + bounds.y1) / 2.0) as f32,
+    );
+    for pressed in [true, false] {
+        run(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert_eq!(app.selected_rating(id), 3);
     app.runtime.shutdown();
 }

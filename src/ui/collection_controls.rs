@@ -23,11 +23,11 @@ pub(super) fn pointer_sense(drag: bool) -> Sense {
 impl Keyboard {
     pub(super) fn new(
         ui: &egui::Ui,
-        salt: impl std::hash::Hash,
+        salt: impl std::hash::Hash + std::fmt::Debug,
         height: f32,
         row_height: f32,
     ) -> Self {
-        let scroll_id = ui.make_persistent_id(egui::Id::new(salt));
+        let scroll_id = ui.make_persistent_id(egui::IdSalt::new(salt));
         Self {
             id: scroll_id.with("collection_keyboard"),
             scroll_id,

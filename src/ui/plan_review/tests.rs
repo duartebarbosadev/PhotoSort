@@ -65,6 +65,7 @@ fn review_rows_cover_every_companion_and_refresh_on_plan_replacement() {
 #[test]
 fn review_virtualization_reaches_last_file_without_materializing_other_rows() {
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     ctx.enable_accesskit();
     let mut plan = plan();
     plan.actions = vec![Action::Move {
@@ -84,12 +85,13 @@ fn review_virtualization_reaches_last_file_without_materializing_other_rows() {
     for at_end in [false, true] {
         if at_end {
             let (id, mut state): (egui::Id, egui::scroll_area::State) = scroll.take().unwrap();
-            state.offset.y = 7_200_000.0;
+            // Past the end; the scroll area clamps to the last row whatever the row height.
+            state.offset.y = 1.0e9;
             state.store(&ctx, id);
         }
         let mut output = None;
         for _ in 0..3 {
-            output = Some(ctx.run(
+            output = Some(ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -97,8 +99,8 @@ fn review_virtualization_reaches_last_file_without_materializing_other_rows() {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         let shown =
                             file_rows(ui, &plan, &index, Some(Path::new("/library")), 220.0);
                         assert!(shown.inner <= 6, "{} rendered rows", shown.inner);
@@ -134,6 +136,7 @@ fn shared_review_exposes_names_and_keeps_apply_visible_in_compact_and_retry_view
     app.set_review_plan(Some(plan()));
     app.plan_open = true;
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     ctx.enable_accesskit();
     for step in Step::ALL {
         app.step = step;
@@ -159,12 +162,15 @@ fn shared_review_exposes_names_and_keeps_apply_visible_in_compact_and_retry_view
             ] {
                 let mut output = None;
                 for _ in 0..3 {
-                    output = Some(ctx.run(
+                    output = Some(ctx.run_test(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                             ..Default::default()
                         },
-                        |ctx| app.plan_review_dialog(ctx),
+                        |ui| {
+                            let ctx = &ui.ctx().clone();
+                            app.plan_review_dialog(ctx)
+                        },
                     ));
                 }
                 let tree = output.unwrap().platform_output.accesskit_update.unwrap();
@@ -244,16 +250,20 @@ fn destination_editor_virtualizes_large_plans_and_keeps_compact_controls_visible
     app.retry_edit.as_mut().unwrap().error = Some("A source changed. ".repeat(100));
     app.retry_edit.as_mut().unwrap().stem = "Reviewed name".into();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     ctx.enable_accesskit();
     for size in [egui::vec2(600., 500.), egui::vec2(1280., 800.)] {
         let mut output = None;
         for _ in 0..3 {
-            output = Some(ctx.run(
+            output = Some(ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
                 },
-                |ctx| app.plan_review_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.plan_review_dialog(ctx)
+                },
             ));
         }
         let tree = output.unwrap().platform_output.accesskit_update.unwrap();
@@ -301,10 +311,11 @@ fn review_names_lossless_pixel_rotations() {
     }));
     app.plan_open = true;
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     ctx.enable_accesskit();
     let mut output = None;
     for _ in 0..3 {
-        output = Some(ctx.run(
+        output = Some(ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -312,7 +323,10 @@ fn review_names_lossless_pixel_rotations() {
                 )),
                 ..Default::default()
             },
-            |ctx| app.plan_review_dialog(ctx),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.plan_review_dialog(ctx)
+            },
         ));
     }
     let tree = output.unwrap().platform_output.accesskit_update.unwrap();

@@ -210,3 +210,22 @@ fn location_layout_defaults_for_old_preferences_and_round_trips_all_levels() {
         assert_eq!(Preferences::load(&path).unwrap().location_layout, layout);
     }
 }
+
+#[test]
+fn companion_moves_default_on_and_survive_a_save() {
+    let old: photosort::core::preferences::Preferences = serde_json::from_str("{}").unwrap();
+    assert!(
+        old.keep_companions,
+        "files saved before the setting keep companions together"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("preferences.json");
+    let mut preferences = old;
+    preferences.keep_companions = false;
+    preferences.save(&path).unwrap();
+    assert!(
+        !photosort::core::preferences::Preferences::load(&path)
+            .unwrap()
+            .keep_companions
+    );
+}

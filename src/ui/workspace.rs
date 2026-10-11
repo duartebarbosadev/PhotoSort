@@ -38,12 +38,16 @@ mod rotation;
 mod selection;
 #[path = "shortcuts.rs"]
 mod shortcuts;
+#[path = "states.rs"]
+mod states;
 #[path = "status.rs"]
 mod status;
 #[path = "tree_controls.rs"]
 mod tree_controls;
 #[path = "video.rs"]
 mod video;
+#[cfg(test)]
+use super::test_frame::TestFrame;
 use super::theme::*;
 use crate::core::{
     analysis::Analysis,
@@ -115,6 +119,13 @@ pub struct PhotoSortApp {
     video_texture: Option<(MediaId, u64, TextureHandle)>,
     video_context: Option<(Step, MediaId)>,
     preferences: crate::core::preferences::Preferences,
+    /// Recent folders that were missing at startup (e.g. an unplugged drive):
+    /// hidden from the menu but kept, so they return once available again.
+    missing_recent: HashSet<PathBuf>,
+    /// A crash report to tell the user about, and whether it is from a
+    /// previous session (true) or a background panic in this one (false).
+    crash_notice: Option<(PathBuf, bool)>,
+    crash_notice_shown: bool,
     preferences_path: Option<PathBuf>,
     preferences_draft: Option<crate::core::preferences::Preferences>,
     preferences_section: Option<preferences::Section>,
@@ -152,6 +163,8 @@ pub struct PhotoSortApp {
     scene_choices: Vec<(usize, usize, MediaId)>,
     scene_undo: Option<Arc<crate::core::manual_groups::ManualGroups>>,
     cull_groups: Arc<HashMap<MediaId, usize>>,
+    /// The highest-scoring photo of each Cull group with two or more photos.
+    group_best: HashSet<MediaId>,
     automatic_groups: Arc<HashMap<MediaId, usize>>,
     manual_groups: Arc<crate::core::manual_groups::ManualGroups>,
     scene_groups: Arc<crate::core::manual_groups::ManualGroups>,
@@ -187,6 +200,8 @@ pub struct PhotoSortApp {
     active: Option<MediaId>,
     selection: crate::core::selection::Selection,
     comparison: Vec<MediaId>,
+    /// The comparison set aside by F1, restored by pressing F1 again.
+    single_view_stash: Vec<MediaId>,
     textures: HashMap<(MediaId, bool), Texture>,
     requested: HashSet<(MediaId, bool)>,
     failures: HashMap<MediaId, String>,
@@ -208,6 +223,9 @@ pub struct PhotoSortApp {
     metadata_run: Option<u64>,
     metadata_progress: Option<(usize, usize)>,
     metadata_failures: HashMap<MediaId, String>,
+    /// Photos the current or last analysis could not process, with the cause.
+    analysis_failures: HashMap<MediaId, String>,
+    analysis_successes: usize,
     review: bool,
     inspector: bool,
     was_wide: bool,
@@ -229,6 +247,7 @@ pub struct PhotoSortApp {
     busy: bool,
     analysis_run: Option<u64>,
     progress: Option<(usize, usize)>,
+    progress_started: Option<Instant>,
     stats: Stats,
     plan: Option<Plan>,
     plan_rows: plan_review::Rows,
@@ -294,19 +313,35 @@ impl PhotoSortApp {
         let mut app = Self::with_runtime(runtime, None);
         let path = crate::core::preferences::Preferences::path();
         match crate::core::preferences::Preferences::load(&path) {
-            Ok(preferences) => app.preferences = preferences,
+            Ok(preferences) => {
+                app.companions = preferences.keep_companions;
+                app.preferences = preferences;
+            }
             Err(e) => app.error = Some(format!("Preferences could not be loaded: {e}")),
         }
+        app.crash_notice = crate::core::crash::unseen_report(&crate::core::crash::directory())
+            .map(|path| (path, true));
+        app.crash_notice_shown = app.crash_notice.is_some();
+        app.missing_recent = app
+            .preferences
+            .recent_folders
+            .iter()
+            .filter(|p| !p.is_dir())
+            .cloned()
+            .collect();
         app.runtime.cache.configure(app.preferences.cache);
         app.runtime.processing.configure(app.preferences.processing);
+        app.runtime.raw_look.set(app.preferences.raw_look);
         app.runtime.cache.request(false);
         app.preferences_path = Some(path);
         if let Some(folder) = folder {
             app.open(folder);
         }
+        // Without the native hook, Quit still closes through the window and the
+        // shared departure guard; nothing here is actionable for the user.
         match super::platform::QuitHandler::install(&cc.egui_ctx) {
             Ok(handler) => app.native_quit = handler,
-            Err(error) => app.error = Some(error),
+            Err(error) => tracing::warn!(%error, "native quit handler unavailable"),
         }
         app
     }
@@ -317,6 +352,9 @@ impl PhotoSortApp {
             video_texture: None,
             video_context: None,
             preferences: Default::default(),
+            missing_recent: HashSet::new(),
+            crash_notice: None,
+            crash_notice_shown: false,
             preferences_path: None,
             preferences_draft: None,
             preferences_section: None,
@@ -356,6 +394,7 @@ impl PhotoSortApp {
             scene_choices: Vec::new(),
             scene_undo: None,
             cull_groups: Arc::default(),
+            group_best: HashSet::new(),
             automatic_groups: Arc::default(),
             manual_groups: Arc::default(),
             scene_groups: Arc::default(),
@@ -393,6 +432,7 @@ impl PhotoSortApp {
             active: None,
             selection: Default::default(),
             comparison: Vec::new(),
+            single_view_stash: Vec::new(),
             textures: HashMap::new(),
             requested: HashSet::new(),
             failures: HashMap::new(),
@@ -414,6 +454,8 @@ impl PhotoSortApp {
             metadata_run: None,
             metadata_progress: None,
             metadata_failures: HashMap::new(),
+            analysis_failures: HashMap::new(),
+            analysis_successes: 0,
             review: false,
             inspector: true,
             was_wide: true,
@@ -435,6 +477,7 @@ impl PhotoSortApp {
             busy: false,
             analysis_run: None,
             progress: None,
+            progress_started: None,
             stats: Stats::default(),
             plan: None,
             plan_rows: plan_review::Rows::default(),
@@ -561,6 +604,9 @@ impl PhotoSortApp {
         self.scene_undo = None;
         self.face_groups = None;
         self.cull_groups = Arc::default();
+        self.group_best.clear();
+        self.analysis_failures.clear();
+        self.single_view_stash.clear();
         self.automatic_groups = Arc::default();
         self.manual_groups = Arc::default();
         self.scene_groups = Arc::default();
@@ -1004,6 +1050,8 @@ impl PhotoSortApp {
                     false, // Keep completed group memberships during reanalysis.
                 );
                 self.analysis_run = Some(run);
+                self.analysis_failures.clear();
+                self.analysis_successes = 0;
                 self.progress = Some((0, self.media.len()));
                 self.set_status("Analyzing locally · previews stay available".into());
             }
@@ -1406,7 +1454,8 @@ fn paint_image(
 impl PhotoSortApp {
     // Shared frame boundary lets input and native-close ordering be verified
     // without constructing a GPU window or replacing the native delegate.
-    fn update_workspace(&mut self, ctx: &egui::Context, native_requested: bool) {
+    fn update_workspace(&mut self, root: &mut egui::Ui, native_requested: bool) {
+        let ctx = &root.ctx().clone();
         self.check_updates_at_startup();
         self.tick += 1;
         self.poll(ctx);
@@ -1421,21 +1470,21 @@ impl PhotoSortApp {
         }
         self.was_wide = wide;
         let compact = ctx.content_rect().width() < 1000.0;
-        self.header(ctx);
-        if compact {
-            self.compact_steps(ctx);
-        } else {
-            self.sidebar(ctx);
-        }
-        self.footer(ctx);
-        self.workflow_footer(ctx);
+        self.track_progress_clock();
+        self.header(root);
+        self.footer(root);
         if self.inspector && self.catalog.is_some() && ctx.content_rect().width() > 1180.0 {
-            egui::SidePanel::right("inspector")
+            egui::Panel::right("inspector")
                 .resizable(true)
-                .default_width(245.0)
-                .width_range(220.0..=350.0)
-                .frame(egui::Frame::new().fill(PANEL).inner_margin(18))
-                .show(ctx, |ui| {
+                .default_size(300.0)
+                .size_range(260.0..=440.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(PANEL)
+                        .inner_margin(S4 as i8)
+                        .stroke(Stroke::new(1.0, LINE)),
+                )
+                .show(root, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
                 });
         }
@@ -1443,9 +1492,9 @@ impl PhotoSortApp {
             .frame(
                 egui::Frame::new()
                     .fill(BG)
-                    .inner_margin(if compact { 16 } else { 26 }),
+                    .inner_margin(if compact { 12 } else { 16 }),
             )
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 if self.root.is_none() {
                     self.welcome(ui);
                 } else {
@@ -1466,25 +1515,17 @@ impl PhotoSortApp {
                     self.toolbar(ui);
                     self.navigator_panel(ui);
                     if self.step == Step::PickBest && self.pick_run.is_some() {
-                        ui.centered_and_justified(|ui| {ui.label("Preparing Pick Best clusters… Use Cancel analysis to stop.");});
+                        self.working_state(ui, "Finding similar photos", "Grouping bursts and near-identical frames, then scoring each photo.");
                     } else if self.step == Step::EasyDelete && self.delete_run.is_some() {
-                        ui.centered_and_justified(|ui| { ui.label("Preparing Easy Delete reviews… Use Cancel analysis to stop."); });
+                        self.working_state(ui, "Looking for photos to clean up", "Checking for duplicates, near-duplicates, and blurry or badly exposed shots.");
                     } else if self.step == Step::Rotation && self.rotation_run.is_some() {
-                        ui.centered_and_justified(|ui| { ui.label("Preparing rotation suggestions… Use Cancel analysis to stop."); });
-                    } else if self.media.is_empty() {
-                        ui.centered_and_justified(|ui| {
-                            ui.label(if self.scanning {
-                                "Finding your photos…"
-                            } else {
-                                "No supported media found in this folder."
-                            });
-                        });
+                        self.working_state(ui, "Checking orientation", "Looking at each photo to find the ones that are sideways or upside down.");
+                    } else if self.media.is_empty() && self.scanning {
+                        self.working_state(ui, "Finding your photos", "Reading the folder and its subfolders.");
                     } else if self.filtered.is_empty() && self.browse_run.is_some() && self.step == Step::Cull {
-                        ui.spinner(); ui.label("Updating library view…");
-                    } else if self.filtered.is_empty() {
-                        ui.label(if self.step == Step::Rotation && self.rotation_queue_only {
-                            "No rotation suggestions remain. Turn off Suggestions only to review any photo manually."
-                        } else if self.step == Step::PickBest { "No comparable clusters. Analyze the library to find similar photos." } else if self.step == Step::EasyDelete { "No reviews match. Analyze the library or enable more categories." } else { "No photos match these filters." });
+                        self.working_state(ui, "Updating the view", "Applying the search and filters.");
+                    } else if self.media.is_empty() || self.filtered.is_empty() {
+                        self.empty_state(ui);
                     } else if self.organize_editor.is_some() {
                         // The editor owns the visible content. Do not render or
                         // submit hidden image/detail requests behind its modal.
@@ -1496,18 +1537,16 @@ impl PhotoSortApp {
                 }
             });
         if self.inspector && self.catalog.is_some() && ctx.content_rect().width() <= 1180.0 {
-            let mut open = self.inspector;
-            egui::Window::new("Photo details")
-                .open(&mut open)
-                .default_width(260.0)
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical()
-                        .max_height(500.0)
-                        .show(ui, |ui| self.inspector(ui));
-                });
-            self.inspector = open;
+            self.inspector_drawer(ctx);
         }
-        let dropped = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone()));
+        self.photo_drag_overlay(ctx);
+        let dropped = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_path_buf())
+                .find(|path| path.is_absolute())
+        });
         if let Some(path) = dropped {
             self.open(if path.is_dir() {
                 path
@@ -1538,13 +1577,69 @@ impl PhotoSortApp {
         }
     }
 }
+/// Hooks for the headless screenshot gallery (`examples/ui_gallery.rs`); not
+/// part of the application API.
+#[doc(hidden)]
+impl PhotoSortApp {
+    pub fn gallery_step(&mut self, step: Step) {
+        self.switch_step(step);
+    }
+    pub fn gallery_review(&mut self, review: bool) {
+        self.review = review;
+    }
+    pub fn gallery_organize_editor(&mut self) {
+        self.open_organize_editor();
+    }
+    /// Compares the first `count` shown photos.
+    pub fn gallery_compare(&mut self, count: usize) {
+        self.comparison = self
+            .filtered
+            .iter()
+            .take(count)
+            .map(|i| self.media[*i].id)
+            .collect();
+        if let Some(first) = self.comparison.first().copied() {
+            self.set_active(first);
+        }
+        self.review = true;
+    }
+    pub fn gallery_about(&mut self) {
+        self.about = true;
+    }
+    pub fn gallery_settings(&mut self) {
+        self.preferences_draft = Some(self.preferences.clone());
+    }
+    /// Marks the first `count` photos for Trash and opens the plan review.
+    /// Planning is a dry run; nothing is applied without the Apply button.
+    pub fn gallery_plan_review(&mut self, count: usize) {
+        let ids: Vec<_> = self.media.iter().take(count).map(|m| m.id).collect();
+        for id in ids {
+            self.decisions.entry(id).or_default().rejected = true;
+        }
+        self.changed();
+        self.review_changes();
+    }
+    /// Thumbnails and previews currently uploaded as textures.
+    pub fn gallery_textures(&self) -> usize {
+        self.textures.len()
+    }
+    /// True while discovery, metadata, thumbnails or analysis are still arriving.
+    pub fn gallery_busy(&self) -> bool {
+        self.scanning
+            || self.busy
+            || !self.requested.is_empty()
+            || self.metadata_run.is_some()
+            || self.analysis_run.is_some()
+    }
+}
+
 impl eframe::App for PhotoSortApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let native_requested = self
             .native_quit
             .as_ref()
             .is_some_and(|handler| handler.take_requested());
-        self.update_workspace(ctx, native_requested);
+        self.update_workspace(ui, native_requested);
     }
     fn on_exit(&mut self) {
         self.checkpoint_bookmarks();
@@ -1629,6 +1724,7 @@ mod keyboard_tests {
     fn plain_enter_is_owned_by_guided_review_only() {
         for rotation in [false, true] {
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             let mut input = egui::RawInput::default();
             input.events.push(egui::Event::Key {
                 key: egui::Key::Enter,
@@ -1637,24 +1733,28 @@ mod keyboard_tests {
                 repeat: false,
                 modifiers: egui::Modifiers::NONE,
             });
-            let _ = ctx.run(input, |ctx| {
-                assert_eq!(pressed_keys(ctx, rotation).len(), usize::from(rotation));
-                assert_eq!(
-                    ctx.input(|i| i.events.iter().any(|e| matches!(
-                        e,
-                        egui::Event::Key {
-                            key: egui::Key::Enter,
-                            ..
-                        }
-                    ))),
-                    !rotation
-                );
+            let _ = ctx.run_test(input, |ui| {
+                let ctx = &ui.ctx().clone();
+                {
+                    assert_eq!(pressed_keys(ctx, rotation).len(), usize::from(rotation));
+                    assert_eq!(
+                        ctx.input(|i| i.events.iter().any(|e| matches!(
+                            e,
+                            egui::Event::Key {
+                                key: egui::Key::Enter,
+                                ..
+                            }
+                        ))),
+                        !rotation
+                    );
+                }
             });
         }
     }
     #[test]
     fn quick_modified_keys_keep_their_own_modifiers_and_order() {
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         let mut input = egui::RawInput::default();
         for _ in 0..3 {
             input.events.push(egui::Event::Key {
@@ -1673,13 +1773,16 @@ mod keyboard_tests {
             });
         }
         let mut captured = Vec::new();
-        let _ = ctx.run(input, |ctx| {
-            captured = pressed_keys(ctx, false);
-            assert!(ctx.input(|i| {
-                i.events
-                    .iter()
-                    .all(|event| !matches!(event, egui::Event::Key { .. }))
-            }));
+        let _ = ctx.run_test(input, |ui| {
+            let ctx = &ui.ctx().clone();
+            {
+                captured = pressed_keys(ctx, false);
+                assert!(ctx.input(|i| {
+                    i.events
+                        .iter()
+                        .all(|event| !matches!(event, egui::Event::Key { .. }))
+                }));
+            }
         });
         assert_eq!(
             captured,

@@ -133,7 +133,7 @@ impl PhotoSortApp {
         if egui::Popup::is_any_open(ctx) || self.navigator_popup_open(ctx) || self.modal_active() {
             return;
         }
-        if self.application_shortcuts(ctx) || ctx.wants_keyboard_input() {
+        if self.application_shortcuts(ctx) || ctx.egui_wants_keyboard_input() {
             return;
         }
         self.video_keyboard(ctx);
@@ -145,7 +145,9 @@ impl PhotoSortApp {
             if self.modal_active() {
                 break;
             }
-            if self.workflow_shortcut(pressed, modifiers) || self.view_shortcut(pressed, modifiers)
+            if self.workflow_shortcut(pressed, modifiers)
+                || self.organize_shortcut(pressed, modifiers)
+                || self.view_shortcut(pressed, modifiers)
             {
                 continue;
             }
@@ -286,10 +288,7 @@ impl PhotoSortApp {
                 }
             }
             egui::Key::I => self.inspector ^= true,
-            egui::Key::F1 => {
-                self.comparison.clear();
-                self.review = true;
-            }
+            egui::Key::F1 => self.toggle_single_view(),
             egui::Key::F2 => self.compare_similar(),
             egui::Key::F3 => self.toggle_sync(),
             egui::Key::A => self.actual_size(),
@@ -312,7 +311,7 @@ impl PhotoSortApp {
     }
 
     /// Digits focus a comparison slot; with Ctrl/Cmd they set the star rating.
-    fn numeric_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) {
+    pub(super) fn numeric_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) {
         let command = modifiers.command || modifiers.ctrl;
         let Some(digit) = digit(pressed) else { return };
         if command {
@@ -321,11 +320,22 @@ impl PhotoSortApp {
             }
             return;
         }
+        let ids = self.comparison_ids();
         if digit == 0 {
             self.fit_view();
-        } else if let Some(&id) = self.comparison_ids().get(digit - 1) {
-            self.active = Some(id);
-            self.focused_slot = (digit - 1) as u64;
+        } else if ids.len() > 1 {
+            if let Some(&id) = ids.get(digit - 1) {
+                self.active = Some(id);
+                self.focused_slot = (digit - 1) as u64;
+            }
+        } else if self.step == Step::Cull
+            && let Some(group) = self
+                .active
+                .and_then(|id| self.cull_groups.get(&id).copied())
+            && let Some(&id) = self.group_members(group).get(digit - 1)
+        {
+            // Single view: digits pick the nth photo of the active photo's group.
+            self.set_active(id);
         }
     }
 }

@@ -69,13 +69,13 @@ pub(super) fn frame(
     size: Vec2,
     events: Vec<egui::Event>,
 ) -> Vec<(String, egui::Rect)> {
-    let out = ctx.run(
+    let out = ctx.run_test(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
             events,
             ..Default::default()
         },
-        |ctx| app.update_workspace(ctx, false),
+        |ui| app.update_workspace(ui, false),
     );
     out.platform_output
         .accesskit_update
@@ -171,17 +171,12 @@ fn wide_review_gives_photos_space_and_reuses_the_existing_filter_panel() {
     assert!(!app.browse_filters_open);
     click_label(&mut app, &ctx, size, "Cancel metadata reading");
     assert!(app.metadata_run.is_none());
-    // Return to the wide browser: existing inline controls and filter survive.
-    app.browse_filters_open = true;
+    // Return to the wide browser: the same panel and its filter survive.
     app.set_library_layout(library::Layout::Grid);
+    app.review = false;
     let nodes = rendered(&mut app, &ctx, size);
-    assert!(!app.browse_filters_open);
-    assert!(nodes.iter().any(|(label, _)| label == "Exactly 5 stars"));
-    assert!(
-        !nodes
-            .iter()
-            .any(|(label, _)| label.starts_with("Filters & sort"))
-    );
+    assert!(nodes.iter().any(|(label, _)| label == "Filters & sort · 1"));
+    assert!(!nodes.iter().any(|(label, _)| label == "Any rating"));
     assert_eq!(app.filtered.len(), 1);
     app.runtime.shutdown();
 }
@@ -201,12 +196,7 @@ fn compact_cull_workspace_keeps_photos_visible_with_navigator_and_filters() {
         for layout in library::Layout::ALL {
             app.set_library_layout(layout);
             let nodes = rendered(&mut app, &ctx, size);
-            let footer = nodes
-                .iter()
-                .find(|(s, _)| s == "< Pick Best")
-                .unwrap()
-                .1
-                .top();
+            let footer = size.y - navigation::STATUS_HEIGHT;
             let photos: Vec<_> = nodes
                 .iter()
                 .filter(|(s, _)| s.starts_with("photo-") && s.ends_with(".png"))
@@ -280,6 +270,7 @@ fn choose_five_stars(app: &mut PhotoSortApp, ctx: &egui::Context, size: Vec2) {
         vec![
             egui::Event::PointerMoved(first),
             egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0., -600.),
                 modifiers: Default::default(),
@@ -347,9 +338,12 @@ fn compact_filter_panel_keeps_nested_rating_folder_choices_and_keyboard_ownershi
     );
     assert!(!app.browse_filters_open, "Escape did not dismiss the panel");
     app.browse_filters_open = true;
-    rendered(&mut app, &ctx, egui::vec2(1440., 900.));
+    let nodes = rendered(&mut app, &ctx, egui::vec2(1440., 900.));
     assert!(
-        !app.browse_filters_open,
+        !app.browse_filters_open
+            || nodes
+                .iter()
+                .any(|(label, _)| label == "Clear browse filters"),
         "Resizing left an invisible keyboard blocker"
     );
     app.browse_filters_open = true;
@@ -411,12 +405,7 @@ fn compact_navigator_selects_scope_and_metadata_cancel_stays_outside_filters() {
         .find(|(s, _)| s == "Cancel metadata reading")
         .unwrap()
         .1;
-    let footer = nodes
-        .iter()
-        .find(|(s, _)| s == "< Pick Best")
-        .unwrap()
-        .1
-        .top();
+    let footer = size.y - navigation::STATUS_HEIGHT;
     assert!(
         b.bottom() < footer,
         "Metadata cancellation is hidden below the footer"

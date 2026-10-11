@@ -33,6 +33,28 @@ pub fn ratio(text: &str) -> Option<f64> {
     value.is_finite().then_some(value)
 }
 
+/// Lens name from EXIF LensSpecification (min/max focal length, min/max
+/// aperture), e.g. `24–70 mm f/2.8`. Unknown parts (0/0) are omitted.
+pub fn lens_specification(values: &[f64]) -> Option<String> {
+    let known = |v: &f64| v.is_finite() && *v > 0.0;
+    let (&low, &high) = (values.first()?, values.get(1)?);
+    if !known(&low) {
+        return None;
+    }
+    let mut name = if known(&high) && high > low {
+        format!("{}–{} mm", trim(low), trim(high))
+    } else {
+        format!("{} mm", trim(low))
+    };
+    if let Some(aperture) = values.get(2).filter(|v| known(v)) {
+        name.push_str(&format!(" f/{}", trim(*aperture)));
+        if let Some(widest) = values.get(3).filter(|v| known(v) && **v > *aperture + 0.05) {
+            name.push_str(&format!("–{}", trim(*widest)));
+        }
+    }
+    Some(name)
+}
+
 /// Tables for one or more photos, omitting rows that nobody has a value for.
 pub fn sections(items: &[(&Media, &Metadata)]) -> Vec<Section> {
     let row = |label: &'static str, cell: &dyn Fn(&Media, &Metadata) -> Option<String>| Row {
@@ -93,6 +115,34 @@ pub fn sections(items: &[(&Media, &Metadata)]) -> Vec<Section> {
                 }),
                 detail("Bit depth", |d| {
                     d.bit_depth.map(|bits| format!("{bits} bit"))
+                }),
+            ],
+        },
+        Section {
+            title: "Video",
+            rows: vec![
+                detail("Duration", |d| {
+                    d.video
+                        .as_ref()
+                        .map(|v| super::video_info::duration(v.duration_s))
+                }),
+                detail("Frame rate", |d| {
+                    d.video
+                        .as_ref()
+                        .and_then(|v| v.frame_rate)
+                        .map(super::video_info::frame_rate)
+                }),
+                detail("Codec", |d| d.video.as_ref().and_then(|v| v.codec.clone())),
+                detail("Bitrate", |d| {
+                    d.video
+                        .as_ref()
+                        .and_then(|v| v.bitrate)
+                        .map(super::video_info::bitrate)
+                }),
+                detail("Audio", |d| {
+                    d.video
+                        .as_ref()
+                        .map(|v| if v.audio { "Yes" } else { "No" }.to_owned())
                 }),
             ],
         },
@@ -204,12 +254,17 @@ fn source(media: &Media, meta: &Metadata) -> Option<String> {
         .then(|| "Screen capture".to_owned())
 }
 
+/// Photographers read short exposures as `1/N s`; cameras may store them as any
+/// rational (Samsung writes 249783/100000000) or a decimal.
 fn shutter(exposure: &str) -> Option<String> {
-    let exposure = text(exposure)?;
-    Some(if exposure.contains('/') && !exposure.ends_with('s') {
-        format!("{exposure} s")
+    let text = text(exposure)?;
+    let Some(seconds) = ratio(text.trim_end_matches('s').trim()).filter(|s| *s > 0.0) else {
+        return Some(text);
+    };
+    Some(if seconds < 0.3 {
+        format!("1/{} s", (1.0 / seconds).round())
     } else {
-        exposure
+        format!("{} s", trim(seconds))
     })
 }
 

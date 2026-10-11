@@ -22,6 +22,7 @@ fn app(dir: &tempfile::TempDir) -> PhotoSortApp {
 fn settle(app: &mut PhotoSortApp) {
     let until = Instant::now() + Duration::from_secs(10);
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     while app.scanning || app.busy {
         app.poll(&ctx);
         assert!(

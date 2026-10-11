@@ -61,9 +61,11 @@ impl PhotoSortApp {
                 .and_then(|index| self.filtered.iter().position(|i| i == index))
         {
             let top = (position / columns) as f32 * (row_height + ui.spacing().item_spacing.y);
-            let offset =
-                egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(egui::Id::new(id)))
-                    .map_or(0.0, |state| state.offset.y);
+            let offset = egui::scroll_area::State::load(
+                ui.ctx(),
+                ui.make_persistent_id(egui::IdSalt::new(id)),
+            )
+            .map_or(0.0, |state| state.offset.y);
             if top < offset {
                 scroll = scroll.vertical_scroll_offset(top);
             } else if top + row_height > offset + ui.available_height() {
@@ -90,7 +92,7 @@ impl PhotoSortApp {
                     let rejected = self.decision(id).rejected;
                     let texture = self.texture(id, false);
                     let (rect, response) =
-                        ui.allocate_exact_size(egui::vec2(width, height), Sense::click());
+                        ui.allocate_exact_size(egui::vec2(width, height), self.tile_sense());
                     response.widget_info(|| {
                         egui::WidgetInfo::selected(
                             egui::WidgetType::Button,
@@ -207,10 +209,11 @@ impl PhotoSortApp {
     }
 
     pub(super) fn grid(&mut self, ui: &mut egui::Ui) {
-        let columns = (ui.available_width() / 190.0).floor().max(1.0) as usize;
+        let gap = ui.spacing().item_spacing.x;
+        let columns = ((ui.available_width() + gap) / 200.0).floor().max(1.0) as usize;
         let cell_width =
-            (ui.available_width() - 10.0 * (columns.saturating_sub(1) as f32)) / columns as f32;
-        let row_height = cell_width * 0.67 + 52.0;
+            (ui.available_width() - gap * (columns.saturating_sub(1) as f32)) / columns as f32;
+        let row_height = cell_width * 0.75 + CAPTION;
         let rows = self.filtered.len().div_ceil(columns);
         let scroll = self.library_scroll(ui, row_height, columns, egui::Id::new("library_grid"));
         let output = scroll.show_rows(ui, row_height, rows, |ui, range| {
@@ -228,7 +231,10 @@ impl PhotoSortApp {
         self.library_offset = output.state.offset.y;
     }
 
+    /// A photo tile. Grid tiles carry a two-line caption; short tiles (the
+    /// filmstrip) are image-only and name the photo in their tooltip.
     pub(super) fn card(&mut self, ui: &mut egui::Ui, index: usize, width: f32, height: f32) {
+        use egui_phosphor::regular as icon;
         let media = self.media[index].clone();
         let id = media.id;
         let texture = self.texture(id, false);
@@ -236,7 +242,8 @@ impl PhotoSortApp {
         let active = self.active == Some(id);
         let comparison = self.comparison.contains(&id);
         let selected = self.library_selection_mode() && self.selection.contains(id);
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), Sense::click());
+        let captioned = height >= 2.0 * CAPTION + 40.0;
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), self.tile_sense());
         response.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::WidgetType::Button,
@@ -245,10 +252,15 @@ impl PhotoSortApp {
                 media.name(),
             )
         });
-        ui.painter().rect_filled(rect, 8.0, CARD);
+        let painter = ui.painter_at(rect);
+        let hovered = response.hovered();
+        painter.rect_filled(rect, R_TILE, if hovered { CARD_HOVER } else { CARD });
         let image_rect = egui::Rect::from_min_max(
-            rect.min + egui::vec2(5.0, 5.0),
-            egui::pos2(rect.right() - 5.0, rect.bottom() - 49.0),
+            rect.min + egui::vec2(S1, S1),
+            egui::pos2(
+                rect.right() - S1,
+                rect.bottom() - if captioned { CAPTION } else { S1 },
+            ),
         );
         if let Some(texture) = texture {
             paint_image(
@@ -260,105 +272,164 @@ impl PhotoSortApp {
                 self.preview_turns(id),
             );
         } else {
-            ui.painter().text(
+            painter.text(
                 image_rect.center(),
                 Align2::CENTER_CENTER,
                 if self.failures.contains_key(&id) {
-                    "Preview unavailable"
+                    icon::IMAGE_BROKEN
                 } else if media.kind == MediaKind::Video {
-                    "VIDEO"
+                    icon::FILM_STRIP
                 } else {
-                    "PS"
+                    icon::IMAGE
                 },
-                FontId::proportional(13.0),
-                MUTED,
+                FontId::proportional(22.0),
+                FAINT,
+            );
+        }
+        if media.kind == MediaKind::Video && texture_is_drawn(&self.textures, id) {
+            badge(
+                &painter,
+                image_rect.left_bottom() + egui::vec2(S1, -S1),
+                Align2::LEFT_BOTTOM,
+                icon::PLAY,
+                INK,
             );
         }
         if d.rejected {
-            ui.painter()
-                .rect_filled(image_rect, 4.0, Color32::from_black_alpha(150));
-            ui.painter().text(
-                image_rect.center(),
-                Align2::CENTER_CENTER,
-                "MARKED",
-                FontId::proportional(13.0),
+            painter.rect_filled(image_rect, 4.0, Color32::from_black_alpha(130));
+            badge(
+                &painter,
+                image_rect.left_top() + egui::vec2(S1, S1),
+                Align2::LEFT_TOP,
+                &format!("{} Trash", icon::TRASH),
                 RED,
             );
         }
+        if self.step == Step::Cull && self.group_best.contains(&id) {
+            badge(
+                &painter,
+                image_rect.left_bottom() + egui::vec2(S1, -S1),
+                Align2::LEFT_BOTTOM,
+                &format!("{} Best", icon::CROWN_SIMPLE),
+                ACCENT,
+            );
+        }
+        let rating = self.selected_rating(id);
+        if rating > 0 && !captioned {
+            badge(
+                &painter,
+                image_rect.right_top() + egui::vec2(-S1, S1),
+                Align2::RIGHT_TOP,
+                &"★".repeat(rating as usize),
+                ACCENT,
+            );
+        }
         if active || comparison || selected {
-            ui.painter().rect_stroke(
+            painter.rect_stroke(
                 rect,
-                8.0,
+                R_TILE,
                 Stroke::new(
-                    2.0,
-                    if active {
-                        ACCENT
-                    } else {
-                        Color32::from_rgb(216, 187, 128)
-                    },
+                    if active { 2.0 } else { 1.5 },
+                    if active { ACCENT } else { MUTED },
                 ),
                 StrokeKind::Inside,
             );
         }
-        let name = media.name();
-        let short = if name.chars().count() > 26 {
-            format!("{}…", name.chars().take(24).collect::<String>())
-        } else {
-            name
-        };
-        ui.painter().text(
-            egui::pos2(rect.left() + 11.0, rect.bottom() - 34.0),
-            Align2::LEFT_CENTER,
-            short,
-            FontId::proportional(12.0),
-            INK,
-        );
-        let rating = self.selected_rating(id);
-        let detail = if self.step == Step::Rotation {
-            self.rotation_review
-                .choice(id)
-                .map(|c| {
-                    format!(
-                        "{} · {}°",
-                        if c.confirmed {
-                            "Confirmed"
-                        } else {
-                            "Unconfirmed"
-                        },
-                        c.degrees()
-                    )
+        if selected && !active {
+            badge(
+                &painter,
+                image_rect.right_bottom() + egui::vec2(-S1, -S1),
+                Align2::RIGHT_BOTTOM,
+                icon::CHECK,
+                ACCENT,
+            );
+        }
+        if captioned {
+            let name = media.name();
+            let left = rect.left() + S2;
+            let text_rect = egui::Rect::from_min_max(
+                egui::pos2(left, image_rect.bottom()),
+                egui::pos2(rect.right() - S2, rect.bottom()),
+            );
+            painter.with_clip_rect(text_rect).text(
+                egui::pos2(left, image_rect.bottom() + 11.0),
+                Align2::LEFT_CENTER,
+                name,
+                FontId::proportional(12.0),
+                INK,
+            );
+            // Organize shows the destination once one exists; before analysis
+            // the label is an instruction, which would repeat on every tile.
+            let destination = (self.step == Step::Organize)
+                .then(|| {
+                    self.organize_drafts
+                        .get(&self.group_mode)
+                        .and_then(|draft| draft.labels().get(&id))
+                        .cloned()
+                        .unwrap_or_else(|| self.label_for(&media))
                 })
-                .unwrap_or_else(|| "Not reviewed".into())
-        } else if rating > 0 {
-            "★".repeat(rating as usize).to_string()
-        } else if let Some(a) = self.analysis.get(&id) {
-            if !a.issues.is_empty() {
-                a.issues.join(" · ")
+                .filter(|folder| !folder.starts_with("Analyze to"));
+            let (detail, color) = if let Some(folder) = destination {
+                (
+                    format!(
+                        "{}  {}",
+                        icon::FOLDER_SIMPLE,
+                        if folder.is_empty() {
+                            "Library root"
+                        } else {
+                            &folder
+                        }
+                    ),
+                    MUTED,
+                )
+            } else if self.step == Step::Rotation {
+                (
+                    self.rotation_review
+                        .choice(id)
+                        .map(|c| {
+                            format!(
+                                "{} · {}°",
+                                if c.confirmed {
+                                    "Confirmed"
+                                } else {
+                                    "Unconfirmed"
+                                },
+                                c.degrees()
+                            )
+                        })
+                        .unwrap_or_else(|| "Not reviewed".into()),
+                    MUTED,
+                )
+            } else if rating > 0 {
+                ("★".repeat(rating as usize), ACCENT)
+            } else if let Some(a) = self.analysis.get(&id).filter(|a| !a.issues.is_empty()) {
+                (a.issues.join(" · "), RED)
             } else {
-                format!("Quality {:.0}", a.score)
-            }
-        } else {
-            format!(
-                "{}  ·  {:.1} MB",
-                media
-                    .path
-                    .extension()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_uppercase(),
-                media.fingerprint.bytes as f64 / 1048576.0
-            )
-        };
-        let detail = self
-            .browse_group_label(id)
-            .map_or_else(|| detail.clone(), |g| format!("{g} · {detail}"));
-        ui.painter().with_clip_rect(rect.shrink(4.0)).text(
-            egui::pos2(rect.left() + 11.0, rect.bottom() - 15.0),
-            Align2::LEFT_CENTER,
-            detail,
-            FontId::proportional(10.0),
-            if rating > 0 { ACCENT } else { MUTED },
-        );
+                (
+                    format!(
+                        "{} · {:.1} MB",
+                        media
+                            .path
+                            .extension()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_uppercase(),
+                        media.fingerprint.bytes as f64 / 1048576.0
+                    ),
+                    FAINT,
+                )
+            };
+            let detail = self
+                .browse_group_label(id)
+                .map_or(detail.clone(), |g| format!("{g} · {detail}"));
+            painter.with_clip_rect(text_rect).text(
+                egui::pos2(left, image_rect.bottom() + 25.0),
+                Align2::LEFT_CENTER,
+                detail,
+                FontId::proportional(11.0),
+                color,
+            );
+        }
         self.library_response(
             ui,
             response.on_hover_text(media.path.display().to_string()),
@@ -366,7 +437,24 @@ impl PhotoSortApp {
         );
     }
     /// All layouts use the same selection, comparison and staged mutation paths.
+    /// Tiles can be dragged onto a similarity group once Cull has groups.
+    fn tile_sense(&self) -> Sense {
+        if self.photo_drag_enabled() {
+            Sense::click_and_drag()
+        } else {
+            Sense::click()
+        }
+    }
     fn library_response(&mut self, ui: &egui::Ui, response: egui::Response, id: MediaId) {
+        if self.photo_drag_enabled() && response.drag_started() {
+            // Drag the whole selection when the tile belongs to it.
+            let ids = if self.selection.contains(id) {
+                self.selection.ordered(&self.media, &self.filtered)
+            } else {
+                vec![id]
+            };
+            response.dnd_set_drag_payload(super::grouping::PhotoDrag(ids));
+        }
         if response.clicked() {
             self.pending_bookmark = None;
             if self.library_selection_mode() {
@@ -414,6 +502,18 @@ impl PhotoSortApp {
                 self.review = true;
                 ui.close();
             }
+            ui.menu_button("Rotate", |ui| {
+                for (label, turns) in [
+                    ("Clockwise · R", 1),
+                    ("Counterclockwise · Shift+R", 3),
+                    ("180° · Alt+R", 2),
+                ] {
+                    if ui.button(label).clicked() {
+                        self.rotate(id, turns);
+                        ui.close();
+                    }
+                }
+            });
             if ui
                 .button(if self.decision(id).rejected {
                     "Unmark"
@@ -427,6 +527,22 @@ impl PhotoSortApp {
             }
         });
     }
+}
+
+/// Caption height under grid tiles.
+pub(super) const CAPTION: f32 = 34.0;
+
+fn texture_is_drawn(textures: &HashMap<(MediaId, bool), Texture>, id: MediaId) -> bool {
+    textures.contains_key(&(id, false))
+}
+
+/// A small pill on top of an image: dark translucent fill, coloured text.
+fn badge(painter: &egui::Painter, anchor: egui::Pos2, align: Align2, text: &str, color: Color32) {
+    let galley = painter.layout_no_wrap(text.to_owned(), FontId::proportional(11.0), color);
+    let size = galley.size() + egui::vec2(10.0, 4.0);
+    let rect = align.anchor_size(anchor, size);
+    painter.rect_filled(rect, 4.0, Color32::from_black_alpha(170));
+    painter.galley(rect.min + egui::vec2(5.0, 2.0), galley, color);
 }
 
 #[cfg(test)]
@@ -448,6 +564,7 @@ mod tests {
         app.filtered = vec![0];
         app.active = Some(id);
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         let texture = ctx.load_texture(
             "canonical",
             egui::ColorImage::filled([40, 20], Color32::WHITE),
@@ -475,7 +592,7 @@ mod tests {
                 app.rotation_review.replace_suggestions(vec![(id, turns)]);
                 for layout in [Layout::List, Layout::Icons, Layout::Grid] {
                     app.library_layout = layout;
-                    let output = ctx.run(
+                    let output = ctx.run_test(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
                                 egui::Pos2::ZERO,
@@ -483,8 +600,8 @@ mod tests {
                             )),
                             ..Default::default()
                         },
-                        |ctx| {
-                            egui::CentralPanel::default().show(ctx, |ui| {
+                        |ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
                                 app.library(ui);
                             });
                         },
@@ -539,7 +656,7 @@ mod tests {
         theme_install(&ctx);
         let render = |app: &mut PhotoSortApp, width| {
             let mut offset = None;
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -547,18 +664,23 @@ mod tests {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        app.library(ui);
-                        assert!(ui.min_rect().right() <= width);
-                        let salt =
-                            egui::Id::new(("library_rows", app.library_layout == Layout::Icons));
-                        offset = egui::scroll_area::State::load(
-                            ctx,
-                            ui.make_persistent_id(egui::Id::new(salt)),
-                        )
-                        .map(|s| s.offset.y);
-                    });
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            app.library(ui);
+                            assert!(ui.min_rect().right() <= width);
+                            let salt = egui::Id::new((
+                                "library_rows",
+                                app.library_layout == Layout::Icons,
+                            ));
+                            offset = egui::scroll_area::State::load(
+                                ctx,
+                                ui.make_persistent_id(egui::IdSalt::new(salt)),
+                            )
+                            .map(|s| s.offset.y);
+                        });
+                    }
                 },
             );
             offset.expect("rendered scroll state")

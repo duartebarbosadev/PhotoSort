@@ -20,12 +20,16 @@ sha2 = "0.11"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
 tokio = { version = "1", features = ["rt", "time", "macros"], optional = true }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland", "accesskit"] }
+eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland", "accesskit"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tiff", "webp", "bmp", "gif"] }
 kamadak-exif = "0.6"
+# MIT. Reads MP4/MOV headers for video duration, frame rate and codec.
+mp4 = "0.14"
 # Page count only: lossless pixel rotation must refuse multi-page TIFF.
 tiff = { version = "0.11.3", default-features = false }
 rfd = "0.15.4"
+# Icon font for icon-led controls (MIT); 0.14 matches egui 0.36.
+egui-phosphor = "0.14"
 serde = { version = "1", features = ["derive", "rc"] }
 # Preserve measurement values exactly when evidence is reopened.
 serde_json = { version = "1", features = ["float_roundtrip"] }
@@ -61,6 +65,9 @@ strip = true
 all = "warn"
 
 [features]
+# Test and example builds only (via the dev-dependency below): application
+# data and caches go to a per-process temporary folder, never the user's.
+test-isolation = []
 default = ["raw", "heif", "onnx", "metadata-native", "model-downloads", "updates", "portable-video"]
 native-imaging = ["dep:photosort-imaging-vips"]
 portable-video = ["dep:gst", "dep:gst_app", "dep:gst_video"]
@@ -82,14 +89,17 @@ gst_video = { package = "gstreamer-video", version = "0.24", optional = true }
 libheif-rs = { version = "3.0", default-features = false, features = ["v1_23"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-wgpu = { version = "27", default-features = false, features = ["metal", "wgsl"] }
+wgpu = { version = "30", default-features = false, features = ["metal", "wgsl"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 libc = "0.2"
-wgpu = { version = "27", default-features = false, features = ["dx12", "wgsl"] }
+wgpu = { version = "30", default-features = false, features = ["dx12", "wgsl"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-wgpu = { version = "27", default-features = false, features = ["vulkan", "gles", "wgsl"] }
+wgpu = { version = "30", default-features = false, features = ["vulkan", "gles", "wgsl"] }
 
 [dev-dependencies]
+photosort = { path = ".", default-features = false, features = ["test-isolation"] }
 jpeg-encoder = "0.7.1"
+# Headless rendering for the UI screenshot gallery and visual checks.
+egui_kittest = { version = "0.36.2", features = ["wgpu", "eframe"] }

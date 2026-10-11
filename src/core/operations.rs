@@ -1389,6 +1389,27 @@ fn copy_exclusive(source: &Path, dest: &Path, cancelled: &dyn Fn() -> bool) -> R
 // The fallback is shared by every move when the destination cannot hard-link the
 // source. Bound cancellation work without allocating the entire photo or video.
 fn copy_contents_exclusive(source: &Path, dest: &Path, cancelled: &dyn Fn() -> bool) -> Result<()> {
+    // Under heavy concurrent I/O, macOS can drop a large resource fork from a
+    // fresh copy. The attempt detects it and rolls back; a new copy usually
+    // keeps it, so try a few times before reporting the error.
+    let mut attempt = 0;
+    loop {
+        match copy_contents_once(source, dest, cancelled) {
+            Err(error)
+                if attempt < 2
+                    && !error.is::<MoveCancelled>()
+                    && !dest.exists()
+                    && format!("{error:#}").contains("extended attributes") =>
+            {
+                attempt += 1;
+                tracing::warn!(attempt, %error, "retrying fallback copy");
+                std::thread::sleep(std::time::Duration::from_millis(50 * attempt));
+            }
+            result => return result,
+        }
+    }
+}
+fn copy_contents_once(source: &Path, dest: &Path, cancelled: &dyn Fn() -> bool) -> Result<()> {
     check_move_cancelled(cancelled)?;
     let mut input = File::open(source)?;
     let metadata = input.metadata()?;
@@ -1397,7 +1418,9 @@ fn copy_contents_exclusive(source: &Path, dest: &Path, cancelled: &dyn Fn() -> b
         times = times.set_accessed(accessed);
     }
     let mut options = OpenOptions::new();
-    options.create_new(true).write(true);
+    // Read access too: macOS resource-fork attributes are read back through
+    // this descriptor to verify the copy, and fail on a write-only one.
+    options.create_new(true).read(true).write(true);
     // Do not expose a private source while its fallback copy is still partial.
     #[cfg(unix)]
     {

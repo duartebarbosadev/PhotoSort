@@ -31,7 +31,7 @@ fn organize_trash_menus_share_state_for_mixed_files_and_folder_descendants() {
             theme_install(&ctx);
             ctx.enable_accesskit();
             let frame = |app: &mut PhotoSortApp, events| {
-                ctx.run(
+                ctx.run_test(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -40,7 +40,10 @@ fn organize_trash_menus_share_state_for_mixed_files_and_folder_descendants() {
                         events,
                         ..Default::default()
                     },
-                    |ctx| app.organize_dialog(ctx),
+                    |ui| {
+                        let ctx = &ui.ctx().clone();
+                        app.organize_dialog(ctx)
+                    },
                 )
             };
             let click = |pos, button| {
@@ -148,7 +151,7 @@ fn folder_expansion_editor_controls_persist_without_repeating_image_work() {
         theme_install(&ctx);
         ctx.enable_accesskit();
         let frame = |app: &mut PhotoSortApp, events| {
-            ctx.run(
+            ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -157,7 +160,10 @@ fn folder_expansion_editor_controls_persist_without_repeating_image_work() {
                     events,
                     ..Default::default()
                 },
-                |ctx| app.organize_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                },
             )
         };
         let click = |pos, button| {
@@ -293,18 +299,24 @@ fn folder_ranges_pointer_keyboard_and_resume_use_visible_order_without_image_wor
         let projection = editor.visible_folders.as_ptr();
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        let frame = |app: &mut PhotoSortApp, events, modifiers| {
-            let _ = ctx.run(
+        let frame = |app: &mut PhotoSortApp, events: Vec<egui::Event>, modifiers| {
+            // egui 0.36 carries modifier state as an event, not a RawInput field.
+            let events = std::iter::once(egui::Event::ModifiersChanged(modifiers))
+                .chain(events)
+                .collect();
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
                         egui::vec2(width, 900.),
                     )),
                     events,
-                    modifiers,
                     ..Default::default()
                 },
-                |ctx| app.organize_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                },
             );
         };
         let click = |app: &mut PhotoSortApp, path: &str, modifiers: egui::Modifiers| {
@@ -505,7 +517,7 @@ fn tree_keyboard_organize_keeps_drafts_and_file_selection_and_reveals_virtual_ro
         let ctx = egui::Context::default();
         theme_install(&ctx);
         let frame = |app: &mut PhotoSortApp, events| {
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -514,7 +526,10 @@ fn tree_keyboard_organize_keeps_drafts_and_file_selection_and_reveals_virtual_ro
                     events,
                     ..Default::default()
                 },
-                |ctx| app.organize_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                },
             );
         };
         for _ in 0..3 {
@@ -804,13 +819,16 @@ fn selective_reset_menu_preserves_other_edits_names_and_selection_at_all_sizes()
             theme_install(&ctx);
             ctx.enable_accesskit();
             let frame = |app: &mut PhotoSortApp, events| {
-                ctx.run(
+                ctx.run_test(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         events,
                         ..Default::default()
                     },
-                    |ctx| app.organize_dialog(ctx),
+                    |ui| {
+                        let ctx = &ui.ctx().clone();
+                        app.organize_dialog(ctx)
+                    },
                 )
             };
             for _ in 0..3 {
@@ -901,7 +919,11 @@ fn selective_reset_waits_for_generated_metadata_and_survives_keep_reopen() {
         ..Default::default()
     });
     let ctx = egui::Context::default();
-    let _ = ctx.run(Default::default(), |ctx| app.organize_dialog(ctx));
+    theme_install(&ctx);
+    let _ = ctx.run_test(Default::default(), |ui| {
+        let ctx = &ui.ctx().clone();
+        app.organize_dialog(ctx)
+    });
     let editor = app.organize_editor.take().unwrap();
     assert_eq!(editor.draft.labels()[&MediaId(0)], "trip");
     app.finish_organize_edit(editor, 2);
@@ -918,7 +940,10 @@ fn selective_reset_waits_for_generated_metadata_and_survives_keep_reopen() {
         files: HashSet::from([MediaId(0)]),
         ..Default::default()
     });
-    let _ = ctx.run(Default::default(), |ctx| app.organize_dialog(ctx));
+    let _ = ctx.run_test(Default::default(), |ui| {
+        let ctx = &ui.ctx().clone();
+        app.organize_dialog(ctx)
+    });
     assert_eq!(
         app.organize_editor.as_ref().unwrap().draft.labels()[&MediaId(0)],
         "Custom"
@@ -949,7 +974,7 @@ fn responsive_editor_keeps_each_scroll_and_selection_without_repeating_work() {
     let ctx = egui::Context::default();
     theme_install(&ctx);
     let frame = |app: &mut PhotoSortApp, width, events| {
-        let _ = ctx.run(
+        let _ = ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -958,7 +983,10 @@ fn responsive_editor_keeps_each_scroll_and_selection_without_repeating_work() {
                 events,
                 ..Default::default()
             },
-            |ctx| app.organize_dialog(ctx),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.organize_dialog(ctx)
+            },
         );
     };
     let editor = app.organize_editor.as_mut().unwrap();
@@ -1008,6 +1036,7 @@ fn responsive_editor_keeps_each_scroll_and_selection_without_repeating_work() {
             vec![
                 egui::Event::PointerMoved(viewport.center()),
                 egui::Event::MouseWheel {
+                    phase: egui::TouchPhase::Move,
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, -100.0),
                     modifiers: Default::default(),
@@ -1067,7 +1096,7 @@ fn virtual_editor_rows_keep_exact_pitch_and_last_entries_visible_without_image_w
                 editor.restore_scroll[usize::from(folders)] =
                     Some(if end { 1_000_000.0 } else { 0.0 });
                 for _ in 0..3 {
-                    let _ = ctx.run(
+                    let _ = ctx.run_test(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
                                 egui::Pos2::ZERO,
@@ -1075,8 +1104,8 @@ fn virtual_editor_rows_keep_exact_pitch_and_last_entries_visible_without_image_w
                             )),
                             ..Default::default()
                         },
-                        |ctx| {
-                            egui::CentralPanel::default().show(ctx, |ui| {
+                        |ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
                                 if folders {
                                     editor.structure(ui, 380.0, &HashMap::new());
                                 } else {
@@ -1099,8 +1128,9 @@ fn virtual_editor_rows_keep_exact_pitch_and_last_entries_visible_without_image_w
                 } else {
                     editor.rows.len()
                 };
+                let gap = ctx.global_style().spacing.item_spacing.y;
                 assert!(
-                    (content.y - (count as f32 * (height + 10.0) - 10.0)).abs() <= height + 10.0,
+                    (content.y - (count as f32 * (height + gap) - gap)).abs() <= height + gap,
                     "{key}: content {content:?} height {height}"
                 );
                 assert!(
@@ -1120,7 +1150,7 @@ fn virtual_editor_rows_keep_exact_pitch_and_last_entries_visible_without_image_w
                     })
                     .collect();
                 assert!(
-                    (rects[1].top() - rects[0].top() - height - 10.0).abs() < 0.6,
+                    (rects[1].top() - rects[0].top() - height - gap).abs() < 0.6,
                     "{key}: {rects:?}, height {height}, offset {offset}"
                 );
                 if end {
@@ -1247,13 +1277,16 @@ fn editor_context_menu_copies_clicked_source_at_compact_and_wide_sizes() {
         theme_install(&ctx);
         ctx.enable_accesskit();
         let frame = |app: &mut PhotoSortApp, events| {
-            ctx.run(
+            ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     events,
                     ..Default::default()
                 },
-                |ctx| app.organize_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                },
             )
         };
         for _ in 0..3 {
@@ -1373,7 +1406,7 @@ fn enter_commits_a_focused_file_name_after_the_widget_releases_focus() {
     let ctx = egui::Context::default();
     theme_install(&ctx);
     let mut frame = |events| {
-        let _ = ctx.run(
+        let _ = ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1382,7 +1415,10 @@ fn enter_commits_a_focused_file_name_after_the_widget_releases_focus() {
                 events,
                 ..Default::default()
             },
-            |ctx| app.organize_dialog(ctx),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.organize_dialog(ctx)
+            },
         );
     };
     for _ in 0..3 {
@@ -1430,7 +1466,7 @@ fn file_keyboard_ranges_marks_rename_and_resume_share_cached_editor_state() {
         let ctx = egui::Context::default();
         theme_install(&ctx);
         let frame = |app: &mut PhotoSortApp, events| {
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1439,7 +1475,10 @@ fn file_keyboard_ranges_marks_rename_and_resume_share_cached_editor_state() {
                     events,
                     ..Default::default()
                 },
-                |ctx| app.organize_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                },
             );
         };
         let key = |key, shift, command, repeat| egui::Event::Key {
@@ -1574,7 +1613,7 @@ fn file_keyboard_large_list_reveals_end_home_and_preserves_pointer_toggle_behavi
         let ctx = egui::Context::default();
         theme_install(&ctx);
         let frame = |app: &mut PhotoSortApp, events| {
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1583,7 +1622,10 @@ fn file_keyboard_large_list_reveals_end_home_and_preserves_pointer_toggle_behavi
                     events,
                     ..Default::default()
                 },
-                |ctx| app.organize_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                },
             );
         };
         for _ in 0..3 {
@@ -1631,12 +1673,15 @@ fn file_name_entry_and_errors_fit_compact_and_wide_editor_windows() {
         let ctx = egui::Context::default();
         theme_install(&ctx);
         for _ in 0..3 {
-            let _ = ctx.run(
+            let _ = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
                 },
-                |ctx| app.organize_dialog(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                },
             );
         }
         let rect = ctx
@@ -1829,6 +1874,7 @@ fn pending_analysis_blocks_editor_and_modal_blocks_workflow_keyboard() {
     app.analysis_run = None;
     app.open_organize_editor();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let mut input = egui::RawInput::default();
     input.events.push(egui::Event::Key {
         key: egui::Key::I,
@@ -1837,7 +1883,10 @@ fn pending_analysis_blocks_editor_and_modal_blocks_workflow_keyboard() {
         repeat: false,
         modifiers: egui::Modifiers::NONE,
     });
-    let _ = ctx.run(input, |ctx| app.keyboard(ctx));
+    let _ = ctx.run_test(input, |ui| {
+        let ctx = &ui.ctx().clone();
+        app.keyboard(ctx)
+    });
     assert!(
         app.inspector,
         "Editor keystrokes must not toggle the underlying inspector"
@@ -1881,7 +1930,10 @@ fn editor_and_footer_fit_wide_and_compact_windows() {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
                 };
-                let _ = ctx.run(input, |ctx| app.organize_dialog(ctx));
+                let _ = ctx.run_test(input, |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.organize_dialog(ctx)
+                });
             }
             let rect = ctx
                 .memory(|m| m.area_rect(egui::Id::new("organize_editor")))
@@ -1951,6 +2003,7 @@ fn hidden_inventory_reaches_editor_and_shared_planner_without_decoding() {
     app.organize_drafts.insert(GroupMode::Current, editor.draft);
     app.organize();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let deadline = Instant::now() + Duration::from_secs(5);
     while app.busy && Instant::now() < deadline {
         app.poll(&ctx);
@@ -1992,6 +2045,7 @@ fn empty_folder_editor_intent_reaches_shared_io_worker_without_mutation() {
     app.organize_drafts.insert(GroupMode::Current, editor.draft);
     app.organize();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let deadline = Instant::now() + Duration::from_secs(5);
     while app.busy && Instant::now() < deadline {
         app.poll(&ctx);
@@ -2067,10 +2121,11 @@ fn drop_target_scopes_payload_to_editor_and_escape_cancels_drag() {
     let mut editor = app.organize_editor.take().unwrap();
     editor.draft.create_folder("", "target").unwrap();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let mut rect = egui::Rect::NOTHING;
     let mut dropped = None;
-    let _ = ctx.run(Default::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let _ = ctx.run_test(Default::default(), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             rect = ui.button("target").rect;
         });
     });
@@ -2098,8 +2153,8 @@ fn drop_target_scopes_payload_to_editor_and_escape_cancels_drag() {
             ],
             ..Default::default()
         };
-        let _ = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_test(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let response = ui.button("target");
                 dropped = editor.drop_target(ui, &response, "target");
             });
@@ -2115,11 +2170,11 @@ fn drop_target_scopes_payload_to_editor_and_escape_cancels_drag() {
         repeat: false,
         modifiers: Default::default(),
     });
-    let _ = ctx.run(input, |_| {});
+    let _ = ctx.run_test(input, |_| {});
     assert!(!egui::DragAndDrop::has_any_payload(&ctx));
     assert_eq!(editor.draft.labels()[&MediaId(0)], "trip");
     for cancellation in 0..4 {
-        let _ = ctx.run(
+        let _ = ctx.run_test(
             egui::RawInput {
                 events: vec![
                     egui::Event::PointerMoved(position),
@@ -2132,7 +2187,10 @@ fn drop_target_scopes_payload_to_editor_and_escape_cancels_drag() {
                 ],
                 ..Default::default()
             },
-            |ctx| editor.begin_drag_frame(ctx),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                editor.begin_drag_frame(ctx)
+            },
         );
         assert!(editor.drag.start().is_some());
         let mut input = egui::RawInput {
@@ -2153,9 +2211,12 @@ fn drop_target_scopes_payload_to_editor_and_escape_cancels_drag() {
         }
         egui::DragAndDrop::set_payload(&ctx, editor.file_drag(MediaId(0)));
         if cancellation == 3 {
-            let _ = ctx.run(Default::default(), |_| {});
+            let _ = ctx.run_test(Default::default(), |_| {});
         }
-        let _ = ctx.run(input, |ctx| editor.begin_drag_frame(ctx));
+        let _ = ctx.run_test(input, |ui| {
+            let ctx = &ui.ctx().clone();
+            editor.begin_drag_frame(ctx)
+        });
         assert!(editor.drag.start().is_none());
         assert!(editor.completed_drag.is_none());
         assert!(
@@ -2171,7 +2232,7 @@ fn hover_frame(
     width: f32,
     events: Vec<egui::Event>,
 ) {
-    let _ = ctx.run(
+    let _ = ctx.run_test(
         egui::RawInput {
             time: Some(time),
             screen_rect: Some(egui::Rect::from_min_size(
@@ -2181,7 +2242,10 @@ fn hover_frame(
             events,
             ..Default::default()
         },
-        |ctx| app.organize_dialog(ctx),
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            app.organize_dialog(ctx)
+        },
     );
 }
 fn hover_rect(ctx: &egui::Context, path: &str) -> egui::Pos2 {
@@ -2262,6 +2326,8 @@ fn drag_hover_expansion_reaches_nested_destinations_in_wide_and_compact_layouts(
                 vec![egui::Event::PointerMoved(tab)],
             );
             hover_frame(&ctx, &mut app, 0.36, width, vec![]);
+            // The newly shown folder list settles on its second frame.
+            hover_frame(&ctx, &mut app, 0.37, width, vec![]);
         }
         let selected = app.organize_editor.as_ref().unwrap().selected.clone();
         let folders = app
@@ -2445,7 +2511,10 @@ fn pointer_drags_in_scrollable_modal_reach_shared_draft() {
                 events,
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| app.organize_dialog(ctx));
+            let _ = ctx.run_test(input, |ui| {
+                let ctx = &ui.ctx().clone();
+                app.organize_dialog(ctx)
+            });
         };
         for _ in 0..3 {
             frame(&mut app, vec![]);
@@ -2552,7 +2621,10 @@ fn compact_drag_can_switch_tabs_without_losing_its_selection() {
             events,
             ..Default::default()
         };
-        let _ = ctx.run(input, |ctx| app.organize_dialog(ctx));
+        let _ = ctx.run_test(input, |ui| {
+            let ctx = &ui.ctx().clone();
+            app.organize_dialog(ctx)
+        });
     };
     for _ in 0..3 {
         frame(&mut app, vec![]);
@@ -2605,7 +2677,7 @@ fn organize_selected_media_preview_is_available_without_accepting_edits() {
     ctx.enable_accesskit();
     let mut labels = Vec::new();
     for _ in 0..3 {
-        let output = ctx.run(
+        let output = ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2613,7 +2685,10 @@ fn organize_selected_media_preview_is_available_without_accepting_edits() {
                 )),
                 ..Default::default()
             },
-            |ctx| app.organize_dialog(ctx),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.organize_dialog(ctx)
+            },
         );
         labels = output
             .platform_output
@@ -2842,13 +2917,17 @@ fn organize_preview_video_uses_shared_player_and_pauses_for_other_dialogs() {
     app.organize_editor.as_mut().unwrap().selected.insert(id);
     app.begin_organize_preview();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let sync = |app: &mut PhotoSortApp, focused| {
-        let _ = ctx.run(
+        let _ = ctx.run_test(
             egui::RawInput {
                 focused,
                 ..Default::default()
             },
-            |ctx| app.sync_playback(ctx),
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.sync_playback(ctx)
+            },
         );
     };
     sync(&mut app, true);
@@ -3045,7 +3124,7 @@ fn action_frame(app: &mut PhotoSortApp, ctx: &egui::Context, width: f32, events:
             std::iter::once(event).chain(release)
         })
         .collect();
-    let _ = ctx.run(
+    let _ = ctx.run_test(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -3054,7 +3133,10 @@ fn action_frame(app: &mut PhotoSortApp, ctx: &egui::Context, width: f32, events:
             events,
             ..Default::default()
         },
-        |ctx| app.organize_dialog(ctx),
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            app.organize_dialog(ctx)
+        },
     );
 }
 fn action_key(key: egui::Key, modifiers: egui::Modifiers, repeat: bool) -> egui::Event {
@@ -3171,6 +3253,18 @@ fn organize_action_order_fallback_and_repeat_guards_share_navigation() {
         .map(|(i, m)| (m.id, i))
         .collect();
     app.open_organize_editor();
+    // action_focus clicks MediaId(0); ArrowDown moves to the next displayed row,
+    // which follows folder and capture order rather than fixture insertion order.
+    let rows: Vec<_> = app
+        .organize_editor
+        .as_ref()
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| r.id)
+        .collect();
+    let first = MediaId(0);
+    let second = rows[rows.iter().position(|id| *id == first).unwrap() + 1];
     let ctx = egui::Context::default();
     theme_install(&ctx);
     action_focus(&mut app, &ctx, 640., false);
@@ -3182,7 +3276,7 @@ fn organize_action_order_fallback_and_repeat_guards_share_navigation() {
         640.,
         vec![key(egui::Key::ArrowDown), key(egui::Key::D)],
     );
-    assert!(!app.decision(MediaId(0)).rejected && app.decision(MediaId(1)).rejected);
+    assert!(!app.decision(first).rejected && app.decision(second).rejected);
     action_frame(
         &mut app,
         &ctx,
@@ -3193,7 +3287,7 @@ fn organize_action_order_fallback_and_repeat_guards_share_navigation() {
         ],
     );
     assert!(
-        app.decision(MediaId(1)).rejected,
+        app.decision(second).rejected,
         "clear then mark lost event ordering"
     );
     action_frame(
@@ -3260,7 +3354,7 @@ fn organize_action_create_and_rename_folder_use_the_existing_draft_commands() {
             );
             action_frame(&mut app, &ctx, width, vec![]);
             assert!(app.organize_editor.as_ref().unwrap().compact_folders);
-            assert!(ctx.wants_keyboard_input());
+            assert!(ctx.egui_wants_keyboard_input());
             action_frame(
                 &mut app,
                 &ctx,
@@ -3303,13 +3397,16 @@ fn organize_action_create_and_rename_folder_use_the_existing_draft_commands() {
             );
             let editor = app.organize_editor.as_ref().unwrap();
             assert!(editor.draft.folders().contains("Journey/Child"));
+            // Selected files (with their companions) moved into the folder
+            // created for them; the rest followed the renamed parent.
+            let labels = editor.draft.labels();
+            assert!(selected.iter().all(|id| labels[id] == "Journey/Child"));
             assert!(
-                editor
-                    .draft
-                    .labels()
+                labels
                     .values()
-                    .all(|label| label == "Journey")
+                    .all(|l| l == "Journey" || l == "Journey/Child")
             );
+            assert!(selected.is_empty() || labels.values().any(|l| l == "Journey"));
             assert_eq!(editor.selected, selected);
             assert!(editor.folder_edit.is_none());
             assert!(
@@ -3524,4 +3621,200 @@ fn organize_action_preview_shortcuts_accept_names_then_review_without_mutation()
         assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
         app.runtime.shutdown();
     }
+}
+
+#[test]
+fn f2_and_new_folder_keys_open_the_editor_from_the_organize_grid() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["a.jpg", "b.jpg"] {
+        std::fs::write(temp.path().join(name), b"unchanged").unwrap();
+    }
+    let catalog = Catalog::scan(temp.path(), || false, |_| {}).unwrap();
+    let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+    app.output = catalog.root.display().to_string();
+    app.media = catalog.media.clone();
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+    app.catalog = Some(Arc::new(catalog));
+    app.step = Step::Organize;
+    let b = app.media.iter().find(|m| m.name() == "b.jpg").unwrap().id;
+    app.active = Some(b);
+    // Other steps and plain keys are not taken over.
+    assert!(!app.organize_shortcut(egui::Key::F3, egui::Modifiers::NONE));
+    assert!(app.organize_editor.is_none());
+    assert!(app.organize_shortcut(egui::Key::F2, egui::Modifiers::NONE));
+    let editor = app.organize_editor.as_ref().unwrap();
+    assert_eq!(editor.file_cursor.map(|i| editor.rows[i].id), Some(b));
+    assert!(
+        editor.renaming.is_some(),
+        "F2 starts renaming the active photo"
+    );
+    app.organize_editor = None;
+    let new_folder = egui::Modifiers {
+        command: true,
+        shift: true,
+        ..Default::default()
+    };
+    assert!(app.organize_shortcut(egui::Key::N, new_folder));
+    assert!(app.organize_editor.as_ref().unwrap().folder_name_focus);
+    // Through the real dispatch: pressed-key filtering and handler order.
+    app.organize_editor = None;
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    let _ = ctx.run_test(
+        egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::F2,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        },
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            app.keyboard(ctx)
+        },
+    );
+    assert!(
+        app.organize_editor
+            .as_ref()
+            .is_some_and(|e| e.renaming.is_some()),
+        "F2 from the grid reaches the rename shortcut"
+    );
+    app.runtime.shutdown();
+}
+
+#[test]
+fn create_folder_moves_the_selected_files_into_it() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["a.jpg", "b.jpg", "c.jpg"] {
+        std::fs::write(temp.path().join(name), b"unchanged").unwrap();
+    }
+    let catalog = Catalog::scan(temp.path(), || false, |_| {}).unwrap();
+    let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+    app.output = catalog.root.display().to_string();
+    app.media = catalog.media.clone();
+    app.catalog = Some(Arc::new(catalog));
+    app.open_organize_editor();
+    let mut editor = app.organize_editor.take().unwrap();
+    let id = |name: &str| app.media.iter().find(|m| m.name() == name).unwrap().id;
+    editor.selected = [id("a.jpg"), id("c.jpg")].into();
+    editor.name = "Keepers".into();
+    editor.apply(Command::Create, &app.media, false);
+    assert!(editor.error.is_none(), "{:?}", editor.error);
+    assert_eq!(editor.folder, "Keepers");
+    let labels = editor.draft.labels();
+    assert_eq!(labels[&id("a.jpg")], "Keepers");
+    assert_eq!(labels[&id("c.jpg")], "Keepers");
+    assert_ne!(
+        labels.get(&id("b.jpg")).map(String::as_str),
+        Some("Keepers")
+    );
+    // With nothing selected, the folder is created empty.
+    editor.selected.clear();
+    editor.folder.clear();
+    editor.name = "Later".into();
+    editor.apply(Command::Create, &app.media, false);
+    assert!(editor.draft.folders().contains("Later"));
+    assert!(!editor.draft.labels().values().any(|l| l == "Later"));
+    app.runtime.shutdown();
+}
+
+#[test]
+fn hovering_a_destination_folder_previews_only_its_photos() {
+    let temp = tempfile::tempdir().unwrap();
+    for (folder, names) in [("Trip", ["a.png", "b.png"]), ("Home", ["c.png", "d.png"])] {
+        std::fs::create_dir_all(temp.path().join(folder)).unwrap();
+        for name in names {
+            image::RgbaImage::new(8, 8)
+                .save(temp.path().join(folder).join(name))
+                .unwrap();
+        }
+    }
+    let catalog = Catalog::scan(temp.path(), || false, |_| {}).unwrap();
+    let mut app =
+        PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
+    app.output = catalog.root.display().to_string();
+    app.media = catalog.media.clone();
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+    app.catalog = Some(Arc::new(catalog));
+    app.step = Step::Organize;
+    app.open_organize_editor();
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let mut time = 0.0;
+    let mut frame = |app: &mut PhotoSortApp, events: Vec<egui::Event>, dt: f64| {
+        time += dt;
+        ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| app.organize_dialog(ui.ctx()),
+        )
+    };
+    for _ in 0..3 {
+        frame(&mut app, vec![], 0.05);
+    }
+    let row = ctx
+        .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_folder_rect", "Trip"))))
+        .expect("Trip row");
+    frame(
+        &mut app,
+        vec![egui::Event::PointerMoved(row.center())],
+        0.05,
+    );
+    // Not yet: a passing pointer must not load thumbnails.
+    let early = frame(&mut app, vec![], 0.1);
+    assert!(app.requested.is_empty());
+    assert!(!labels(&early).iter().any(|l| l.starts_with("Trip ·")));
+    frame(&mut app, vec![], 0.5);
+    let shown = frame(&mut app, vec![], 0.05);
+    assert!(
+        labels(&shown).iter().any(|l| l == "Trip · 2 files"),
+        "{:?}",
+        labels(&shown)
+    );
+    let trip: HashSet<MediaId> = app
+        .media
+        .iter()
+        .filter(|m| m.path.parent().unwrap().ends_with("Trip"))
+        .map(|m| m.id)
+        .collect();
+    assert!(!app.requested.is_empty());
+    assert!(
+        app.requested
+            .iter()
+            .all(|(id, preview)| trip.contains(id) && !preview)
+    );
+    app.runtime.shutdown();
+}
+
+fn labels(output: &egui::FullOutput) -> Vec<String> {
+    output
+        .platform_output
+        .accesskit_update
+        .as_ref()
+        .unwrap()
+        .nodes
+        .iter()
+        .filter_map(|(_, n)| n.value().or(n.label()).map(str::to_owned))
+        .collect()
 }

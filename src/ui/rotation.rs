@@ -100,6 +100,8 @@ impl PhotoSortApp {
                     self.rotations.clear();
                     self.rotation_run = Some(run);
                     self.analysis_run = Some(run);
+                    self.analysis_failures.clear();
+                    self.analysis_successes = 0;
                     self.progress = Some((0, self.media.len()));
                     self.set_status("Detecting orientations locally…".into());
                 }
@@ -112,10 +114,10 @@ impl PhotoSortApp {
             .media
             .iter()
             .filter_map(|m| {
-                self.rotations
-                    .get(&m.id)
-                    .filter(|s| s.turns != 0)
-                    .map(|s| (m.name(), m.id, s.turns, s.uncertain))
+                self.rotations.get(&m.id).filter(|s| s.turns != 0).map(|s| {
+                    let order = crate::core::dates::capture_order(m, self.metadata.get(&m.id));
+                    (order, m.id, s.turns, s.uncertain)
+                })
             })
             .collect();
         rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.0.cmp(&b.1.0)));
@@ -130,23 +132,55 @@ impl PhotoSortApp {
         self.filter_dirty = true;
         self.set_workflow_status(
             Step::Rotation,
-            format!(
-                "{} rotation suggestions · confirm choices before applying",
-                self.rotation_review.ids().len()
-            ),
+            match self.rotation_review.ids().len() {
+                0 => "No rotation suggestions · every photo looks upright".to_owned(),
+                1 => "1 rotation suggestion · confirm it before applying".to_owned(),
+                n => format!("{n} rotation suggestions · confirm choices before applying"),
+            } + &self.failure_note(),
         );
     }
     pub(super) fn rotation_controls(&mut self, ui: &mut egui::Ui) {
+        use egui_phosphor::regular as icon;
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(
-                    self.can_start_analysis(),
-                    egui::Button::new("Detect rotations…"),
-                )
-                .on_hover_text("Detect orientations locally · Ctrl/Cmd+S")
-                .clicked()
-            {
-                self.analyze_current_workflow();
+            if let Some(id) = self.active {
+                if icon_button(ui, icon::ARROW_COUNTER_CLOCKWISE, "Rotate left · Q").clicked() {
+                    self.rotate(id, 3);
+                }
+                if icon_button(ui, icon::ARROW_CLOCKWISE, "Rotate right · E").clicked() {
+                    self.rotate(id, 1);
+                }
+                divider(ui);
+                let confirmed = self.rotation_review.choice(id).is_some_and(|c| c.confirmed);
+                let confirm = if confirmed {
+                    ui.button("Cancel confirmation")
+                } else {
+                    ui.add(primary("Confirm"))
+                };
+                if confirm.on_hover_text("Enter").clicked() {
+                    self.confirm_rotation();
+                }
+                if ui
+                    .add_enabled(
+                        !self.rotation_review.ids().is_empty(),
+                        egui::Button::new("Confirm all"),
+                    )
+                    .on_hover_text("Confirms every certain suggestion; uncertain photos stay open")
+                    .clicked()
+                    && self.allow_review_departure()
+                {
+                    self.rotation_review.confirm_all();
+                }
+                if ui
+                    .button("Reset")
+                    .on_hover_text("Back to the suggestion · R")
+                    .clicked()
+                {
+                    self.reset_rotation(false);
+                }
+                if ui.button("Reset all").on_hover_text("Shift+R").clicked() {
+                    self.reset_rotation(true);
+                }
+                divider(ui);
             }
             let mut queue_only = self.rotation_queue_only;
             if ui.checkbox(&mut queue_only, "Suggestions only").changed()
@@ -156,81 +190,51 @@ impl PhotoSortApp {
                 self.filter_dirty = true;
             }
             let count = self.rotation_review.pending_count();
+            let apply = format!("Apply {count} confirmed…");
+            let button = if count > 0 {
+                primary(apply)
+            } else {
+                egui::Button::new(apply)
+            };
             if ui
-                .add_enabled(
-                    count > 0 && !self.busy,
-                    egui::Button::new(format!("Apply {count} confirmed…")),
-                )
+                .add_enabled(count > 0 && !self.busy, button)
+                .on_hover_text("Review and write the confirmed rotations · Shift+Enter")
                 .clicked()
             {
                 self.review_rotations();
             }
         });
-        ui.horizontal_wrapped(|ui| {
-            if let Some(id) = self.active {
-                if ui.button("↶ Left (Q)").clicked() {
-                    self.rotate(id, 3);
-                }
-                if ui.button("Right (E) ↷").clicked() {
-                    self.rotate(id, 1);
-                }
-                let confirmed = self.rotation_review.choice(id).is_some_and(|c| c.confirmed);
-                if ui
-                    .button(if confirmed {
-                        "Cancel confirmation"
-                    } else {
-                        "Confirm →"
-                    })
-                    .clicked()
-                {
-                    self.confirm_rotation();
-                }
-                if ui.button("Reset default").clicked() {
-                    self.reset_rotation(false);
-                }
-                if ui.button("Reset all").clicked() {
-                    self.reset_rotation(true);
-                }
-                if ui
-                    .add_enabled(
-                        !self.rotation_review.ids().is_empty(),
-                        egui::Button::new("Confirm all"),
-                    )
-                    .clicked()
-                    && self.allow_review_departure()
-                {
-                    self.rotation_review.confirm_all();
-                }
-            }
-        });
         if let Some(id) = self.active {
-            let text = self
-                .rotation_review
-                .choice(id)
+            let choice = self.rotation_review.choice(id);
+            let text = choice
                 .map(|c| {
                     format!(
-                        "{} · {}{} · {}°{}",
-                        if c.confirmed {
-                            "Confirmed"
-                        } else {
-                            "Choose, then confirm"
-                        },
+                        "{} · {}{} · {}°",
                         if c.selected {
                             "Correction selected"
                         } else {
                             "Original selected"
                         },
-                        if c.manual() { " · Manual" } else { "" },
+                        if c.manual() { "manual · " } else { "" },
+                        if c.confirmed {
+                            "confirmed"
+                        } else {
+                            "not confirmed yet"
+                        },
                         c.degrees(),
-                        if c.confirmed { "" } else { " · Preview only" }
                     )
                 })
-                .unwrap_or_else(|| {
-                    "Choose the original or rotate the preview, then confirm.".into()
-                });
-            ui.label(RichText::new(text).small().color(ACCENT));
-            if self.rotation_review.choice(id).is_some_and(|c| c.uncertain) {
-                ui.label(RichText::new("Uncertain orientation · rotated views disagree. Compare with the original and confirm this photo individually; Confirm all skips it.").small());
+                .unwrap_or_else(|| "Pick the original or rotate the preview, then confirm.".into());
+            step_hint(ui, &text);
+            if choice.is_some_and(|c| c.uncertain) {
+                ui.label(
+                    RichText::new(format!(
+                        "{}  Uncertain orientation: the rotated views disagree. Compare with the original and confirm this photo on its own; Confirm all skips it.",
+                        icon::WARNING
+                    ))
+                    .small()
+                    .color(ACCENT),
+                );
             }
         }
     }
@@ -264,8 +268,9 @@ mod tests {
         assert_eq!(app.rotation_review.ids(), &[id]);
         assert!(!app.rotation_review.choice(id).unwrap().selected);
         let ctx = egui::Context::default();
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.rotation_controls(ui));
+        theme_install(&ctx);
+        let output = ctx.run_test(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.rotation_controls(ui));
         });
         fn has_warning(shape: &egui::Shape) -> bool {
             match shape {

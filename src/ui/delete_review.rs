@@ -41,10 +41,11 @@ impl PhotoSortApp {
         self.filter_dirty = true;
         self.set_workflow_status(
             Step::EasyDelete,
-            format!(
-                "{} reviews · choices stay provisional until confirmed",
-                self.delete_review.entries().len()
-            ),
+            match self.delete_review.entries().len() {
+                0 => "Nothing to clean up · no duplicates or problem shots found".to_owned(),
+                1 => "1 suggestion · choices stay provisional until confirmed".to_owned(),
+                n => format!("{n} suggestions · choices stay provisional until confirmed"),
+            } + &self.failure_note(),
         );
     }
     pub(super) fn delete_review_ids(&self) -> Vec<MediaId> {
@@ -115,16 +116,20 @@ impl PhotoSortApp {
                 if count == 0 {
                     continue;
                 }
-                let mut enabled = self.delete_categories.contains(&category);
-                if ui
-                    .checkbox(&mut enabled, format!("{} ({count})", category.title()))
-                    .changed()
+                let enabled = self.delete_categories.contains(&category);
+                if chip(ui, enabled, &format!("{} ({count})", category.title()))
+                    .on_hover_text(if enabled {
+                        "Hide this kind of suggestion"
+                    } else {
+                        "Show this kind of suggestion"
+                    })
+                    .clicked()
                     && self.allow_review_departure()
                 {
                     if enabled {
-                        self.delete_categories.insert(category);
-                    } else {
                         self.delete_categories.remove(&category);
+                    } else {
+                        self.delete_categories.insert(category);
                     }
                     self.filter_dirty = true;
                 }
@@ -132,54 +137,50 @@ impl PhotoSortApp {
         });
         ui.horizontal_wrapped(|ui| {
             if let Some(id) = self.delete_current {
-                if ui
-                    .button(if self.delete_review.confirmed(id) {
-                        "Cancel confirmation"
-                    } else {
-                        "Confirm →"
-                    })
-                    .clicked()
-                {
+                let confirmed = self.delete_review.confirmed(id);
+                let confirm = if confirmed {
+                    ui.button("Cancel confirmation")
+                } else {
+                    ui.add(primary("Confirm"))
+                };
+                if confirm.on_hover_text("Enter").clicked() {
                     self.confirm_delete();
                 }
-                if ui.button("Reset default").clicked() {
+                if ui
+                    .button("Reset")
+                    .on_hover_text("Back to the suggestion · R")
+                    .clicked()
+                {
                     self.reset_delete(false);
                 }
-                if ui.button("Reset all").clicked() {
+                if ui.button("Reset all").on_hover_text("Shift+R").clicked() {
                     self.reset_delete(true);
                 }
+                divider(ui);
             }
-            if ui
+            if !self.filtered.is_empty()
+                && ui
                 .add_enabled(
-                    !self.filtered.is_empty(),
-                    egui::Button::new("Accept filtered defaults"),
+                    true,
+                    egui::Button::new(format!("Accept suggestions ({} shown)", self.filtered.len())),
                 )
+                .on_hover_text("Confirm the suggested Keep/Trash choice for every photo in the categories shown · A")
                 .clicked()
             {
                 self.accept_delete_defaults();
-            }
-            if ui
-                .add_enabled(
-                    self.decisions.values().any(|d| d.rejected),
-                    egui::Button::new("Review marked files…"),
-                )
-                .clicked()
-            {
-                self.review_changes();
             }
         });
         if let Some(id) = self.delete_current
             && let Some(entry) = self.delete_review.entry(id)
         {
-            ui.label(RichText::new(&entry.reason).small().color(MUTED));
-            ui.label(
-                RichText::new(if self.delete_review.confirmed(id) {
-                    "Confirmed · shared Trash marks updated"
+            ui.add(egui::Label::new(RichText::new(&entry.reason).color(INK)).wrap());
+            step_hint(
+                ui,
+                if self.delete_review.confirmed(id) {
+                    "Confirmed. The Trash marks are shared with every step."
                 } else {
-                    "Choose Keep or Trash for each photo, then confirm. Files stay unchanged."
-                })
-                .small()
-                .color(ACCENT),
+                    "Choose Keep or Trash for each photo, then confirm. Files stay unchanged until you review changes."
+                },
             );
         }
     }
@@ -227,15 +228,19 @@ mod tests {
         for smoke in [false, true] {
             let mut app = app();
             let ctx = egui::Context::default();
+            theme_install(&ctx);
             if smoke {
                 app = app.with_smoke_test(Duration::from_millis(200));
-                let _ = ctx.run(
+                let _ = ctx.run_test(
                     egui::RawInput {
                         time: Some(0.0),
                         ..Default::default()
                     },
-                    |ctx| {
-                        assert!(!app.smoke_close_requested(ctx));
+                    |ui| {
+                        let ctx = &ui.ctx().clone();
+                        {
+                            assert!(!app.smoke_close_requested(ctx));
+                        }
                     },
                 );
             }
@@ -250,7 +255,7 @@ mod tests {
                 repeat: false,
                 modifiers: egui::Modifiers::NONE,
             });
-            let output = ctx.run(input, |ctx| app.update_workspace(ctx, !smoke));
+            let output = ctx.run_test(input, |ui| app.update_workspace(ui, !smoke));
             assert!(app.decisions[&MediaId(1)].rejected);
             assert!(!app.close_authorized);
             assert!(matches!(app.departure, Some(Destination::Close)));

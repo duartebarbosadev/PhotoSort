@@ -1,7 +1,21 @@
 use super::*;
 impl PhotoSortApp {
-    pub(super) fn start_ready_pick_analysis(&mut self) {
-        if self.step == Step::PickBest
+    /// Start the current step's analysis on entry when it has nothing to show
+    /// yet, as the reference app does for Easy Delete, Fix Rotation and Pick Best.
+    pub(super) fn start_ready_analysis(&mut self) {
+        let unanalysed = match self.step {
+            Step::PickBest => self.pick_review.tournaments().is_empty(),
+            Step::EasyDelete => {
+                !self.view_data_ready.contains(&Step::EasyDelete)
+                    && self.delete_review.entries().is_empty()
+            }
+            Step::Rotation => {
+                !self.view_data_ready.contains(&Step::Rotation)
+                    && self.rotation_review.ids().is_empty()
+            }
+            _ => false,
+        };
+        if unanalysed
             && self.model_issue.is_none()
             && !self.model_dialog
             && self.catalog.is_some()
@@ -14,9 +28,8 @@ impl PhotoSortApp {
             && self.review_notice.is_none()
             && !self.plan_open
             && self.analysis_run.is_none()
-            && self.pick_review.tournaments().is_empty()
         {
-            self.analyze();
+            self.analyze_current_workflow();
         }
     }
 
@@ -33,10 +46,11 @@ impl PhotoSortApp {
         self.pick_run = None;
         self.set_workflow_status(
             Step::PickBest,
-            format!(
-                "{} clusters ready · choose Keep/Trash, then confirm",
-                self.pick_review.tournaments().len()
-            ),
+            match self.pick_review.tournaments().len() {
+                0 => "No similar photos found · every photo is one of a kind".to_owned(),
+                1 => "1 group of similar photos · choose Keep/Trash, then confirm".to_owned(),
+                n => format!("{n} groups of similar photos · choose Keep/Trash, then confirm"),
+            } + &self.failure_note(),
         );
         if self.step == Step::PickBest {
             self.sync_pick_view();
@@ -137,7 +151,7 @@ impl PhotoSortApp {
         ui.horizontal_wrapped(|ui| {
             egui::ComboBox::from_id_salt("pick_cluster")
                 .selected_text(format!(
-                    "Cluster {} / {} · {} photos",
+                    "Group {} / {} · {} photos",
                     current + 1,
                     self.pick_review.tournaments().len(),
                     t.cluster.ordered.len()
@@ -159,16 +173,27 @@ impl PhotoSortApp {
                                             &mut selected_cluster,
                                             i,
                                             format!(
-                                                "Cluster {} · {} photos · {}",
+                                                "Group {} · {} photos · {}",
                                                 i + 1,
                                                 t.cluster.ordered.len(),
                                                 if t.finalized {
-                                                    "Complete"
+                                                    let kept = t
+                                                        .cluster
+                                                        .ordered
+                                                        .iter()
+                                                        .filter(|id| {
+                                                            !self
+                                                                .decisions
+                                                                .get(id)
+                                                                .is_some_and(|d| d.rejected)
+                                                        })
+                                                        .count();
+                                                    format!("Complete · keeping {kept}")
                                                 } else if t.comparisons.iter().any(|c| c.confirmed)
                                                 {
-                                                    "In progress"
+                                                    "In progress".to_owned()
                                                 } else {
-                                                    "Not started"
+                                                    "Not started".to_owned()
                                                 }
                                             ),
                                         )
@@ -252,14 +277,20 @@ impl PhotoSortApp {
                             },
                         );
                 });
-            ui.label(format!(
-                "{} clusters complete",
-                self.pick_review
-                    .tournaments()
-                    .iter()
-                    .filter(|t| t.finalized)
-                    .count()
-            ));
+            let complete = self
+                .pick_review
+                .tournaments()
+                .iter()
+                .filter(|t| t.finalized)
+                .count();
+            ui.label(
+                RichText::new(format!(
+                    "{complete} of {} groups complete",
+                    self.pick_review.tournaments().len()
+                ))
+                .small()
+                .color(MUTED),
+            );
         });
         if selected_cluster != current && self.allow_review_departure() {
             self.pick_review.select_cluster(selected_cluster);
@@ -275,38 +306,45 @@ impl PhotoSortApp {
         }
         let confirmed = self.pick_review.comparison().is_some_and(|c| c.confirmed);
         ui.horizontal_wrapped(|ui| {
+            let confirm = if confirmed {
+                egui::Button::new("Confirmed")
+            } else {
+                primary("Confirm")
+            };
             if ui
-                .add_enabled(
-                    !confirmed,
-                    egui::Button::new(if confirmed { "Confirmed" } else { "Confirm >" }),
+                .add_enabled(!confirmed, confirm)
+                .on_hover_text(
+                    "Apply these Keep/Trash choices and move to the next comparison · Enter",
                 )
                 .clicked()
             {
                 self.confirm_pick(false);
             }
-            if ui.button("Reset default").clicked() {
+            if ui.button("Keep all").on_hover_text("K").clicked() {
+                self.confirm_pick(true);
+            }
+            if ui
+                .button("Reset")
+                .on_hover_text("Back to the suggestion · R")
+                .clicked()
+            {
                 self.reset_pick(false);
             }
             if ui.button("Reset all").clicked() {
                 self.reset_pick(true);
             }
-            if ui.button("Keep all").clicked() {
-                self.confirm_pick(true);
-            }
-            if ui
-                .selectable_label(self.pick_focus, "Focus photo (C)")
-                .clicked()
+            divider(ui);
+            if icon_text_button(
+                ui,
+                true,
+                self.pick_focus,
+                egui_phosphor::regular::CORNERS_OUT,
+                "Focus photo",
+            )
+            .on_hover_text("Show one photo at a time · C")
+            .clicked()
             {
                 self.toggle_pick_focus();
-            }
-            if ui
-                .add_enabled(
-                    self.pick_review.any_completed(),
-                    egui::Button::new("Review changes…"),
-                )
-                .clicked()
-            {
-                self.review_changes();
             }
         });
         if let Some(c) = self.pick_review.comparison() {
@@ -316,17 +354,33 @@ impl PhotoSortApp {
                 .map(|i| self.media[*i].name())
                 .unwrap_or_default();
             let score = self.pick_review.current().unwrap().cluster.scores[&c.ai_pick];
-            ui.label(
-                RichText::new(format!(
-                    "Suggested: {name} · score {score:.1} · {}",
+            // Why these were grouped: the least similar photo to the suggested
+            // keeper, from the same normalized embeddings the grouping used.
+            let alike = self.embeddings.get(&c.ai_pick).and_then(|keeper| {
+                c.paths
+                    .iter()
+                    .filter(|id| **id != c.ai_pick)
+                    .map(|id| {
+                        self.embeddings
+                            .get(id)
+                            .map(|other| crate::core::analysis::cosine(keeper, other))
+                    })
+                    .collect::<Option<Vec<_>>>()
+                    .and_then(|values| values.into_iter().reduce(f32::min))
+            });
+            let alike = alike
+                .map(|value| format!(" These look {:.0}% alike.", value.clamp(0.0, 1.0) * 100.0))
+                .unwrap_or_default();
+            step_hint(
+                ui,
+                &format!(
+                    "Suggested keeper: {name} (score {score:.1}).{alike} {}",
                     if c.confirmed {
-                        "Confirmed choices"
+                        "Choices confirmed."
                     } else {
-                        "Choose Keep/Trash, then confirm"
+                        "Choose Keep or Trash for each photo, then confirm."
                     }
-                ))
-                .small()
-                .color(ACCENT),
+                ),
             );
         }
     }
@@ -404,6 +458,7 @@ mod tests {
     fn workflow_keys_toggle_keep_and_keep_all_without_staging_ratings() {
         let mut app = app();
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         for key in [egui::Key::Num1, egui::Key::C, egui::Key::K] {
             let input = egui::RawInput {
                 events: vec![egui::Event::Key {
@@ -415,7 +470,10 @@ mod tests {
                 }],
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| app.keyboard(ctx));
+            let _ = ctx.run_test(input, |ui| {
+                let ctx = &ui.ctx().clone();
+                app.keyboard(ctx)
+            });
         }
         assert!(!app.pick_focus);
         assert_eq!(app.pick_review.current().unwrap().current, 1);
@@ -490,6 +548,7 @@ mod tests {
     fn popup_keys_do_not_confirm_or_change_the_underlying_review() {
         let mut app = app();
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         for key in [
             egui::Key::Num1,
             egui::Key::Enter,
@@ -506,13 +565,16 @@ mod tests {
                 }],
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| {
-                egui::Popup::open_id(ctx, egui::Id::new("comparison-menu"));
-                app.keyboard(ctx);
-                assert!(
-                    ctx.input(|i| i.key_pressed(key)),
-                    "Leave keys available to the popup"
-                );
+            let _ = ctx.run_test(input, |ui| {
+                let ctx = &ui.ctx().clone();
+                {
+                    egui::Popup::open_id(ctx, egui::Id::new("comparison-menu"));
+                    app.keyboard(ctx);
+                    assert!(
+                        ctx.input(|i| i.key_pressed(key)),
+                        "Leave keys available to the popup"
+                    );
+                }
             });
         }
         assert!(!app.pick_review.unfinished());

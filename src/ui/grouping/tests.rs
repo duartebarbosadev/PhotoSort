@@ -42,6 +42,7 @@ fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
 fn settle(app: &mut PhotoSortApp) {
     let deadline = Instant::now() + Duration::from_secs(10);
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     loop {
         app.poll(&ctx);
         app.refilter();
@@ -221,8 +222,9 @@ fn group_target_picker_virtualizes_large_libraries_at_compact_and_wide_sizes() {
     let (_dir, mut app) = fixture();
     app.browse_groups = (1..=100_000).collect();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     for width in [320., 480., 1200.] {
-        let out = ctx.run(
+        let out = ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -230,8 +232,8 @@ fn group_target_picker_virtualizes_large_libraries_at_compact_and_wide_sizes() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.group_targets(ui));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.group_targets(ui));
             },
         );
         assert!(
@@ -480,8 +482,9 @@ fn scene_edit_cancel_keeps_completed_groups_and_folder_drafts_are_guarded() {
     app.group_mode = GroupMode::Visual;
     app.scene_choices = (1..=100_000).map(|g| (g, 1, MediaId(0))).collect();
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     for width in [320., 600., 1200.] {
-        let output = ctx.run(
+        let output = ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -489,11 +492,152 @@ fn scene_edit_cancel_keeps_completed_groups_and_folder_drafts_are_guarded() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.group_targets(ui));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.group_targets(ui));
             },
         );
         assert!(output.shapes.len() < 180);
     }
     assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+}
+
+#[test]
+fn each_group_with_a_choice_marks_its_best_scoring_photo() {
+    let groups: HashMap<MediaId, usize> = [(1, 7), (2, 7), (3, 7), (4, 8), (5, 9), (6, 9)]
+        .into_iter()
+        .map(|(id, g)| (MediaId(id), g))
+        .collect();
+    let analysis: HashMap<MediaId, crate::core::analysis::Analysis> = [
+        (1, 40.0),
+        (2, 81.5),
+        (3, 60.0),
+        (4, 99.0),
+        (5, 70.0),
+        (6, 70.0),
+    ]
+    .into_iter()
+    .map(|(id, score)| {
+        (
+            MediaId(id),
+            crate::core::analysis::Analysis {
+                score,
+                ..Default::default()
+            },
+        )
+    })
+    .collect();
+    let best = super::group_best(&groups, &analysis);
+    // Group 8 has one photo, so nothing to choose; group 9 ties on score
+    // and resolves to the lower id every time.
+    assert_eq!(best, [MediaId(2), MediaId(5)].into_iter().collect());
+    assert!(super::group_best(&groups, &HashMap::new()).is_empty());
+}
+
+#[test]
+fn dropping_photos_on_a_group_moves_them_like_the_groups_menu() {
+    let (_dir, mut app) = fixture();
+    assert!(app.photo_drag_enabled());
+    // Photos 0 and 1 start in group 1; drop photo 0 onto photo 4's group.
+    let target = app.cull_groups[&MediaId(4)];
+    app.drop_on_group(&super::super::grouping::PhotoDrag(vec![MediaId(0)]), target);
+    settle(&mut app);
+    // Group numbers are reassigned after an edit; membership is what moved.
+    assert_eq!(app.cull_groups[&MediaId(0)], app.cull_groups[&MediaId(4)]);
+    assert!(app.manual_groups.contains(MediaId(0)));
+    assert_ne!(app.cull_groups[&MediaId(1)], app.cull_groups[&MediaId(4)]);
+    // In review, or with nothing grouped yet, tiles are not draggable.
+    app.review = true;
+    assert!(!app.photo_drag_enabled());
+    app.runtime.shutdown();
+}
+
+#[test]
+fn dragging_a_tile_onto_a_navigator_group_moves_it() {
+    use crate::core::browsing::tree::{self, Key, Mode};
+    let (_dir, mut app) = fixture();
+    app.navigator = tree::State {
+        enabled: true,
+        mode: Mode::Groups,
+        ..Default::default()
+    };
+    let entries: Vec<_> = app
+        .media
+        .iter()
+        .map(|m| tree::Entry {
+            path: &m.path,
+            date: None,
+            group: app.cull_groups.get(&m.id).copied(),
+        })
+        .collect();
+    let built = tree::build(Mode::Groups, &[], entries.into_iter(), || false).unwrap();
+    app.browse_tree = Some(Arc::new(
+        Arc::new(built).project(&app.navigator, || false).unwrap(),
+    ));
+    app.filtered = (0..app.media.len()).collect();
+    let target = app.cull_groups[&MediaId(4)];
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let mut time = 0.0;
+    let mut frame = |app: &mut PhotoSortApp, events: Vec<egui::Event>| {
+        time += 0.05;
+        ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 800.0),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    app.navigator_panel(ui);
+                    app.library(ui);
+                });
+                app.photo_drag_overlay(ui.ctx());
+            },
+        )
+    };
+    let mut output = frame(&mut app, vec![]);
+    for _ in 0..2 {
+        output = frame(&mut app, vec![]);
+    }
+    let tree = output.platform_output.accesskit_update.unwrap();
+    let tile = tree
+        .nodes
+        .iter()
+        .find(|(_, n)| n.label() == Some("0.jpg"))
+        .and_then(|(_, n)| n.bounds())
+        .expect("tile 0.jpg");
+    let from = egui::pos2(
+        ((tile.x0 + tile.x1) / 2.0) as f32,
+        ((tile.y0 + tile.y1) / 2.0) as f32,
+    );
+    let row = ctx
+        .data(|d| {
+            d.get_temp::<egui::Rect>(egui::Id::new(("test_navigator_node", &Key::Group(target))))
+        })
+        .expect("group row");
+    let to = row.center();
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    frame(
+        &mut app,
+        vec![egui::Event::PointerMoved(from), button(from, true)],
+    );
+    for step in 1..=10 {
+        let pos = from + (to - from) * (step as f32 / 10.0);
+        frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+    }
+    frame(&mut app, vec![button(to, false)]);
+    frame(&mut app, vec![]);
+    settle(&mut app);
+    assert_eq!(app.cull_groups[&MediaId(0)], app.cull_groups[&MediaId(4)]);
+    app.runtime.shutdown();
 }

@@ -736,7 +736,13 @@ mod batch_probe {
                 let outputs = session.run(ort::inputs![tensor])?;
                 let (shape, values) = outputs[0].try_extract_tensor::<f32>()?;
                 assert_eq!(&shape[..], &[chunk.len() as i64, 257, 384]);
-                results.extend(values.chunks_exact(257 * 384).map(|v| v.to_vec()));
+                results.extend(
+                    values
+                        .as_chunks::<{ 257 * 384 }>()
+                        .0
+                        .iter()
+                        .map(|v| v.to_vec()),
+                );
             }
             if round > 0 {
                 elapsed_ms.push(start.elapsed().as_secs_f64() * 1000.0);

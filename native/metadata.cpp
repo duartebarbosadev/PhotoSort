@@ -54,7 +54,8 @@ extern "C" int photosort_metadata_read(const char *path, size_t length, void *co
                     "Exif.Image.Make", "Exif.Image.Software", "Exif.Photo.FocalLength",
                     "Exif.Photo.ExposureBiasValue", "Exif.Photo.Flash", "Exif.Photo.WhiteBalance",
                     "Exif.Photo.MeteringMode", "Exif.Photo.ExposureMode",
-                    "Exif.Photo.SceneCaptureType", "Exif.Photo.ColorSpace", "Exif.Image.BitsPerSample"
+                    "Exif.Photo.SceneCaptureType", "Exif.Photo.ColorSpace", "Exif.Image.BitsPerSample",
+                    "Exif.Photo.LensSpecification", "Xmp.aux.Lens"
                 };
                 if (std::find(std::begin(selected), std::end(selected), key) != std::end(selected)) {
                     const auto display = item.print(&image->exifData());

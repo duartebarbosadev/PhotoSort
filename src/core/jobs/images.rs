@@ -34,6 +34,7 @@ pub(super) struct Wiring {
     pub(super) cache: PathBuf,
     pub(super) cache_control: cache::Control,
     pub(super) processing: processing::Control,
+    pub(super) raw_look: super::super::raw_look::Control,
     pub(super) inspection: Arc<Mutex<inspection::Queue>>,
     pub(super) analysis: Arc<RunGeneration>,
     pub(super) metadata: Arc<RunGeneration>,
@@ -198,6 +199,7 @@ struct ImageWorker {
     subject_persistent: bool,
     selection: Selection,
     pipeline: Pipeline,
+    raw_look: super::super::raw_look::Control,
     pending: Option<Pending>,
     groups: VisualGroups,
     hashes: HashMap<String, MediaId>,
@@ -219,6 +221,7 @@ impl ImageWorker {
             cache,
             cache_control,
             processing,
+            raw_look,
             inspection,
             analysis,
             metadata,
@@ -237,6 +240,7 @@ impl ImageWorker {
             false,
         );
         Self {
+            raw_look,
             publisher,
             analysis_generation: analysis,
             metadata_generation: metadata,
@@ -278,16 +282,26 @@ impl ImageWorker {
     /// Each step reports whether it did work, in which case the loop starts over so
     /// cache maintenance, inspection and evidence requests keep their priority.
     fn run(&mut self) {
-        while !self.publisher.stop.load(Ordering::Relaxed) {
-            if self.handle_cache_request()
-                || self.handle_inspection()
-                || self.handle_evidence()
-                || self.handle_work()
-                || self.step_analysis()
-            {
-                continue;
-            }
-            self.step_metadata_index();
+        // Work that panics every time (one corrupt state) must not spin; after
+        // a few failures in a row this worker stops and the crash notice
+        // asks for a restart.
+        let mut failures = 0;
+        while !self.publisher.stop.load(Ordering::Relaxed) && failures < 3 {
+            let publisher = self.publisher.clone();
+            // A Settings change applies to the next preview or detail request.
+            self.pipeline.set_raw_look(self.raw_look.get());
+            let ok = publisher.guard(super::Worker::Images, || {
+                if self.handle_cache_request()
+                    || self.handle_inspection()
+                    || self.handle_evidence()
+                    || self.handle_work()
+                    || self.step_analysis()
+                {
+                    return;
+                }
+                self.step_metadata_index();
+            });
+            failures = if ok { 0 } else { failures + 1 };
         }
     }
 
@@ -576,10 +590,21 @@ impl ImageWorker {
     }
 
     fn load_asset(&mut self, epoch: u64, media: &Media, preview: bool) {
-        match self
-            .pipeline
-            .load_cancellable(media, || self.publisher.cancelled(epoch))
-        {
+        let cancelled = || self.publisher.cancelled(epoch);
+        let fast = (!preview)
+            .then(|| self.pipeline.cached_thumbnail(media, cancelled))
+            .flatten();
+        let loaded = fast.map_or_else(
+            || {
+                super::super::crash::catch(|| {
+                    self.pipeline
+                        .load_cancellable(media, || self.publisher.cancelled(epoch))
+                })
+                .unwrap_or_else(|error| Err(anyhow::anyhow!(error)))
+            },
+            Ok,
+        );
+        match loaded {
             Ok(asset) => self.publisher.send(
                 epoch,
                 Event::Asset {
@@ -818,7 +843,9 @@ impl ImageWorker {
     /// Analyze one photo. Returns true when the run was superseded meanwhile.
     fn analyze_photo(&mut self, scope: &Scope, item: &Media) -> bool {
         let mut item_metadata = Metadata::default();
-        let result = self.analyze_item(scope, item, &mut item_metadata);
+        let result =
+            super::super::crash::catch(|| self.analyze_item(scope, item, &mut item_metadata))
+                .unwrap_or_else(|error| Err(anyhow::anyhow!(error)));
         // Cancellation can interrupt preparation, measurements or
         // native models. Retire the run before publishing errors,
         // fallback groups or progress for work the user superseded.
@@ -1320,15 +1347,15 @@ impl ImageWorker {
             return;
         }
         if let Some(media) = index.media.get(index.next) {
-            index.batch.push((
-                media.id,
+            let read = super::super::crash::catch(|| {
                 self.pipeline
                     .metadata_cancellable(media, &|| {
                         self.publisher.cancelled(index.epoch)
                             || self.metadata_generation.current() != index.run
                     })
-                    .map_err(|e| format!("{e:#}")),
-            ));
+                    .map_err(|e| format!("{e:#}"))
+            });
+            index.batch.push((media.id, read.and_then(|result| result)));
             index.next += 1;
         }
         // A cancellation during a header read must not publish a partial

@@ -29,7 +29,9 @@ pub(super) fn spawn(
                 let Ok(job) = jobs.recv_timeout(Duration::from_millis(100)) else {
                     continue;
                 };
-                group(&publisher, &generation, &cache, job);
+                let _ = publisher.guard(super::Worker::Subjects, || {
+                    group(&publisher, &generation, &cache, job)
+                });
             }
         })
         .expect("Start subject policy worker")

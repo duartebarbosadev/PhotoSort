@@ -112,7 +112,7 @@ pub fn review(
     let mut assigned = HashSet::new();
     let mut result = Vec::new();
     for cohort in exact.values() {
-        for pair_indexes in cohort.chunks_exact(2) {
+        for pair_indexes in cohort.as_chunks::<2>().0 {
             if cancelled() {
                 return Ok(None);
             }

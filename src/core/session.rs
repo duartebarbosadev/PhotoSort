@@ -6,16 +6,54 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Application data (preferences, sessions, saved views, models). Set
+/// `PHOTOSORT_DATA_ROOT` to relocate it, e.g. for portable or isolated runs.
 pub fn data_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("PhotoSort-Rust")
+    root_override("PHOTOSORT_DATA_ROOT")
+        .or_else(|| isolated_root("data"))
+        .unwrap_or_else(|| {
+            dirs::data_local_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("PhotoSort-Rust")
+        })
 }
+/// Regenerable caches. `PHOTOSORT_CACHE_ROOT` relocates them.
 pub fn cache_dir() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("PhotoSort-Rust")
+    root_override("PHOTOSORT_CACHE_ROOT")
+        .or_else(|| isolated_root("cache"))
+        .unwrap_or_else(|| {
+            dirs::cache_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("PhotoSort-Rust")
+        })
         .join("proxy-v1")
+}
+/// Tests and examples never touch the user's real data or caches: each
+/// process gets its own temporary root (in the system temp folder).
+fn isolated_root(kind: &str) -> Option<PathBuf> {
+    if !cfg!(any(test, feature = "test-isolation")) {
+        return None;
+    }
+    static ROOT: std::sync::OnceLock<Option<tempfile::TempDir>> = std::sync::OnceLock::new();
+    let root = ROOT.get_or_init(|| {
+        tempfile::Builder::new()
+            .prefix("photosort-test-")
+            .tempdir()
+            .ok()
+    });
+    // Journals refuse symlinked paths; macOS temp lives under the /var link.
+    let path = root.as_ref()?.path();
+    Some(
+        path.canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .join(kind),
+    )
+}
+/// Only absolute paths are honoured, so a stray relative value cannot scatter
+/// state into whatever the working directory happens to be.
+fn root_override(name: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(std::env::var_os(name)?);
+    path.is_absolute().then_some(path)
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Session {

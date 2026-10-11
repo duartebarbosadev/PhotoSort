@@ -70,7 +70,7 @@ The authoritative reference handlers are
 | “Similarity Model” section | The current Python dialog has strictness selection but no model chooser. Its loader pins DINOv2-small. Rust's verified model catalog/setup replaces stale claims about selectable Python models. |
 | Separate thumbnail/preview/EXIF/analysis clears and separate EXIF disk allowance | Deliberately consolidated into shared reusable-cache usage/clear, preview/detail memory budgets and one persistent-cache budget. Rust does not offer category-specific clearing or a separate EXIF disk slider. Clearing reusable caches preserves decisions, saved positions and downloaded model assets. |
 | Delete All Models | Rust reviews removal of each managed copy in `ui/models.rs` and retains bundled assets. Reanalysis may require import/download; the UI states that consequence. No blanket deletion of external or bundled model locations. |
-| Open Cache Folder | **Missing at the audited `979b0e6` baseline.** There was no Rust settings button dispatching the cache root to the desktop worker. Follow-up should expose the actual configured cache location through its owner and reuse the existing desktop service, with disabled/error handling when unavailable. It must not construct a competing cache, clear data or open a photo folder instead. |
+| Open Cache Folder | **Fixed since the audited `979b0e6` baseline.** Settings has "Open cache folder", which sends the configured cache root to the shared desktop service and shows a readable error when that fails (`src/ui/preferences.rs`, covered by `src/ui/preferences/tests.rs`). |
 
 ## Organize context actions
 

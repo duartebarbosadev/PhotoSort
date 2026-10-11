@@ -284,8 +284,10 @@ mod tests {
         ] {
             let bytes = std::fs::read(root.join(name)).unwrap();
             let expected: Vec<_> = bytes
-                .chunks_exact(4)
-                .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|v| f32::from_le_bytes(*v))
                 .collect();
             assert_eq!(actual.len(), expected.len());
             let maximum = actual
@@ -313,8 +315,10 @@ mod tests {
         for (name, actual) in [("warped.f32", &warped), ("corrected.f32", &corrected)] {
             let bytes = std::fs::read(root.join(name)).unwrap();
             let expected: Vec<_> = bytes
-                .chunks_exact(4)
-                .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|v| f32::from_le_bytes(*v))
                 .collect();
             let (index, maximum) = actual
                 .iter()
@@ -342,8 +346,10 @@ mod tests {
         ] {
             let bytes = std::fs::read(root.join(name)).unwrap();
             let expected: Vec<_> = bytes
-                .chunks_exact(4)
-                .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|v| f32::from_le_bytes(*v))
                 .collect();
             let maximum = actual
                 .iter()

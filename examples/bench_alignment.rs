@@ -47,8 +47,10 @@ fn read_plane(path: &Path) -> Result<(Vec<f32>, usize, usize)> {
     );
     Ok((
         bytes[12..]
-            .chunks_exact(4)
-            .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| f32::from_le_bytes(*v))
             .collect(),
         w,
         h,

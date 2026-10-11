@@ -281,9 +281,18 @@ pub fn from_analysis(
             || !present.contains(&pair.keep)
             || [pair.discard, pair.keep]
                 .iter()
-                .any(|id| analysis.get(id).is_none_or(|a| !a.issues.is_empty()))
+                .any(|id| !analysis.contains_key(id))
         {
             continue;
+        }
+        // A pair outranks a single-photo issue for either member: comparing the
+        // two is the more useful review, and the keeper is already the sharper
+        // one. Say so instead of hiding the duplicate behind the issue.
+        let mut reason = pair.reason.clone();
+        for (role, id) in [("suggested discard", pair.discard), ("keeper", pair.keep)] {
+            if let Some(issue) = analysis[&id].issues.first() {
+                reason.push_str(&format!(" · the {role} is also {}", issue.to_lowercase()));
+            }
         }
         entries.push(Entry {
             subject: pair.discard,
@@ -295,25 +304,12 @@ pub fn from_analysis(
             } else {
                 Category::Near
             },
-            reason: pair.reason.clone(),
+            reason,
         });
     }
     let order: HashMap<_, _> = media
         .iter()
-        .map(|m| {
-            let captured = metadata
-                .get(&m.id)
-                .filter(|m| !m.captured.is_empty())
-                .map(|m| m.captured.clone());
-            (
-                m.id,
-                (
-                    captured.is_none(),
-                    captured.unwrap_or_default(),
-                    m.path.clone(),
-                ),
-            )
-        })
+        .map(|m| (m.id, super::dates::capture_order(m, metadata.get(&m.id))))
         .collect();
     // Choose pair ownership before capture sorting so metadata updates cannot
     // transfer a pending decision to the other image in the pair.

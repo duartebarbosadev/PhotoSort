@@ -9,17 +9,79 @@ pub(super) struct Rows {
     ends: Vec<usize>,
     movable: Vec<usize>,
     generation: u64,
+    summary: Summary,
+}
+/// Plain counts for the plan headline, by what happens to the files.
+#[derive(Default)]
+struct Summary {
+    trash: usize,
+    moves: usize,
+    renames: usize,
+    metadata: usize,
+    folders: usize,
+}
+impl Summary {
+    fn parts(&self) -> Vec<(String, Color32)> {
+        let plural =
+            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        [
+            (
+                self.trash,
+                plural(self.trash, "file to Trash", "files to Trash"),
+                RED,
+            ),
+            (self.moves, plural(self.moves, "move", "moves"), ACCENT),
+            (self.renames, plural(self.renames, "rename", "renames"), INK),
+            (
+                self.metadata,
+                plural(self.metadata, "metadata update", "metadata updates"),
+                INK,
+            ),
+            (
+                self.folders,
+                plural(self.folders, "folder change", "folder changes"),
+                MUTED,
+            ),
+        ]
+        .into_iter()
+        .filter(|(n, ..)| *n > 0)
+        .map(|(_, text, color)| (text, color))
+        .collect()
+    }
 }
 impl Rows {
     fn replace(&mut self, plan: Option<&Plan>) {
         self.generation = self.generation.wrapping_add(1);
         self.ends.clear();
         self.movable.clear();
+        self.summary = Summary::default();
         let mut end = 0;
         if let Some(plan) = plan {
             for (group, action) in plan.actions.iter().enumerate() {
                 if matches!(action, Action::Move { files } if !files.is_empty()) {
                     self.movable.push(group);
+                }
+                let summary = &mut self.summary;
+                match action {
+                    Action::Move { files } | Action::FinishMove { files } => {
+                        for (source, to) in files {
+                            if source.path.parent() == to.parent() {
+                                summary.renames += 1;
+                            } else {
+                                summary.moves += 1;
+                            }
+                        }
+                    }
+                    Action::Trash { files } => summary.trash += files.len(),
+                    Action::TrashDirectory(folder) => {
+                        summary.trash += folder.inventory.files.len().max(1)
+                    }
+                    Action::RenameFile { .. } => summary.renames += 1,
+                    Action::RenameDirectory(_) => summary.folders += 1,
+                    Action::Metadata { .. } => summary.metadata += 1,
+                    Action::CreateDirectory { .. } | Action::RemoveEmptyDirectory { .. } => {
+                        summary.folders += 1
+                    }
                 }
                 end += match action {
                     Action::Move { files } | Action::FinishMove { files } => files.len().max(1),
@@ -41,7 +103,18 @@ impl Rows {
     }
 }
 
-fn path_label(ui: &mut egui::Ui, prefix: &str, path: &Path, root: Option<&Path>) {
+const ROW_HEIGHT: f32 = 46.0;
+
+/// One path line. `spoken` prefixes the accessible text ("From  ", "To    ")
+/// so screen readers keep the direction the arrow shows visually.
+fn path_line(
+    ui: &mut egui::Ui,
+    spoken: &str,
+    shown: &str,
+    path: &Path,
+    root: Option<&Path>,
+    color: Color32,
+) {
     let relative = root
         .and_then(|root| path.strip_prefix(root).ok())
         .unwrap_or(path);
@@ -51,14 +124,46 @@ fn path_label(ui: &mut egui::Ui, prefix: &str, path: &Path, root: Option<&Path>)
         relative.display().to_string()
     };
     // Extend inside the two-axis scroll area: long paths can be read without hover.
-    ui.add(egui::Label::new(RichText::new(format!("{prefix}{display}")).monospace()).extend())
+    let response = ui
+        .add(egui::Label::new(RichText::new(format!("{shown}{display}")).color(color)).extend())
         .on_hover_text(path.display().to_string());
+    let spoken = format!("{spoken}{display}");
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &spoken));
+}
+fn path_label(ui: &mut egui::Ui, prefix: &str, path: &Path, root: Option<&Path>) {
+    let to = prefix.trim() == "To";
+    path_line(
+        ui,
+        prefix,
+        if to { "→  " } else { "" },
+        path,
+        root,
+        if to { MUTED } else { INK },
+    );
+}
+/// The first line of a row: what happens, then the file it happens to.
+fn source_line(
+    ui: &mut egui::Ui,
+    kind: &str,
+    color: Color32,
+    prefix: &str,
+    path: &Path,
+    root: Option<&Path>,
+) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = S2;
+        ui.label(RichText::new(kind).small().color(color));
+        path_line(ui, prefix, "", path, root, INK);
+    });
+}
+fn note_line(ui: &mut egui::Ui, text: &str) {
+    ui.add(egui::Label::new(RichText::new(text).color(MUTED)).extend());
 }
 
 fn row_ui(
     ui: &mut egui::Ui,
     action: &Action,
-    group: usize,
+    _group: usize,
     file: usize,
     root: Option<&Path>,
     output: Option<&Path>,
@@ -75,71 +180,65 @@ fn row_ui(
             } else {
                 "Move and rename"
             };
-            ui.small(format!(
-                "Group {} · {kind} · file {} of {}",
-                group + 1,
-                file + 1,
-                files.len()
-            ));
-            path_label(ui, "From  ", &source.path, root);
+            source_line(ui, kind, ACCENT, "From  ", &source.path, root);
             path_label(ui, "To    ", to, output.or(root));
         }
         Action::Trash { files } if !files.is_empty() => {
-            ui.small(format!(
-                "Group {} · Trash · file {} of {}",
-                group + 1,
-                file + 1,
-                files.len()
-            ));
-            path_label(ui, "From  ", &files[file].path, root);
-            ui.add(egui::Label::new("To    System Trash").extend());
+            source_line(ui, "Trash", RED, "From  ", &files[file].path, root);
+            note_line(ui, "→  System Trash");
         }
         Action::TrashDirectory(folder) => {
             if file == 0 {
-                ui.small(format!(
-                    "Group {} · Trash original folder · {} files, {} subfolders",
-                    group + 1,
-                    folder.inventory.files.len(),
-                    folder.inventory.directory_count().saturating_sub(1)
-                ));
-                path_label(ui, "From  ", &folder.path, root);
+                source_line(
+                    ui,
+                    &format!(
+                        "Trash folder · {} files, {} subfolders",
+                        folder.inventory.files.len(),
+                        folder.inventory.directory_count().saturating_sub(1)
+                    ),
+                    RED,
+                    "From  ",
+                    &folder.path,
+                    root,
+                );
             } else {
-                ui.small(format!(
-                    "Group {} · Included file {} of {}",
-                    group + 1,
-                    file,
-                    folder.inventory.files.len()
-                ));
-                path_label(ui, "File  ", &folder.inventory.files[file - 1].path, root);
+                source_line(
+                    ui,
+                    &format!("In folder · {} of {}", file, folder.inventory.files.len()),
+                    RED,
+                    "File  ",
+                    &folder.inventory.files[file - 1].path,
+                    root,
+                );
             }
-            ui.add(egui::Label::new("To    System Trash (whole folder)").extend());
+            note_line(ui, "→  System Trash, with the whole folder");
         }
         Action::RenameFile { source, to } => {
-            ui.small(format!("Group {} · Rename file", group + 1));
-            path_label(ui, "From  ", &source.path, root);
+            source_line(ui, "Rename", INK, "From  ", &source.path, root);
             path_label(ui, "To    ", to, output.or(root));
         }
         Action::RenameDirectory(rename) => {
-            ui.small(format!("Group {} · Rename folder", group + 1));
-            path_label(ui, "From  ", &rename.from, root);
+            source_line(ui, "Rename folder", INK, "From  ", &rename.from, root);
             path_label(ui, "To    ", &rename.to, root);
         }
         Action::Metadata { source, .. } => {
-            ui.small(format!("Group {} · Update metadata", group + 1));
-            path_label(ui, "File  ", &source.path, root);
-            ui.add(egui::Label::new(action.label()).extend());
+            source_line(ui, "Metadata", INK, "File  ", &source.path, root);
+            note_line(ui, &action.label());
         }
         Action::CreateDirectory { path } | Action::RemoveEmptyDirectory { path, .. } => {
-            ui.small(format!(
-                "Group {} · {}",
-                group + 1,
-                if matches!(action, Action::CreateDirectory { .. }) {
+            let create = matches!(action, Action::CreateDirectory { .. });
+            source_line(
+                ui,
+                if create {
                     "Create folder"
                 } else {
-                    "Remove folder only if empty"
-                }
-            ));
-            path_label(ui, "Folder  ", path, output.or(root));
+                    "Remove folder if empty"
+                },
+                if create { GREEN } else { MUTED },
+                "Folder  ",
+                path,
+                output.or(root),
+            );
         }
         _ => {
             ui.label("Empty file operation");
@@ -158,13 +257,13 @@ fn file_rows(
         .id_salt(("plan_files", index.generation))
         .max_height(height)
         .auto_shrink([false, true])
-        .show_rows(ui, 68.0, index.len(), |ui, rows| {
+        .show_rows(ui, ROW_HEIGHT, index.len(), |ui, rows| {
             let rendered = rows.len();
             for row in rows {
                 let (group, file) = index.at(row);
                 ui.push_id(row, |ui| {
                     ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), 68.0),
+                        egui::vec2(ui.available_width(), ROW_HEIGHT),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             row_ui(
@@ -209,7 +308,11 @@ impl PhotoSortApp {
             if let Some(plan) = &self.plan {
                 let retry = self.retry_plan.is_some();
                 ui.heading(if retry { "Unfinished file operations" } else { "Review your changes" });
-                ui.label(RichText::new(format!("{} operation groups · {} file/folder entries", plan.actions.len(), self.plan_rows.len())).color(ACCENT));
+                ui.horizontal_wrapped(|ui| {
+                    for (part, color) in self.plan_rows.summary.parts() {
+                        ui.label(RichText::new(part).font(medium(13.5)).color(color));
+                    }
+                });
                 if let Some(root) = &self.root {
                     ui.add(egui::Label::new(format!("Library: {}", root.display())).truncate()).on_hover_text(root.display().to_string());
                 }
@@ -246,7 +349,7 @@ impl PhotoSortApp {
                     if retry && ui.add_enabled(!self.busy && self.recovery_ticket.is_some() && !self.plan_rows.movable.is_empty(), egui::Button::new("Edit destination…")).clicked() { edit = true; }
                     if retry && ui.button("Discard unfinished plan").clicked() { discard = true; }
                     if ui.add_enabled(!plan.actions.is_empty() && !self.busy,
-                        egui::Button::new(RichText::new(if retry { "Retry unfinished changes" } else { "Apply these changes" }).color(BG)).fill(ACCENT)).clicked() { apply = true; }
+                        primary(if retry { "Retry unfinished changes" } else { "Apply these changes" })).clicked() { apply = true; }
                 }); });
             }
         });
@@ -390,7 +493,7 @@ impl PhotoSortApp {
             if edit.saving { ui.label("Checking sources and saving…"); }
             ui.horizontal_wrapped(|ui| {
                 if ui.button(if edit.saving { "Cancel saving" } else { "Cancel" }).clicked() { cancel = true; }
-                if ui.add_enabled(!edit.saving, egui::Button::new("Save destination")).clicked() { save = true; }
+                if ui.add_enabled(!edit.saving, primary("Save destination")).clicked() { save = true; }
             });
         });
         if cancel {

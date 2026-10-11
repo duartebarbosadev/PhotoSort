@@ -138,6 +138,7 @@ mod tests {
         let state = updates::evaluate(&source, "0.1.0", &body).unwrap();
         app.update_dialog = true;
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         ctx.enable_accesskit();
         for size in [egui::vec2(600.0, 500.0), egui::vec2(1440.0, 900.0)] {
             let mut output = None;
@@ -146,7 +147,10 @@ mod tests {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
                 };
-                output = Some(ctx.run(input, |ctx| app.render_updates_dialog(ctx, state.clone())));
+                output = Some(ctx.run_test(input, |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.render_updates_dialog(ctx, state.clone())
+                }));
             }
             let tree = output.unwrap().platform_output.accesskit_update.unwrap();
             for label in [
@@ -174,6 +178,7 @@ mod tests {
         let mut app =
             PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         for step in Step::ALL {
             app.step = step;
             app.runtime
@@ -187,9 +192,12 @@ mod tests {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
                 };
-                let _ = ctx.run(input, |ctx| {
-                    app.keyboard(ctx);
-                    app.updates_dialog(ctx);
+                let _ = ctx.run_test(input, |ui| {
+                    let ctx = &ui.ctx().clone();
+                    {
+                        app.keyboard(ctx);
+                        app.updates_dialog(ctx);
+                    }
                 });
                 assert_eq!(app.step, step);
                 assert!(app.decisions.is_empty() && app.requested.is_empty());

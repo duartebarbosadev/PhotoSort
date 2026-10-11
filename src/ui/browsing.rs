@@ -2,6 +2,15 @@ use super::*;
 use crate::core::browsing::{GroupSort, RatingFilter, Sort};
 
 impl PhotoSortApp {
+    pub(super) fn clear_browse_filters(&mut self) {
+        self.browse.rating = RatingFilter::All;
+        self.browse.group = None;
+        self.browse.date = None;
+        self.browse.folder = Default::default();
+        self.filter = Filter::All;
+        self.query.clear();
+        self.filter_dirty = true;
+    }
     fn browse_item(&self, id: MediaId) -> crate::core::browsing::Update {
         crate::core::browsing::Update {
             embedding: self.embeddings.get(&id).cloned(),
@@ -137,10 +146,9 @@ impl PhotoSortApp {
         }
     }
     pub(super) fn browse_controls(&mut self, ui: &mut egui::Ui) {
-        // Review prioritizes the photographs. Reuse the same filter panel as
-        // narrow windows; wide browsing keeps its inline controls.
-        let overlay =
-            self.review || ui.available_width() < 850. || ui.ctx().content_rect().height() < 760.;
+        // One row at every size: filters live in a popover that shows how many
+        // are active, so photos keep the vertical space.
+        let overlay = true;
         ui.horizontal_wrapped(|ui| {
             if overlay {
                 let active = [
@@ -153,11 +161,17 @@ impl PhotoSortApp {
                 .filter(|active| *active)
                 .count();
                 let label = if active == 0 {
-                    "Filters & sort".into()
+                    "Filters & sort".to_owned()
                 } else {
                     format!("Filters & sort · {active}")
                 };
-                let response = ui.button(label);
+                let response = icon_text_button(
+                    ui,
+                    true,
+                    active > 0 || self.browse_filters_open,
+                    egui_phosphor::regular::FUNNEL,
+                    &label,
+                );
                 let mut open = self.browse_filters_open;
                 if response.clicked() {
                     open = !open;
@@ -183,6 +197,10 @@ impl PhotoSortApp {
                 self.browse_filters_open = false;
             }
             self.navigator_controls(ui);
+            if !self.review {
+                ui.add_space(S3);
+                self.selection_controls(ui);
+            }
         });
         if !overlay {
             self.browse_filter_controls(ui);
@@ -274,13 +292,7 @@ impl PhotoSortApp {
                     ui.end_row();
                 }
                 if ui.button("Clear browse filters").clicked() {
-                    self.browse.rating = RatingFilter::All;
-                    self.browse.group = None;
-                    self.browse.date = None;
-                    self.browse.folder = Default::default();
-                    self.filter = Filter::All;
-                    self.query.clear();
-                    self.filter_dirty = true;
+                    self.clear_browse_filters();
                 }
             });
         ui.horizontal_wrapped(|ui| {
@@ -375,6 +387,14 @@ impl PhotoSortApp {
         });
     }
     pub(super) fn metadata_status(&mut self, ui: &mut egui::Ui) {
+        let reading = self.metadata_progress.is_some() && self.metadata_run.is_some();
+        if !reading
+            && self.metadata.len() >= self.media.len()
+            && self.metadata_failures.is_empty()
+            && self.browse_run.is_none()
+        {
+            return; // An empty row would still take a full line of height.
+        }
         ui.horizontal_wrapped(|ui| {
             if let Some((done, total)) = self.metadata_progress && self.metadata_run.is_some() {
                 ui.spinner();

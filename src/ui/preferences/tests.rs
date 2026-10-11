@@ -8,19 +8,22 @@ fn settings_errors_are_bounded_and_dismissible_without_hiding_footer_or_losing_d
         let error = "Open folder failed: /unavailable/long cache folder café/".repeat(20);
         app.error = Some(error.clone());
         let ctx = egui::Context::default();
-        crate::ui::theme::install(&ctx);
+        theme_install(&ctx);
         ctx.enable_accesskit();
         let mut time = 0.;
         let mut frame = |app: &mut PhotoSortApp, events| {
             time += 0.1;
-            ctx.run(
+            ctx.run_test(
                 egui::RawInput {
                     time: Some(time),
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     events,
                     ..Default::default()
                 },
-                |ctx| app.dialogs(ctx),
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.dialogs(ctx)
+                },
             )
         };
         let mut output = frame(&mut app, vec![]);
@@ -125,19 +128,22 @@ fn cache_folder_settings_uses_injected_location_in_every_workflow_without_extra_
             app.step = step;
             app.open_settings(Section::Caches);
             let ctx = egui::Context::default();
-            crate::ui::theme::install(&ctx);
+            theme_install(&ctx);
             ctx.enable_accesskit();
             let mut time = 0.;
             let mut frame = |app: &mut PhotoSortApp, events| {
                 time += 0.1;
-                ctx.run(
+                ctx.run_test(
                     egui::RawInput {
                         time: Some(time),
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         events,
                         ..Default::default()
                     },
-                    |ctx| app.preferences_dialog(ctx),
+                    |ui| {
+                        let ctx = &ui.ctx().clone();
+                        app.preferences_dialog(ctx)
+                    },
                 )
             };
             let mut output = frame(&mut app, vec![]);
@@ -361,7 +367,8 @@ fn settings_preserve_live_history_and_render_compactly_without_image_or_analysis
     );
     app.preferences_draft = Some(app.preferences.clone());
     let ctx = egui::Context::default();
-    let output = ctx.run(
+    theme_install(&ctx);
+    let output = ctx.run_test(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -369,7 +376,10 @@ fn settings_preserve_live_history_and_render_compactly_without_image_or_analysis
             )),
             ..Default::default()
         },
-        |ctx| app.preferences_dialog(ctx),
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            app.preferences_dialog(ctx)
+        },
     );
     assert!(!output.shapes.is_empty());
     assert!(app.analysis_run.is_none() && app.metadata_run.is_none() && app.requested.is_empty());
@@ -423,6 +433,7 @@ fn escape_cancels_settings_without_applying_draft_navigation() {
     draft.navigation.rating = Some(5);
     app.preferences_draft = Some(draft);
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let raw = || egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
             egui::Pos2::ZERO,
@@ -431,7 +442,10 @@ fn escape_cancels_settings_without_applying_draft_navigation() {
         ..Default::default()
     };
     for _ in 0..2 {
-        let _ = ctx.run(raw(), |ctx| app.preferences_dialog(ctx));
+        let _ = ctx.run_test(raw(), |ui| {
+            let ctx = &ui.ctx().clone();
+            app.preferences_dialog(ctx)
+        });
     }
     let mut input = raw();
     input.events.push(egui::Event::Key {
@@ -441,7 +455,10 @@ fn escape_cancels_settings_without_applying_draft_navigation() {
         repeat: false,
         modifiers: egui::Modifiers::NONE,
     });
-    let _ = ctx.run(input, |ctx| app.preferences_dialog(ctx));
+    let _ = ctx.run_test(input, |ui| {
+        let ctx = &ui.ctx().clone();
+        app.preferences_dialog(ctx)
+    });
     assert!(app.preferences_draft.is_none());
     assert_eq!(app.preferences.navigation.rating, None);
     assert!(app.analysis_run.is_none() && app.metadata_run.is_none());
@@ -475,7 +492,7 @@ fn settings_access_cache_and_general_anchors_keep_footer_visible_at_small_sizes(
     for size in [egui::vec2(600., 500.), egui::vec2(1440., 900.)] {
         let (_dir, mut app) = fixture();
         let ctx = egui::Context::default();
-        crate::ui::theme::install(&ctx);
+        theme_install(&ctx);
         ctx.enable_accesskit();
         let mut time = 0.;
         for (section, label) in [
@@ -487,13 +504,16 @@ fn settings_access_cache_and_general_anchors_keep_footer_visible_at_small_sizes(
             let mut output = None;
             for _ in 0..8 {
                 time += 0.1;
-                output = Some(ctx.run(
+                output = Some(ctx.run_test(
                     egui::RawInput {
                         time: Some(time),
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         ..Default::default()
                     },
-                    |ctx| app.preferences_dialog(ctx),
+                    |ui| {
+                        let ctx = &ui.ctx().clone();
+                        app.preferences_dialog(ctx)
+                    },
                 ));
             }
             let tree = output.unwrap().platform_output.accesskit_update.unwrap();
@@ -526,4 +546,45 @@ fn settings_access_cache_and_general_anchors_keep_footer_visible_at_small_sizes(
         );
         app.runtime.shutdown();
     }
+}
+#[test]
+fn switching_the_raw_look_reloads_only_raw_previews() {
+    let (dir, mut app) = fixture();
+    app.media = [(1, MediaKind::Raw), (2, MediaKind::Photo)]
+        .into_iter()
+        .map(|(n, kind)| Media {
+            id: MediaId(n),
+            path: dir.path().join(format!("{n}.file")),
+            kind,
+            fingerprint: Fingerprint::default(),
+        })
+        .collect();
+    let ctx = egui::Context::default();
+    for n in [1, 2] {
+        let handle = ctx.load_texture(
+            format!("t{n}"),
+            egui::ColorImage::filled([2, 2], Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        );
+        app.textures.insert(
+            (MediaId(n), false),
+            Texture {
+                handle,
+                bytes: 16,
+                used: 0,
+            },
+        );
+        app.requested.insert((MediaId(n), true));
+    }
+    let mut next = app.preferences.clone();
+    next.raw_look = crate::core::raw_look::RawLook::Enhanced;
+    app.apply_preferences(next);
+    assert_eq!(
+        app.runtime.raw_look.get(),
+        crate::core::raw_look::RawLook::Enhanced
+    );
+    assert!(!app.textures.contains_key(&(MediaId(1), false)));
+    assert!(app.textures.contains_key(&(MediaId(2), false)));
+    assert_eq!(app.requested, [(MediaId(2), true)].into_iter().collect());
+    app.runtime.shutdown();
 }

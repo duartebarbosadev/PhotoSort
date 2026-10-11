@@ -200,7 +200,8 @@ fn clear_all_trash_does_not_resurrect_marks_from_confirmed_keep_all_reviews() {
     app.pick_review.confirm(true, &mut app.decisions);
     assert!(!app.decision(MediaId(0)).rejected && !app.decision(MediaId(2)).rejected);
     let ctx = egui::Context::default();
-    let _ = ctx.run(
+    theme_install(&ctx);
+    let _ = ctx.run_test(
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::D,
@@ -211,7 +212,10 @@ fn clear_all_trash_does_not_resurrect_marks_from_confirmed_keep_all_reviews() {
             }],
             ..Default::default()
         },
-        |ctx| app.keyboard(ctx),
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            app.keyboard(ctx)
+        },
     );
     assert!(app.decisions.values().all(|d| !d.rejected));
     app.delete_review.reset_all(&mut app.decisions);
@@ -229,7 +233,7 @@ fn clear_all_trash_does_not_resurrect_marks_from_confirmed_keep_all_reviews() {
     app.runtime.shutdown();
 }
 fn clear_key(app: &mut PhotoSortApp, ctx: &egui::Context, modifiers: egui::Modifiers) {
-    let _ = ctx.run(
+    let _ = ctx.run_test(
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::D,
@@ -240,7 +244,10 @@ fn clear_key(app: &mut PhotoSortApp, ctx: &egui::Context, modifiers: egui::Modif
             }],
             ..Default::default()
         },
-        |ctx| app.keyboard(ctx),
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            app.keyboard(ctx)
+        },
     );
 }
 #[test]
@@ -292,6 +299,7 @@ fn clear_all_trash_shared_action_covers_every_workflow_and_retains_unconfirmed_c
         let catalog = app.catalog.clone().unwrap();
         let selected = app.selection.snapshot();
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         clear_key(&mut app, &ctx, egui::Modifiers::ALT);
         assert!(app.decisions.values().all(|d| !d.rejected), "{step:?}");
         assert_eq!(app.decision(MediaId(4)).rating, Some(5));
@@ -384,6 +392,17 @@ fn clear_all_trash_after_keep_reviewing_invalidates_only_the_cached_plan() {
     let size = egui::vec2(640., 600.);
     click_label(&mut app, &ctx, size, "Keep reviewing");
     assert!(!app.plan_open && app.plan.is_some());
+    // The visible grid loads its previews; let that settle so the check
+    // below measures only what clearing the marks does.
+    use super::super::compact_cull_tests::rendered;
+    for _ in 0..200 {
+        rendered(&mut app, &ctx, size);
+        if app.requested.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let image_work = (app.stats.decodes, app.stats.metadata_reads);
     assert!(
         app.can_clear_trash_marks(),
         "A closed cached preview blocked clearing marks"
@@ -398,7 +417,11 @@ fn clear_all_trash_after_keep_reviewing_invalidates_only_the_cached_plan() {
         app.file_names.get(&id).map(String::as_str),
         Some("retained-name.JPG")
     );
-    assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+    assert_eq!(
+        (app.stats.decodes, app.stats.metadata_reads),
+        image_work,
+        "clearing marks decodes nothing"
+    );
     app.runtime.shutdown();
 }
 #[test]
@@ -431,17 +454,18 @@ fn clear_all_trash_shortcut_preserves_text_and_requires_exact_modifiers() {
         },
     );
     let ctx = egui::Context::default();
+    theme_install(&ctx);
     let field = egui::Id::new("clear-test-input");
     let mut text = "unfinished".to_string();
     for _ in 0..2 {
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_test(Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.add(egui::TextEdit::singleline(&mut text).id(field))
                     .request_focus();
             });
         });
     }
-    assert!(ctx.wants_keyboard_input());
+    assert!(ctx.egui_wants_keyboard_input());
     clear_key(&mut app, &ctx, egui::Modifiers::ALT);
     assert!(app.decision(MediaId(0)).rejected);
     assert_eq!(text, "unfinished");
@@ -528,4 +552,77 @@ fn clear_all_trash_menu_clears_hidden_marks_at_compact_and_wide_sizes() {
             app.runtime.shutdown();
         }
     }
+}
+
+#[test]
+fn review_compares_a_selection_and_f1_returns_to_the_comparison() {
+    let (_dir, mut app) = fixture();
+    for id in [2, 5, 7] {
+        app.select_library(MediaId(id), true, false);
+    }
+    assert_eq!(app.selection.len(), 3);
+    app.open_review();
+    assert!(app.review);
+    assert_eq!(app.comparison, [MediaId(2), MediaId(5), MediaId(7)]);
+    // F1: one photo, then the same comparison again.
+    app.toggle_single_view();
+    assert!(app.comparison.is_empty() && app.review);
+    app.toggle_single_view();
+    assert_eq!(app.comparison, [MediaId(2), MediaId(5), MediaId(7)]);
+    // A photo filtered out meanwhile does not come back.
+    app.toggle_single_view();
+    app.filtered.retain(|i| *i != 5);
+    app.toggle_single_view();
+    assert_eq!(app.comparison, [MediaId(2), MediaId(7)]);
+    // Review with a single selected photo stays a single view.
+    app.review = false;
+    app.comparison.clear();
+    app.clear_library_selection();
+    app.select_library(MediaId(3), true, false);
+    app.open_review();
+    assert!(app.review && app.comparison.is_empty());
+    app.runtime.shutdown();
+}
+
+#[test]
+fn a_similarity_group_opens_as_one_comparison() {
+    let (_dir, mut app) = fixture();
+    app.cull_groups = Arc::new(
+        [(1, 3), (4, 3), (6, 3), (2, 8)]
+            .into_iter()
+            .map(|(id, g)| (MediaId(id), g))
+            .collect(),
+    );
+    assert_eq!(app.group_members(3), [MediaId(1), MediaId(4), MediaId(6)]);
+    app.compare_group(3);
+    assert!(app.review);
+    assert_eq!(app.comparison, [MediaId(1), MediaId(4), MediaId(6)]);
+    assert_eq!(app.active, Some(MediaId(1)));
+    // A single-photo group has nothing to compare.
+    app.review = false;
+    app.comparison.clear();
+    app.compare_group(8);
+    assert!(!app.review && app.comparison.is_empty());
+    app.runtime.shutdown();
+}
+
+#[test]
+fn digits_pick_within_the_active_photos_group_in_single_view() {
+    let (_dir, mut app) = fixture();
+    app.cull_groups = Arc::new(
+        [(1, 3), (4, 3), (6, 3)]
+            .into_iter()
+            .map(|(id, g)| (MediaId(id), g))
+            .collect(),
+    );
+    app.review = true;
+    app.active = Some(MediaId(4));
+    app.numeric_key(egui::Key::Num3, egui::Modifiers::NONE);
+    assert_eq!(app.active, Some(MediaId(6)));
+    app.numeric_key(egui::Key::Num1, egui::Modifiers::NONE);
+    assert_eq!(app.active, Some(MediaId(1)));
+    // Past the end of the group, nothing changes.
+    app.numeric_key(egui::Key::Num7, egui::Modifiers::NONE);
+    assert_eq!(app.active, Some(MediaId(1)));
+    app.runtime.shutdown();
 }

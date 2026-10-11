@@ -120,7 +120,9 @@ impl PhotoSortApp {
             }
             self.library_layout = view.layout;
             self.review = view.review;
-            self.inspector = view.inspector;
+            // Narrow windows show Details as a drawer over the photos; only
+            // reopen it on request, never from a view saved in a wide window.
+            self.inspector = view.inspector && self.was_wide;
             self.group_mode = view.group_mode;
             self.organize_view = view.editor.clone();
             self.delete_categories = view.delete_categories.iter().copied().collect();
@@ -157,7 +159,7 @@ impl PhotoSortApp {
             self.resume_started = true;
             match self.step {
                 Step::PickBest if !self.view_data_ready.contains(&self.step) => {
-                    self.start_ready_pick_analysis()
+                    self.start_ready_analysis()
                 }
                 Step::EasyDelete if !self.view_data_ready.contains(&self.step) => self.analyze(),
                 Step::Cull

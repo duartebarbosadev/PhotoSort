@@ -145,6 +145,8 @@ pub enum Event {
     ViewError(String),
     PreferencesError(String),
     Error(String),
+    /// A task panicked outside per-item work; the named worker carries on.
+    WorkerStopped(Worker),
 }
 pub struct Envelope {
     pub epoch: u64,
@@ -310,7 +312,32 @@ struct Publisher {
     stop: Arc<AtomicBool>,
     wake: Arc<dyn Fn() + Send + Sync>,
 }
+/// The error a worker publishes when one of its tasks panicked. The UI resets
+/// its busy state on it; the crash notice explains what happened.
+pub const WORKER_STOPPED: &str =
+    "A background task stopped unexpectedly. Try again; restart PhotoSort if it keeps happening.";
+
+/// The long-lived background workers, so the UI resets only what each owns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Worker {
+    Files,
+    Images,
+    Similarity,
+    Subjects,
+}
+
 impl Publisher {
+    /// Runs one unit of worker work. A panic becomes an error for the current
+    /// folder instead of ending the worker thread and leaving the UI waiting.
+    /// Returns false when the work panicked.
+    fn guard(&self, worker: Worker, work: impl FnOnce()) -> bool {
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).is_ok();
+        if !ok {
+            let epoch = self.generation.load(Ordering::Acquire);
+            self.send(epoch, Event::WorkerStopped(worker));
+        }
+        ok
+    }
     fn cancelled(&self, epoch: u64) -> bool {
         self.stop.load(Ordering::Relaxed) || self.generation.load(Ordering::Acquire) != epoch
     }
@@ -350,6 +377,8 @@ pub struct Runtime {
     pub desktop: super::desktop::Worker,
     pub model_assets: super::model_assets::Worker,
     pub processing: super::processing::Control,
+    /// How RAW photos are displayed; read by the image worker per request.
+    pub raw_look: super::raw_look::Control,
     pub cache: super::cache::Control,
     pub browsing: super::browsing::Worker,
     pub events: Receiver<Envelope>,
@@ -410,12 +439,14 @@ impl Runtime {
             cache_control.clone(),
         );
         let processing = super::processing::Control::default();
+        let raw_look = super::raw_look::Control::default();
         let inspection = Arc::new(Mutex::new(super::inspection::Queue::default()));
         let image_thread = images::spawn(images::Wiring {
             publisher,
             cache,
             cache_control: cache_control.clone(),
             processing: processing.clone(),
+            raw_look: raw_look.clone(),
             inspection: inspection.clone(),
             analysis: analysis.clone(),
             metadata: metadata_generation.clone(),
@@ -432,6 +463,7 @@ impl Runtime {
             model_assets,
             cache: cache_control,
             processing,
+            raw_look,
             browsing,
             events,
             io,

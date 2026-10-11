@@ -50,6 +50,8 @@ pub(super) struct Editor {
     parent: String,
     pub(super) error: Option<String>,
     compact_folders: bool,
+    /// The destination folder under the pointer, its row and since when.
+    folder_hover: Option<(String, egui::Rect, f64)>,
     photo_scroll: f32,
     folder_scroll: f32,
     restore_scroll: [Option<f32>; 2],
@@ -620,7 +622,7 @@ impl Editor {
         // Rendered once per frame, either in a column or the compact tab.
         // Global scope preserves egui state when that parent changes.
         ui.scope_builder(
-            egui::UiBuilder::new().id(("organize_file_panel", &self.catalog.root)),
+            egui::UiBuilder::new().id(egui::Id::new(("organize_file_panel", &self.catalog.root))),
             |ui| self.photo_contents(ui, height, decisions),
         )
         .inner
@@ -750,7 +752,7 @@ impl Editor {
         decisions: &HashMap<MediaId, Decision>,
     ) -> Option<Command> {
         let mut command = None;
-        ui.strong("Files · before / after");
+        ui.label(RichText::new("Files").font(semibold(14.0)));
         ui.horizontal(|ui| {
             if ui.button("Select all").clicked() {
                 self.select_all_files();
@@ -797,8 +799,9 @@ impl Editor {
                     ui.push_id(id.0, |ui| {
                         let marked = decisions.get(&id).is_some_and(|d| d.rejected);
                         let title = if marked { RichText::new(format!("{name} · Trash")).color(RED) } else { RichText::new(&name) };
+                        // The grow atom left-aligns the name across the full row.
                         let response = ui.add_sized([ui.available_width(), button_row_height(ui)],
-                            egui::Button::selectable(selected, title).truncate().sense(collection_controls::pointer_sense(true)));
+                            egui::Button::selectable(selected, (title, egui::Atom::grow())).truncate().sense(collection_controls::pointer_sense(true)));
                         keyboard.focus_on_click(&response);
                         if focused && self.file_cursor == Some(i) {
                             ui.painter().rect_stroke(response.rect, 2., ui.visuals().selection.stroke, StrokeKind::Inside);
@@ -830,8 +833,19 @@ impl Editor {
                         if let Some(drop) = self.drop_target(ui, &response, &after) { command = Some(drop); }
                         let before_path = std::path::Path::new(&before).join(&name);
                         let after_path = std::path::Path::new(&after).join(&after_name);
-                        ui.add(egui::Label::new(RichText::new(format!("{}  >  {}", before_path.display(), after_path.display())).small().color(MUTED)).truncate())
-                            .on_hover_text(format!("Before: {}\nAfter: {}\nDrag selected files onto a destination folder. Double-click a file to rename it.", before_path.display(), after_path.display()));
+                        let line = if before_path == after_path {
+                            RichText::new(format!("Stays in {}", if before.as_os_str().is_empty() { "Library root".into() } else { before.display().to_string() })).small().color(FAINT)
+                        } else {
+                            RichText::new(format!("{}  →  {}", before_path.display(), after_path.display())).small().color(ACCENT)
+                        };
+                        // Align with the name inside the row button above,
+                        // without adding height: rows have a fixed pitch.
+                        egui::Frame::new()
+                            .inner_margin(egui::Margin { left: ui.spacing().button_padding.x as i8, ..Default::default() })
+                            .show(ui, |ui| {
+                                ui.add(egui::Label::new(line).truncate())
+                                .on_hover_text(format!("Before: {}\nAfter: {}\nDrag selected files onto a destination folder. Double-click a file to rename it.", before_path.display(), after_path.display()));
+                            });
                     });
                 }
             });
@@ -861,7 +875,7 @@ impl Editor {
         // Rendered once per frame, either in a column or the compact tab.
         // Global scope preserves egui state when that parent changes.
         ui.scope_builder(
-            egui::UiBuilder::new().id(("organize_folder_panel", &self.catalog.root)),
+            egui::UiBuilder::new().id(egui::Id::new(("organize_folder_panel", &self.catalog.root))),
             |ui| self.folder_contents(ui, height, decisions),
         )
         .inner
@@ -919,7 +933,8 @@ impl Editor {
         let owned_drag = egui::DragAndDrop::payload::<FolderDrag>(ui.ctx())
             .is_some_and(|payload| Arc::ptr_eq(&payload.owner, &self.drag_owner));
         let pointer = ui.ctx().pointer_interact_pos();
-        ui.strong("Destination folders");
+        let mut hovered_now: Option<(String, egui::Rect)> = None;
+        ui.label(RichText::new("Destination folders").font(semibold(14.0)));
         let mut scroll = egui::ScrollArea::vertical().id_salt("organize_folders");
         if let Some(offset) = self.restore_scroll[1].take() {
             scroll = scroll.vertical_scroll_offset(offset);
@@ -980,8 +995,18 @@ impl Editor {
                         ui.horizontal(|ui| {
                             ui.add_space((depth as f32 * 12.0).min(96.0));
                             expansion_changed |= tree_controls::expander(ui, &self.tree, i, &mut self.collapsed, &keyboard);
-                            let response = ui.add_sized([ui.available_width(), row_height], egui::Button::selectable(self.selected_folders.contains(&path), format!("{} · {count}", folder_title(&path)))
+                            let title = folder_title(&path);
+                            let response = ui.add_sized([ui.available_width(), row_height], egui::Button::selectable(
+                                    self.selected_folders.contains(&path),
+                                    (RichText::new(title), egui::Atom::grow(), RichText::new(count.to_string()).small().color(MUTED)),
+                                )
                                 .truncate().sense(tree_controls::pointer_sense(true)));
+                            if response.hovered() && !owned_drag {
+                                hovered_now = Some((path.clone(), response.rect));
+                            }
+                            let spoken = format!("{title}, {count} files");
+                            let selected = self.selected_folders.contains(&path);
+                            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, &spoken));
                             keyboard.focus_on_click(&response);
                             if self.folder == path {
                                 ui.painter().rect_stroke(response.rect, 2., ui.visuals().selection.stroke, StrokeKind::Inside);
@@ -1083,7 +1108,18 @@ impl Editor {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Create folder").clicked() {
+            let create = match self.selected.len() {
+                0 => "Create folder".to_owned(),
+                1 => "Create folder with 1 file".to_owned(),
+                n => format!("Create folder with {n} files"),
+            };
+            if ui
+                .button(create)
+                .on_hover_text(
+                    "Creates the folder inside the selected one; selected files move into it",
+                )
+                .clicked()
+            {
                 command = Some(Command::Create);
             }
             if ui
@@ -1131,6 +1167,12 @@ impl Editor {
                 command = Some(Command::Unnest);
             }
         });
+        // Keep when the pointer arrived on this folder, so the preview waits.
+        let now = ui.input(|i| i.time);
+        self.folder_hover = hovered_now.map(|(path, rect)| match self.folder_hover.take() {
+            Some((previous, _, since)) if previous == path => (path, rect, since),
+            _ => (path, rect, now),
+        });
         command
     }
     fn apply(&mut self, command: Command, media: &[Media], companions: bool) {
@@ -1146,7 +1188,26 @@ impl Editor {
                 self.renaming = None;
                 self.folder.clone()
             }),
-            Command::Create => self.draft.create_folder(&self.folder, self.name.trim()),
+            // With files selected, the new folder receives them in one step.
+            Command::Create => self
+                .draft
+                .create_folder(&self.folder, self.name.trim())
+                .and_then(|folder| {
+                    if self.selected.is_empty() {
+                        return Ok(folder);
+                    }
+                    self.draft
+                        .move_selection(
+                            &Selection {
+                                files: self.selected.clone(),
+                                ..Default::default()
+                            },
+                            &folder,
+                            media,
+                            companions,
+                        )
+                        .map(|()| folder)
+                }),
             Command::Rename => self.draft.rename_folder(&self.folder, self.name.trim()),
             Command::Parent => self.draft.create_parent(&self.folder, self.name.trim()),
             Command::Nest => self.draft.nest_folder(&self.folder, &self.parent),
@@ -1191,6 +1252,36 @@ impl Editor {
     }
 }
 impl PhotoSortApp {
+    /// F2 and Ctrl/Cmd+Shift+N in the Organize grid open the folder editor on
+    /// the active photo and start renaming it or naming a new folder.
+    pub(super) fn organize_shortcut(&mut self, key: egui::Key, modifiers: egui::Modifiers) -> bool {
+        let Some(action @ (EditAction::Rename | EditAction::NewFolder)) =
+            EditAction::from_key(key, modifiers)
+        else {
+            return false;
+        };
+        if self.step != Step::Organize
+            || self.review
+            || self.organize_editor.is_some()
+            || !self.can_edit_folders()
+        {
+            return false;
+        }
+        let Some(active) = self.active else {
+            return false;
+        };
+        self.open_organize_editor();
+        if let Some(editor) = self.organize_editor.as_mut() {
+            if let Some(row) = editor.rows.iter().position(|r| r.id == active) {
+                editor.file_cursor = Some(row);
+                editor.file_anchor = Some(active);
+                editor.reveal_file = true;
+            }
+            editor.edit_action(action, false);
+        }
+        true
+    }
+
     fn change_location_layout(&mut self, layout: crate::core::geography::Layout) {
         if self.step != Step::Organize
             || self.group_mode != GroupMode::Location
@@ -1289,11 +1380,19 @@ impl PhotoSortApp {
             .media
             .iter()
             .filter(|m| {
-                (self.group_mode != GroupMode::Visual
-                    || self
-                        .visual_groups
-                        .as_ref()
-                        .is_some_and(|groups| groups.contains_key(&m.id)))
+                // Video GPS is not read, so a video without a resolved place would
+                // otherwise be swept into "No GPS"; it stays where it is instead.
+                !(self.group_mode == GroupMode::Location
+                    && m.kind == MediaKind::Video
+                    && self
+                        .metadata
+                        .get(&m.id)
+                        .is_none_or(|meta| meta.location.is_none()))
+                    && (self.group_mode != GroupMode::Visual
+                        || self
+                            .visual_groups
+                            .as_ref()
+                            .is_some_and(|groups| groups.contains_key(&m.id)))
                     && (self.group_mode != GroupMode::Faces
                         || self
                             .face_groups
@@ -1343,7 +1442,7 @@ impl PhotoSortApp {
             .unwrap_or_else(|| {
                 Draft::from_catalog(self.catalog.as_ref().unwrap(), self.organize_labels())
             });
-        let rows = self
+        let mut rows: Vec<PhotoRow> = self
             .catalog
             .as_ref()
             .unwrap()
@@ -1356,6 +1455,13 @@ impl PhotoSortApp {
                 after: String::new(),
             })
             .collect();
+        // Folders alphabetically, photos within a folder in the order taken.
+        rows.sort_by_cached_key(|row| {
+            let order = self.index.get(&row.id).map(|&i| {
+                crate::core::dates::capture_order(&self.media[i], self.metadata.get(&row.id))
+            });
+            (row.source.parent().map(std::path::Path::to_path_buf), order)
+        });
         let folder = self
             .active
             .and_then(|id| draft.labels().get(&id))
@@ -1397,6 +1503,7 @@ impl PhotoSortApp {
             parent: String::new(),
             error: None,
             compact_folders: false,
+            folder_hover: None,
             photo_scroll: 0.0,
             folder_scroll: 0.0,
             restore_scroll: [Some(0.0); 2],
@@ -1484,6 +1591,84 @@ impl PhotoSortApp {
             self.end_organize_preview();
         }
     }
+    /// After a short hover on a destination folder, up to four thumbnails of
+    /// the photos going there. Only that folder's thumbnails are requested.
+    fn folder_hover_preview(&mut self, ctx: &egui::Context, editor: &Editor) {
+        const DELAY: f64 = 0.4;
+        const EDGE: f32 = 72.0;
+        let Some((path, row, since)) = &editor.folder_hover else {
+            return;
+        };
+        let waited = ctx.input(|i| i.time) - since;
+        if waited < DELAY {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(DELAY - waited));
+            return;
+        }
+        let going: Vec<MediaId> = editor
+            .rows
+            .iter()
+            .filter(|r| r.after == *path)
+            .map(|r| r.id)
+            .collect();
+        let photos: Vec<MediaId> = going
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.index
+                    .get(id)
+                    .is_some_and(|i| self.media[*i].kind != MediaKind::Video)
+            })
+            .take(4)
+            .collect();
+        egui::Area::new(egui::Id::new("folder-hover-preview"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(row.right_top() + egui::vec2(S2, 0.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .stroke(Stroke::new(1.0, LINE))
+                    .corner_radius(R_SURFACE)
+                    .inner_margin(S2)
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(format!(
+                                "{} · {} {}",
+                                folder_title(path),
+                                going.len(),
+                                if going.len() == 1 { "file" } else { "files" }
+                            ))
+                            .font(medium(12.5)),
+                        );
+                        if photos.is_empty() {
+                            ui.label(RichText::new("No photos yet").small().color(MUTED));
+                            return;
+                        }
+                        ui.horizontal(|ui| {
+                            for id in photos {
+                                let (rect, _) =
+                                    ui.allocate_exact_size(egui::vec2(EDGE, EDGE), Sense::hover());
+                                ui.painter().rect_filled(rect, R_CONTROL, CARD);
+                                if let Some(texture) = self.texture(id, false) {
+                                    let size = texture.size_vec2();
+                                    let scale = (EDGE / size.x).min(EDGE / size.y);
+                                    let fit =
+                                        egui::Rect::from_center_size(rect.center(), size * scale);
+                                    ui.painter().image(
+                                        texture.id(),
+                                        fit,
+                                        egui::Rect::from_min_max(
+                                            egui::pos2(0.0, 0.0),
+                                            egui::pos2(1.0, 1.0),
+                                        ),
+                                        Color32::WHITE,
+                                    );
+                                }
+                            }
+                        });
+                    });
+            });
+    }
     pub(super) fn organize_dialog(&mut self, ctx: &egui::Context) {
         if self.organize_preview().is_some() {
             self.organize_preview_dialog(ctx);
@@ -1509,8 +1694,8 @@ impl PhotoSortApp {
                 ui.menu_button("Actions", |ui| self.clear_trash_menu_item(ui));
             });
             if width >= 680.0 {
-                ui.label("Drag files onto folders, drag folders to nest them, or select a file to rename it.");
-                ui.label(RichText::new("Preview moves, then Apply to change files. Photo companions move and rename together when enabled. Added empty folders are included in the reviewed plan.").small().color(MUTED));
+                ui.label(RichText::new("Drag files onto folders and folders into each other; double-click a file to rename it. Nothing changes on disk until you preview and apply the moves.").color(MUTED))
+                    .on_hover_text("Photo companions move and rename together when enabled. Added empty folders are included in the reviewed plan.");
             } else {
                 ui.label("Drag files or folders to arrange them. Preview moves before applying.")
                     .on_hover_text("Photo companions move and rename together when enabled. Added empty folders are included in the reviewed plan.");
@@ -1540,9 +1725,10 @@ impl PhotoSortApp {
                 if ui.button("Reset folder layout").clicked() { action = 4; }
                 if ui.button("Cancel edits").on_hover_text("Discard folder and name edits. Shared Trash marks remain staged for review.").clicked() { action = 1; }
                 if ui.button("Keep edits").clicked() { action = 2; }
-                if ui.button("Preview moves >").clicked() { action = 3; }
+                if ui.add(primary("Preview moves")).clicked() { action = 3; }
             });
         });
+        self.folder_hover_preview(ctx, &editor);
         if command.is_none()
             && let Some(drag) = editor.completed_drag.take()
             && let (Some(payload), Some(target)) = (drag.payload, drag.target)

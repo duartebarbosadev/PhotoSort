@@ -2,18 +2,17 @@ use super::*;
 
 impl PhotoSortApp {
     pub(super) fn inspector(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(12.0);
-        ui.label(RichText::new("PHOTO DETAILS").small().color(MUTED));
-        ui.add_space(16.0);
+        ui.add_space(S2);
         let Some(id) = self.active else {
-            ui.label("Select a photo");
+            ui.label(RichText::new("Select a photo to see its details.").color(MUTED));
             return;
         };
         let Some(&index) = self.index.get(&id) else {
             return;
         };
         let media = self.media[index].clone();
-        ui.label(RichText::new(media.name()).size(17.0).strong());
+        ui.add(egui::Label::new(RichText::new(media.name()).font(semibold(15.0))).truncate())
+            .on_hover_text(media.path.display().to_string());
         ui.label(
             RichText::new(format!(
                 "{:.1} MB · {:?}",
@@ -30,7 +29,7 @@ impl PhotoSortApp {
         if let Some(analysis) = self.analysis.get(&id) {
             ui.add_space(15.0);
             ui.separator();
-            ui.label(RichText::new("PHOTO QUALITY").small().color(MUTED));
+            section_title(ui, "Photo quality");
             ui.label(
                 RichText::new(format!("{:.0} / 100", analysis.score))
                     .size(24.0)
@@ -73,7 +72,7 @@ impl PhotoSortApp {
         if self.step == Step::Organize {
             ui.add_space(12.0);
             ui.separator();
-            ui.label(RichText::new("DESTINATION FOLDER").small().color(MUTED));
+            section_title(ui, "Destination folder");
             let label = self
                 .organize_drafts
                 .get(&self.group_mode)
@@ -114,6 +113,16 @@ impl PhotoSortApp {
             ui.colored_label(egui::Color32::from_rgb(233, 191, 116), "Preview warning");
             ui.label(warning);
         }
+        if let Some(error) = self.analysis_failures.get(&id) {
+            ui.add_space(10.0);
+            ui.colored_label(RED, "This photo could not be analyzed");
+            ui.add(egui::Label::new(RichText::new(error).small().color(MUTED)).wrap());
+            ui.label(
+                RichText::new("It gets no suggestions and is never marked for Trash automatically. Analyze again to retry.")
+                    .small()
+                    .color(MUTED),
+            );
+        }
         if let Some(error) = self.failures.get(&id) {
             ui.add_space(10.0);
             ui.colored_label(RED, error);
@@ -151,6 +160,47 @@ impl PhotoSortApp {
 }
 
 impl PhotoSortApp {
+    /// Details in windows too narrow for a side panel: a full-height drawer
+    /// over the right edge, so the photos keep their width when it closes.
+    pub(super) fn inspector_drawer(&mut self, ctx: &egui::Context) {
+        let screen = ctx.content_rect();
+        let width = (screen.width() * 0.85).min(320.0);
+        let top = screen.top() + navigation::HEADER_HEIGHT;
+        let height = screen.bottom() - navigation::STATUS_HEIGHT - top;
+        egui::Area::new(egui::Id::new("inspector-drawer"))
+            .order(egui::Order::Middle)
+            .fixed_pos(egui::pos2(screen.right() - width, top))
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .stroke(Stroke::new(1.0, LINE))
+                    .shadow(egui::Shadow {
+                        offset: [-6, 0],
+                        blur: 18,
+                        spread: 0,
+                        color: Color32::from_black_alpha(140),
+                    })
+                    .inner_margin(S4 as i8)
+                    .show(ui, |ui| {
+                        ui.set_width(width - 2.0 * S4);
+                        ui.set_height(height - 2.0 * S4);
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Details").font(semibold(14.0)));
+                            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                                if icon_button(ui, egui_phosphor::regular::X, "Close details · I")
+                                    .clicked()
+                                {
+                                    self.inspector = false;
+                                }
+                            });
+                        });
+                        egui::ScrollArea::vertical()
+                            .id_salt("inspector-drawer-scroll")
+                            .show(ui, |ui| self.inspector(ui));
+                    });
+            });
+    }
+
     /// Metadata tables for the active photo, or one column per photo while a
     /// comparison is open. Values come from the shared metadata index.
     fn details_tables(&self, ui: &mut egui::Ui, active: MediaId) {
@@ -169,63 +219,83 @@ impl PhotoSortApp {
         let sections = crate::core::details::sections(&items);
         if items.len() < 2 {
             for section in &sections {
-                ui.add_space(10.0);
-                ui.label(
-                    RichText::new(section.title.to_uppercase())
-                        .small()
-                        .color(MUTED),
-                );
+                ui.add_space(S3);
+                section_title(ui, section.title);
                 for row in &section.rows {
-                    ui.add_space(6.0);
-                    ui.label(RichText::new(row.label).small().color(MUTED));
-                    ui.label(&row.values[0]);
+                    detail_row(ui, row.label, |ui| {
+                        ui.add(egui::Label::new(&row.values[0]).wrap());
+                    });
                 }
             }
             return;
         }
-        ui.add_space(10.0);
-        ui.label(RichText::new("COMPARE DETAILS").small().color(MUTED));
-        egui::ScrollArea::horizontal()
-            .id_salt("compare-details")
-            .show(ui, |ui| {
-                for section in &sections {
-                    ui.add_space(8.0);
-                    ui.label(RichText::new(section.title).small().color(MUTED));
-                    egui::Grid::new(("compare-details", section.title))
-                        .num_columns(items.len() + 1)
-                        .spacing([14.0, 4.0])
-                        .show(ui, |ui| {
-                            ui.label("");
-                            for (media, _) in &items {
-                                let name = media.name();
-                                let short = if name.chars().count() > 15 {
-                                    format!("{}…", name.chars().take(12).collect::<String>())
-                                } else {
-                                    name.clone()
-                                };
-                                ui.label(RichText::new(short).small().strong())
-                                    .on_hover_text(name);
-                            }
-                            ui.end_row();
-                            for row in &section.rows {
-                                let differs = row.values.iter().any(|v| *v != row.values[0]);
-                                ui.label(RichText::new(row.label).small().color(MUTED));
-                                for value in &row.values {
-                                    let shown = if value.is_empty() {
-                                        "—"
-                                    } else {
-                                        value.as_str()
-                                    };
-                                    ui.label(if differs {
-                                        RichText::new(shown).color(ACCENT)
-                                    } else {
-                                        RichText::new(shown)
-                                    });
-                                }
-                                ui.end_row();
-                            }
-                        });
-                }
+        // Stacked rather than tabular so any number of photos fits the panel:
+        // shared values take one line, differing values get one line per photo.
+        ui.add_space(S3);
+        section_title(ui, "Compare details");
+        for (n, (media, _)) in items.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!("{}", n + 1))
+                        .font(semibold(12.0))
+                        .color(ACCENT),
+                );
+                ui.add(egui::Label::new(media.name()).truncate())
+                    .on_hover_text(media.path.display().to_string());
             });
+        }
+        for section in &sections {
+            ui.add_space(S3);
+            section_title(ui, section.title);
+            for row in &section.rows {
+                let differs = row.values.iter().any(|v| *v != row.values[0]);
+                detail_row(ui, row.label, |ui| {
+                    if !differs {
+                        ui.add(egui::Label::new(&row.values[0]).wrap());
+                        return;
+                    }
+                    for (n, value) in row.values.iter().enumerate() {
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing.x = S2;
+                            ui.label(RichText::new(format!("{}", n + 1)).small().color(FAINT));
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(if value.is_empty() { "—" } else { value })
+                                        .color(ACCENT),
+                                )
+                                .wrap(),
+                            );
+                        });
+                    }
+                });
+            }
+        }
     }
+}
+
+/// One label/value line with a fixed label column; the value wraps in the
+/// remaining width instead of being clipped by a grid column.
+fn detail_row(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::Ui)) {
+    const LABEL: f32 = 96.0;
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(LABEL, 0.0),
+            egui::Layout::top_down(Align::Min),
+            |ui| {
+                ui.set_width(LABEL);
+                ui.add(egui::Label::new(RichText::new(label).color(MUTED)).wrap());
+            },
+        );
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), 0.0),
+            egui::Layout::top_down(Align::Min),
+            value,
+        );
+    });
+}
+
+/// Sentence-case section heading for the Details panel.
+fn section_title(ui: &mut egui::Ui, title: &str) {
+    ui.label(RichText::new(title).font(medium(12.5)).color(INK));
+    ui.add_space(2.0);
 }

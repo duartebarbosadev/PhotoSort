@@ -5,6 +5,7 @@ pub mod cache;
 mod cache_record;
 pub mod catalog;
 mod color;
+pub mod crash;
 pub mod faces;
 pub mod geography;
 pub mod jobs;
@@ -13,7 +14,9 @@ pub mod model;
 pub mod models;
 pub mod operations;
 pub mod pipeline;
+pub mod raw_look;
 pub mod session;
+pub mod video_info;
 
 pub mod inspection;
 

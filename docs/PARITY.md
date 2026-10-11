@@ -27,7 +27,7 @@ goal, different mechanism; **Open** = not done.
 | Details sidebar (single photo) | Done | Source, lens, focal length, aperture, shutter, ISO, flash, dimensions, megapixels, orientation, bit depth, colour space, white balance, metering, exposure mode/compensation, scene, software. |
 | Details sidebar (compare mode) | Done | One column per photo; differing rows highlighted. |
 | Video browse and playback | Done | macOS verified; Windows/Linux unverified. |
-| Capture-date ordering shared by all lists | Done | EXIF/XMP, then movie header, then filename, then file time. |
+| Capture-date ordering shared by all lists | Done | One `dates::capture_order` key (EXIF/XMP, movie header, filename, file time; undated last; ties by name) for Fix Rotation, Easy Delete, Pick Best and the Organize editor. |
 | Per-folder, per-workflow resume | Done | Filters, selection, focus, scroll, comparison. Python caches are not imported. |
 | Recent folders, Settings, cache management, shortcuts guide, About | Done | Panel layout differs. |
 | Update check | Redesigned | Client implemented; **no Rust release feed exists yet**. |

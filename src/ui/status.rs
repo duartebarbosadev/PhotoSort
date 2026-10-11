@@ -54,6 +54,47 @@ mod tests {
         app.root = Some(temp.path().into());
         app
     }
+    #[test]
+    fn one_unreadable_photo_is_reported_without_stopping_pick_best() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = app(&temp);
+        app.media = vec![Media {
+            id: MediaId(4),
+            path: temp.path().join("broken.jpg"),
+            kind: MediaKind::Photo,
+            fingerprint: Fingerprint::default(),
+        }];
+        app.index.insert(MediaId(4), 0);
+        app.analysis_run = Some(9);
+        app.pick_run = Some(9);
+        app.on_analysis_error(9, MediaId(4), "Cannot decode broken.jpg".into());
+        assert_eq!((app.analysis_run, app.pick_run), (Some(9), Some(9)));
+        assert!(app.error.is_none(), "no dialog per photo");
+        assert!(app.status.contains("broken.jpg could not be analyzed"));
+        app.finish_pick_analysis();
+        assert!(app.status.contains("1 photo could not be analyzed"));
+        // Nothing analyzable at all: stop once with the cause, not per photo.
+        app.analysis_run = Some(11);
+        app.pick_run = Some(11);
+        app.analysis_failures.clear();
+        app.analysis_successes = 0;
+        for n in 0..5 {
+            app.on_analysis_error(11, MediaId(4 + n), "Model file missing".into());
+        }
+        assert_eq!((app.analysis_run, app.pick_run), (None, None));
+        assert!(
+            app.error
+                .as_deref()
+                .is_some_and(|e| e.contains("Model file missing"))
+        );
+        app.error = None;
+        // A late error from a superseded run is ignored.
+        app.analysis_run = Some(10);
+        app.analysis_failures.clear();
+        app.on_analysis_error(9, MediaId(4), "stale".into());
+        assert!(app.analysis_failures.is_empty());
+        app.runtime.shutdown();
+    }
     #[cfg(feature = "onnx")]
     #[test]
     fn model_preparation_is_visible_only_while_the_shared_run_is_active() {
@@ -118,18 +159,21 @@ mod tests {
         let mut app = app(&temp);
         app.step = Step::Cull;
         app.finish_pick_analysis();
-        assert!(app.status.contains("choose Keep/Trash"));
+        // An empty fixture: no groups and nothing to clean up.
+        assert!(app.status.contains("No similar photos found"));
         assert_eq!(app.status_scope, Some((Step::PickBest, None)));
-        assert!(!app.workflow_status().contains("Keep/Trash"));
+        assert!(!app.workflow_status().contains("similar photos"));
         app.finish_delete_analysis();
+        assert!(app.status.contains("Nothing to clean up"));
         assert_eq!(app.status_scope, Some((Step::EasyDelete, None)));
-        assert!(!app.workflow_status().contains("provisional"));
+        assert!(!app.workflow_status().contains("clean up"));
         app.finish_rotation_detection();
         assert_eq!(app.status_scope, Some((Step::Rotation, None)));
         assert!(!app.workflow_status().contains("rotation suggestions"));
         let ctx = egui::Context::default();
+        theme_install(&ctx);
         ctx.enable_accesskit();
-        let output = ctx.run(
+        let output = ctx.run_test(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -137,7 +181,7 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| app.footer(ctx),
+            |ui| app.footer(ui),
         );
         let tree = output.platform_output.accesskit_update.unwrap();
         assert!(

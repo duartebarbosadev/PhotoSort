@@ -138,6 +138,7 @@ pub(super) fn contains_pointer(ui: &egui::Ui, response: &egui::Response, pos: Po
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::test_frame::TestFrame;
     fn button(pos: Pos2, pressed: bool) -> egui::Event {
         egui::Event::PointerButton {
             pos,
@@ -153,14 +154,17 @@ mod tests {
         focused: bool,
         events: Vec<egui::Event>,
     ) {
-        let _ = ctx.run(
+        let _ = ctx.run_test(
             egui::RawInput {
                 focused,
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                tracker.begin_frame(ctx, egui::Id::new(owner));
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                {
+                    tracker.begin_frame(ctx, egui::Id::new(owner));
+                }
             },
         );
     }
@@ -168,6 +172,7 @@ mod tests {
     fn cancelled_or_abandoned_gestures_cannot_resume_in_another_context() {
         for reason in 0..6 {
             let ctx = egui::Context::default();
+            crate::ui::theme::install(&ctx);
             let mut tracker = DragTracker::default();
             let start = egui::pos2(20.0, 20.0);
             let end = egui::pos2(80.0, 90.0);
@@ -190,7 +195,7 @@ mod tests {
                 2 => frame(&ctx, &mut tracker, 1, true, vec![egui::Event::PointerGone]),
                 3 => frame(&ctx, &mut tracker, 2, true, vec![]),
                 4 => {
-                    let _ = ctx.run(Default::default(), |_| {});
+                    let _ = ctx.run_test(Default::default(), |_| {});
                 }
                 _ => frame(
                     &ctx,
@@ -218,12 +223,13 @@ mod tests {
     fn coalesced_drags_are_claimed_by_the_press_pane_once_and_respect_clipping() {
         for clipped in [false, true] {
             let ctx = egui::Context::default();
+            crate::ui::theme::install(&ctx);
             let mut tracker = DragTracker::default();
             let mut rectangles = Vec::new();
             let mut render = |events, tracker: &mut DragTracker| {
                 let mut pans = Vec::new();
                 rectangles.clear();
-                let _ = ctx.run(
+                let _ = ctx.run_test(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             Pos2::ZERO,
@@ -232,29 +238,32 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ctx| {
-                        tracker.begin_frame(ctx, egui::Id::new("panes"));
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            ui.horizontal(|ui| {
-                                for pane in 0..2 {
-                                    let (_, response) = ui.allocate_exact_size(
-                                        egui::vec2(200., 200.),
-                                        egui::Sense::click_and_drag(),
-                                    );
-                                    rectangles.push(response.rect);
-                                    let original_clip = ui.clip_rect();
-                                    if clipped && pane == 0 {
-                                        ui.set_clip_rect(egui::Rect::NOTHING);
+                    |ui| {
+                        let ctx = &ui.ctx().clone();
+                        {
+                            tracker.begin_frame(ctx, egui::Id::new("panes"));
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    for pane in 0..2 {
+                                        let (_, response) = ui.allocate_exact_size(
+                                            egui::vec2(200., 200.),
+                                            egui::Sense::click_and_drag(),
+                                        );
+                                        rectangles.push(response.rect);
+                                        let original_clip = ui.clip_rect();
+                                        if clipped && pane == 0 {
+                                            ui.set_clip_rect(egui::Rect::NOTHING);
+                                        }
+                                        pans.push(tracker.take_pan_delta(ui, &response));
+                                        assert!(
+                                            tracker.take_pan_delta(ui, &response).is_none(),
+                                            "same-frame movement repeated"
+                                        );
+                                        ui.set_clip_rect(original_clip);
                                     }
-                                    pans.push(tracker.take_pan_delta(ui, &response));
-                                    assert!(
-                                        tracker.take_pan_delta(ui, &response).is_none(),
-                                        "same-frame movement repeated"
-                                    );
-                                    ui.set_clip_rect(original_clip);
-                                }
+                                });
                             });
-                        });
+                        }
                     },
                 );
                 (rectangles.clone(), pans)
@@ -282,6 +291,7 @@ mod tests {
     #[test]
     fn clicks_and_secondary_buttons_do_not_pan_and_multiple_drags_keep_their_deltas() {
         let ctx = egui::Context::default();
+        crate::ui::theme::install(&ctx);
         let mut tracker = DragTracker::default();
         let start = egui::pos2(20., 20.);
         let end = egui::pos2(80., 90.);

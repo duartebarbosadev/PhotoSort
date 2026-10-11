@@ -151,9 +151,63 @@ impl PhotoSortApp {
             self.set_active(id);
         }
     }
+    /// The shown photos of one similarity group, in view order.
+    pub(super) fn group_members(&self, group: usize) -> Vec<MediaId> {
+        self.filtered
+            .iter()
+            .map(|i| self.media[*i].id)
+            .filter(|id| self.cull_groups.get(id) == Some(&group))
+            .collect()
+    }
+    /// Compares a whole similarity group (2–9 shown photos) side by side.
+    pub(super) fn compare_group(&mut self, group: usize) {
+        let members = self.group_members(group);
+        if !(2..=9).contains(&members.len()) {
+            return;
+        }
+        self.comparison = members;
+        self.single_view_stash.clear();
+        self.review = true;
+        if let Some(first) = self.comparison.first().copied() {
+            self.set_active(first);
+        }
+    }
+    /// F1: show only the active photo, keeping the comparison to return to.
+    pub(super) fn toggle_single_view(&mut self) {
+        if self.comparison.len() > 1 {
+            self.single_view_stash = std::mem::take(&mut self.comparison);
+        } else if self.review && !self.single_view_stash.is_empty() {
+            let stash = std::mem::take(&mut self.single_view_stash);
+            // Only photos still shown in this view can return.
+            self.comparison = stash
+                .into_iter()
+                .filter(|id| {
+                    self.index
+                        .get(id)
+                        .is_some_and(|i| self.filtered.contains(i))
+                })
+                .collect();
+            if self.comparison.len() < 2 {
+                self.comparison.clear();
+            }
+        }
+        self.review = true;
+    }
+    /// Review from the grid compares a 2–9 photo selection directly.
+    pub(super) fn open_review(&mut self) {
+        if self.step == Step::Cull
+            && !self.review
+            && self.library_selection_mode()
+            && (2..=9).contains(&self.selection.len())
+        {
+            self.compare_selection();
+        }
+        self.review = true;
+    }
+    /// Inline, so it wraps with whatever row it is placed in.
     pub(super) fn selection_controls(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(format!("{} selected", self.selection.len()));
+        {
+            ui.label(RichText::new(format!("{} selected", self.selection.len())).color(MUTED));
             ui.add_enabled_ui(self.selection_ready(), |ui| {
                 ui.menu_button("Selection", |ui| {
                     if ui.button("Select all visible · Ctrl/Cmd+A").clicked() { self.select_all_visible(); ui.close(); }
@@ -165,7 +219,7 @@ impl PhotoSortApp {
                 if ui.add_enabled((2..=9).contains(&self.selection.len()), egui::Button::new("Compare selected"))
                     .on_hover_text("Compare 2–9 selected photos. Larger selections can still be rated, rotated or marked together.").clicked() { self.compare_selection(); }
             });
-        });
+        }
     }
     pub(super) fn selection_actions(&mut self, ui: &mut egui::Ui) {
         self.group_controls(ui);
@@ -200,6 +254,7 @@ impl PhotoSortApp {
                 ("Unmark selected", Change::Trash(false)),
                 ("Rotate selected clockwise", Change::Rotate(1)),
                 ("Rotate selected counterclockwise", Change::Rotate(3)),
+                ("Rotate selected 180°", Change::Rotate(2)),
             ] {
                 if ui.button(label).clicked() {
                     self.stage_selection(change);

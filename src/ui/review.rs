@@ -165,9 +165,25 @@ impl PhotoSortApp {
             },
         );
     }
+    /// Zooms around the centre of the view (keyboard and slider).
     pub(super) fn zoom_view(&mut self, factor: f32) {
+        self.zoom_view_at(factor, egui::Vec2::ZERO);
+    }
+    /// Zooms keeping the image point at `anchor` (relative to the slot's
+    /// centre) under the pointer. Back at fit or smaller, the image recentres.
+    pub(super) fn zoom_view_at(&mut self, factor: f32, anchor: egui::Vec2) {
         let mut view = self.view_for(self.focused_slot);
-        view.zoom = (view.zoom * factor).clamp(InspectionView::MIN_ZOOM, InspectionView::MAX_ZOOM);
+        let old = view.zoom;
+        view.zoom = (old * factor).clamp(InspectionView::MIN_ZOOM, InspectionView::MAX_ZOOM);
+        let ratio = view.zoom / old.max(f32::EPSILON);
+        if !view.actual_size && view.zoom <= 1.0 {
+            view.pan = [0.0, 0.0];
+        } else {
+            view.pan = [
+                anchor.x - (anchor.x - view.pan[0]) * ratio,
+                anchor.y - (anchor.y - view.pan[1]) * ratio,
+            ];
+        }
         self.set_view(self.focused_slot, view);
     }
     pub(super) fn toggle_sync(&mut self) {
@@ -207,9 +223,10 @@ impl PhotoSortApp {
             (true, false) => 100.0,
             (false, _) => 60.0,
         };
-        let height =
-            (ui.available_height() - controls_height - if show_filmstrip { 125.0 } else { 0.0 })
-                .max(40.0);
+        let height = (ui.available_height()
+            - controls_height
+            - if show_filmstrip { FILMSTRIP } else { 0.0 })
+        .max(40.0);
         let ideal_columns = if ids.len() == 4 { 2 } else { 3 };
         let columns = ((ui.available_width() / 250.0).floor() as usize)
             .clamp(1, ideal_columns)
@@ -245,7 +262,7 @@ impl PhotoSortApp {
             })
             .scroll_source(egui::scroll_area::ScrollSource {
                 scroll_bar: true,
-                drag: false,
+                drag: egui::scroll_area::DragScroll::Never,
                 mouse_wheel: false,
             })
             .max_height(height)
@@ -285,10 +302,11 @@ impl PhotoSortApp {
             ui.horizontal_wrapped(|ui| self.review_view_controls(ui));
             return;
         }
+        ui.add_space(S1);
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .button("< Previous")
-                .on_hover_text("Cull follows Up/Down navigation preferences. Hold Ctrl or Cmd to include marked photos and bypass movement filters.")
+            use egui_phosphor::regular as icon;
+            const NAVIGATION: &str = "Cull follows Up/Down navigation preferences. Hold Ctrl or Cmd to include marked photos and bypass movement filters.";
+            if icon_button(ui, icon::CARET_LEFT, &format!("Previous photo · Up\n{NAVIGATION}"))
                 .clicked()
             {
                 self.navigate_selection(
@@ -297,9 +315,7 @@ impl PhotoSortApp {
                     ui.input(|i| i.modifiers.command || i.modifiers.ctrl),
                 );
             }
-            if ui
-                .button("Next >")
-                .on_hover_text("Cull follows Up/Down navigation preferences. Hold Ctrl or Cmd to include marked photos and bypass movement filters.")
+            if icon_button(ui, icon::CARET_RIGHT, &format!("Next photo · Down\n{NAVIGATION}"))
                 .clicked()
             {
                 self.navigate_selection(
@@ -314,11 +330,8 @@ impl PhotoSortApp {
                         .delete_current
                         .is_none_or(|review| self.delete_review.keeps(review, *id));
                     if ui
-                        .button(format!(
-                            "{}: {}",
-                            side + 1,
-                            if keep { "Keep" } else { "Trash" }
-                        ))
+                        .add(decision_button(side, keep))
+                        .on_hover_text(format!("Toggle photo {} · {}", side + 1, side + 1))
                         .clicked()
                     {
                         self.toggle_delete_candidate(side);
@@ -333,25 +346,27 @@ impl PhotoSortApp {
                 for (side, id) in paths.iter().enumerate() {
                     let keep = self.pick_review.comparison().is_none_or(|c| c.keeps(*id));
                     if ui
-                        .button(format!(
-                            "{}: {}",
-                            side + 1,
-                            if keep { "Keep" } else { "Trash" }
-                        ))
+                        .add(decision_button(side, keep))
+                        .on_hover_text(format!("Toggle photo {} · {}", side + 1, side + 1))
                         .clicked()
                     {
                         self.toggle_pick(*id);
                     }
                 }
-            } else if ui
-                .button(if self.decision(active).rejected {
-                    "Unmark"
-                } else {
-                    "Mark for Trash"
-                })
-                .clicked()
-            {
-                self.reject(active);
+            } else {
+                let rejected = self.decision(active).rejected;
+                if icon_text_button(
+                    ui,
+                    true,
+                    rejected,
+                    icon::TRASH,
+                    if rejected { "Marked for Trash" } else { "Trash" },
+                )
+                .on_hover_text(if rejected { "Unmark · D" } else { "Mark for Trash · D" })
+                    .clicked()
+                {
+                    self.reject(active);
+                }
             }
             if !self.comparison.is_empty() && ui.small_button("End comparison").clicked() {
                 self.comparison.clear();
@@ -377,13 +392,32 @@ impl PhotoSortApp {
             self.review_view_controls(ui);
             return;
         }
-        ui.spacing_mut().button_padding = egui::vec2(8.0, 6.0);
+        // A comparison rates each photo from its own stars on the canvas.
+        if matches!(self.step, Step::Cull | Step::Organize) && self.comparison_ids().len() > 1 {
+            self.review_view_controls(ui);
+            return;
+        }
+        ui.add_space(S2);
+        let rating = self.selected_rating(active);
         for star in 1..=5 {
             if ui
-                .selectable_label(self.selected_rating(active) >= star, "★")
+                .add(
+                    egui::Button::new(RichText::new("★").size(16.0).color(if rating >= star {
+                        ACCENT
+                    } else {
+                        FAINT
+                    }))
+                    .frame(false),
+                )
+                .on_hover_text(if rating == star {
+                    "Clear rating · Ctrl/Cmd+0".to_owned()
+                } else {
+                    format!("Rate {star} · Ctrl/Cmd+{star}")
+                })
                 .clicked()
             {
-                self.rating(active, star);
+                // Clicking the current rating again clears it.
+                self.rating(active, if rating == star { 0 } else { star });
             }
         }
         if ui.small_button("Clear rating").clicked() {
@@ -437,10 +471,17 @@ impl PhotoSortApp {
         {
             self.set_view(self.focused_slot, view);
         }
+        ui.label(
+            RichText::new(format!("{:.0}%", view.zoom * 100.0))
+                .small()
+                .color(MUTED),
+        )
+        .on_hover_text("Zoom relative to fitting the whole photo");
     }
     fn filmstrip(&mut self, ui: &mut egui::Ui) {
-        const WIDTH: f32 = 156.0;
-        const HEIGHT: f32 = 100.0;
+        // Image-only tiles: the strip is for orientation, the canvas for judging.
+        const WIDTH: f32 = 104.0;
+        const HEIGHT: f32 = 72.0;
         let stride = WIDTH + ui.spacing().item_spacing.x;
         let selection_key = egui::Id::new("filmstrip_selection");
         let previous = ui.data(|data| data.get_temp::<MediaId>(selection_key));
@@ -661,9 +702,9 @@ impl PhotoSortApp {
                 rect.left_bottom() + egui::vec2(10.0, -8.0),
                 Align2::LEFT_BOTTOM,
                 if view.actual_size && view.zoom == 1.0 {
-                    "ORIGINAL · 1:1"
+                    "Original · 1:1"
                 } else {
-                    "ORIGINAL DETAIL"
+                    "Original detail"
                 },
                 FontId::proportional(10.0),
                 ACCENT,
@@ -679,21 +720,44 @@ impl PhotoSortApp {
                         .is_some_and(|c| c.selected == corrected)
                     {
                         if corrected {
-                            "CORRECTION · SELECTED"
+                            "Correction · selected"
                         } else {
-                            "ORIGINAL · SELECTED"
+                            "Original · selected"
                         }
                     } else if corrected {
-                        "CORRECTION"
+                        "Correction"
                     } else {
-                        "ORIGINAL"
+                        "Original"
                     },
                     self.media[index].name()
                 )
             } else {
-                format!("{} / {}", slot + 1, self.media[index].name())
+                let mut label = format!("{} / {}", slot + 1, self.media[index].name());
+                // Pick Best ranks by its cluster score; elsewhere show the
+                // photo's quality score once analysis has run.
+                let score = (self.step == Step::PickBest)
+                    .then(|| self.pick_review.current())
+                    .flatten()
+                    .and_then(|t| t.cluster.scores.get(&id).copied())
+                    .or_else(|| self.analysis.get(&id).map(|a| a.score));
+                if let Some(score) = score {
+                    label.push_str(&format!(" · score {score:.1}"));
+                }
+                if let Some(analysis) = self.analysis.get(&id) {
+                    for issue in &analysis.issues {
+                        label.push_str(" · ");
+                        label.push_str(issue);
+                    }
+                }
+                label
             };
-            ui.painter().with_clip_rect(rect).text(
+            // Leave room for the Keep/Trash pill in the top-right corner.
+            let pill = matches!(self.step, Step::EasyDelete | Step::PickBest) || d.rejected;
+            let mut label_clip = rect;
+            if pill {
+                label_clip.max.x -= 104.0;
+            }
+            ui.painter().with_clip_rect(label_clip).text(
                 rect.left_top() + egui::vec2(10.0, 14.0),
                 Align2::LEFT_CENTER,
                 label,
@@ -727,21 +791,17 @@ impl PhotoSortApp {
                 self.delete_current
                     .is_none_or(|review| self.delete_review.keeps(review, id))
             };
-            ui.painter().text(
-                rect.right_bottom() + egui::vec2(-10.0, -8.0),
-                Align2::RIGHT_BOTTOM,
-                if keep { "KEEP" } else { "TRASH" },
-                FontId::proportional(12.0),
-                if keep { ACCENT } else { RED },
-            );
+            decision_pill(ui.painter(), rect, keep);
         } else if d.rejected {
-            ui.painter().text(
-                rect.right_bottom() + egui::vec2(-10.0, -8.0),
-                Align2::RIGHT_BOTTOM,
-                "MARKED FOR TRASH",
-                FontId::proportional(10.0),
-                RED,
-            );
+            decision_pill(ui.painter(), rect, false);
+        }
+        // In a comparison each photo carries its own stars, so several can be
+        // rated without changing focus. Single view keeps the toolbar stars.
+        if matches!(self.step, Step::Cull | Step::Organize)
+            && self.comparison_ids().len() > 1
+            && self.organize_preview().is_none()
+        {
+            self.slot_stars(ui, rect, id);
         }
         if pan.is_none() && response.clicked() && self.step == Step::EasyDelete {
             self.toggle_delete_candidate(slot as usize);
@@ -761,7 +821,10 @@ impl PhotoSortApp {
             let delta = ui.input(|i| i.smooth_scroll_delta.y);
             if delta.abs() > 0.0 {
                 self.focused_slot = slot;
-                self.zoom_view((delta * 0.003).exp());
+                let anchor = response
+                    .hover_pos()
+                    .map_or(egui::Vec2::ZERO, |pointer| pointer - rect.center());
+                self.zoom_view_at((delta * 0.003).exp(), anchor);
             }
         }
         if pan.is_none() && response.double_clicked() {
@@ -820,6 +883,92 @@ fn paint_region(
         .add(egui::Shape::mesh(mesh));
 }
 
+/// Height reserved for the filmstrip below the review canvas.
+const FILMSTRIP: f32 = 88.0;
+
+/// Keep/Trash toggle for one side of a guided comparison.
+fn decision_button(side: usize, keep: bool) -> egui::Button<'static> {
+    use egui_phosphor::regular as icon;
+    egui::Button::new(
+        RichText::new(format!(
+            "{}  {}  {}",
+            side + 1,
+            if keep { icon::CHECK } else { icon::TRASH },
+            if keep { "Keep" } else { "Trash" }
+        ))
+        .color(if keep { GREEN } else { RED }),
+    )
+}
+
 #[cfg(test)]
 #[path = "review/tests.rs"]
 mod tests;
+
+/// The Keep/Trash state of a compared photo, pinned to the slot's top-right
+/// corner where it stays readable on any image.
+fn decision_pill(painter: &egui::Painter, slot: egui::Rect, keep: bool) {
+    use egui_phosphor::regular as icon;
+    let (text, fill) = if keep {
+        (format!("{}  Keep", icon::CHECK), GREEN)
+    } else {
+        (format!("{}  Trash", icon::TRASH), RED)
+    };
+    let galley = painter.layout_no_wrap(text, medium(13.0), Color32::from_rgb(16, 16, 16));
+    let size = galley.size() + egui::vec2(20.0, 8.0);
+    let rect = Align2::RIGHT_TOP.anchor_size(slot.right_top() + egui::vec2(-S2, S2), size);
+    painter.rect_filled(rect, size.y / 2.0, fill);
+    painter.galley(rect.min + egui::vec2(10.0, 4.0), galley, Color32::BLACK);
+}
+
+impl PhotoSortApp {
+    /// Five frameless stars over a comparison slot's bottom-left corner.
+    fn slot_stars(&mut self, ui: &mut egui::Ui, slot: egui::Rect, id: MediaId) {
+        let rating = self.selected_rating(id);
+        let size = egui::vec2(22.0, 22.0);
+        let origin = slot.left_bottom() + egui::vec2(S2, -S2 - size.y);
+        let backdrop = egui::Rect::from_min_size(
+            origin - egui::vec2(4.0, 2.0),
+            egui::vec2(size.x * 5.0 + 8.0, size.y + 4.0),
+        );
+        ui.painter()
+            .rect_filled(backdrop, R_CONTROL, Color32::from_black_alpha(150));
+        let responses: Vec<_> = (1..=5u8)
+            .map(|star| {
+                let rect = egui::Rect::from_min_size(
+                    origin + egui::vec2(size.x * f32::from(star - 1), 0.0),
+                    size,
+                );
+                let id = ui.id().with(("slot-star", id, star));
+                (star, ui.interact(rect, id, Sense::click()))
+            })
+            .collect();
+        // Hovering previews the rating a click would set.
+        let shown = responses
+            .iter()
+            .find(|(_, r)| r.hovered())
+            .map_or(rating, |(star, _)| *star);
+        for (star, response) in responses {
+            ui.painter().text(
+                response.rect.center(),
+                Align2::CENTER_CENTER,
+                "★",
+                FontId::proportional(16.0),
+                if star <= shown {
+                    ACCENT
+                } else {
+                    Color32::from_gray(150)
+                },
+            );
+            let label = if rating == star {
+                "Clear rating".to_owned()
+            } else {
+                format!("Rate {star}")
+            };
+            response
+                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+            if response.on_hover_text(&label).clicked() {
+                self.rating(id, if rating == star { 0 } else { star });
+            }
+        }
+    }
+}

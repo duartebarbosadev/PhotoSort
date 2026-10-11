@@ -13,7 +13,7 @@ restore these files when making a fresh checkout or distributing a local bundle.
 | --- | --- | --- |
 | `models/orientation.onnx` | Unmodified upstream `v2` release asset `orientation_model_v2_0.9882.onnx`; identical to the reference copy; RGB 416 resize, center crop 384 | MIT upstream repository; notice retained in `licenses/ORIENTATION-MIT.txt` |
 | `models/dinov2-small.onnx` | `onnx-community/dinov2-small`, revision `8b1f705a3a7f6f062f6bdd21986c1583d3ef105d`, `onnx/model.onnx` | Apache-2.0 model repository |
-| `models/aesthetic.onnx` | `cafeai/cafe_aesthetic`, revision `48a343764f786abc1ca8aaddfcd60a688a70da9b`; exported using `scripts/export_aesthetic.py`, opset 17, then folded with `examples/fold_model.rs` (ONNX Runtime basic, hardware-independent optimizations; outputs verified bit-identical) | AGPL-3.0 model card; original model card retained below |
+| `models/aesthetic.onnx` | `cafeai/cafe_aesthetic`, revision `48a343764f786abc1ca8aaddfcd60a688a70da9b`; exported using `scripts/export_aesthetic.py`, opset 17, then folded with `examples/fold_model.rs` (ONNX Runtime basic, hardware-independent optimizations; outputs verified bit-identical) | AGPL-3.0 model card; licence text in `licenses/CAFE-AESTHETIC-AGPL-3.0.txt`, original model card retained below |
 | `models/face_detector.onnx`, `models/face_landmarks_detector.onnx` | Reference `assets/models/face_landmarker.task`, Google MediaPipe face detector and Face Mesh V2; `scripts/normalize_faces.py` folds float16 constants, then tflite2onnx 0.4.1 exports opset 11 | Google MediaPipe assets, Apache-2.0 project; model cards upstream |
 | `models/face_blendshapes.onnx` | Same `face_landmarker.task`, MediaPipe `face_blendshapes.tflite` (52 expression scores from 146 Face Mesh points); `scripts/convert_blendshapes.py` with TensorFlow 2.16.2 and tf2onnx 1.16.1, opset 17, explicit convolution pads; verified against TFLite within 3e-6 | Google MediaPipe assets, Apache-2.0 project |
 | `runtime/libonnxruntime.dylib` | Native ONNX Runtime 1.29.0 library, copied from the reference environment; no Python runtime included | MIT |
@@ -27,7 +27,17 @@ Links: [DINO export](https://huggingface.co/onnx-community/dinov2-small/tree/8b1
 [GeoNames](https://www.geonames.org/),
 [reverse_geocode](https://github.com/richardpenman/reverse_geocode).
 
-The application source license does not replace these assets' terms. Packaging
+The application source license does not replace these assets' terms.
+
+Bundling the aesthetic model: `scripts/package_macos.py` copies all of
+`resources/` into the app, so release builds ship the model and need no
+download. AGPL-3.0 then applies to the distributed model: ship its licence and
+model card (both in `licenses/`), and offer the corresponding source of the
+shipped file, i.e. the pinned upstream revision plus `scripts/export_aesthetic.py`
+and `examples/fold_model.rs`. Publishing this repository satisfies that. A
+closed-source or store-restricted release should drop the model instead (Pick
+Best then ranks without aesthetic scores) or get a different licence from the
+model's authors. Exiv2 (GPL-2.0-or-later) has comparable source obligations. Packaging
 here is a local development build; no public release or redistribution was done.
 
 ## Recreating model exports
