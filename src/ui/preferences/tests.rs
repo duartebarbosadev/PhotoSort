@@ -547,3 +547,44 @@ fn settings_access_cache_and_general_anchors_keep_footer_visible_at_small_sizes(
         app.runtime.shutdown();
     }
 }
+#[test]
+fn switching_the_raw_look_reloads_only_raw_previews() {
+    let (dir, mut app) = fixture();
+    app.media = [(1, MediaKind::Raw), (2, MediaKind::Photo)]
+        .into_iter()
+        .map(|(n, kind)| Media {
+            id: MediaId(n),
+            path: dir.path().join(format!("{n}.file")),
+            kind,
+            fingerprint: Fingerprint::default(),
+        })
+        .collect();
+    let ctx = egui::Context::default();
+    for n in [1, 2] {
+        let handle = ctx.load_texture(
+            format!("t{n}"),
+            egui::ColorImage::filled([2, 2], Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        );
+        app.textures.insert(
+            (MediaId(n), false),
+            Texture {
+                handle,
+                bytes: 16,
+                used: 0,
+            },
+        );
+        app.requested.insert((MediaId(n), true));
+    }
+    let mut next = app.preferences.clone();
+    next.raw_look = crate::core::raw_look::RawLook::Enhanced;
+    app.apply_preferences(next);
+    assert_eq!(
+        app.runtime.raw_look.get(),
+        crate::core::raw_look::RawLook::Enhanced
+    );
+    assert!(!app.textures.contains_key(&(MediaId(1), false)));
+    assert!(app.textures.contains_key(&(MediaId(2), false)));
+    assert_eq!(app.requested, [(MediaId(2), true)].into_iter().collect());
+    app.runtime.shutdown();
+}

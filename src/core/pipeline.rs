@@ -125,6 +125,9 @@ pub struct Pipeline {
     pub stats: Stats,
     disk: PathBuf,
     written_since_prune: u64,
+    raw_look: super::raw_look::RawLook,
+    /// Enhanced-look levels per RAW source, so 1:1 crops match the preview.
+    raw_levels: HashMap<String, super::raw_look::Levels>,
 }
 impl Pipeline {
     pub fn new(budget: usize, disk: PathBuf) -> Self {
@@ -142,6 +145,8 @@ impl Pipeline {
             stats: Stats::default(),
             disk,
             written_since_prune: 0,
+            raw_look: Default::default(),
+            raw_levels: HashMap::new(),
         }
     }
     pub fn standard() -> Self {
@@ -327,11 +332,12 @@ impl Pipeline {
         cancelled: impl Fn() -> bool,
     ) -> Option<Asset> {
         let source_key = Self::key(media).ok()?;
-        if self.cache.contains_key(&source_key) {
+        let display_key = self.look_key(media, &source_key);
+        if self.cache.contains_key(&display_key) {
             return None;
         }
         let saved = self.render_info(&source_key)?;
-        let image = image::open(self.disk.join(format!("{}.png", thumb_key(&source_key)))).ok()?;
+        let image = image::open(self.disk.join(format!("{}.png", thumb_key(&display_key)))).ok()?;
         let mut meta = self.metadata_for_key(media, &source_key, &cancelled).ok()?;
         if media.kind != MediaKind::Video {
             (meta.width, meta.height) = (saved.width, saved.height);
@@ -363,6 +369,22 @@ impl Pipeline {
         };
         if image.save(&temp).is_ok() && std::fs::rename(&temp, &path).is_err() {
             let _ = std::fs::remove_file(&temp);
+        }
+    }
+    /// How RAW photos are displayed. Analysis is unaffected; display assets
+    /// are cached per look, so switching never shows a stale render.
+    pub fn set_raw_look(&mut self, look: super::raw_look::RawLook) {
+        self.raw_look = look;
+    }
+    fn enhanced(&self, media: &Media) -> bool {
+        media.kind == MediaKind::Raw && self.raw_look == super::raw_look::RawLook::Enhanced
+    }
+    /// Memory and thumbnail key for a display asset under the current look.
+    fn look_key(&self, media: &Media, key: &str) -> String {
+        if self.enhanced(media) {
+            format!("{key}+enhanced")
+        } else {
+            key.to_owned()
         }
     }
     pub fn load(&mut self, media: &Media) -> Result<Asset> {
@@ -399,8 +421,14 @@ impl Pipeline {
         } else {
             source_key.clone()
         };
+        // The disk proxy is always the neutral render; the look applies after.
+        let memory_key = if analysis {
+            key.clone()
+        } else {
+            self.look_key(media, &key)
+        };
         self.tick += 1;
-        if let Some(entry) = self.cache.get_mut(&key) {
+        if let Some(entry) = self.cache.get_mut(&memory_key) {
             entry.tick = self.tick;
             self.stats.hits += 1;
             return Ok(entry.asset.clone());
@@ -492,6 +520,15 @@ impl Pipeline {
             !cancelled() && Self::key(media)? == source_key,
             "Photo changed or preparation cancelled"
         );
+        let decoded = if !analysis && self.enhanced(media) {
+            let mut rgba = decoded.to_rgba8();
+            let levels = super::raw_look::Levels::measure(&rgba);
+            self.raw_levels.insert(source_key.clone(), levels);
+            levels.apply(&mut rgba);
+            DynamicImage::ImageRgba8(rgba)
+        } else {
+            decoded
+        };
         let thumbnail = if analysis {
             None
         } else {
@@ -500,7 +537,8 @@ impl Pipeline {
             ))
         };
         if let Some(thumbnail) = &thumbnail {
-            self.save_thumbnail(&source_key, thumbnail);
+            let display_key = self.look_key(media, &source_key);
+            self.save_thumbnail(&display_key, thumbnail);
         }
         let pixels = Arc::new(decoded.to_rgba8());
         let thumbnail = thumbnail.unwrap_or_else(|| pixels.clone());
@@ -525,7 +563,7 @@ impl Pipeline {
         if asset.bytes() <= self.budget {
             self.stats.resident_bytes += asset.bytes();
             self.cache.insert(
-                key,
+                memory_key,
                 Entry {
                     asset: asset.clone(),
                     tick: self.tick,
@@ -875,12 +913,25 @@ impl Pipeline {
         );
         let crop = image.crop_imm(r.x, r.y, r.width, r.height);
         let edge = request.output_edge.clamp(1, 4096);
-        let pixels = if crop.width() > edge || crop.height() > edge {
+        let mut pixels = if crop.width() > edge || crop.height() > edge {
             crop.resize(edge, edge, image::imageops::FilterType::Triangle)
                 .into_rgba8()
         } else {
             crop.into_rgba8()
         };
+        if self.enhanced(&request.media) {
+            // Same levels as the preview, so zooming in does not shift colour.
+            let levels = match self.raw_levels.get(&key) {
+                Some(levels) => *levels,
+                None => {
+                    let levels =
+                        super::raw_look::Levels::measure(&image.thumbnail(1024, 1024).to_rgba8());
+                    self.raw_levels.insert(key.clone(), levels);
+                    levels
+                }
+            };
+            levels.apply(&mut pixels);
+        }
         anyhow::ensure!(
             !cancelled() && Self::key(&request.media)? == key,
             "Photo changed or inspection cancelled"
@@ -888,6 +939,7 @@ impl Pipeline {
         Ok((Arc::new(pixels), prepared.warning))
     }
     pub fn clear_memory(&mut self) {
+        self.raw_levels.clear();
         self.colors.clear();
         self.cache.clear();
         self.metadata.clear();

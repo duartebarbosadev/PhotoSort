@@ -40,6 +40,19 @@ impl PhotoSortApp {
         self.preferences_section = Some(section);
     }
 
+    /// Drops RAW thumbnails and previews so they are requested again in the
+    /// new look. Other photos and all analysis results are kept.
+    fn reload_raw_previews(&mut self) {
+        let raw: HashSet<MediaId> = self
+            .media
+            .iter()
+            .filter(|m| m.kind == MediaKind::Raw)
+            .map(|m| m.id)
+            .collect();
+        self.textures.retain(|(id, _), _| !raw.contains(id));
+        self.requested.retain(|(id, _)| !raw.contains(id));
+        self.inspection_frames.clear();
+    }
     pub(super) fn save_preferences(&mut self) {
         if let Some(path) = &self.preferences_path
             && let Err(error) = self.runtime.io(IoWork::SavePreferences {
@@ -58,6 +71,10 @@ impl PhotoSortApp {
         next.normalize();
         self.runtime.cache.configure(next.cache);
         self.runtime.processing.configure(next.processing);
+        if next.raw_look != self.preferences.raw_look {
+            self.runtime.raw_look.set(next.raw_look);
+            self.reload_raw_previews();
+        }
         self.preferences = next;
         self.navigation_notice = None;
         self.save_preferences();
@@ -263,6 +280,14 @@ impl PhotoSortApp {
                     ui.checkbox(&mut draft.navigation.skip_singletons, "Skip single-photo groups with Up/Down");
                     ui.checkbox(&mut draft.navigation.cycle_similarity, "Cycle Left/Right within similarity groups");
                     settings_note(ui, "Rating jumps take priority. Ctrl/Cmd bypasses movement filters and includes Trash marks. Group options use Cull analysis results; photos remain visible.");
+                    ui.separator();
+                    settings_heading(ui, "RAW photos");
+                    ui.horizontal_wrapped(|ui| {
+                        use crate::core::raw_look::RawLook;
+                        ui.selectable_value(&mut draft.raw_look, RawLook::Neutral, "Neutral");
+                        ui.selectable_value(&mut draft.raw_look, RawLook::Enhanced, "Enhanced");
+                    });
+                    settings_note(ui, "Enhanced stretches contrast and adds a little colour to RAW previews, like a camera's JPEG. It only changes how photos look here: files, scores and suggestions are unchanged.");
                     ui.separator();
                     settings_heading(ui, "Saving ratings and rotation");
                     ui.horizontal_wrapped(|ui| {

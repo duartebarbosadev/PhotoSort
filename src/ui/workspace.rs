@@ -331,6 +331,7 @@ impl PhotoSortApp {
             .collect();
         app.runtime.cache.configure(app.preferences.cache);
         app.runtime.processing.configure(app.preferences.processing);
+        app.runtime.raw_look.set(app.preferences.raw_look);
         app.runtime.cache.request(false);
         app.preferences_path = Some(path);
         if let Some(folder) = folder {

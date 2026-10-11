@@ -377,6 +377,8 @@ pub struct Runtime {
     pub desktop: super::desktop::Worker,
     pub model_assets: super::model_assets::Worker,
     pub processing: super::processing::Control,
+    /// How RAW photos are displayed; read by the image worker per request.
+    pub raw_look: super::raw_look::Control,
     pub cache: super::cache::Control,
     pub browsing: super::browsing::Worker,
     pub events: Receiver<Envelope>,
@@ -437,12 +439,14 @@ impl Runtime {
             cache_control.clone(),
         );
         let processing = super::processing::Control::default();
+        let raw_look = super::raw_look::Control::default();
         let inspection = Arc::new(Mutex::new(super::inspection::Queue::default()));
         let image_thread = images::spawn(images::Wiring {
             publisher,
             cache,
             cache_control: cache_control.clone(),
             processing: processing.clone(),
+            raw_look: raw_look.clone(),
             inspection: inspection.clone(),
             analysis: analysis.clone(),
             metadata: metadata_generation.clone(),
@@ -459,6 +463,7 @@ impl Runtime {
             model_assets,
             cache: cache_control,
             processing,
+            raw_look,
             browsing,
             events,
             io,

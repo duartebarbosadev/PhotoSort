@@ -34,6 +34,7 @@ pub(super) struct Wiring {
     pub(super) cache: PathBuf,
     pub(super) cache_control: cache::Control,
     pub(super) processing: processing::Control,
+    pub(super) raw_look: super::super::raw_look::Control,
     pub(super) inspection: Arc<Mutex<inspection::Queue>>,
     pub(super) analysis: Arc<RunGeneration>,
     pub(super) metadata: Arc<RunGeneration>,
@@ -198,6 +199,7 @@ struct ImageWorker {
     subject_persistent: bool,
     selection: Selection,
     pipeline: Pipeline,
+    raw_look: super::super::raw_look::Control,
     pending: Option<Pending>,
     groups: VisualGroups,
     hashes: HashMap<String, MediaId>,
@@ -219,6 +221,7 @@ impl ImageWorker {
             cache,
             cache_control,
             processing,
+            raw_look,
             inspection,
             analysis,
             metadata,
@@ -237,6 +240,7 @@ impl ImageWorker {
             false,
         );
         Self {
+            raw_look,
             publisher,
             analysis_generation: analysis,
             metadata_generation: metadata,
@@ -284,6 +288,8 @@ impl ImageWorker {
         let mut failures = 0;
         while !self.publisher.stop.load(Ordering::Relaxed) && failures < 3 {
             let publisher = self.publisher.clone();
+            // A Settings change applies to the next preview or detail request.
+            self.pipeline.set_raw_look(self.raw_look.get());
             let ok = publisher.guard(super::Worker::Images, || {
                 if self.handle_cache_request()
                     || self.handle_inspection()
