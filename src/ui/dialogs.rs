@@ -145,7 +145,10 @@ impl PhotoSortApp {
                             "Rotate right / left / 180 degrees",
                         ),
                         ("I", "Toggle photo details"),
-                        ("F1 / F2", "Single photo / similar comparison"),
+                        (
+                            "F1 / F2",
+                            "Single photo, press again to return / similar comparison",
+                        ),
                         (
                             "0 / A / Double-click canvas",
                             "Fit / actual size / toggle actual size",

@@ -532,3 +532,33 @@ fn clear_all_trash_menu_clears_hidden_marks_at_compact_and_wide_sizes() {
         }
     }
 }
+
+#[test]
+fn review_compares_a_selection_and_f1_returns_to_the_comparison() {
+    let (_dir, mut app) = fixture();
+    for id in [2, 5, 7] {
+        app.select_library(MediaId(id), true, false);
+    }
+    assert_eq!(app.selection.len(), 3);
+    app.open_review();
+    assert!(app.review);
+    assert_eq!(app.comparison, [MediaId(2), MediaId(5), MediaId(7)]);
+    // F1: one photo, then the same comparison again.
+    app.toggle_single_view();
+    assert!(app.comparison.is_empty() && app.review);
+    app.toggle_single_view();
+    assert_eq!(app.comparison, [MediaId(2), MediaId(5), MediaId(7)]);
+    // A photo filtered out meanwhile does not come back.
+    app.toggle_single_view();
+    app.filtered.retain(|i| *i != 5);
+    app.toggle_single_view();
+    assert_eq!(app.comparison, [MediaId(2), MediaId(7)]);
+    // Review with a single selected photo stays a single view.
+    app.review = false;
+    app.comparison.clear();
+    app.clear_library_selection();
+    app.select_library(MediaId(3), true, false);
+    app.open_review();
+    assert!(app.review && app.comparison.is_empty());
+    app.runtime.shutdown();
+}

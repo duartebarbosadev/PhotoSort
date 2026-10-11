@@ -161,6 +161,8 @@ pub struct PhotoSortApp {
     scene_choices: Vec<(usize, usize, MediaId)>,
     scene_undo: Option<Arc<crate::core::manual_groups::ManualGroups>>,
     cull_groups: Arc<HashMap<MediaId, usize>>,
+    /// The highest-scoring photo of each Cull group with two or more photos.
+    group_best: HashSet<MediaId>,
     automatic_groups: Arc<HashMap<MediaId, usize>>,
     manual_groups: Arc<crate::core::manual_groups::ManualGroups>,
     scene_groups: Arc<crate::core::manual_groups::ManualGroups>,
@@ -196,6 +198,8 @@ pub struct PhotoSortApp {
     active: Option<MediaId>,
     selection: crate::core::selection::Selection,
     comparison: Vec<MediaId>,
+    /// The comparison set aside by F1, restored by pressing F1 again.
+    single_view_stash: Vec<MediaId>,
     textures: HashMap<(MediaId, bool), Texture>,
     requested: HashSet<(MediaId, bool)>,
     failures: HashMap<MediaId, String>,
@@ -381,6 +385,7 @@ impl PhotoSortApp {
             scene_choices: Vec::new(),
             scene_undo: None,
             cull_groups: Arc::default(),
+            group_best: HashSet::new(),
             automatic_groups: Arc::default(),
             manual_groups: Arc::default(),
             scene_groups: Arc::default(),
@@ -418,6 +423,7 @@ impl PhotoSortApp {
             active: None,
             selection: Default::default(),
             comparison: Vec::new(),
+            single_view_stash: Vec::new(),
             textures: HashMap::new(),
             requested: HashSet::new(),
             failures: HashMap::new(),
@@ -587,6 +593,7 @@ impl PhotoSortApp {
         self.scene_undo = None;
         self.face_groups = None;
         self.cull_groups = Arc::default();
+        self.group_best.clear();
         self.automatic_groups = Arc::default();
         self.manual_groups = Arc::default();
         self.scene_groups = Arc::default();

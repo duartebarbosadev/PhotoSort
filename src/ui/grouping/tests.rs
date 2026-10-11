@@ -500,3 +500,35 @@ fn scene_edit_cancel_keeps_completed_groups_and_folder_drafts_are_guarded() {
     }
     assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
 }
+
+#[test]
+fn each_group_with_a_choice_marks_its_best_scoring_photo() {
+    let groups: HashMap<MediaId, usize> = [(1, 7), (2, 7), (3, 7), (4, 8), (5, 9), (6, 9)]
+        .into_iter()
+        .map(|(id, g)| (MediaId(id), g))
+        .collect();
+    let analysis: HashMap<MediaId, crate::core::analysis::Analysis> = [
+        (1, 40.0),
+        (2, 81.5),
+        (3, 60.0),
+        (4, 99.0),
+        (5, 70.0),
+        (6, 70.0),
+    ]
+    .into_iter()
+    .map(|(id, score)| {
+        (
+            MediaId(id),
+            crate::core::analysis::Analysis {
+                score,
+                ..Default::default()
+            },
+        )
+    })
+    .collect();
+    let best = super::group_best(&groups, &analysis);
+    // Group 8 has one photo, so nothing to choose; group 9 ties on score
+    // and resolves to the lower id every time.
+    assert_eq!(best, [MediaId(2), MediaId(5)].into_iter().collect());
+    assert!(super::group_best(&groups, &HashMap::new()).is_empty());
+}

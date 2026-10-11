@@ -305,10 +305,10 @@ impl PhotoSortApp {
                 }
                 ui.add_space(S2);
                 if icon_text_button(ui, true, self.review, icon::IMAGE, "Review")
-                    .on_hover_text("One photo at a time, or side by side")
+                    .on_hover_text("One photo at a time, or a selection side by side")
                     .clicked()
                 {
-                    self.review = true;
+                    self.open_review();
                 }
                 if self.step == Step::Cull {
                     egui::ComboBox::from_id_salt("library_layout")

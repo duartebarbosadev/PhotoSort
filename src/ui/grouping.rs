@@ -44,6 +44,7 @@ impl PhotoSortApp {
                 })
         });
         self.cull_groups = groups;
+        self.group_best = group_best(&self.cull_groups, &self.analysis);
         if self.browse.group.is_some() {
             self.browse.group = anchor.and_then(|id| self.cull_groups.get(&id).copied());
         }
@@ -305,3 +306,24 @@ impl PhotoSortApp {
 #[cfg(test)]
 #[path = "grouping/tests.rs"]
 mod tests;
+
+/// The best-scoring member of every group that has a choice to make.
+fn group_best(
+    groups: &HashMap<MediaId, usize>,
+    analysis: &HashMap<MediaId, crate::core::analysis::Analysis>,
+) -> HashSet<MediaId> {
+    let mut best: HashMap<usize, (f64, MediaId, usize)> = HashMap::new();
+    for (id, group) in groups {
+        let score = analysis.get(id).map_or(f64::NEG_INFINITY, |a| a.score);
+        let entry = best.entry(*group).or_insert((score, *id, 0));
+        entry.2 += 1;
+        // Ties go to the lower id so the badge does not jump between frames.
+        if score > entry.0 || (score == entry.0 && id.0 < entry.1.0) {
+            (entry.0, entry.1) = (score, *id);
+        }
+    }
+    best.into_values()
+        .filter(|(score, _, members)| *members > 1 && score.is_finite())
+        .map(|(_, id, _)| id)
+        .collect()
+}

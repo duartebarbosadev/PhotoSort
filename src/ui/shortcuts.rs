@@ -286,10 +286,7 @@ impl PhotoSortApp {
                 }
             }
             egui::Key::I => self.inspector ^= true,
-            egui::Key::F1 => {
-                self.comparison.clear();
-                self.review = true;
-            }
+            egui::Key::F1 => self.toggle_single_view(),
             egui::Key::F2 => self.compare_similar(),
             egui::Key::F3 => self.toggle_sync(),
             egui::Key::A => self.actual_size(),

@@ -303,6 +303,15 @@ impl PhotoSortApp {
                 RED,
             );
         }
+        if self.step == Step::Cull && self.group_best.contains(&id) {
+            badge(
+                &painter,
+                image_rect.left_bottom() + egui::vec2(S1, -S1),
+                Align2::LEFT_BOTTOM,
+                &format!("{} Best", icon::CROWN_SIMPLE),
+                ACCENT,
+            );
+        }
         let rating = self.selected_rating(id);
         if rating > 0 && !captioned {
             badge(

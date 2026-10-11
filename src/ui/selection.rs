@@ -151,6 +151,38 @@ impl PhotoSortApp {
             self.set_active(id);
         }
     }
+    /// F1: show only the active photo, keeping the comparison to return to.
+    pub(super) fn toggle_single_view(&mut self) {
+        if self.comparison.len() > 1 {
+            self.single_view_stash = std::mem::take(&mut self.comparison);
+        } else if self.review && !self.single_view_stash.is_empty() {
+            let stash = std::mem::take(&mut self.single_view_stash);
+            // Only photos still shown in this view can return.
+            self.comparison = stash
+                .into_iter()
+                .filter(|id| {
+                    self.index
+                        .get(id)
+                        .is_some_and(|i| self.filtered.contains(i))
+                })
+                .collect();
+            if self.comparison.len() < 2 {
+                self.comparison.clear();
+            }
+        }
+        self.review = true;
+    }
+    /// Review from the grid compares a 2–9 photo selection directly.
+    pub(super) fn open_review(&mut self) {
+        if self.step == Step::Cull
+            && !self.review
+            && self.library_selection_mode()
+            && (2..=9).contains(&self.selection.len())
+        {
+            self.compare_selection();
+        }
+        self.review = true;
+    }
     /// Inline, so it wraps with whatever row it is placed in.
     pub(super) fn selection_controls(&mut self, ui: &mut egui::Ui) {
         {
