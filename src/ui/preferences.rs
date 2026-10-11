@@ -212,10 +212,20 @@ impl PhotoSortApp {
                         if ui.button("Dismiss error").clicked() { self.error = None; }
                     }).response.rect.height() + ui.spacing().item_spacing.y
                 } else { 0.0 };
-                ui.horizontal(|ui| {
-                    if ui.button("General").clicked() { section = Some(Section::General); }
-                    if ui.button("Caches").clicked() { section = Some(Section::Caches); }
+                // The highlighted tab follows the last section chosen this session.
+                let tab_id = egui::Id::new("settings_tab");
+                let mut current = section.unwrap_or_else(|| {
+                    ctx.data(|d| d.get_temp::<Section>(tab_id)).unwrap_or(Section::General)
                 });
+                ui.horizontal(|ui| {
+                    for (tab, label) in [(Section::General, "General"), (Section::Caches, "Caches")] {
+                        if chip(ui, current == tab, label).clicked() {
+                            section = Some(tab);
+                            current = tab;
+                        }
+                    }
+                });
+                ctx.data_mut(|d| d.insert_temp(tab_id, current));
                 egui::ScrollArea::vertical()
                     .id_salt("settings_content")
                     .max_height((ctx.content_rect().height() - 200.0 - error_height).max(80.0))
@@ -227,22 +237,29 @@ impl PhotoSortApp {
                         ui.separator();
                         settings_heading(ui, "Choose your workflow");
                         settings_note(ui, "Organize and Cull always remain available.");
-                        for step in Step::ALL {
-                            let mut visible = draft.visible(step);
-                            if ui
-                                .add_enabled(
-                                    !matches!(step, Step::Organize | Step::Cull),
-                                    egui::Checkbox::new(&mut visible, step.title()),
-                                )
-                                .changed()
-                            {
-                                if visible {
-                                    draft.hidden_steps.remove(&step);
-                                } else {
-                                    draft.hidden_steps.insert(step);
+                        ui.horizontal_wrapped(|ui| {
+                            for step in Step::ALL {
+                                let visible = draft.visible(step);
+                                let fixed = matches!(step, Step::Organize | Step::Cull);
+                                let response = ui
+                                    .add_enabled_ui(!fixed, |ui| chip(ui, visible, step.title()))
+                                    .inner
+                                    .on_hover_text(if fixed {
+                                        "Always available"
+                                    } else if visible {
+                                        "Shown · click to hide this step"
+                                    } else {
+                                        "Hidden · click to show this step"
+                                    });
+                                if response.clicked() {
+                                    if visible {
+                                        draft.hidden_steps.insert(step);
+                                    } else {
+                                        draft.hidden_steps.remove(&step);
+                                    }
                                 }
                             }
-                        }
+                        });
                         ui.separator();
                         ui.checkbox(&mut draft.show_shortcuts, "Show workflow shortcut hints");
                     ui.separator();
