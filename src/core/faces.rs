@@ -67,13 +67,18 @@ struct Detection {
     angle: f32,
 }
 /// Part of the face-cache identity; change it whenever a rule below changes.
-pub const RECIPE: &str = "faces-v3-blendshapes";
-/// Eyes count as closed when both MediaPipe blink scores reach `CLOSED_BLINK`
-/// and the Face Mesh eye aspect ratio agrees (`CLOSED_EYE_RATIO`). On 76
-/// hand-labelled faces closed eyes scored ≥ 0.68 / ≤ 0.06 and every other face,
-/// including downward gazes, squints and sunglasses, < 0.44 / ≥ 0.10; any blink
-/// cutoff from 0.44 to 0.68 with any ratio from 0.07 to 0.29 made no mistake.
-/// (The reference rule, ratio < 0.21 alone, flagged 18 faces, 10 of them closed.)
+pub const RECIPE: &str = "faces-v4-cew";
+/// Eyes count as closed when the Face Mesh eye aspect ratio is clearly shut
+/// (`SHUT_EYE_RATIO`), or when both MediaPipe blink scores reach `CLOSED_BLINK`
+/// and the ratio agrees (`CLOSED_EYE_RATIO`).
+///
+/// Tuned on half of the CEW dataset (1,186 closed / 1,231 open faces, false
+/// alarms held at ≤ 1%) and checked on the other half, which it never saw:
+/// 86.2% of closed eyes caught, 1.0% of open eyes flagged (the blink-and-ratio
+/// rule alone: 55.5% / 0.2%). On 76 hand-labelled faces from the sample
+/// library it still catches all 10 closed and flags none of the 64 others,
+/// including downward gazes (ratio ≥ 0.10), squints and sunglasses.
+const SHUT_EYE_RATIO: f32 = 0.10;
 const CLOSED_BLINK: f32 = 0.55;
 const CLOSED_EYE_RATIO: f32 = 0.15;
 /// Minimum detector score on a crop centred on the candidate. In the same set it
@@ -318,7 +323,10 @@ fn detect(
         let left = eye_aspect_ratio(landmarks, [33, 160, 158, 133, 153, 144]);
         let right = eye_aspect_ratio(landmarks, [362, 385, 387, 263, 373, 380]);
         record(sigmoid(presence[0]), [left, right], blink, true);
-        if blink.iter().all(|&b| b >= CLOSED_BLINK) && (left + right) / 2.0 < CLOSED_EYE_RATIO {
+        let ratio = (left + right) / 2.0;
+        if ratio < SHUT_EYE_RATIO
+            || (blink.iter().all(|&b| b >= CLOSED_BLINK) && ratio < CLOSED_EYE_RATIO)
+        {
             faces.closed_eyes += 1;
         }
         if face.size > largest {
