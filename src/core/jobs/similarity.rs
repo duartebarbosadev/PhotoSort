@@ -121,7 +121,7 @@ pub(super) fn spawn(
                 let Ok(job) = jobs.recv_timeout(Duration::from_millis(100)) else {
                     continue;
                 };
-                let _ = publisher.guard(|| worker.handle(job));
+                let _ = publisher.guard(super::Worker::Similarity, || worker.handle(job));
             }
         })
         .expect("Start general similarity policy worker")

@@ -18,7 +18,12 @@ pub struct VideoInfo {
 pub fn probe(path: &Path) -> Option<VideoInfo> {
     let file = std::fs::File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
-    let reader = mp4::Mp4Reader::read_header(std::io::BufReader::new(file), size).ok()?;
+    // The header comes from an untrusted file; a parser bug skips the rows.
+    let reader = super::crash::catch(|| {
+        mp4::Mp4Reader::read_header(std::io::BufReader::new(file), size).ok()
+    })
+    .ok()
+    .flatten()?;
     let mut info = VideoInfo {
         duration_s: reader.duration().as_secs_f64(),
         ..Default::default()

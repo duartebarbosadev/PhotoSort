@@ -145,6 +145,8 @@ pub enum Event {
     ViewError(String),
     PreferencesError(String),
     Error(String),
+    /// A task panicked outside per-item work; the named worker carries on.
+    WorkerStopped(Worker),
 }
 pub struct Envelope {
     pub epoch: u64,
@@ -315,15 +317,24 @@ struct Publisher {
 pub const WORKER_STOPPED: &str =
     "A background task stopped unexpectedly. Try again; restart PhotoSort if it keeps happening.";
 
+/// The long-lived background workers, so the UI resets only what each owns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Worker {
+    Files,
+    Images,
+    Similarity,
+    Subjects,
+}
+
 impl Publisher {
     /// Runs one unit of worker work. A panic becomes an error for the current
     /// folder instead of ending the worker thread and leaving the UI waiting.
     /// Returns false when the work panicked.
-    fn guard(&self, work: impl FnOnce()) -> bool {
+    fn guard(&self, worker: Worker, work: impl FnOnce()) -> bool {
         let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).is_ok();
         if !ok {
             let epoch = self.generation.load(Ordering::Acquire);
-            self.send(epoch, Event::Error(WORKER_STOPPED.into()));
+            self.send(epoch, Event::WorkerStopped(worker));
         }
         ok
     }

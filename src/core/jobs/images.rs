@@ -284,7 +284,7 @@ impl ImageWorker {
         let mut failures = 0;
         while !self.publisher.stop.load(Ordering::Relaxed) && failures < 3 {
             let publisher = self.publisher.clone();
-            let ok = publisher.guard(|| {
+            let ok = publisher.guard(super::Worker::Images, || {
                 if self.handle_cache_request()
                     || self.handle_inspection()
                     || self.handle_evidence()
@@ -588,13 +588,17 @@ impl ImageWorker {
         let fast = (!preview)
             .then(|| self.pipeline.cached_thumbnail(media, cancelled))
             .flatten();
-        match fast.map_or_else(
+        let loaded = fast.map_or_else(
             || {
-                self.pipeline
-                    .load_cancellable(media, || self.publisher.cancelled(epoch))
+                super::super::crash::catch(|| {
+                    self.pipeline
+                        .load_cancellable(media, || self.publisher.cancelled(epoch))
+                })
+                .unwrap_or_else(|error| Err(anyhow::anyhow!(error)))
             },
             Ok,
-        ) {
+        );
+        match loaded {
             Ok(asset) => self.publisher.send(
                 epoch,
                 Event::Asset {
@@ -833,7 +837,9 @@ impl ImageWorker {
     /// Analyze one photo. Returns true when the run was superseded meanwhile.
     fn analyze_photo(&mut self, scope: &Scope, item: &Media) -> bool {
         let mut item_metadata = Metadata::default();
-        let result = self.analyze_item(scope, item, &mut item_metadata);
+        let result =
+            super::super::crash::catch(|| self.analyze_item(scope, item, &mut item_metadata))
+                .unwrap_or_else(|error| Err(anyhow::anyhow!(error)));
         // Cancellation can interrupt preparation, measurements or
         // native models. Retire the run before publishing errors,
         // fallback groups or progress for work the user superseded.
@@ -1335,15 +1341,15 @@ impl ImageWorker {
             return;
         }
         if let Some(media) = index.media.get(index.next) {
-            index.batch.push((
-                media.id,
+            let read = super::super::crash::catch(|| {
                 self.pipeline
                     .metadata_cancellable(media, &|| {
                         self.publisher.cancelled(index.epoch)
                             || self.metadata_generation.current() != index.run
                     })
-                    .map_err(|e| format!("{e:#}")),
-            ));
+                    .map_err(|e| format!("{e:#}"))
+            });
+            index.batch.push((media.id, read.and_then(|result| result)));
             index.next += 1;
         }
         // A cancellation during a header read must not publish a partial

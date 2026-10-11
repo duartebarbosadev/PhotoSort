@@ -73,6 +73,21 @@ mod tests {
         assert!(app.status.contains("broken.jpg could not be analyzed"));
         app.finish_pick_analysis();
         assert!(app.status.contains("1 photo could not be analyzed"));
+        // Nothing analyzable at all: stop once with the cause, not per photo.
+        app.analysis_run = Some(11);
+        app.pick_run = Some(11);
+        app.analysis_failures.clear();
+        app.analysis_successes = 0;
+        for n in 0..5 {
+            app.on_analysis_error(11, MediaId(4 + n), "Model file missing".into());
+        }
+        assert_eq!((app.analysis_run, app.pick_run), (None, None));
+        assert!(
+            app.error
+                .as_deref()
+                .is_some_and(|e| e.contains("Model file missing"))
+        );
+        app.error = None;
         // A late error from a superseded run is ignored.
         app.analysis_run = Some(10);
         app.analysis_failures.clear();

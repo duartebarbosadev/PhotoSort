@@ -57,7 +57,7 @@ fn run(publisher: &Publisher, rx: &Receiver<Message<IoWork>>) {
         {
             continue;
         }
-        let _ = publisher.guard(|| {
+        let _ = publisher.guard(super::Worker::Files, || {
             let files = Files { publisher, epoch };
             if let Err(e) = files.handle(message.work) {
                 publisher.send(epoch, Event::Error(format!("{e:#}")));

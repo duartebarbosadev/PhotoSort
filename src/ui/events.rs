@@ -4,6 +4,9 @@ use super::*;
 use image::RgbaImage;
 use std::ops::ControlFlow;
 
+/// Failures with no success before analysis stops as a whole.
+const SYSTEMIC_FAILURES: usize = 5;
+
 impl PhotoSortApp {
     /// `Break` ends the current poll without the end-of-frame repaint and save
     /// bookkeeping; only a failed session hand-off after Apply needs that.
@@ -79,6 +82,7 @@ impl PhotoSortApp {
                 self.error = Some(error);
             }
             Event::Error(e) => self.on_error(e),
+            Event::WorkerStopped(worker) => self.on_worker_stopped(worker),
         }
         ControlFlow::Continue(())
     }
@@ -290,11 +294,59 @@ impl PhotoSortApp {
             .get(&id)
             .map(|&i| self.media[i].name())
             .unwrap_or_default();
+        // When nothing works at all (a broken model, a missing runtime), the
+        // same error repeats for every photo: stop early and say so once.
+        if self.analysis_successes == 0 && self.analysis_failures.len() + 1 >= SYSTEMIC_FAILURES {
+            self.analysis_failures.insert(id, error.clone());
+            self.runtime.cancel_analysis();
+            self.analysis_run = None;
+            self.rotation_run = None;
+            self.delete_run = None;
+            self.pick_run = None;
+            self.organize_run = None;
+            self.organize_preview_requested = false;
+            self.progress = None;
+            self.set_status("Analysis stopped · the first photos could not be analyzed".into());
+            self.error = Some(format!(
+                "Analysis stopped: the first {SYSTEMIC_FAILURES} photos could not be analyzed: {error}"
+            ));
+            return;
+        }
         self.analysis_failures.insert(id, error);
         self.set_status(format!(
             "{name} could not be analyzed · {} so far · analysis continues",
             self.analysis_failures.len()
         ));
+    }
+    /// A worker task panicked. File work may have been interrupted, so it
+    /// takes the full error path (an unfinished apply becomes a retry plan);
+    /// other workers only release the runs and requests they own.
+    fn on_worker_stopped(&mut self, worker: crate::core::jobs::Worker) {
+        tracing::error!(?worker, "background task stopped");
+        if worker == crate::core::jobs::Worker::Files {
+            self.on_error(crate::core::jobs::WORKER_STOPPED.into());
+            return;
+        }
+        self.runtime.cancel_analysis();
+        self.analysis_run = None;
+        self.rotation_run = None;
+        self.delete_run = None;
+        self.pick_run = None;
+        self.organize_run = None;
+        self.organize_preview_requested = false;
+        self.group_task = None;
+        if worker == crate::core::jobs::Worker::Images {
+            // Let visible tiles ask again once the worker is taking work.
+            self.requested.clear();
+        }
+        if self.applying_plan.is_none() && self.apply_stop.is_none() {
+            self.busy = false;
+            self.progress = None;
+        }
+        // The crash notice explains a panic when the hook is installed.
+        if crate::core::crash::background_panic().is_none() {
+            self.error = Some(crate::core::jobs::WORKER_STOPPED.into());
+        }
     }
     /// " · 2 photos could not be analyzed", for completion statuses.
     pub(super) fn failure_note(&self) -> String {
@@ -319,6 +371,7 @@ impl PhotoSortApp {
         metadata: Metadata,
     ) {
         if self.analysis_run == Some(run) {
+            self.analysis_successes += 1;
             if let Some(embedding) = embedding {
                 self.embeddings.insert(id, embedding);
             }
@@ -347,6 +400,7 @@ impl PhotoSortApp {
         suggestion: crate::core::models::RotationSuggestion,
     ) {
         if self.analysis_run == Some(run) {
+            self.analysis_successes += 1;
             self.rotations.insert(id, suggestion);
         }
     }

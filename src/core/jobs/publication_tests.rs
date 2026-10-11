@@ -113,10 +113,13 @@ fn rejected_publication_does_not_request_an_empty_repaint() {
 fn a_panicking_task_publishes_a_readable_error_and_the_worker_continues() {
     let (tx, rx) = mpsc::sync_channel(4);
     let publisher = publisher(tx, || {});
-    assert!(!publisher.guard(|| panic!("decoder state went bad")));
+    assert!(!publisher.guard(Worker::Images, || panic!("decoder state went bad")));
     let envelope = rx.try_recv().unwrap();
-    assert!(matches!(envelope.event, Event::Error(ref e) if e == WORKER_STOPPED));
+    assert!(matches!(
+        envelope.event,
+        Event::WorkerStopped(Worker::Images)
+    ));
     let mut ran = false;
-    assert!(publisher.guard(|| ran = true));
+    assert!(publisher.guard(Worker::Files, || ran = true));
     assert!(ran && rx.try_recv().is_err());
 }

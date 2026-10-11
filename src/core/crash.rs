@@ -4,6 +4,7 @@
 //! in the previous session. Reports hold no photo pixels, only the panic
 //! message, its location, the thread name and a backtrace.
 use std::{
+    cell::Cell,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
@@ -16,6 +17,28 @@ const KEEP: usize = 10;
 
 static DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 static BACKGROUND: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+thread_local! {
+    /// Set while [`catch`] runs per-item work that recovers from a panic.
+    static RECOVERABLE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Runs work for one item (a file, a photo). A panic becomes `Err` with a
+/// readable message instead of ending the worker; its report is kept for
+/// diagnosis but does not raise the restart notice.
+pub fn catch<T>(work: impl FnOnce() -> T) -> Result<T, String> {
+    let outer = RECOVERABLE.with(|flag| flag.replace(true));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
+    RECOVERABLE.with(|flag| flag.set(outer));
+    result.map_err(|payload| {
+        let detail = payload
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_owned())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        format!("PhotoSort hit an internal error with this file and skipped it ({detail}). A report was saved.")
+    })
+}
 
 /// Where reports are kept: `crashes` inside the data directory.
 pub fn directory() -> PathBuf {
@@ -43,9 +66,20 @@ pub fn install(directory: PathBuf) {
             .unwrap_or_default();
         let backtrace = std::backtrace::Backtrace::force_capture().to_string();
         tracing::error!(thread = %name, %location, %message, "panic");
+        let recoverable = RECOVERABLE.with(Cell::get);
         if let Some(directory) = DIRECTORY.get()
-            && let Ok(path) = write_report(directory, &name, &message, &location, &backtrace)
+            && let Ok(path) = write(
+                directory,
+                &name,
+                &message,
+                &location,
+                &backtrace,
+                // Recovered item panics are kept for diagnosis but never
+                // reported as a crash on the next launch.
+                if recoverable { SEEN } else { UNSEEN },
+            )
             && name != "main"
+            && !recoverable
             && let Ok(mut slot) = BACKGROUND.lock()
         {
             slot.get_or_insert(path);
@@ -67,9 +101,26 @@ pub fn write_report(
     location: &str,
     backtrace: &str,
 ) -> std::io::Result<PathBuf> {
+    write(directory, thread, message, location, backtrace, UNSEEN)
+}
+
+fn write(
+    directory: &Path,
+    thread: &str,
+    message: &str,
+    location: &str,
+    backtrace: &str,
+    suffix: &str,
+) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(directory)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let path = directory.join(format!("{PREFIX}{stamp}-{}{UNSEEN}", std::process::id()));
+    // Several items can fail within one second; the sequence keeps each report.
+    static SEQUENCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = directory.join(format!(
+        "{PREFIX}{stamp}-{}-{sequence}{suffix}",
+        std::process::id()
+    ));
     let report = format!(
         "PhotoSort Rust {}\nOS: {} {}\nThread: {thread}\nLocation: {location}\nMessage: {message}\n\nBacktrace:\n{backtrace}\n",
         env!("CARGO_PKG_VERSION"),
