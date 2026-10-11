@@ -1539,6 +1539,7 @@ impl PhotoSortApp {
         if self.inspector && self.catalog.is_some() && ctx.content_rect().width() <= 1180.0 {
             self.inspector_drawer(ctx);
         }
+        self.photo_drag_overlay(ctx);
         let dropped = ctx.input(|i| {
             i.raw
                 .dropped_files

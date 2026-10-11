@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/xattr.h>
+#include <unistd.h>
 
 struct photosort_copy_context {
     int (*cancelled)(void *);
@@ -95,19 +96,27 @@ static int photosort_verify_xattrs(int source, int destination,
         char *expected = NULL, *actual = NULL;
         ssize_t want = photosort_read_xattr(source, name, &expected);
         if (want < 0) { result = errno ? errno : EIO; break; }
-        for (int attempt = 0; attempt < 2; attempt++) {
+        // APFS can make a freshly written resource fork visible late under
+        // heavy concurrent I/O. Flush, wait briefly and check again; rewrite
+        // at most twice. A persisting mismatch fails (and rolls back) the copy.
+        for (int attempt = 0; attempt < 6; attempt++) {
             free(actual);
+            actual = NULL;
             ssize_t have = photosort_read_xattr(destination, name, &actual);
             if (have == want && (want == 0 || memcmp(expected, actual, (size_t)want) == 0)) {
                 result = 0;
                 break;
             }
             result = EIO;
-            if (attempt == 0 &&
+            if (attempt == 5) break;
+            if (cancelled(opaque)) { result = -1; break; }
+            if ((attempt == 0 || attempt == 3) &&
                 photosort_write_xattr(destination, name, expected, (size_t)want) != 0) {
                 result = errno ? errno : EIO;
                 break;
             }
+            fsync(destination);
+            usleep((useconds_t)(20000 * (attempt + 1)));
         }
         free(expected);
         free(actual);

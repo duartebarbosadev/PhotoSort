@@ -3725,3 +3725,96 @@ fn create_folder_moves_the_selected_files_into_it() {
     assert!(!editor.draft.labels().values().any(|l| l == "Later"));
     app.runtime.shutdown();
 }
+
+#[test]
+fn hovering_a_destination_folder_previews_only_its_photos() {
+    let temp = tempfile::tempdir().unwrap();
+    for (folder, names) in [("Trip", ["a.png", "b.png"]), ("Home", ["c.png", "d.png"])] {
+        std::fs::create_dir_all(temp.path().join(folder)).unwrap();
+        for name in names {
+            image::RgbaImage::new(8, 8)
+                .save(temp.path().join(folder).join(name))
+                .unwrap();
+        }
+    }
+    let catalog = Catalog::scan(temp.path(), || false, |_| {}).unwrap();
+    let mut app =
+        PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
+    app.output = catalog.root.display().to_string();
+    app.media = catalog.media.clone();
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+    app.catalog = Some(Arc::new(catalog));
+    app.step = Step::Organize;
+    app.open_organize_editor();
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let mut time = 0.0;
+    let mut frame = |app: &mut PhotoSortApp, events: Vec<egui::Event>, dt: f64| {
+        time += dt;
+        ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| app.organize_dialog(ui.ctx()),
+        )
+    };
+    for _ in 0..3 {
+        frame(&mut app, vec![], 0.05);
+    }
+    let row = ctx
+        .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_folder_rect", "Trip"))))
+        .expect("Trip row");
+    frame(
+        &mut app,
+        vec![egui::Event::PointerMoved(row.center())],
+        0.05,
+    );
+    // Not yet: a passing pointer must not load thumbnails.
+    let early = frame(&mut app, vec![], 0.1);
+    assert!(app.requested.is_empty());
+    assert!(!labels(&early).iter().any(|l| l.starts_with("Trip ·")));
+    frame(&mut app, vec![], 0.5);
+    let shown = frame(&mut app, vec![], 0.05);
+    assert!(
+        labels(&shown).iter().any(|l| l == "Trip · 2 files"),
+        "{:?}",
+        labels(&shown)
+    );
+    let trip: HashSet<MediaId> = app
+        .media
+        .iter()
+        .filter(|m| m.path.parent().unwrap().ends_with("Trip"))
+        .map(|m| m.id)
+        .collect();
+    assert!(!app.requested.is_empty());
+    assert!(
+        app.requested
+            .iter()
+            .all(|(id, preview)| trip.contains(id) && !preview)
+    );
+    app.runtime.shutdown();
+}
+
+fn labels(output: &egui::FullOutput) -> Vec<String> {
+    output
+        .platform_output
+        .accesskit_update
+        .as_ref()
+        .unwrap()
+        .nodes
+        .iter()
+        .filter_map(|(_, n)| n.value().or(n.label()).map(str::to_owned))
+        .collect()
+}

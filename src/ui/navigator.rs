@@ -260,6 +260,25 @@ impl PhotoSortApp {
                                     response.rect,
                                 )
                             });
+                            if let Key::Group(group) = &node.key {
+                                let group = *group;
+                                if response
+                                    .dnd_hover_payload::<super::grouping::PhotoDrag>()
+                                    .is_some()
+                                {
+                                    ui.painter().rect_stroke(
+                                        response.rect,
+                                        R_CONTROL,
+                                        Stroke::new(2.0, ACCENT),
+                                        StrokeKind::Inside,
+                                    );
+                                }
+                                if let Some(drag) =
+                                    response.dnd_release_payload::<super::grouping::PhotoDrag>()
+                                {
+                                    self.drop_on_group(&drag, group);
+                                }
+                            }
                             response.context_menu(|ui| {
                                 if tree_controls::menu(
                                     ui,

@@ -92,7 +92,7 @@ impl PhotoSortApp {
                     let rejected = self.decision(id).rejected;
                     let texture = self.texture(id, false);
                     let (rect, response) =
-                        ui.allocate_exact_size(egui::vec2(width, height), Sense::click());
+                        ui.allocate_exact_size(egui::vec2(width, height), self.tile_sense());
                     response.widget_info(|| {
                         egui::WidgetInfo::selected(
                             egui::WidgetType::Button,
@@ -243,7 +243,7 @@ impl PhotoSortApp {
         let comparison = self.comparison.contains(&id);
         let selected = self.library_selection_mode() && self.selection.contains(id);
         let captioned = height >= 2.0 * CAPTION + 40.0;
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), Sense::click());
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), self.tile_sense());
         response.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::WidgetType::Button,
@@ -437,7 +437,24 @@ impl PhotoSortApp {
         );
     }
     /// All layouts use the same selection, comparison and staged mutation paths.
+    /// Tiles can be dragged onto a similarity group once Cull has groups.
+    fn tile_sense(&self) -> Sense {
+        if self.photo_drag_enabled() {
+            Sense::click_and_drag()
+        } else {
+            Sense::click()
+        }
+    }
     fn library_response(&mut self, ui: &egui::Ui, response: egui::Response, id: MediaId) {
+        if self.photo_drag_enabled() && response.drag_started() {
+            // Drag the whole selection when the tile belongs to it.
+            let ids = if self.selection.contains(id) {
+                self.selection.ordered(&self.media, &self.filtered)
+            } else {
+                vec![id]
+            };
+            response.dnd_set_drag_payload(super::grouping::PhotoDrag(ids));
+        }
         if response.clicked() {
             self.pending_bookmark = None;
             if self.library_selection_mode() {

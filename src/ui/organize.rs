@@ -50,6 +50,8 @@ pub(super) struct Editor {
     parent: String,
     pub(super) error: Option<String>,
     compact_folders: bool,
+    /// The destination folder under the pointer, its row and since when.
+    folder_hover: Option<(String, egui::Rect, f64)>,
     photo_scroll: f32,
     folder_scroll: f32,
     restore_scroll: [Option<f32>; 2],
@@ -931,6 +933,7 @@ impl Editor {
         let owned_drag = egui::DragAndDrop::payload::<FolderDrag>(ui.ctx())
             .is_some_and(|payload| Arc::ptr_eq(&payload.owner, &self.drag_owner));
         let pointer = ui.ctx().pointer_interact_pos();
+        let mut hovered_now: Option<(String, egui::Rect)> = None;
         ui.label(RichText::new("Destination folders").font(semibold(14.0)));
         let mut scroll = egui::ScrollArea::vertical().id_salt("organize_folders");
         if let Some(offset) = self.restore_scroll[1].take() {
@@ -998,6 +1001,9 @@ impl Editor {
                                     (RichText::new(title), egui::Atom::grow(), RichText::new(count.to_string()).small().color(MUTED)),
                                 )
                                 .truncate().sense(tree_controls::pointer_sense(true)));
+                            if response.hovered() && !owned_drag {
+                                hovered_now = Some((path.clone(), response.rect));
+                            }
                             let spoken = format!("{title}, {count} files");
                             let selected = self.selected_folders.contains(&path);
                             response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, &spoken));
@@ -1160,6 +1166,12 @@ impl Editor {
             {
                 command = Some(Command::Unnest);
             }
+        });
+        // Keep when the pointer arrived on this folder, so the preview waits.
+        let now = ui.input(|i| i.time);
+        self.folder_hover = hovered_now.map(|(path, rect)| match self.folder_hover.take() {
+            Some((previous, _, since)) if previous == path => (path, rect, since),
+            _ => (path, rect, now),
         });
         command
     }
@@ -1491,6 +1503,7 @@ impl PhotoSortApp {
             parent: String::new(),
             error: None,
             compact_folders: false,
+            folder_hover: None,
             photo_scroll: 0.0,
             folder_scroll: 0.0,
             restore_scroll: [Some(0.0); 2],
@@ -1578,6 +1591,84 @@ impl PhotoSortApp {
             self.end_organize_preview();
         }
     }
+    /// After a short hover on a destination folder, up to four thumbnails of
+    /// the photos going there. Only that folder's thumbnails are requested.
+    fn folder_hover_preview(&mut self, ctx: &egui::Context, editor: &Editor) {
+        const DELAY: f64 = 0.4;
+        const EDGE: f32 = 72.0;
+        let Some((path, row, since)) = &editor.folder_hover else {
+            return;
+        };
+        let waited = ctx.input(|i| i.time) - since;
+        if waited < DELAY {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(DELAY - waited));
+            return;
+        }
+        let going: Vec<MediaId> = editor
+            .rows
+            .iter()
+            .filter(|r| r.after == *path)
+            .map(|r| r.id)
+            .collect();
+        let photos: Vec<MediaId> = going
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.index
+                    .get(id)
+                    .is_some_and(|i| self.media[*i].kind != MediaKind::Video)
+            })
+            .take(4)
+            .collect();
+        egui::Area::new(egui::Id::new("folder-hover-preview"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(row.right_top() + egui::vec2(S2, 0.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .stroke(Stroke::new(1.0, LINE))
+                    .corner_radius(R_SURFACE)
+                    .inner_margin(S2)
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(format!(
+                                "{} · {} {}",
+                                folder_title(path),
+                                going.len(),
+                                if going.len() == 1 { "file" } else { "files" }
+                            ))
+                            .font(medium(12.5)),
+                        );
+                        if photos.is_empty() {
+                            ui.label(RichText::new("No photos yet").small().color(MUTED));
+                            return;
+                        }
+                        ui.horizontal(|ui| {
+                            for id in photos {
+                                let (rect, _) =
+                                    ui.allocate_exact_size(egui::vec2(EDGE, EDGE), Sense::hover());
+                                ui.painter().rect_filled(rect, R_CONTROL, CARD);
+                                if let Some(texture) = self.texture(id, false) {
+                                    let size = texture.size_vec2();
+                                    let scale = (EDGE / size.x).min(EDGE / size.y);
+                                    let fit =
+                                        egui::Rect::from_center_size(rect.center(), size * scale);
+                                    ui.painter().image(
+                                        texture.id(),
+                                        fit,
+                                        egui::Rect::from_min_max(
+                                            egui::pos2(0.0, 0.0),
+                                            egui::pos2(1.0, 1.0),
+                                        ),
+                                        Color32::WHITE,
+                                    );
+                                }
+                            }
+                        });
+                    });
+            });
+    }
     pub(super) fn organize_dialog(&mut self, ctx: &egui::Context) {
         if self.organize_preview().is_some() {
             self.organize_preview_dialog(ctx);
@@ -1637,6 +1728,7 @@ impl PhotoSortApp {
                 if ui.add(primary("Preview moves")).clicked() { action = 3; }
             });
         });
+        self.folder_hover_preview(ctx, &editor);
         if command.is_none()
             && let Some(drag) = editor.completed_drag.take()
             && let (Some(payload), Some(target)) = (drag.payload, drag.target)

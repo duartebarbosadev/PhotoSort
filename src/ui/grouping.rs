@@ -199,6 +199,58 @@ impl PhotoSortApp {
             self.selection.ordered(&self.media, &self.filtered)
         }
     }
+    /// Dragging photos onto a navigator group: Cull, with groups to move into.
+    pub(super) fn photo_drag_enabled(&self) -> bool {
+        self.step == Step::Cull
+            && !self.review
+            && !self.cull_groups.is_empty()
+            && self.groups_ready()
+    }
+    /// Moves dropped photos into `group` with the same edit as the Groups menu.
+    pub(super) fn drop_on_group(&mut self, drag: &PhotoDrag, group: usize) {
+        if !self.groups_ready() || drag.0.is_empty() {
+            return;
+        }
+        self.edit_groups(
+            Edit::Move {
+                selected: drag.0.clone(),
+                target: Some(group),
+            },
+            true,
+        );
+    }
+    /// A label at the pointer while photos are being dragged.
+    pub(super) fn photo_drag_overlay(&self, ctx: &egui::Context) {
+        let Some(drag) = egui::DragAndDrop::payload::<PhotoDrag>(ctx) else {
+            return;
+        };
+        let Some(pointer) = ctx.pointer_latest_pos() else {
+            return;
+        };
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+        let count = drag.0.len();
+        let text = if self.navigator.enabled
+            && self.navigator.mode == crate::core::browsing::tree::Mode::Groups
+        {
+            format!(
+                "Move {count} {} to a group",
+                if count == 1 { "photo" } else { "photos" }
+            )
+        } else {
+            "Open the navigator's Groups view to drop here".to_owned()
+        };
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Tooltip,
+            egui::Id::new("photo-drag"),
+        ));
+        let galley = painter.layout_no_wrap(text, medium(13.0), ON_ACCENT);
+        let rect = egui::Rect::from_min_size(
+            pointer + egui::vec2(14.0, 10.0),
+            galley.size() + egui::vec2(20.0, 10.0),
+        );
+        painter.rect_filled(rect, rect.height() / 2.0, ACCENT);
+        painter.galley(rect.min + egui::vec2(10.0, 5.0), galley, ON_ACCENT);
+    }
     fn move_selected_group(&mut self, target: Option<usize>) {
         let mut selected = self.selected_group_members();
         if self.scene_editing() {
@@ -306,6 +358,9 @@ impl PhotoSortApp {
 #[cfg(test)]
 #[path = "grouping/tests.rs"]
 mod tests;
+
+/// Photos being dragged from the grid onto a similarity group.
+pub(super) struct PhotoDrag(pub(super) Vec<MediaId>);
 
 /// The best-scoring member of every group that has a choice to make.
 fn group_best(
