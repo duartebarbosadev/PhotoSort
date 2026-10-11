@@ -562,3 +562,25 @@ fn review_compares_a_selection_and_f1_returns_to_the_comparison() {
     assert!(app.review && app.comparison.is_empty());
     app.runtime.shutdown();
 }
+
+#[test]
+fn a_similarity_group_opens_as_one_comparison() {
+    let (_dir, mut app) = fixture();
+    app.cull_groups = Arc::new(
+        [(1, 3), (4, 3), (6, 3), (2, 8)]
+            .into_iter()
+            .map(|(id, g)| (MediaId(id), g))
+            .collect(),
+    );
+    assert_eq!(app.group_members(3), [MediaId(1), MediaId(4), MediaId(6)]);
+    app.compare_group(3);
+    assert!(app.review);
+    assert_eq!(app.comparison, [MediaId(1), MediaId(4), MediaId(6)]);
+    assert_eq!(app.active, Some(MediaId(1)));
+    // A single-photo group has nothing to compare.
+    app.review = false;
+    app.comparison.clear();
+    app.compare_group(8);
+    assert!(!app.review && app.comparison.is_empty());
+    app.runtime.shutdown();
+}

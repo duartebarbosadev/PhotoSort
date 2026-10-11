@@ -1102,7 +1102,18 @@ impl Editor {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Create folder").clicked() {
+            let create = match self.selected.len() {
+                0 => "Create folder".to_owned(),
+                1 => "Create folder with 1 file".to_owned(),
+                n => format!("Create folder with {n} files"),
+            };
+            if ui
+                .button(create)
+                .on_hover_text(
+                    "Creates the folder inside the selected one; selected files move into it",
+                )
+                .clicked()
+            {
                 command = Some(Command::Create);
             }
             if ui
@@ -1165,7 +1176,26 @@ impl Editor {
                 self.renaming = None;
                 self.folder.clone()
             }),
-            Command::Create => self.draft.create_folder(&self.folder, self.name.trim()),
+            // With files selected, the new folder receives them in one step.
+            Command::Create => self
+                .draft
+                .create_folder(&self.folder, self.name.trim())
+                .and_then(|folder| {
+                    if self.selected.is_empty() {
+                        return Ok(folder);
+                    }
+                    self.draft
+                        .move_selection(
+                            &Selection {
+                                files: self.selected.clone(),
+                                ..Default::default()
+                            },
+                            &folder,
+                            media,
+                            companions,
+                        )
+                        .map(|()| folder)
+                }),
             Command::Rename => self.draft.rename_folder(&self.folder, self.name.trim()),
             Command::Parent => self.draft.create_parent(&self.folder, self.name.trim()),
             Command::Nest => self.draft.nest_folder(&self.folder, &self.parent),

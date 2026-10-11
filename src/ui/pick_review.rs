@@ -354,10 +354,27 @@ impl PhotoSortApp {
                 .map(|i| self.media[*i].name())
                 .unwrap_or_default();
             let score = self.pick_review.current().unwrap().cluster.scores[&c.ai_pick];
+            // Why these were grouped: the least similar photo to the suggested
+            // keeper, from the same normalized embeddings the grouping used.
+            let alike = self.embeddings.get(&c.ai_pick).and_then(|keeper| {
+                c.paths
+                    .iter()
+                    .filter(|id| **id != c.ai_pick)
+                    .map(|id| {
+                        self.embeddings
+                            .get(id)
+                            .map(|other| crate::core::analysis::cosine(keeper, other))
+                    })
+                    .collect::<Option<Vec<_>>>()
+                    .and_then(|values| values.into_iter().reduce(f32::min))
+            });
+            let alike = alike
+                .map(|value| format!(" These look {:.0}% alike.", value.clamp(0.0, 1.0) * 100.0))
+                .unwrap_or_default();
             step_hint(
                 ui,
                 &format!(
-                    "Suggested keeper: {name} (score {score:.1}). {}",
+                    "Suggested keeper: {name} (score {score:.1}).{alike} {}",
                     if c.confirmed {
                         "Choices confirmed."
                     } else {

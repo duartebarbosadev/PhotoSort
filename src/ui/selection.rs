@@ -151,6 +151,27 @@ impl PhotoSortApp {
             self.set_active(id);
         }
     }
+    /// The shown photos of one similarity group, in view order.
+    pub(super) fn group_members(&self, group: usize) -> Vec<MediaId> {
+        self.filtered
+            .iter()
+            .map(|i| self.media[*i].id)
+            .filter(|id| self.cull_groups.get(id) == Some(&group))
+            .collect()
+    }
+    /// Compares a whole similarity group (2–9 shown photos) side by side.
+    pub(super) fn compare_group(&mut self, group: usize) {
+        let members = self.group_members(group);
+        if !(2..=9).contains(&members.len()) {
+            return;
+        }
+        self.comparison = members;
+        self.single_view_stash.clear();
+        self.review = true;
+        if let Some(first) = self.comparison.first().copied() {
+            self.set_active(first);
+        }
+    }
     /// F1: show only the active photo, keeping the comparison to return to.
     pub(super) fn toggle_single_view(&mut self) {
         if self.comparison.len() > 1 {

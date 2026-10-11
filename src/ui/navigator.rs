@@ -269,6 +269,21 @@ impl PhotoSortApp {
                                 ) {
                                     self.navigator_changed();
                                 }
+                                if let Key::Group(group) = node.key {
+                                    let count = self.group_members(group).len();
+                                    ui.separator();
+                                    if ui
+                                        .add_enabled(
+                                            (2..=9).contains(&count),
+                                            egui::Button::new(format!("Compare these {count}")),
+                                        )
+                                        .on_disabled_hover_text("Comparison shows 2 to 9 photos")
+                                        .clicked()
+                                    {
+                                        self.compare_group(group);
+                                        ui.close();
+                                    }
+                                }
                             });
                             if response
                                 .on_hover_text(match &node.key {

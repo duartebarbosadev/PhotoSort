@@ -3324,13 +3324,16 @@ fn organize_action_create_and_rename_folder_use_the_existing_draft_commands() {
             );
             let editor = app.organize_editor.as_ref().unwrap();
             assert!(editor.draft.folders().contains("Journey/Child"));
+            // Selected files (with their companions) moved into the folder
+            // created for them; the rest followed the renamed parent.
+            let labels = editor.draft.labels();
+            assert!(selected.iter().all(|id| labels[id] == "Journey/Child"));
             assert!(
-                editor
-                    .draft
-                    .labels()
+                labels
                     .values()
-                    .all(|label| label == "Journey")
+                    .all(|l| l == "Journey" || l == "Journey/Child")
             );
+            assert!(selected.is_empty() || labels.values().any(|l| l == "Journey"));
             assert_eq!(editor.selected, selected);
             assert!(editor.folder_edit.is_none());
             assert!(
@@ -3608,5 +3611,41 @@ fn f2_and_new_folder_keys_open_the_editor_from_the_organize_grid() {
             .is_some_and(|e| e.renaming.is_some()),
         "F2 from the grid reaches the rename shortcut"
     );
+    app.runtime.shutdown();
+}
+
+#[test]
+fn create_folder_moves_the_selected_files_into_it() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["a.jpg", "b.jpg", "c.jpg"] {
+        std::fs::write(temp.path().join(name), b"unchanged").unwrap();
+    }
+    let catalog = Catalog::scan(temp.path(), || false, |_| {}).unwrap();
+    let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+    app.output = catalog.root.display().to_string();
+    app.media = catalog.media.clone();
+    app.catalog = Some(Arc::new(catalog));
+    app.open_organize_editor();
+    let mut editor = app.organize_editor.take().unwrap();
+    let id = |name: &str| app.media.iter().find(|m| m.name() == name).unwrap().id;
+    editor.selected = [id("a.jpg"), id("c.jpg")].into();
+    editor.name = "Keepers".into();
+    editor.apply(Command::Create, &app.media, false);
+    assert!(editor.error.is_none(), "{:?}", editor.error);
+    assert_eq!(editor.folder, "Keepers");
+    let labels = editor.draft.labels();
+    assert_eq!(labels[&id("a.jpg")], "Keepers");
+    assert_eq!(labels[&id("c.jpg")], "Keepers");
+    assert_ne!(
+        labels.get(&id("b.jpg")).map(String::as_str),
+        Some("Keepers")
+    );
+    // With nothing selected, the folder is created empty.
+    editor.selected.clear();
+    editor.folder.clear();
+    editor.name = "Later".into();
+    editor.apply(Command::Create, &app.media, false);
+    assert!(editor.draft.folders().contains("Later"));
+    assert!(!editor.draft.labels().values().any(|l| l == "Later"));
     app.runtime.shutdown();
 }
