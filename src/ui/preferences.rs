@@ -203,7 +203,7 @@ impl PhotoSortApp {
         if let Some(mut draft) = self.preferences_draft.take() {
             let mut action = 0;
             let mut section = self.preferences_section.take();
-            let response = egui::Modal::new(egui::Id::new("preferences")).show(ctx, |ui| {
+            let response = modal(egui::Id::new("preferences")).show(ctx, |ui| {
                 ui.set_width((ctx.content_rect().width() - 64.0).clamp(280.0, 560.0));
                 ui.heading("Settings");
                 let error_height = if let Some(error) = self.error.clone() {

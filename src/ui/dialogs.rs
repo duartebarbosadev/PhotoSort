@@ -204,7 +204,7 @@ impl PhotoSortApp {
         };
         let mut reveal = false;
         let mut dismiss = false;
-        egui::Modal::new(egui::Id::new("crash_notice")).show(ctx, |ui| {
+        modal(egui::Id::new("crash_notice")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 64.0).clamp(280.0, 460.0));
             ui.heading(if previous {
                 "PhotoSort closed unexpectedly"

@@ -217,7 +217,12 @@ impl PhotoSortApp {
                     } else if self.apply_stop.is_none() {
                         // Thumbnails and previews still decoding for what is on screen.
                         let loading = self.requested.len();
-                        let count = if loading > 0 && !self.scanning {
+                        // A refreshing view is reported here, in the fixed-height
+                        // footer: a row above the photos would push the grid and
+                        // navigator under the pointer whenever a query starts.
+                        let count = if self.browse_run.is_some() && !self.scanning {
+                            format!("Updating library view · {} photos", self.filtered.len())
+                        } else if loading > 0 && !self.scanning {
                             format!(
                                 "Loading {loading} {} · {} photos",
                                 if loading == 1 { "preview" } else { "previews" },
@@ -254,7 +259,7 @@ impl PhotoSortApp {
                         });
                     }
                     ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
-                        if self.scanning || self.busy || self.analysis_run.is_some() || !self.requested.is_empty() {
+                        if self.scanning || self.busy || self.analysis_run.is_some() || !self.requested.is_empty() || self.browse_run.is_some() {
                             ui.add(egui::Spinner::new().size(12.0));
                         } else {
                             ui.label(RichText::new(egui_phosphor::regular::CHECK_CIRCLE).color(GREEN).small());

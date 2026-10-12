@@ -302,7 +302,7 @@ impl PhotoSortApp {
         let mut cancel = false;
         let mut discard = false;
         let mut save_quit = false;
-        egui::Modal::new(egui::Id::new("review_changes")).show(ctx, |ui| {
+        modal(egui::Id::new("review_changes")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 64.0).clamp(240.0, 720.0));
             let top = ui.cursor().top();
             if let Some(plan) = &self.plan {
@@ -453,7 +453,7 @@ impl PhotoSortApp {
         let Some(plan) = &self.plan else {
             return;
         };
-        egui::Modal::new(egui::Id::new("edit_pending_destination")).show(ctx, |ui| {
+        modal(egui::Id::new("edit_pending_destination")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 64.).clamp(240., 720.));
             ui.heading("Edit pending destination");
             ui.label("Choose a move. Photo companions stay together; extensions keep their original spelling.");

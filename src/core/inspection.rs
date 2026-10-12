@@ -78,6 +78,12 @@ impl View {
             return true;
         }
         let Some(preview) = preview else { return false };
+        // A preview as large as the source already holds every pixel; the
+        // original cannot add detail however far the view zooms. Long edges
+        // are compared so a preview stored unrotated still counts.
+        if preview[0].max(preview[1]) + 1 >= source[0].max(source[1]) {
+            return false;
+        }
         let density =
             self.scale(source, viewport, turns, pixels_per_point) * pixels_per_point.max(0.1);
         (0..2).any(|axis| source[axis] as f32 * density > preview[axis] as f32 + 1.0)

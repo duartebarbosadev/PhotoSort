@@ -27,22 +27,14 @@ pub(super) fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
         .enumerate()
         .map(|(i, m)| (m.id, i))
         .collect();
+    // Seed exactly what the metadata workers will read. Thumbnail work
+    // publishes metadata while the test's frames run; a seed that differs
+    // (a made-up capture date, say) re-sorts the grid and rebuilds the
+    // navigator between a press and its release.
     for m in &app.media {
-        app.metadata.insert(
-            m.id,
-            Metadata {
-                width: 16,
-                height: 16,
-                orientation: 1,
-                rating: if m.path.file_name().unwrap() == "photo-0.png" {
-                    5
-                } else {
-                    3
-                },
-                captured: "2023:04:27 22:46:40".into(),
-                ..Default::default()
-            },
-        );
+        let metadata = crate::core::metadata::read(&m.path);
+        assert_eq!(metadata.rating, if m.path.ends_with("photo-0.png") { 5 } else { 3 });
+        app.metadata.insert(m.id, metadata);
     }
     app.catalog = Some(catalog);
     app.step = Step::Cull;
@@ -469,4 +461,61 @@ fn navigator_activation_checkbox_reveals_browser_from_review_at_both_sizes() {
         assert!(app.navigator.enabled && !app.review);
         assert_eq!(app.decisions[&active].rating, Some(4));
     }
+}
+
+#[test]
+fn loading_grid_animates_then_comes_to_rest() {
+    const IDLE: Duration = Duration::from_millis(900);
+    let (_temp, mut app) = fixture();
+    app.navigator.enabled = false;
+    app.active = Some(app.media[0].id);
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    // Real motion: shimmer, fade-in, hover and ring must all come to rest.
+    set_reduce_motion(&ctx, false);
+    let size = egui::vec2(1200., 800.);
+    let tile = egui::pos2(100., 300.);
+    let mut animated = false;
+    let mut delay = Duration::ZERO;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    for frame in 0u32.. {
+        assert!(
+            Instant::now() < deadline,
+            "the grid never settled: delay {delay:?}, {} textures, requested {:?}, causes {:?}",
+            app.textures.len(),
+            app.requested,
+            ctx.repaint_causes()
+        );
+        // Hover a tile for a moment, then leave the window.
+        // Any input event repaints at once, so later frames send none.
+        let events = match frame {
+            5..=20 => vec![egui::Event::PointerMoved(tile)],
+            21 => vec![egui::Event::PointerGone],
+            _ => Vec::new(),
+        };
+        let out = ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                time: Some(f64::from(frame) / 60.0),
+                events,
+                ..Default::default()
+            },
+            |ui| app.update_workspace(ui, false),
+        );
+        delay = out.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        animated |= delay.is_zero();
+        let loaded = !app.textures.is_empty() && app.requested.is_empty();
+        if frame > 40 && loaded && delay >= IDLE {
+            break;
+        }
+        settle(&mut app);
+        if !loaded {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+    assert!(animated, "no frame asked for animation");
+    assert!(app.requested.is_empty(), "{:?}", app.requested);
+    // The workspace keeps a one-second heartbeat for view checkpoints;
+    // anything sooner means an animation never came to rest.
+    assert!(delay >= IDLE, "an idle window repaints every {delay:?}");
 }

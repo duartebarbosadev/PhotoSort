@@ -394,7 +394,6 @@ impl PhotoSortApp {
         if !reading
             && self.metadata.len() >= self.media.len()
             && self.metadata_failures.is_empty()
-            && self.browse_run.is_none()
         {
             return; // An empty row would still take a full line of height.
         }
@@ -411,9 +410,6 @@ impl PhotoSortApp {
                 ui.colored_label(RED, format!("{} files have unavailable metadata", self.metadata_failures.len()))
                     .on_hover_text("Restore access and retry metadata reading. Folder proposals wait for complete metadata; photos remain browsable.");
             }
-            // Browsing can finish between pointer down and up. Keep its changing
-            // indicator after metadata actions so Cancel does not move or change ID.
-            if self.browse_run.is_some() { ui.spinner(); ui.label("Updating library view…"); }
         });
     }
 }

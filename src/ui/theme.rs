@@ -96,14 +96,87 @@ pub(super) fn icon_text_button(
     icon: &str,
     text: &str,
 ) -> egui::Response {
+    icon_text_button_min(ui, enabled, selected, icon, text, 0.0)
+}
+/// [`icon_text_button`] at least `min_width` wide, for a label that changes
+/// on click but must keep its neighbours still.
+pub(super) fn icon_text_button_min(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    selected: bool,
+    icon: &str,
+    text: &str,
+    min_width: f32,
+) -> egui::Response {
     let response = ui.add_enabled(
         enabled,
-        egui::Button::new(format!("{icon}  {text}")).selected(selected),
+        egui::Button::new(format!("{icon}  {text}"))
+            .selected(selected)
+            .min_size(egui::vec2(min_width, 0.0)),
     );
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, text)
     });
     response
+}
+
+/// A dialog over a dimmed window. Dialogs get more room than menus, which
+/// share egui's popup frame.
+pub(super) fn modal(id: egui::Id) -> egui::Modal {
+    egui::Modal::new(id)
+        .backdrop_color(Color32::from_black_alpha(140))
+        .frame(
+            egui::Frame::new()
+                .fill(PANEL)
+                .stroke(Stroke::new(1.0, LINE))
+                .corner_radius(R_SURFACE + 2)
+                .inner_margin(egui::Margin::same(20))
+                .shadow(egui::Shadow {
+                    offset: [0, 12],
+                    blur: 40,
+                    spread: 0,
+                    color: Color32::from_black_alpha(110),
+                }),
+        )
+}
+
+/// A floating toolbar: a raised rounded panel centred in the row and sized
+/// to its content. Its width comes from the previous frame and is updated
+/// only while no pointer button is held, so a label that changes on click
+/// (Trash to Marked for Trash) never moves controls under a press.
+pub(super) fn floating_bar<R>(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let available = ui.available_width();
+    let measured = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(available);
+    let inset = ((available - measured) / 2.0).max(0.0).round();
+    ui.horizontal(|ui| {
+        ui.add_space(inset);
+        let output = egui::Frame::new()
+            .fill(PANEL)
+            .stroke(Stroke::new(1.0, LINE))
+            .corner_radius(R_SURFACE)
+            .inner_margin(egui::Margin::symmetric(S2 as i8, S1 as i8))
+            .shadow(egui::epaint::Shadow {
+                offset: [0, 4],
+                blur: 14,
+                spread: 0,
+                color: Color32::from_black_alpha(70),
+            })
+            .show(ui, |ui| {
+                ui.set_max_width(available - 2.0 * S2);
+                ui.horizontal_wrapped(add).inner
+            });
+        let width = output.response.rect.width();
+        if !ui.input(|i| i.pointer.any_down()) && (width - measured).abs() > 0.5 {
+            ui.data_mut(|d| d.insert_temp(id, width));
+            ui.ctx().request_repaint();
+        }
+        output.inner
+    })
+    .inner
 }
 
 /// A pill-shaped toggle for filters and scopes, such as Easy Delete categories.

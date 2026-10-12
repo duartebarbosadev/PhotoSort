@@ -1337,7 +1337,7 @@ impl PhotoSortApp {
             return;
         };
         let mut action = None;
-        egui::Modal::new(egui::Id::new("replace_location_layout")).show(ctx, |ui| {
+        modal(egui::Id::new("replace_location_layout")).show(ctx, |ui| {
             ui.set_max_width(400.0_f32.min((ctx.content_rect().width() - 60.0).max(180.0)));
             ui.heading("Replace location folder edits?");
             ui.label("The new levels will regenerate location folders and replace their custom folder edits. File names, ratings and other grouping modes keep their edits. Your photos stay unchanged until Apply.");
@@ -1569,7 +1569,7 @@ impl PhotoSortApp {
     }
     fn organize_preview_dialog(&mut self, ctx: &egui::Context) {
         let mut back = false;
-        egui::Modal::new(egui::Id::new("organize_editor")).show(ctx, |ui| {
+        modal(egui::Id::new("organize_editor")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 64.0).clamp(280.0, 1080.0));
             ui.horizontal_wrapped(|ui| {
                 back |= ui.button("< Back to arranging").clicked();
@@ -1683,7 +1683,7 @@ impl PhotoSortApp {
         editor.begin_drag_frame(ctx);
         let mut action = 0;
         let mut command = None;
-        egui::Modal::new(egui::Id::new("organize_editor")).show(ctx, |ui| {
+        modal(egui::Id::new("organize_editor")).show(ctx, |ui| {
             let width = (ctx.content_rect().width() - 64.0).clamp(280.0, 1080.0);
             let height = (ctx.content_rect().height() - 380.0).clamp(160.0, 560.0);
             ui.set_width(width);

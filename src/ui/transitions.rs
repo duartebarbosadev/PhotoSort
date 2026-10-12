@@ -283,7 +283,7 @@ impl PhotoSortApp {
     pub(super) fn review_dialogs(&mut self, ctx: &egui::Context) {
         if let Some(step) = self.review_notice {
             let mut action = 0;
-            egui::Modal::new(egui::Id::new("unfinished_review")).show(ctx, |ui| {
+            modal(egui::Id::new("unfinished_review")).show(ctx, |ui| {
                 ui.set_max_width(460.0);
                 ui.heading("Confirm or reset this choice");
                 ui.label("This review has unfinished choices. Confirm them or restore the suggestions before moving on.");
@@ -310,7 +310,7 @@ impl PhotoSortApp {
         if self.departure.is_some() {
             let rotations = self.rotation_review.pending_count();
             let mut action = 0;
-            egui::Modal::new(egui::Id::new("pending_changes")).show(ctx, |ui| {
+            modal(egui::Id::new("pending_changes")).show(ctx, |ui| {
                 ui.set_max_width(460.0);
                 ui.heading(if rotations > 0 { "Resolve confirmed rotations" } else { "Resolve staged changes" });
                 if rotations > 0 { ui.label(format!("{rotations} confirmed corrections are waiting to be applied.")); }
@@ -422,7 +422,7 @@ impl PhotoSortApp {
             return;
         }
         let mut resolution = None;
-        egui::Modal::new(egui::Id::new("pending_organize_changes")).show(ctx, |ui| {
+        modal(egui::Id::new("pending_organize_changes")).show(ctx, |ui| {
             ui.set_max_width(460.0);
             ui.heading("Resolve folder changes");
             if let Some(plan) = &self.plan {

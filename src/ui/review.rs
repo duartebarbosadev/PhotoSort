@@ -298,12 +298,14 @@ impl PhotoSortApp {
                 }
             });
         ui.spacing_mut().scroll = scroll_style;
+        ui.add_space(S1);
         if editor_preview {
-            ui.horizontal_wrapped(|ui| self.review_view_controls(ui));
+            floating_bar(ui, egui::Id::new("review_bar_preview"), |ui| {
+                self.review_view_controls(ui)
+            });
             return;
         }
-        ui.add_space(S1);
-        ui.horizontal_wrapped(|ui| {
+        floating_bar(ui, egui::Id::new(("review_bar", compact)), |ui| {
             use egui_phosphor::regular as icon;
             const NAVIGATION: &str = "Cull follows Up/Down navigation preferences. Hold Ctrl or Cmd to include marked photos and bypass movement filters.";
             if icon_button(ui, icon::CARET_LEFT, &format!("Previous photo · Up\n{NAVIGATION}"))
@@ -355,12 +357,22 @@ impl PhotoSortApp {
                 }
             } else {
                 let rejected = self.decision(active).rejected;
-                if icon_text_button(
+                // Both labels get the wider label's width so toggling never
+                // resizes the bar.
+                let font = egui::TextStyle::Button.resolve(ui.style());
+                let wide = ui
+                    .painter()
+                    .layout_no_wrap(format!("{}  Marked for Trash", icon::TRASH), font, INK)
+                    .size()
+                    .x
+                    + 2.0 * ui.spacing().button_padding.x;
+                if icon_text_button_min(
                     ui,
                     true,
                     rejected,
                     icon::TRASH,
                     if rejected { "Marked for Trash" } else { "Trash" },
+                    wide,
                 )
                 .on_hover_text(if rejected { "Unmark · D" } else { "Mark for Trash · D" })
                     .clicked()
@@ -372,14 +384,13 @@ impl PhotoSortApp {
                 self.comparison.clear();
                 self.focused_slot = 0;
             }
-            if !compact {
-                self.review_ratings(ui, active);
+            if compact {
+                ui.end_row();
             }
+            self.review_ratings(ui, active);
         });
-        if compact {
-            ui.horizontal_wrapped(|ui| self.review_ratings(ui, active));
-        }
         if show_filmstrip {
+            ui.add_space(S1);
             self.filmstrip(ui);
         }
     }
@@ -480,8 +491,8 @@ impl PhotoSortApp {
     }
     fn filmstrip(&mut self, ui: &mut egui::Ui) {
         // Image-only tiles: the strip is for orientation, the canvas for judging.
-        const WIDTH: f32 = 104.0;
-        const HEIGHT: f32 = 72.0;
+        const WIDTH: f32 = 84.0;
+        const HEIGHT: f32 = 56.0;
         let stride = WIDTH + ui.spacing().item_spacing.x;
         let selection_key = egui::Id::new("filmstrip_selection");
         let previous = ui.data(|data| data.get_temp::<MediaId>(selection_key));
@@ -884,7 +895,7 @@ fn paint_region(
 }
 
 /// Height reserved for the filmstrip below the review canvas.
-const FILMSTRIP: f32 = 88.0;
+const FILMSTRIP: f32 = 72.0;
 
 /// Keep/Trash toggle for one side of a guided comparison.
 fn decision_button(side: usize, keep: bool) -> egui::Button<'static> {

@@ -101,33 +101,44 @@ impl PhotoSortApp {
                             media.name(),
                         )
                     });
-                    ui.painter().rect_filled(rect, 5.0, CARD);
-                    if active || comparison || selected {
-                        ui.painter().rect_stroke(
-                            rect,
-                            5.0,
-                            Stroke::new(2.0, if active { ACCENT } else { MUTED }),
-                            StrokeKind::Inside,
-                        );
-                    }
+                    let hover = ui
+                        .ctx()
+                        .animate_bool_responsive(response.id.with("hover"), response.hovered());
+                    ui.painter()
+                        .rect_filled(rect, R_CONTROL, lerp_color(CARD, CARD_HOVER, hover));
+                    ring(ui, response.id, rect, R_CONTROL, active, comparison || selected);
                     let size = rect.height() - 8.0;
                     let image = egui::Rect::from_min_size(
                         rect.min + egui::vec2(4.0, 4.0),
                         egui::vec2(size, size),
                     );
+                    let shown = reveal(ui, id, texture.is_some());
+                    ui.painter().rect_filled(image, 3.0, WELL);
                     if let Some(texture) = texture {
-                        paint_image(ui, &texture, image, 1.0, Vec2::ZERO, self.preview_turns(id));
+                        paint_image_tinted(
+                            ui,
+                            &texture,
+                            image,
+                            1.0,
+                            Vec2::ZERO,
+                            self.preview_turns(id),
+                            Color32::from_white_alpha((shown * 255.0) as u8),
+                        );
+                    } else if self.requested.contains(&(id, false)) {
+                        shimmer(ui, image);
                     } else {
                         ui.painter().text(
                             image.center(),
                             Align2::CENTER_CENTER,
-                            if media.kind == MediaKind::Video {
-                                "V"
+                            if self.failures.contains_key(&id) {
+                                egui_phosphor::regular::IMAGE_BROKEN
+                            } else if media.kind == MediaKind::Video {
+                                egui_phosphor::regular::FILM_STRIP
                             } else {
-                                "PS"
+                                egui_phosphor::regular::IMAGE
                             },
-                            FontId::proportional(10.0),
-                            MUTED,
+                            FontId::proportional(if icons { 22.0 } else { 14.0 }),
+                            FAINT,
                         );
                     }
                     let left = image.right() + 10.0;
@@ -254,7 +265,10 @@ impl PhotoSortApp {
         });
         let painter = ui.painter_at(rect);
         let hovered = response.hovered();
-        painter.rect_filled(rect, R_TILE, if hovered { CARD_HOVER } else { CARD });
+        let hover = ui
+            .ctx()
+            .animate_bool_responsive(response.id.with("hover"), hovered);
+        painter.rect_filled(rect, R_TILE, lerp_color(CARD, CARD_HOVER, hover));
         let image_rect = egui::Rect::from_min_max(
             rect.min + egui::vec2(S1, S1),
             egui::pos2(
@@ -262,15 +276,20 @@ impl PhotoSortApp {
                 rect.bottom() - if captioned { CAPTION } else { S1 },
             ),
         );
+        let shown = reveal(ui, id, texture.is_some());
+        painter.rect_filled(image_rect, 4.0, WELL);
         if let Some(texture) = texture {
-            paint_image(
+            paint_image_tinted(
                 ui,
                 &texture,
                 image_rect,
                 1.0,
                 Vec2::ZERO,
                 self.preview_turns(id),
+                Color32::from_white_alpha((shown * 255.0) as u8),
             );
+        } else if self.requested.contains(&(id, false)) {
+            shimmer(ui, image_rect);
         } else {
             painter.text(
                 image_rect.center(),
@@ -324,24 +343,12 @@ impl PhotoSortApp {
                 ACCENT,
             );
         }
-        if active || comparison || selected {
-            painter.rect_stroke(
-                rect,
-                R_TILE,
-                Stroke::new(
-                    if active { 2.0 } else { 1.5 },
-                    if active { ACCENT } else { MUTED },
-                ),
-                StrokeKind::Inside,
-            );
-        }
-        if selected && !active {
-            badge(
+        ring(ui, response.id, rect, R_TILE, active, comparison || selected);
+        if self.library_selection_mode() && (selected || hovered) && !active {
+            check_mark(
                 &painter,
-                image_rect.right_bottom() + egui::vec2(-S1, -S1),
-                Align2::RIGHT_BOTTOM,
-                icon::CHECK,
-                ACCENT,
+                image_rect.right_bottom() - egui::vec2(S2 + 1.0, S2 + 1.0),
+                selected,
             );
         }
         if captioned {
@@ -416,7 +423,7 @@ impl PhotoSortApp {
                             .to_uppercase(),
                         media.fingerprint.bytes as f64 / 1048576.0
                     ),
-                    FAINT,
+                    MUTED,
                 )
             };
             let detail = self
@@ -538,11 +545,121 @@ fn texture_is_drawn(textures: &HashMap<(MediaId, bool), Texture>, id: MediaId) -
 
 /// A small pill on top of an image: dark translucent fill, coloured text.
 fn badge(painter: &egui::Painter, anchor: egui::Pos2, align: Align2, text: &str, color: Color32) {
-    let galley = painter.layout_no_wrap(text.to_owned(), FontId::proportional(11.0), color);
-    let size = galley.size() + egui::vec2(10.0, 4.0);
+    let galley = painter.layout_no_wrap(text.to_owned(), medium(10.5), color);
+    let size = galley.size() + egui::vec2(12.0, 4.0);
     let rect = align.anchor_size(anchor, size);
-    painter.rect_filled(rect, 4.0, Color32::from_black_alpha(170));
-    painter.galley(rect.min + egui::vec2(5.0, 2.0), galley, color);
+    painter.rect_filled(rect, size.y / 2.0, Color32::from_black_alpha(165));
+    painter.galley(rect.min + egui::vec2(6.0, 2.0), galley, color);
+}
+
+/// The recessed surface a thumbnail sits in, so letterboxing reads as a
+/// frame and a loading tile already has its final shape.
+const WELL: Color32 = Color32::from_rgb(0x1D, 0x20, 0x25);
+
+/// How far a thumbnail has faded in. The first frame with pixels starts the
+/// fade, so a scrolling grid fills softly instead of popping; thumbnails that
+/// were already loaded appear at once.
+fn reveal(ui: &egui::Ui, id: MediaId, loaded: bool) -> f32 {
+    let time = ui.ctx().global_style().animation_time * 1.75;
+    ui.ctx().animate_bool_with_time_and_easing(
+        egui::Id::new(("thumbnail-reveal", id)),
+        loaded,
+        time,
+        egui::emath::easing::quadratic_out,
+    )
+}
+
+/// The placeholder for a thumbnail on its way: a recessed well with a soft
+/// band of light sweeping across it. The band stays in phase across tiles,
+/// so a loading grid reads as one wave rather than many blinking cells.
+/// Reduce motion keeps the well and drops the sweep.
+fn shimmer(ui: &egui::Ui, rect: egui::Rect) {
+    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    painter.rect_filled(rect, 4.0, WELL);
+    if ui.ctx().global_style().animation_time == 0.0 {
+        return;
+    }
+    const PERIOD: f64 = 1.4;
+    let band = rect.width().max(rect.height()) * 0.7;
+    let skew = rect.height() * 0.35;
+    // Offset by position so the wave travels diagonally across the grid.
+    let phase = (ui.input(|i| i.time) / PERIOD
+        - f64::from(rect.left() + rect.top() * 0.6) / 1800.0)
+        .rem_euclid(1.0) as f32;
+    let x = rect.left() - band - skew + phase * (rect.width() + band + skew);
+    let mut mesh = egui::Mesh::default();
+    for (offset, alpha) in [(0.0, 0), (band / 2.0, 11), (band, 0)] {
+        let color = Color32::from_white_alpha(alpha);
+        mesh.colored_vertex(egui::pos2(x + offset + skew, rect.top()), color);
+        mesh.colored_vertex(egui::pos2(x + offset, rect.bottom()), color);
+    }
+    for i in [0, 2] {
+        mesh.add_triangle(i, i + 1, i + 2);
+        mesh.add_triangle(i + 1, i + 2, i + 3);
+    }
+    painter.add(mesh);
+    ui.ctx().request_repaint();
+}
+
+/// The focus ring: accent for the active photo, a quieter line for compared
+/// or selected ones. It eases in and out so moving through photos glides.
+fn ring(
+    ui: &egui::Ui,
+    id: egui::Id,
+    rect: egui::Rect,
+    radius: u8,
+    active: bool,
+    marked: bool,
+) {
+    let ctx = ui.ctx();
+    let strength = ctx.animate_bool_responsive(id.with("ring"), active);
+    let marked = ctx.animate_bool_responsive(id.with("marked"), marked && !active);
+    if marked > 0.0 {
+        ui.painter().rect_stroke(
+            rect,
+            radius,
+            Stroke::new(1.5, MUTED.gamma_multiply(marked)),
+            StrokeKind::Inside,
+        );
+    }
+    if strength > 0.0 {
+        ui.painter().rect_stroke(
+            rect,
+            radius,
+            Stroke::new(2.0, ACCENT.gamma_multiply(strength)),
+            StrokeKind::Inside,
+        );
+        // A soft halo outside the tile lifts the active photo off the grid.
+        ui.painter().rect_stroke(
+            rect,
+            radius,
+            Stroke::new(3.0, ACCENT_SOFT.gamma_multiply(strength)),
+            StrokeKind::Outside,
+        );
+    }
+}
+
+/// Selection mode's check: a filled accent disc when selected, an empty ring
+/// on hover to show the tile can be picked.
+fn check_mark(painter: &egui::Painter, center: egui::Pos2, selected: bool) {
+    const RADIUS: f32 = 9.0;
+    if selected {
+        painter.circle_filled(center, RADIUS, ACCENT);
+        painter.text(
+            center,
+            Align2::CENTER_CENTER,
+            egui_phosphor::regular::CHECK,
+            FontId::proportional(12.0),
+            ON_ACCENT,
+        );
+    } else {
+        painter.circle(
+            center,
+            RADIUS,
+            Color32::from_black_alpha(90),
+            Stroke::new(1.5, Color32::from_white_alpha(200)),
+        );
+    }
 }
 
 #[cfg(test)]

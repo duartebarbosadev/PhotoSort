@@ -1421,6 +1421,19 @@ fn paint_image(
     pan: Vec2,
     turns: u8,
 ) {
+    paint_image_tinted(ui, texture, rect, zoom, pan, turns, Color32::WHITE);
+}
+
+/// [`paint_image`] multiplied by `tint`; a translucent white fades it in.
+fn paint_image_tinted(
+    ui: &egui::Ui,
+    texture: &TextureHandle,
+    rect: egui::Rect,
+    zoom: f32,
+    pan: Vec2,
+    turns: u8,
+    tint: Color32,
+) {
     let dimensions = texture.size_vec2();
     let oriented = if turns % 2 == 1 {
         egui::vec2(dimensions.y, dimensions.x)
@@ -1449,7 +1462,7 @@ fn paint_image(
         mesh.vertices.push(egui::epaint::Vertex {
             pos: center + rot * (p * size),
             uv,
-            color: Color32::WHITE,
+            color: tint,
         });
     }
     mesh.indices = vec![0, 1, 2, 0, 2, 3];

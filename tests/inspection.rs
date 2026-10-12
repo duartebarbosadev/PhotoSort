@@ -254,4 +254,17 @@ fn original_requests_follow_preview_density_and_explicit_native_view() {
     ));
     assert!(!fit.needs_original([6000, 4000], Some([1200, 800]), [900., 600.], 0, 1.));
     assert!(fit.needs_original([6000, 4000], Some([1200, 800]), [900., 600.], 0, 2.));
+    // A preview that already holds every source pixel never needs the
+    // original, at any zoom or rotation of how it is stored.
+    for (source, preview) in [([16, 16], [16, 16]), ([1200, 800], [800, 1200])] {
+        for turns in 0..4 {
+            assert!(!View { zoom: 8., ..fit }.needs_original(
+                source,
+                Some(preview),
+                [900., 600.],
+                turns,
+                2.
+            ));
+        }
+    }
 }
