@@ -106,7 +106,14 @@ impl PhotoSortApp {
                         .animate_bool_responsive(response.id.with("hover"), response.hovered());
                     ui.painter()
                         .rect_filled(rect, R_CONTROL, lerp_color(CARD, CARD_HOVER, hover));
-                    ring(ui, response.id, rect, R_CONTROL, active, comparison || selected);
+                    ring(
+                        ui,
+                        response.id,
+                        rect,
+                        R_CONTROL,
+                        active,
+                        comparison || selected,
+                    );
                     let size = rect.height() - 8.0;
                     let image = egui::Rect::from_min_size(
                         rect.min + egui::vec2(4.0, 4.0),
@@ -343,7 +350,14 @@ impl PhotoSortApp {
                 ACCENT,
             );
         }
-        ring(ui, response.id, rect, R_TILE, active, comparison || selected);
+        ring(
+            ui,
+            response.id,
+            rect,
+            R_TILE,
+            active,
+            comparison || selected,
+        );
         if self.library_selection_mode() && (selected || hovered) && !active {
             check_mark(
                 &painter,
@@ -583,8 +597,7 @@ fn shimmer(ui: &egui::Ui, rect: egui::Rect) {
     let band = rect.width().max(rect.height()) * 0.7;
     let skew = rect.height() * 0.35;
     // Offset by position so the wave travels diagonally across the grid.
-    let phase = (ui.input(|i| i.time) / PERIOD
-        - f64::from(rect.left() + rect.top() * 0.6) / 1800.0)
+    let phase = (ui.input(|i| i.time) / PERIOD - f64::from(rect.left() + rect.top() * 0.6) / 1800.0)
         .rem_euclid(1.0) as f32;
     let x = rect.left() - band - skew + phase * (rect.width() + band + skew);
     let mut mesh = egui::Mesh::default();
@@ -603,14 +616,7 @@ fn shimmer(ui: &egui::Ui, rect: egui::Rect) {
 
 /// The focus ring: accent for the active photo, a quieter line for compared
 /// or selected ones. It eases in and out so moving through photos glides.
-fn ring(
-    ui: &egui::Ui,
-    id: egui::Id,
-    rect: egui::Rect,
-    radius: u8,
-    active: bool,
-    marked: bool,
-) {
+fn ring(ui: &egui::Ui, id: egui::Id, rect: egui::Rect, radius: u8, active: bool, marked: bool) {
     let ctx = ui.ctx();
     let strength = ctx.animate_bool_responsive(id.with("ring"), active);
     let marked = ctx.animate_bool_responsive(id.with("marked"), marked && !active);

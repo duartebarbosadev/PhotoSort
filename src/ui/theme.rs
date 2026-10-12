@@ -140,25 +140,28 @@ pub(super) fn modal(id: egui::Id) -> egui::Modal {
         )
 }
 
-/// A floating toolbar: a raised rounded panel centred in the row and sized
-/// to its content. Its width comes from the previous frame and is updated
-/// only while no pointer button is held, so a label that changes on click
-/// (Trash to Marked for Trash) never moves controls under a press.
+/// A floating toolbar: a raised rounded panel centred in the row. It keeps
+/// the widest size its content has needed under `id`, so a narrower state
+/// (a video's playback hint, Keep instead of Trash) never shifts the left
+/// edge and the buttons there stay under the pointer. The width is updated
+/// only while no pointer button is held.
 pub(super) fn floating_bar<R>(
     ui: &mut egui::Ui,
     id: egui::Id,
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
+    const MARGIN: f32 = S2;
     let available = ui.available_width();
-    let measured = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(available);
-    let inset = ((available - measured) / 2.0).max(0.0).round();
+    let widest = ui.data(|d| d.get_temp::<f32>(id));
+    let width = widest.unwrap_or(available).min(available);
+    let inset = ((available - width) / 2.0).max(0.0).round();
     ui.horizontal(|ui| {
         ui.add_space(inset);
         let output = egui::Frame::new()
             .fill(PANEL)
             .stroke(Stroke::new(1.0, LINE))
             .corner_radius(R_SURFACE)
-            .inner_margin(egui::Margin::symmetric(S2 as i8, S1 as i8))
+            .inner_margin(egui::Margin::symmetric(MARGIN as i8, S1 as i8))
             .shadow(egui::epaint::Shadow {
                 offset: [0, 4],
                 blur: 14,
@@ -166,12 +169,16 @@ pub(super) fn floating_bar<R>(
                 color: Color32::from_black_alpha(70),
             })
             .show(ui, |ui| {
-                ui.set_max_width(available - 2.0 * S2);
+                let inner = available - 2.0 * MARGIN - 2.0;
+                ui.set_max_width(inner);
+                if widest.is_some() {
+                    ui.set_min_width((width - 2.0 * MARGIN - 2.0).clamp(0.0, inner));
+                }
                 ui.horizontal_wrapped(add).inner
             });
-        let width = output.response.rect.width();
-        if !ui.input(|i| i.pointer.any_down()) && (width - measured).abs() > 0.5 {
-            ui.data_mut(|d| d.insert_temp(id, width));
+        let needed = output.response.rect.width();
+        if !ui.input(|i| i.pointer.any_down()) && widest.is_none_or(|w| needed > w + 0.5) {
+            ui.data_mut(|d| d.insert_temp(id, needed));
             ui.ctx().request_repaint();
         }
         output.inner
@@ -618,5 +625,42 @@ mod tests {
                 });
             }
         });
+    }
+
+    #[test]
+    fn floating_bar_keeps_its_left_edge_when_content_narrows() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let id = egui::Id::new("bar");
+        let first = |labels: &[&str]| {
+            let mut rect = egui::Rect::NOTHING;
+            let _ = ctx.run_test(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900., 200.),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    floating_bar(ui, id, |ui| {
+                        rect = ui.button(labels[0]).rect;
+                        for label in &labels[1..] {
+                            let _ = ui.button(*label);
+                        }
+                    });
+                },
+            );
+            rect
+        };
+        let wide = ["Previous", "Marked for Trash", "Clear rating", "Fit", "1:1"];
+        first(&wide);
+        let settled = first(&wide);
+        // Narrower content (a video, Keep instead of Trash) keeps the edge.
+        assert_eq!(first(&["Previous", "Keep"]), settled);
+        assert_eq!(first(&["Previous", "Keep"]), settled);
+        assert_eq!(first(&wide), settled);
+        // It still sits centred rather than at the window edge.
+        assert!(settled.left() > 100.0, "{settled:?}");
     }
 }

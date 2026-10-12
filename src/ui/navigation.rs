@@ -208,6 +208,7 @@ impl PhotoSortApp {
                             self.stop_file_operations();
                         }
                     }
+                    self.footer_metadata(ui);
                     if let Some((done, total)) = self.progress {
                         let bar = ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32)
                             .desired_width(160.0).desired_height(14.0).text(RichText::new(format!("{done} / {total}")).small()));
@@ -548,7 +549,6 @@ impl PhotoSortApp {
                     ui.label(RichText::new("Select photos with Cmd/Ctrl-click or Shift-click, then use Scenes to correct groups. Preview moves analyzes first. Ungrouped photos and videos stay in place.").small().color(MUTED));
                 } else if self.metadata_organize_mode() {
                     ui.label(RichText::new("Folder proposals use photo metadata. Location names are resolved offline; AI analysis is not needed.").small().color(MUTED));
-                    self.metadata_status(ui);
                 }
             }
             Step::EasyDelete => self.delete_controls(ui),

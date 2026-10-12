@@ -254,17 +254,17 @@ fn original_requests_follow_preview_density_and_explicit_native_view() {
     ));
     assert!(!fit.needs_original([6000, 4000], Some([1200, 800]), [900., 600.], 0, 1.));
     assert!(fit.needs_original([6000, 4000], Some([1200, 800]), [900., 600.], 0, 2.));
-    // A preview that already holds every source pixel never needs the
-    // original, at any zoom or rotation of how it is stored.
-    for (source, preview) in [([16, 16], [16, 16]), ([1200, 800], [800, 1200])] {
-        for turns in 0..4 {
-            assert!(!View { zoom: 8., ..fit }.needs_original(
-                source,
-                Some(preview),
-                [900., 600.],
-                turns,
-                2.
-            ));
-        }
-    }
+    // Density alone still asks for the original when the size is only known
+    // from the preview itself, as for files without dimensions in metadata.
+    assert!(View { zoom: 3., ..fit }.needs_original([16, 16], Some([16, 16]), [900., 600.], 0, 2.));
+}
+
+#[test]
+fn a_preview_holding_every_metadata_pixel_is_complete() {
+    assert!(View::preview_is_complete([16, 16], [16, 16]));
+    // Stored unrotated against a rotated metadata size.
+    assert!(View::preview_is_complete([800, 1200], [1200, 800]));
+    assert!(!View::preview_is_complete([6000, 4000], [2048, 1365]));
+    // A capped preview may hide a photo whose metadata understates its size.
+    assert!(!View::preview_is_complete([2048, 1536], [2048, 1536]));
 }

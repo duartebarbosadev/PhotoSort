@@ -78,15 +78,20 @@ impl View {
             return true;
         }
         let Some(preview) = preview else { return false };
-        // A preview as large as the source already holds every pixel; the
-        // original cannot add detail however far the view zooms. Long edges
-        // are compared so a preview stored unrotated still counts.
-        if preview[0].max(preview[1]) + 1 >= source[0].max(source[1]) {
-            return false;
-        }
         let density =
             self.scale(source, viewport, turns, pixels_per_point) * pixels_per_point.max(0.1);
         (0..2).any(|axis| source[axis] as f32 * density > preview[axis] as f32 + 1.0)
+    }
+    /// Whether a decoded preview already holds every pixel of a photo whose
+    /// size is known from its metadata, so the original cannot add detail at
+    /// any zoom. Long edges are compared so a preview stored unrotated still
+    /// counts. A preview at the proxy cap may have been downscaled from a
+    /// photo whose metadata understates its size, so it never qualifies.
+    /// Callers must not pass a size guessed from the preview itself.
+    pub fn preview_is_complete(metadata_size: [u32; 2], preview: [u32; 2]) -> bool {
+        let long = preview[0].max(preview[1]);
+        long < crate::core::pipeline::PROXY_EDGE
+            && long + 1 >= metadata_size[0].max(metadata_size[1])
     }
     pub fn visible_region(
         self,

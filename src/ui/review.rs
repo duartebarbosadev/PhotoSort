@@ -305,11 +305,15 @@ impl PhotoSortApp {
             });
             return;
         }
-        floating_bar(ui, egui::Id::new(("review_bar", compact)), |ui| {
+        floating_bar(ui, egui::Id::new(("review_bar", compact, self.step)), |ui| {
             use egui_phosphor::regular as icon;
             const NAVIGATION: &str = "Cull follows Up/Down navigation preferences. Hold Ctrl or Cmd to include marked photos and bypass movement filters.";
-            if icon_button(ui, icon::CARET_LEFT, &format!("Previous photo · Up\n{NAVIGATION}"))
-                .clicked()
+            if icon_button(
+                ui,
+                icon::CARET_LEFT,
+                &format!("Previous photo · Up\n{NAVIGATION}"),
+            )
+            .clicked()
             {
                 self.navigate_selection(
                     -1,
@@ -317,8 +321,12 @@ impl PhotoSortApp {
                     ui.input(|i| i.modifiers.command || i.modifiers.ctrl),
                 );
             }
-            if icon_button(ui, icon::CARET_RIGHT, &format!("Next photo · Down\n{NAVIGATION}"))
-                .clicked()
+            if icon_button(
+                ui,
+                icon::CARET_RIGHT,
+                &format!("Next photo · Down\n{NAVIGATION}"),
+            )
+            .clicked()
             {
                 self.navigate_selection(
                     1,
@@ -371,11 +379,19 @@ impl PhotoSortApp {
                     true,
                     rejected,
                     icon::TRASH,
-                    if rejected { "Marked for Trash" } else { "Trash" },
+                    if rejected {
+                        "Marked for Trash"
+                    } else {
+                        "Trash"
+                    },
                     wide,
                 )
-                .on_hover_text(if rejected { "Unmark · D" } else { "Mark for Trash · D" })
-                    .clicked()
+                .on_hover_text(if rejected {
+                    "Unmark · D"
+                } else {
+                    "Mark for Trash · D"
+                })
+                .clicked()
                 {
                     self.reject(active);
                 }
@@ -598,6 +614,10 @@ impl PhotoSortApp {
         } else {
             self.preview_turns(id)
         };
+        let known_size = self
+            .metadata
+            .get(&id)
+            .is_some_and(|m| m.width > 0 && m.height > 0);
         let source = self
             .metadata
             .get(&id)
@@ -630,15 +650,18 @@ impl PhotoSortApp {
                     turns,
                 );
             }
-            let needs_original = view.needs_original(
-                source,
-                texture
-                    .as_ref()
-                    .map(|t| [t.size()[0] as u32, t.size()[1] as u32]),
-                viewport,
-                turns,
-                ppp,
-            );
+            let preview = texture
+                .as_ref()
+                .map(|t| [t.size()[0] as u32, t.size()[1] as u32]);
+            // Only a size read from metadata can show the preview is complete;
+            // the texture fallback above would always look complete. 1:1 is an
+            // explicit request for source pixels and always loads them.
+            let complete = !view.actual_size
+                && known_size
+                && preview
+                    .is_some_and(|preview| InspectionView::preview_is_complete(source, preview));
+            let needs_original =
+                !complete && view.needs_original(source, preview, viewport, turns, ppp);
             if needs_original
                 && (view.actual_size
                     || view.zoom > 1.0

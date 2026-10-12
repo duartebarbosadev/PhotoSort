@@ -33,7 +33,14 @@ pub(super) fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
     // navigator between a press and its release.
     for m in &app.media {
         let metadata = crate::core::metadata::read(&m.path);
-        assert_eq!(metadata.rating, if m.path.ends_with("photo-0.png") { 5 } else { 3 });
+        assert_eq!(
+            metadata.rating,
+            if m.path.ends_with("photo-0.png") {
+                5
+            } else {
+                3
+            }
+        );
         app.metadata.insert(m.id, metadata);
     }
     app.catalog = Some(catalog);
@@ -397,10 +404,10 @@ fn compact_navigator_selects_scope_and_metadata_cancel_stays_outside_filters() {
         .find(|(s, _)| s == "Cancel metadata reading")
         .unwrap()
         .1;
-    let footer = size.y - navigation::STATUS_HEIGHT;
+    // It lives in the status bar, so it must be fully inside the window.
     assert!(
-        b.bottom() < footer,
-        "Metadata cancellation is hidden below the footer"
+        b.top() >= size.y - navigation::STATUS_HEIGHT && b.bottom() <= size.y,
+        "Metadata cancellation is outside the status bar: {b:?}"
     );
     click_label(&mut app, &ctx, size, "Cancel metadata reading");
     assert!(app.metadata_run.is_none());
