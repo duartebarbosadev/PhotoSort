@@ -1496,20 +1496,28 @@ impl PhotoSortApp {
         self.track_progress_clock();
         self.header(root);
         self.footer(root);
-        if self.inspector && self.catalog.is_some() && ctx.content_rect().width() > 1180.0 {
-            egui::Panel::right("inspector")
-                .resizable(true)
-                .default_size(300.0)
-                .size_range(260.0..=440.0)
-                .frame(
-                    egui::Frame::new()
-                        .fill(PANEL)
-                        .inner_margin(S4 as i8)
-                        .stroke(Stroke::new(1.0, LINE)),
-                )
-                .show(root, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
-                });
+        // Details slides in and out beside the photos in wide windows;
+        // narrow windows use the drawer instead.
+        let wide = ctx.content_rect().width() > 1180.0;
+        let shown = self.inspector && self.catalog.is_some() && wide;
+        let mut expanded = shown;
+        egui::Panel::right("inspector")
+            .resizable(true)
+            .drag_to_open(false)
+            .default_size(300.0)
+            .size_range(260.0..=440.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .inner_margin(S4 as i8)
+                    .stroke(Stroke::new(1.0, LINE)),
+            )
+            .show_collapsible(root, &mut expanded, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
+            });
+        // Dragging the edge past its minimum closes Details.
+        if shown && !expanded {
+            self.inspector = false;
         }
         egui::CentralPanel::default()
             .frame(
