@@ -11,7 +11,24 @@ exact. The report explains why this cache-format change was not adopted.
 
 Latest whole-analysis measurement: **real library, 9 October 2026** (below).
 
-Latest UI responsiveness: **grid and thumbnails, 10 October 2026** (below).
+Latest UI responsiveness: **Studio look, 12 October 2026** (below).
+
+## Studio look — 12 October 2026
+
+Same `examples/perf_budget` setup as below, after tiles gained a fade-in,
+a loading shimmer, and eased hover and focus rings (about four
+`animate_bool` lookups per visible tile).
+
+| Measurement | 10 October | 12 October |
+| --- | ---: | ---: |
+| Grid scroll, 10,000 photos: median / p95 / max | 0.10 / 0.13 / 0.73 ms | 0.13 / 0.30 / 1.07 ms |
+| First screen (24 thumbnails), cold cache | 0.72–0.77 s | 0.76 s |
+| First screen, reopening the folder | 0.06–0.15 s | 0.15 s |
+| Thumbnails after a long jump | 0.47–0.53 s | 0.58 s |
+
+The p95 frame doubles but stays two orders of magnitude inside a 60 Hz
+frame (16.7 ms). Once every animation settles the window only wakes for the
+one-second view-checkpoint heartbeat (`loading_grid_animates_then_comes_to_rest`).
 
 ## Grid and thumbnails — 10 October 2026
 
