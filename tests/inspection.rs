@@ -267,4 +267,5 @@ fn a_preview_holding_every_metadata_pixel_is_complete() {
     assert!(!View::preview_is_complete([6000, 4000], [2048, 1365]));
     // A capped preview may hide a photo whose metadata understates its size.
     assert!(!View::preview_is_complete([2048, 1536], [2048, 1536]));
+    assert!(!View::preview_is_complete([320, 240], [320, 240]));
 }

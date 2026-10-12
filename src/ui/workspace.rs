@@ -1513,7 +1513,11 @@ impl PhotoSortApp {
                     .stroke(Stroke::new(1.0, LINE)),
             )
             .show_collapsible(root, &mut expanded, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
+                // While sliding out after the folder closed or the window
+                // narrowed (the drawer then shows Details), the panel stays empty.
+                if self.catalog.is_some() && wide {
+                    egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
+                }
             });
         // Dragging the edge past its minimum closes Details.
         if shown && !expanded {

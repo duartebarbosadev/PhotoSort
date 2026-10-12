@@ -526,3 +526,93 @@ fn loading_grid_animates_then_comes_to_rest() {
     // anything sooner means an animation never came to rest.
     assert!(delay >= IDLE, "an idle window repaints every {delay:?}");
 }
+
+#[test]
+fn details_slide_out_never_doubles_or_outlives_its_folder() {
+    let (_temp, mut app) = fixture();
+    app.inspector = true;
+    app.active = Some(app.media[0].id);
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    set_reduce_motion(&ctx, false);
+    let run = |app: &mut PhotoSortApp, width: f32, frame: u32| {
+        let out = ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 900.),
+                )),
+                time: Some(f64::from(frame) / 60.0),
+                ..Default::default()
+            },
+            |ui| app.update_workspace(ui, false),
+        );
+        out.platform_output
+            .accesskit_update
+            .unwrap()
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.label() == Some("Show in Finder"))
+            .count()
+    };
+    let mut frame = 0;
+    for _ in 0..30 {
+        frame += 1;
+        assert!(run(&mut app, 1440., frame) <= 1);
+    }
+    frame += 1;
+    assert_eq!(run(&mut app, 1440., frame), 1, "Details is not showing");
+    // Narrowing hands Details to the drawer while the panel slides away.
+    for _ in 0..30 {
+        frame += 1;
+        assert!(run(&mut app, 1000., frame) <= 1, "two inspectors at once");
+    }
+    for _ in 0..30 {
+        frame += 1;
+        run(&mut app, 1440., frame);
+    }
+    // Closing the folder mid-session slides an empty panel out.
+    app.catalog = None;
+    for _ in 0..30 {
+        frame += 1;
+        assert_eq!(run(&mut app, 1440., frame), 0);
+    }
+    app.runtime.shutdown();
+}
+
+#[test]
+fn status_bar_metadata_controls_never_overlap_the_status_text() {
+    for width in [360., 640., 1440.] {
+        let (_temp, mut app) = fixture();
+        app.metadata_run = Some(73);
+        app.metadata_progress = Some((120, 6500));
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(width, 700.);
+        let nodes = rendered(&mut app, &ctx, size);
+        let footer = size.y - navigation::STATUS_HEIGHT;
+        let bar: Vec<_> = nodes
+            .iter()
+            .filter(|(label, r)| {
+                r.top() >= footer - 1.0 && r.bottom() <= size.y + 1.0 && !label.is_empty()
+            })
+            .collect();
+        assert!(
+            bar.iter().any(|(l, _)| l == "Cancel metadata reading"),
+            "{width}: {bar:?}"
+        );
+        for (i, (a, ra)) in bar.iter().enumerate() {
+            assert!(ra.right() <= width + 0.5, "{width}: {a} leaves the window");
+            for (b, rb) in &bar[i + 1..] {
+                let overlap = ra.intersect(*rb);
+                assert!(
+                    overlap.width() <= 0.5 || ra.contains_rect(*rb) || rb.contains_rect(*ra),
+                    "{width}: {a} {ra:?} overlaps {b} {rb:?}"
+                );
+            }
+        }
+        app.runtime.shutdown();
+    }
+}

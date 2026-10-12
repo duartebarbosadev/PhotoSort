@@ -85,12 +85,15 @@ impl View {
     /// Whether a decoded preview already holds every pixel of a photo whose
     /// size is known from its metadata, so the original cannot add detail at
     /// any zoom. Long edges are compared so a preview stored unrotated still
-    /// counts. A preview at the proxy cap may have been downscaled from a
-    /// photo whose metadata understates its size, so it never qualifies.
-    /// Callers must not pass a size guessed from the preview itself.
+    /// counts. A preview or thumbnail exactly at its cap may have been
+    /// downscaled from a photo whose metadata understates its size, so it
+    /// never qualifies. Callers must not pass a size guessed from the
+    /// preview itself.
     pub fn preview_is_complete(metadata_size: [u32; 2], preview: [u32; 2]) -> bool {
+        use crate::core::pipeline::{PROXY_EDGE, THUMB_EDGE};
         let long = preview[0].max(preview[1]);
-        long < crate::core::pipeline::PROXY_EDGE
+        long < PROXY_EDGE
+            && long != THUMB_EDGE
             && long + 1 >= metadata_size[0].max(metadata_size[1])
     }
     pub fn visible_region(
