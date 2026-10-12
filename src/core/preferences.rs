@@ -25,6 +25,8 @@ pub struct Preferences {
     pub keep_companions: bool,
     /// How RAW photos are displayed; analysis always uses the neutral render.
     pub raw_look: super::raw_look::RawLook,
+    /// Finish every interface animation instantly.
+    pub reduce_motion: bool,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -43,6 +45,7 @@ impl Default for Preferences {
             recent_folders: vec![],
             keep_companions: true,
             raw_look: Default::default(),
+            reduce_motion: false,
         }
     }
 }

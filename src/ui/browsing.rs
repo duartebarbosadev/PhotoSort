@@ -150,6 +150,9 @@ impl PhotoSortApp {
         // are active, so photos keep the vertical space.
         let overlay = true;
         ui.horizontal_wrapped(|ui| {
+            // Buttons keep their text on one line, so a control that does not
+            // fit moves to the next row instead of being squeezed.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             if overlay {
                 let active = [
                     self.browse.rating != RatingFilter::All,
@@ -371,7 +374,7 @@ impl PhotoSortApp {
             if ui
                 .add_enabled(
                     self.browse.folder.path.is_some(),
-                    egui::Checkbox::new(&mut self.browse.folder.recursive, "Include subfolders"),
+                    Switch::new(&mut self.browse.folder.recursive, "Include subfolders"),
                 )
                 .changed()
             {

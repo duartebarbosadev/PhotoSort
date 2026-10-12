@@ -35,7 +35,7 @@ impl PhotoSortApp {
         // Show actual visibility here so one click always opens the navigator.
         let mut visible = self.navigator.enabled && !self.review;
         if ui
-            .checkbox(&mut visible, "Library navigator")
+            .add(Switch::new(&mut visible, "Library navigator"))
             .on_hover_text(
                 "Browse folders, capture dates and similarity groups without moving files.",
             )

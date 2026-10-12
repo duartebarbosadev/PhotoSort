@@ -97,7 +97,7 @@ impl PhotoSortApp {
             }
             let mut automatic = self.preferences.updates.automatic;
             if ui
-                .checkbox(&mut automatic, "Check for updates daily")
+                .add(Switch::new(&mut automatic, "Check for updates daily"))
                 .changed()
             {
                 self.preferences.updates.automatic = automatic;

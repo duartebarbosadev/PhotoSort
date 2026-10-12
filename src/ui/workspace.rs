@@ -122,6 +122,8 @@ pub struct PhotoSortApp {
     /// Recent folders that were missing at startup (e.g. an unplugged drive):
     /// hidden from the menu but kept, so they return once available again.
     missing_recent: HashSet<PathBuf>,
+    /// A saved "Reduce motion" choice to apply to the context next frame.
+    reduce_motion_pending: Option<bool>,
     /// A crash report to tell the user about, and whether it is from a
     /// previous session (true) or a background panic in this one (false).
     crash_notice: Option<(PathBuf, bool)>,
@@ -332,6 +334,7 @@ impl PhotoSortApp {
         app.runtime.cache.configure(app.preferences.cache);
         app.runtime.processing.configure(app.preferences.processing);
         app.runtime.raw_look.set(app.preferences.raw_look);
+        set_reduce_motion(&cc.egui_ctx, app.preferences.reduce_motion);
         app.runtime.cache.request(false);
         app.preferences_path = Some(path);
         if let Some(folder) = folder {
@@ -353,6 +356,7 @@ impl PhotoSortApp {
             video_context: None,
             preferences: Default::default(),
             missing_recent: HashSet::new(),
+            reduce_motion_pending: None,
             crash_notice: None,
             crash_notice_shown: false,
             preferences_path: None,
@@ -1405,6 +1409,9 @@ impl PhotoSortApp {
 }
 fn theme_install(ctx: &egui::Context) {
     super::theme::install(ctx);
+    // Headless frames carry no real time; finish every animation at once so
+    // tests never measure a layout mid-slide.
+    ctx.global_style_mut(|style| style.animation_time = 0.0);
 }
 fn paint_image(
     ui: &egui::Ui,
@@ -1456,6 +1463,9 @@ impl PhotoSortApp {
     // without constructing a GPU window or replacing the native delegate.
     fn update_workspace(&mut self, root: &mut egui::Ui, native_requested: bool) {
         let ctx = &root.ctx().clone();
+        if let Some(reduce) = self.reduce_motion_pending.take() {
+            set_reduce_motion(ctx, reduce);
+        }
         self.check_updates_at_startup();
         self.tick += 1;
         self.poll(ctx);
