@@ -86,57 +86,31 @@ impl PhotoSortApp {
     /// The workflow is a sequence, so tabs carry their number; the active one
     /// is underlined in the accent.
     fn step_tabs(&mut self, ui: &mut egui::Ui, compact: bool) {
-        ui.spacing_mut().item_spacing.x = if compact { 2.0 } else { S1 };
-        for step in self.navigation_steps() {
-            let selected = self.step == step;
-            let label = format!("{} {}", step.index() + 1, step.title());
-            let text = if compact && !selected {
-                (step.index() + 1).to_string()
-            } else {
-                label.clone()
-            };
-            let galley = ui.painter().layout_no_wrap(
-                text,
-                if selected {
-                    medium(13.0)
-                } else {
-                    FontId::proportional(13.0)
-                },
-                INK,
-            );
-            let size = egui::vec2(galley.size().x + 2.0 * S3, 52.0);
-            let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-            response.widget_info(|| {
-                egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, &label)
-            });
-            let response = response.on_hover_text(format!(
-                "{} · Ctrl/Cmd+Alt+{}",
-                step.subtitle(),
-                step.index() + 1
-            ));
-            let color = if selected || response.hovered() {
-                INK
-            } else {
-                MUTED
-            };
-            ui.painter().galley_with_override_text_color(
-                rect.center() - galley.size() / 2.0,
-                galley,
-                color,
-            );
-            if selected {
-                ui.painter().rect_filled(
-                    egui::Rect::from_min_max(
-                        egui::pos2(rect.left() + S2, rect.bottom() - 2.0),
-                        egui::pos2(rect.right() - S2, rect.bottom()),
-                    ),
-                    1.0,
-                    ACCENT,
-                );
-            }
-            if response.clicked() && !self.busy {
-                self.switch_step(step);
-            }
+        let steps = self.navigation_steps();
+        let segments: Vec<Segment> = steps
+            .iter()
+            .map(|step| {
+                let name = format!("{} {}", step.index() + 1, step.title());
+                Segment {
+                    shown: if compact && *step != self.step {
+                        (step.index() + 1).to_string()
+                    } else {
+                        step.title().to_owned()
+                    },
+                    name,
+                    hover: Some(format!(
+                        "{} · Ctrl/Cmd+Alt+{}",
+                        step.subtitle(),
+                        step.index() + 1
+                    )),
+                }
+            })
+            .collect();
+        let selected = steps.iter().position(|s| *s == self.step);
+        if let Some(index) = segmented(ui, egui::Id::new("step-tabs"), &segments, selected, 30.0)
+            && !self.busy
+        {
+            self.switch_step(steps[index]);
         }
     }
 
@@ -234,6 +208,7 @@ impl PhotoSortApp {
                             self.stop_file_operations();
                         }
                     }
+                    self.footer_metadata(ui);
                     if let Some((done, total)) = self.progress {
                         let bar = ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32)
                             .desired_width(160.0).desired_height(14.0).text(RichText::new(format!("{done} / {total}")).small()));
@@ -243,7 +218,12 @@ impl PhotoSortApp {
                     } else if self.apply_stop.is_none() {
                         // Thumbnails and previews still decoding for what is on screen.
                         let loading = self.requested.len();
-                        let count = if loading > 0 && !self.scanning {
+                        // A refreshing view is reported here, in the fixed-height
+                        // footer: a row above the photos would push the grid and
+                        // navigator under the pointer whenever a query starts.
+                        let count = if self.browse_run.is_some() && !self.scanning {
+                            format!("Updating library view · {} photos", self.filtered.len())
+                        } else if loading > 0 && !self.scanning {
                             format!(
                                 "Loading {loading} {} · {} photos",
                                 if loading == 1 { "preview" } else { "previews" },
@@ -280,7 +260,7 @@ impl PhotoSortApp {
                         });
                     }
                     ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
-                        if self.scanning || self.busy || self.analysis_run.is_some() || !self.requested.is_empty() {
+                        if self.scanning || self.busy || self.analysis_run.is_some() || !self.requested.is_empty() || self.browse_run.is_some() {
                             ui.add(egui::Spinner::new().size(12.0));
                         } else {
                             ui.label(RichText::new(egui_phosphor::regular::CHECK_CIRCLE).color(GREEN).small());
@@ -292,6 +272,103 @@ impl PhotoSortApp {
             });
     }
 
+    /// Organize's own controls, inline in the context bar: how photos are
+    /// grouped, where they go, then edit and preview.
+    fn organize_controls(&mut self, ui: &mut egui::Ui) {
+        use egui_phosphor::regular as icon;
+        ui.label(RichText::new("Group by").color(MUTED));
+        wrap_before(ui, ui.spacing().combo_width + 2.0 * S3);
+        egui::ComboBox::from_id_salt("grouping")
+            .selected_text(self.group_mode.title())
+            .show_ui(ui, |ui| {
+                for mode in GroupMode::ALL {
+                    if ui
+                        .selectable_label(self.group_mode == mode, mode.title())
+                        .clicked()
+                    {
+                        self.set_group_mode(mode);
+                        ui.close();
+                    }
+                }
+            });
+        if self.group_mode == GroupMode::Location {
+            self.location_layout_controls(ui);
+        }
+        if self.scene_editing() {
+            self.group_controls(ui);
+            if ui
+                .add_enabled(
+                    (2..=9).contains(&self.selection.len()) && !self.busy,
+                    egui::Button::new("Compare selected"),
+                )
+                .clicked()
+            {
+                self.compare_selection();
+            }
+        }
+        // Destination and companion handling live in one popover chip.
+        let destination = std::path::Path::new(&self.output)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Choose a folder".into());
+        let chip = ui
+            .add(egui::Button::new(format!(
+                "{}  Move to {destination}  {}",
+                icon::FOLDER_SIMPLE,
+                icon::CARET_DOWN
+            )))
+            .on_hover_text(format!("Destination: {}", self.output));
+        let label = format!("Move to {destination}");
+        chip.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+        egui::Popup::menu(&chip)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .width(420.0)
+            .show(|ui| {
+                ui.set_width(420.0);
+                ui.label(RichText::new("Destination").font(medium(12.5)));
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.output)
+                            .background_color(BG)
+                            .desired_width(ui.available_width() - 36.0),
+                    )
+                    .on_hover_text("Folders are created inside this folder");
+                    if icon_button(ui, icon::FOLDER_OPEN, "Choose destination folder").clicked()
+                        && let Some(path) = rfd::FileDialog::new().pick_folder()
+                    {
+                        self.output = path.display().to_string();
+                    }
+                });
+                ui.add_space(S1);
+                if ui
+                    .add(Switch::new(
+                        &mut self.companions,
+                        "Keep RAW + JPEG + XMP together",
+                    ))
+                    .on_hover_text("Move sidecars and paired RAW files with their photo")
+                    .changed()
+                {
+                    self.preferences.keep_companions = self.companions;
+                    self.save_preferences();
+                }
+            });
+        if ui
+            .add_enabled(self.can_edit_folders(), egui::Button::new("Edit folders…"))
+            .clicked()
+        {
+            self.open_organize_editor();
+        }
+        if ui
+            .add_enabled(
+                !self.scanning && !self.busy && self.organize_metadata_ready(),
+                primary("Preview moves"),
+            )
+            .on_hover_text("See every move before anything changes")
+            .clicked()
+        {
+            self.organize();
+        }
+    }
     pub(super) fn toolbar(&mut self, ui: &mut egui::Ui) {
         let before = (
             self.query.clone(),
@@ -306,186 +383,162 @@ impl PhotoSortApp {
             self.pick_focus,
         );
         use egui_phosphor::regular as icon;
-        ui.horizontal(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if icon_text_button(ui, true, self.inspector, icon::INFO, "Details")
-                    .on_hover_text("Photo details · I")
-                    .clicked()
-                {
-                    self.inspector ^= true;
-                }
-                ui.add_space(S2);
-                if icon_text_button(ui, true, self.review, icon::IMAGE, "Review")
-                    .on_hover_text("One photo at a time, or a selection side by side")
-                    .clicked()
-                {
-                    self.open_review();
-                }
-                if self.step == Step::Cull {
-                    egui::ComboBox::from_id_salt("library_layout")
-                        .width(84.0)
-                        .selected_text(self.library_layout.title())
-                        .show_ui(ui, |ui| {
-                            for layout in library::Layout::ALL {
-                                if ui
-                                    .selectable_label(self.library_layout == layout, layout.title())
-                                    .clicked()
-                                {
-                                    self.set_library_layout(layout);
-                                    if self.review {
-                                        self.review = false;
-                                    }
-                                    ui.close();
-                                }
+        // Right group first (view switch, Details); the step's controls then
+        // get exactly the width left over and wrap within it.
+        let mut row = ui.available_rect_before_wrap();
+        row.max.y = row.min.y + ui.spacing().interact_size.y;
+        let right = ui
+            .scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(row)
+                    .layout(egui::Layout::right_to_left(Align::Center)),
+                |ui| {
+                    if icon_text_button(ui, true, self.inspector, icon::INFO, "Details")
+                        .on_hover_text("Photo details · I")
+                        .clicked()
+                    {
+                        self.inspector ^= true;
+                    }
+                    ui.add_space(S2);
+                    // One segmented view switch: library layouts, then Review.
+                    // Narrow windows show icons only; names stay for tooltips and AT.
+                    let narrow = ui.available_width() < 720.0;
+                    let layouts: &[library::Layout] = if self.step == Step::Cull {
+                        &library::Layout::ALL
+                    } else {
+                        &[library::Layout::Grid]
+                    };
+                    let mut segments: Vec<Segment> = layouts
+                        .iter()
+                        .map(|layout| {
+                            let glyph = match layout {
+                                library::Layout::Grid => icon::SQUARES_FOUR,
+                                library::Layout::List => icon::LIST,
+                                library::Layout::Icons => icon::DOTS_NINE,
+                            };
+                            Segment {
+                                shown: if narrow {
+                                    glyph.to_owned()
+                                } else {
+                                    format!("{glyph}  {}", layout.title())
+                                },
+                                name: layout.title().to_owned(),
+                                hover: narrow.then(|| layout.title().to_owned()),
                             }
-                        });
-                } else if icon_text_button(ui, true, !self.review, icon::SQUARES_FOUR, "Grid")
-                    .clicked()
-                {
-                    self.review = false;
-                }
-                ui.with_layout(
-                    egui::Layout::left_to_right(Align::Center).with_main_wrap(true),
-                    |ui| {
-                        if self.step != Step::PickBest {
-                            let mut query = self.query.clone();
-                            if ui
-                                .add(
-                                    egui::TextEdit::singleline(&mut query)
-                                        .id(egui::Id::new("library_search"))
-                                        .hint_text(format!("{}  Search", icon::MAGNIFYING_GLASS))
-                                        .background_color(CARD)
-                                        .desired_width(180.0),
-                                )
-                                .changed()
-                                && self.allow_review_departure()
-                            {
-                                self.query = query;
-                                self.filter_dirty = true;
-                            }
-                            egui::ComboBox::from_id_salt("filter")
-                                .selected_text(self.filter.title())
-                                .show_ui(ui, |ui| {
-                                    for f in Filter::ALL {
-                                        if ui
-                                            .selectable_label(self.filter == f, f.title())
-                                            .clicked()
-                                            && self.allow_review_departure()
-                                        {
-                                            self.filter = f;
-                                            self.filter_dirty = true;
-                                            ui.close();
-                                            if f == Filter::Rated {
-                                                self.start_metadata_index();
-                                            }
+                        })
+                        .collect();
+                    segments.push(Segment {
+                        shown: if narrow {
+                            icon::IMAGE.to_owned()
+                        } else {
+                            format!("{}  Review", icon::IMAGE)
+                        },
+                        name: "Review".into(),
+                        hover: Some("One photo at a time, or a selection side by side".into()),
+                    });
+                    let current = if self.review {
+                        Some(layouts.len())
+                    } else if self.step == Step::Cull {
+                        layouts.iter().position(|l| *l == self.library_layout)
+                    } else {
+                        Some(0)
+                    };
+                    if let Some(index) = segmented(
+                        ui,
+                        egui::Id::new(("view-switch", self.step == Step::Cull)),
+                        &segments,
+                        current,
+                        button_row_height(ui),
+                    ) {
+                        if index == layouts.len() {
+                            self.open_review();
+                        } else if self.step == Step::Cull {
+                            self.set_library_layout(layouts[index]);
+                        } else {
+                            self.review = false;
+                        }
+                    }
+                },
+            )
+            .response
+            .rect;
+        let left_room = row.with_max_x((right.left() - S3).max(row.left()));
+        let left = ui
+            .scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(left_room)
+                    .layout(egui::Layout::left_to_right(Align::Center).with_main_wrap(true)),
+                |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    if self.step == Step::Organize {
+                        self.organize_controls(ui);
+                        divider(ui);
+                    }
+                    if self.step != Step::PickBest {
+                        wrap_before(ui, 150.0 + 2.0 * S3);
+                        let mut query = self.query.clone();
+                        if ui
+                            .add(
+                                egui::TextEdit::singleline(&mut query)
+                                    .id(egui::Id::new("library_search"))
+                                    .hint_text(format!("{}  Search", icon::MAGNIFYING_GLASS))
+                                    .background_color(CARD)
+                                    .desired_width(150.0),
+                            )
+                            .changed()
+                            && self.allow_review_departure()
+                        {
+                            self.query = query;
+                            self.filter_dirty = true;
+                        }
+                        wrap_before(ui, ui.spacing().combo_width + 2.0 * S3);
+                        egui::ComboBox::from_id_salt("filter")
+                            .selected_text(self.filter.title())
+                            .show_ui(ui, |ui| {
+                                for f in Filter::ALL {
+                                    if ui.selectable_label(self.filter == f, f.title()).clicked()
+                                        && self.allow_review_departure()
+                                    {
+                                        self.filter = f;
+                                        self.filter_dirty = true;
+                                        ui.close();
+                                        if f == Filter::Rated {
+                                            self.start_metadata_index();
                                         }
                                     }
-                                });
-                        }
-                        if self.analysis_run.is_some() {
-                            if icon_text_button(ui, true, false, icon::STOP, "Cancel analysis")
-                                .clicked()
-                            {
-                                self.cancel_analysis();
-                            }
-                        } else if icon_text_button(
-                            ui,
-                            self.can_start_analysis(),
-                            false,
-                            icon::SPARKLE,
-                            if self.step == Step::Rotation {
-                                "Detect rotations"
-                            } else {
-                                "Analyze library"
-                            },
-                        )
-                        .on_hover_text("Runs on this computer · Ctrl/Cmd+S")
-                        .clicked()
+                                }
+                            });
+                    }
+                    if self.analysis_run.is_some() {
+                        if icon_text_button(ui, true, false, icon::STOP, "Cancel analysis")
+                            .clicked()
                         {
-                            self.analyze_current_workflow();
+                            self.cancel_analysis();
                         }
-                    },
-                );
-            });
-        });
+                    } else if icon_text_button(
+                        ui,
+                        self.can_start_analysis(),
+                        false,
+                        icon::SPARKLE,
+                        if self.step == Step::Rotation {
+                            "Detect rotations"
+                        } else {
+                            "Analyze library"
+                        },
+                    )
+                    .on_hover_text("Runs on this computer · Ctrl/Cmd+S")
+                    .clicked()
+                    {
+                        self.analyze_current_workflow();
+                    }
+                },
+            )
+            .response
+            .rect;
+        ui.advance_cursor_after_rect(left.union(right));
         ui.add_space(4.0);
         match self.step {
             Step::Organize => {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Group by").color(MUTED));
-                    egui::ComboBox::from_id_salt("grouping")
-                        .selected_text(self.group_mode.title())
-                        .show_ui(ui, |ui| {
-                            for mode in GroupMode::ALL {
-                                if ui
-                                    .selectable_label(self.group_mode == mode, mode.title())
-                                    .clicked()
-                                {
-                                    self.set_group_mode(mode);
-                                    ui.close();
-                                }
-                            }
-                        });
-                    if self.group_mode == GroupMode::Location {
-                        self.location_layout_controls(ui);
-                    }
-                    if self.scene_editing() {
-                        self.group_controls(ui);
-                        if ui
-                            .add_enabled(
-                                (2..=9).contains(&self.selection.len()) && !self.busy,
-                                egui::Button::new("Compare selected"),
-                            )
-                            .clicked()
-                        {
-                            self.compare_selection();
-                        }
-                    }
-                    divider(ui);
-                    if ui
-                        .checkbox(&mut self.companions, "Keep RAW + JPEG + XMP together")
-                        .on_hover_text("Move sidecars and paired RAW files with their photo")
-                        .changed()
-                    {
-                        self.preferences.keep_companions = self.companions;
-                        self.save_preferences();
-                    }
-                    if ui
-                        .add_enabled(self.can_edit_folders(), egui::Button::new("Edit folders…"))
-                        .clicked()
-                    {
-                        self.open_organize_editor();
-                    }
-                    if ui
-                        .add_enabled(
-                            !self.scanning && !self.busy && self.organize_metadata_ready(),
-                            primary("Preview moves"),
-                        )
-                        .on_hover_text("See every move before anything changes")
-                        .clicked()
-                    {
-                        self.organize();
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Destination").color(MUTED));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.output)
-                            .background_color(CARD)
-                            .desired_width((ui.available_width() - 48.0).clamp(120.0, 520.0)),
-                    )
-                    .on_hover_text("Folders are created inside this folder");
-                    if icon_button(
-                        ui,
-                        egui_phosphor::regular::FOLDER_OPEN,
-                        "Choose destination folder",
-                    )
-                    .clicked()
-                        && let Some(path) = rfd::FileDialog::new().pick_folder()
-                    {
-                        self.output = path.display().to_string();
-                    }
-                });
                 if self.group_mode == GroupMode::Mixed {
                     ui.label(RichText::new(if self.mixed_labels.is_some() {
                         "Dates contain similar-photo groups; single photos stay in the date folder."
@@ -496,7 +549,6 @@ impl PhotoSortApp {
                     ui.label(RichText::new("Select photos with Cmd/Ctrl-click or Shift-click, then use Scenes to correct groups. Preview moves analyzes first. Ungrouped photos and videos stay in place.").small().color(MUTED));
                 } else if self.metadata_organize_mode() {
                     ui.label(RichText::new("Folder proposals use photo metadata. Location names are resolved offline; AI analysis is not needed.").small().color(MUTED));
-                    self.metadata_status(ui);
                 }
             }
             Step::EasyDelete => self.delete_controls(ui),

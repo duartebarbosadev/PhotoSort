@@ -1,17 +1,34 @@
-Latest real-photo comparison: [preview and thumbnail preparation, 9 October](diagnostics/review-comparison-2026-10-09/README.md).
-On the authorized samples, median initial Rust preparation was 2.35–2.76× faster
-on mixed folders and 27.26× faster on 100 RAW photos. Rendering recipes and proxy
-sizes differ; this does not establish whole-application speed. The report includes
-cache reuse, RSS ranges and the larger Rust disk-cache footprint.
+Latest real-photo comparison (preview and thumbnail preparation, 9 October): on the
+authorized samples, median initial Rust preparation was 2.35–2.76× faster on
+mixed folders and 27.26× faster on 100 RAW photos. Rendering recipes and proxy sizes
+differ; this does not establish whole-application speed. The report includes cache
+reuse, RSS ranges and the larger Rust disk-cache footprint.
 
-[Lossless proxy codec evaluation, 9 October](diagnostics/proxy-codecs-2026-10-09/README.md):
-retain the current PNG setting. On 263 photos, the tested WebP encoder saves
-15–27% of proxy bytes but decodes 1.65–2.18× more slowly; all tested pixels remain
-exact. The report explains why this cache-format change was not adopted.
+Lossless proxy codec evaluation, 9 October: retain the current PNG setting. On 263
+photos, the tested WebP encoder saves 15–27% of proxy bytes but decodes 1.65–2.18× more
+slowly; all tested pixels remain exact. The report explains why this cache-format change
+was not adopted.
 
 Latest whole-analysis measurement: **real library, 9 October 2026** (below).
 
-Latest UI responsiveness: **grid and thumbnails, 10 October 2026** (below).
+Latest UI responsiveness: **Studio look, 12 October 2026** (below).
+
+## Studio look — 12 October 2026
+
+Same `examples/perf_budget` setup as below, after tiles gained a fade-in,
+a loading shimmer, and eased hover and focus rings (about four
+`animate_bool` lookups per visible tile).
+
+| Measurement | 10 October | 12 October |
+| --- | ---: | ---: |
+| Grid scroll, 10,000 photos: median / p95 / max | 0.10 / 0.13 / 0.73 ms | 0.13 / 0.30 / 1.07 ms |
+| First screen (24 thumbnails), cold cache | 0.72–0.77 s | 0.76 s |
+| First screen, reopening the folder | 0.06–0.15 s | 0.15 s |
+| Thumbnails after a long jump | 0.47–0.53 s | 0.58 s |
+
+The p95 frame doubles but stays two orders of magnitude inside a 60 Hz
+frame (16.7 ms). Once every animation settles the window only wakes for the
+one-second view-checkpoint heartbeat (`loading_grid_animates_then_comes_to_rest`).
 
 ## Grid and thumbnails — 10 October 2026
 
@@ -122,11 +139,9 @@ harnesses emit JSON containing every scan's count, duration and first batch.
 The scripts perform no file mutation. Do not infer file-operation, image-quality
 or AI-result parity from their timing.
 
-[Raw results and source hashes](benchmarks/scan-2026-09-28.json) preserve all 42
-scans and six process RSS measurements. The original seven sample hashes and
-clean Python working tree were verified after the run; all 100,000 fixture paths
-retained the same unchanged disposable inode and no sidecars were created.
-
+The original seven sample hashes and clean Python working tree were verified after the
+run; all 100,000 fixture paths retained the same unchanged disposable inode and no
+sidecars were created.
 
 ## Regional scene inference — 2026-10-01
 
@@ -183,12 +198,10 @@ project build output (requires the pinned native models/runtime and sample files
 ```
 
 For independent process RSS, compile once with `--no-run` and run the resulting
-`release/deps/photosort-*` test executable under `/usr/bin/time -l`; exclude
-compilation from timing. The `core::models::batch_probe::scene_batch_timing_and_equivalence`
-ignored test selects widths using `PHOTOSORT_BATCH_WIDTH=1`, `2` or `5`.
-[Raw runs, method details and source/model/sample hashes](benchmarks/scene-batching-2026-10-01.json)
-retain the evidence. All build targets were cleaned afterward.
-
+`release/deps/photosort-*` test executable under `/usr/bin/time -l`; exclude compilation
+from timing. The `core::models::batch_probe::scene_batch_timing_and_equivalence` ignored
+test selects widths using `PHOTOSORT_BATCH_WIDTH=1`, `2` or `5`. All build targets were
+cleaned afterward.
 
 ## Shared evidence cache — 2026-10-01
 
@@ -222,14 +235,12 @@ isolated heap measurement. No build or test from this task overlapped timed runs
 the host was otherwise not isolated and OS caches were not flushed.
 
 Reproduce with `cargo build --locked --release --no-default-features --example
-bench_evidence`, then run the resulting executable with `json 512` or `binary 512`
-in the order above under `/usr/bin/time -l`. Use a temporary CARGO_TARGET_DIR and
-clean it afterward as shown in the regional benchmark instructions. The harness
-creates and automatically removes its own disposable cache fixtures.
-[Raw process measurements, counters and source hashes](benchmarks/evidence-cache-2026-10-01.json)
-retain every timed pass. Worst-case clustering remains quadratic; this result
-neither establishes whole-application speed nor compares against Python.
-
+bench_evidence`, then run the resulting executable with `json 512` or `binary 512` in
+the order above under `/usr/bin/time -l`. Use a temporary CARGO_TARGET_DIR and clean it
+afterward as shown in the regional benchmark instructions. The harness creates and
+automatically removes its own disposable cache fixtures. Worst-case clustering remains
+quadratic; this result neither establishes whole-application speed nor compares against
+Python.
 
 ## Metadata service baseline before persistence — 2026-10-02
 
@@ -301,18 +312,17 @@ Use a read-only JPEG/PNG/ARW fixture and alternate these commands three times:
 PYTHONDONTWRITEBYTECODE=1 /usr/bin/time -l ../PhotoSort/.venv/bin/python -B scripts/bench_reference_metadata.py ../PhotoSort /path/to/fixture
 ```
 
-Each executable owns and removes its temporary cache. The source fixture must
-remain unchanged during the comparison. The harnesses create no GUI, models or
-image pixels. Twelve completed processes and all 48 phase records, source hashes,
-platform details, dimension differences, ranges and RSS are preserved in
-[the raw benchmark](benchmarks/metadata-2026-10-02.json). All original/seed hashes
-and all 2,100 hardlink identities were verified; the synthetic fixture was removed.
+Each executable owns and removes its temporary cache. The source fixture must remain
+unchanged during the comparison. The harnesses create no GUI, models or image pixels.
+Twelve completed processes and all 48 phase records, source hashes, platform details,
+dimension differences, ranges and RSS were recorded. All
+original/seed hashes and all 2,100 hardlink identities were verified; the synthetic
+fixture was removed.
 
 **Follow-up (implemented below):** persist typed metadata through the existing shared cache,
 with source/sidecar/recipe invalidation, corruption recovery, cancellation, cache
 limits and clear/disabled-cache behavior. Re-run the same benchmark after that
 change rather than inferring improvement from the language or a hot memory hit.
-
 
 ## Persistent metadata and cache-write cost — 2026-10-02
 
@@ -340,26 +350,22 @@ figures must not be used as full-app memory or startup claims.
 
 A completed first attempt reused the synced writer used for user data. It reduced
 reopening to 75.63 ms but increased initial Rust ingestion to **13,941.40 ms**.
-Regenerable binary artifacts now use one shared exclusive-temp/atomic-replace
-writer without per-record physical flushing. Interrupted or lost cache records
-recompute; photo edits, decisions, settings and recovery journals keep their
-synced write path. The first attempt is retained in
-[metadata-persistent-synced-2026-10-02.json](benchmarks/metadata-persistent-synced-2026-10-02.json).
-The old non-persistent baseline remains unchanged.
+Regenerable binary artifacts now use one shared exclusive-temp/atomic-replace writer
+without per-record physical flushing. Interrupted or lost cache records recompute; photo
+edits, decisions, settings and recovery journals keep their synced write path. The first
+attempt was also measured. The old
+non-persistent baseline remains unchanged.
 
-The final comparison repeats all 12 processes/48 phases with the same seven
-original sample contents and 300-directory disposable hardlink fixture, three
-alternating Rust/Python pairs per fixture, no overlapping task builds/tests, and
-unflushed OS caches. All common-field checksums agree with Python under the
-previously documented declared-photo-dimension normalization. The Rust harness
-now additionally hashes every typed metadata field outside phase timing and
-verifies equality across all four phases. This adds validation work to whole-
-process RSS; it does not change timed service calls. Original and seed hashes,
-all 2,100 links and the untouched Python checkout were verified before removing
-the synthetic fixture. Raw final evidence is in
-[metadata-persistent-2026-10-02.json](benchmarks/metadata-persistent-2026-10-02.json).
-Seven repeated contents remain a scaling fixture, not a diverse-photo workload.
-
+The final comparison repeats all 12 processes/48 phases with the same seven original
+sample contents and 300-directory disposable hardlink fixture, three alternating
+Rust/Python pairs per fixture, no overlapping task builds/tests, and unflushed OS
+caches. All common-field checksums agree with Python under the previously documented
+declared-photo-dimension normalization. The Rust harness now additionally hashes every
+typed metadata field outside phase timing and verifies equality across all four phases.
+This adds validation work to whole- process RSS; it does not change timed service calls.
+Original and seed hashes, all 2,100 links and the untouched Python checkout were
+verified before removing the synthetic fixture. Seven repeated contents remain a scaling
+fixture, not a diverse-photo workload.
 
 ## Exact regional early rejection — 2026-10-04
 
@@ -403,26 +409,21 @@ loading remain quadratic. A separate read-only seven-sample native-model
 regression preserves groups at 0.02/0.055/0.20 and reduces regional dots from
 54 to 9/10/21 respectively, without additional image/model work.
 
-Reproduce by building the ignored
-`core::regional::tests::regional_pruning_benchmark` release test, then running
-its executable under `/usr/bin/time -l` with `--exact --ignored --nocapture`,
-`PHOTOSORT_REGIONAL_MODE=exhaustive` or `pruned`, and
-`PHOTOSORT_REGIONAL_COUNT=512` or `2048`. Use a disposable CARGO_TARGET_DIR
-and clean it afterward. Compiling the entire optimized unit-test executable
-is expensive; exclude compilation from timings.
-[Raw measurements and source hashes](benchmarks/regional-pruning-2026-10-04.json)
-retain all measured passes, counters, label hashes and process RSS.
-
+Reproduce by building the ignored `core::regional::tests::regional_pruning_benchmark`
+release test, then running its executable under `/usr/bin/time -l` with `--exact
+--ignored --nocapture`, `PHOTOSORT_REGIONAL_MODE=exhaustive` or `pruned`, and
+`PHOTOSORT_REGIONAL_COUNT=512` or `2048`. Use a disposable CARGO_TARGET_DIR and clean it
+afterward. Compiling the entire optimized unit-test executable is expensive; exclude
+compilation from timings.
 
 ## Metadata capacity and real photo folders — 6 October 2026
 
-The shared metadata cache now evicts least-recently-used entries using `lru`
-0.18.5 instead of clearing every entry at 100,000. The red/green shared-boundary
-regression proves that a recently used photo avoids a disk reread after another
-entry crosses the capacity. One before/after 100,000-path release observation
-found broadly similar service times and whole-process peak RSS of 350.45 versus
-302.19 MiB; this is not evidence of a universal throughput improvement.
-[Method, raw measurements and limitations](diagnostics/metadata-lru-2026-10-06/README.md).
+The shared metadata cache now evicts least-recently-used entries using `lru` 0.18.5
+instead of clearing every entry at 100,000. The red/green shared-boundary regression
+proves that a recently used photo avoids a disk reread after another entry crosses the
+capacity. One before/after 100,000-path release observation found broadly similar
+service times and whole-process peak RSS of 350.45 versus 302.19 MiB; this is not
+evidence of a universal throughput improvement.
 
 The newly authorized sample folders provided 263 photo paths (186 unique file
 contents), including 102 ARW and 90 HEIC. Every folder passed read-only metadata,
@@ -431,11 +432,10 @@ Quality and visual grouping completed on all three larger folders, with identica
 reopened results and zero new decoding/inference. All originals and sidecars
 remained unchanged. This is format/consistency evidence, not labeled accuracy.
 
-This larger corpus exposed remaining performance costs: 135.59 s to cold-render
-100 RAW browsing proxies versus 21.15 s for Quality analysis using embedded
-previews; image-pipeline maximum RSS reached roughly 2 GiB on mixed HEIC folders,
-and Quality-process maximum RSS reached roughly 4.7 GiB including model setup.
-The next performance work should measure fast RAW browsing previews, bounded
-Apple image decoding and native/model allocation lifetimes. These observed peaks
-must not be described as steady-state memory or explained as leaks without
-further profiling. [Full corpus results](diagnostics/real-library-2026-10-06/README.md).
+This larger corpus exposed remaining performance costs: 135.59 s to cold-render 100 RAW
+browsing proxies versus 21.15 s for Quality analysis using embedded previews;
+image-pipeline maximum RSS reached roughly 2 GiB on mixed HEIC folders, and
+Quality-process maximum RSS reached roughly 4.7 GiB including model setup. The next
+performance work should measure fast RAW browsing previews, bounded Apple image decoding
+and native/model allocation lifetimes. These observed peaks must not be described as
+steady-state memory or explained as leaks without further profiling.

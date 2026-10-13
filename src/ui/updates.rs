@@ -44,7 +44,7 @@ impl PhotoSortApp {
     }
     fn render_updates_dialog(&mut self, ctx: &egui::Context, state: State) {
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("updates")).show(ctx, |ui| {
+        let response = modal(egui::Id::new("updates")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 64.0).clamp(240.0, 480.0));
             ui.heading("PhotoSort updates");
             ui.label(format!("Installed version {}", env!("CARGO_PKG_VERSION")));
@@ -97,7 +97,7 @@ impl PhotoSortApp {
             }
             let mut automatic = self.preferences.updates.automatic;
             if ui
-                .checkbox(&mut automatic, "Check for updates daily")
+                .add(Switch::new(&mut automatic, "Check for updates daily"))
                 .changed()
             {
                 self.preferences.updates.automatic = automatic;

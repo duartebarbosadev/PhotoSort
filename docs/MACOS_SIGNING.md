@@ -8,9 +8,8 @@ photos” while macOS holds the worker's directory-open call. Bring PhotoSort an
 its system access prompt into view and choose whether to allow the requested
 folder access. A wait alone does not prove that a permission prompt is the cause.
 
-The captured Documents-folder incident and matching OS evidence are in the
-[diagnostic report](diagnostics/discovery-permission-2026-10-08/README.md).
-Apple describes code identity and privacy-choice persistence in
+A Documents-folder permission incident was captured with matching OS evidence during
+development. Apple describes code identity and privacy-choice persistence in
 [TN3127](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
 
 ## Use an existing signing identity

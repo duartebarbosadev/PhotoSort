@@ -149,7 +149,7 @@ impl PhotoSortApp {
     }
     fn render_model_setup(&mut self, ctx: &egui::Context, state: &model_assets::State) {
         let mut close = false;
-        egui::Modal::new(egui::Id::new("model_setup")).show(ctx, |ui| {
+        modal(egui::Id::new("model_setup")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 64.).clamp(260., 580.));
             ui.heading("Local AI models");
             egui::ScrollArea::vertical()

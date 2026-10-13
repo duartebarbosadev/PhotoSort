@@ -39,11 +39,10 @@ partition. Regional crops run sequentially through this same fixed session with
 cancellation between calls, avoiding multiple compiled DINO instances. CPU and
 CUDA retain the export's dynamic batch support.
 
-An isolated release probe on this Mac measured a warm median of approximately
-29.0 ms on CPU and 3.73 ms with fixed-shape Core ML (about 7.8× for that model call).
-Without shape specialization, Core ML was slower (69.5 ms). This is synthetic
-model inference, not end-to-end grouping, a broad-library benchmark or a Python
-comparison. See `diagnostics/acceleration-probe-2026-10-04.json`. The adjacent
+An isolated release probe on this Mac measured a warm median of approximately 29.0 ms on
+CPU and 3.73 ms with fixed-shape Core ML (about 7.8× for that model call). Without shape
+specialization, Core ML was slower (69.5 ms). This is synthetic model inference, not
+end-to-end grouping, a broad-library benchmark or a Python comparison. The adjacent
 standalone Rust source preserves that measurement harness; its direct session
 construction is intentionally isolated validation code, not an application owner.
 
@@ -68,17 +67,15 @@ oversize entries are not retained after their session closes. Model assets and
 reviews are not removed. Custom exports remain usable without persistent caching.
 
 First compilation and runtime/OS temporary caches remain outside that persistence
-budget. Native compilation itself still cannot be interrupted by the current ORT
-call. CPU remains the low-initialization-cost default; acceleration is opt-in.
-Model and native-runtime memory is additional to the preview-cache allowance.
-Source integration has passed the seven-sample native lifecycle check, all three
-full suites and strict Clippy. The macOS native-imaging bundle has been rebuilt and its signature verified.
-Native Settings, cancellation/retry, restart reuse and cache clearing now pass on
-nine disposable photos. DINOv2 and face detection reused identical prepared native
-files after restart; face landmarks reported its compiler error and ran on CPU.
-An initial Recent-folder discovery stall remains unresolved after successful
-retries. See `diagnostics/coreml-desktop-2026-10-06/README.md`; the earlier automated
-lifecycle evidence is in `diagnostics/coreml-cache-integration-2026-10-06/README.md`.
+budget. Native compilation itself still cannot be interrupted by the current ORT call.
+CPU remains the low-initialization-cost default; acceleration is opt-in. Model and
+native-runtime memory is additional to the preview-cache allowance. Source integration
+has passed the seven-sample native lifecycle check, all three full suites and strict
+Clippy. The macOS native-imaging bundle has been rebuilt and its signature verified.
+Native Settings, cancellation/retry, restart reuse and cache clearing now pass on nine
+disposable photos. DINOv2 and face detection reused identical prepared native files
+after restart; face landmarks reported its compiler error and ran on CPU. An initial
+Recent-folder discovery stall remains unresolved after successful retries.
 
 Core ML configuration follows the [official provider documentation](https://onnxruntime.ai/docs/execution-providers/CoreML-ExecutionProvider.html).
 
@@ -120,16 +117,14 @@ interrupted. CUDA/DirectML hardware validation is still required on those device
 
 ## Persistent Core ML cache evaluation
 
-An isolated October 6 probe of the pinned DINO/runtime measured median session
-creation of 29.446 s without a provider cache versus 5.563 s when reused in fresh
-processes (5.29x). All nine tested output buffers were identical. Each cached
-model occupied about 398 MiB. Copying the cache to a fresh path raised session
-creation to 26.802 s; a second load there took 5.610 s. Stable-path ownership,
-model/runtime/recipe invalidation and integration with the shared disk budget
-are therefore prerequisites. The source integration now uses these safeguards;
-the probe's performance numbers remain isolated measurements, not integrated-app
-benchmarks. See `diagnostics/coreml-cache-evaluation-2026-10-06/README.md`.
-
+An isolated October 6 probe of the pinned DINO/runtime measured median session creation
+of 29.446 s without a provider cache versus 5.563 s when reused in fresh processes
+(5.29x). All nine tested output buffers were identical. Each cached model occupied about
+398 MiB. Copying the cache to a fresh path raised session creation to 26.802 s; a second
+load there took 5.610 s. Stable-path ownership, model/runtime/recipe invalidation and
+integration with the shared disk budget are therefore prerequisites. The source
+integration now uses these safeguards; the probe's performance numbers remain isolated
+measurements, not integrated-app benchmarks.
 
 ## Aesthetic model: folded offline instead of prepared per machine
 

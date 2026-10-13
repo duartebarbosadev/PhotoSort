@@ -71,6 +71,7 @@ impl PhotoSortApp {
         next.normalize();
         self.runtime.cache.configure(next.cache);
         self.runtime.processing.configure(next.processing);
+        self.reduce_motion_pending = Some(next.reduce_motion);
         if next.raw_look != self.preferences.raw_look {
             self.runtime.raw_look.set(next.raw_look);
             self.reload_raw_previews();
@@ -202,7 +203,7 @@ impl PhotoSortApp {
         if let Some(mut draft) = self.preferences_draft.take() {
             let mut action = 0;
             let mut section = self.preferences_section.take();
-            let response = egui::Modal::new(egui::Id::new("preferences")).show(ctx, |ui| {
+            let response = modal(egui::Id::new("preferences")).show(ctx, |ui| {
                 ui.set_width((ctx.content_rect().width() - 64.0).clamp(280.0, 560.0));
                 ui.heading("Settings");
                 let error_height = if let Some(error) = self.error.clone() {
@@ -232,7 +233,7 @@ impl PhotoSortApp {
                     .show(ui, |ui| {
                         let general = settings_heading(ui, "Application updates");
                         if section == Some(Section::General) { general.scroll_to_me(Some(egui::Align::Min)); }
-                        ui.checkbox(&mut draft.updates.automatic, "Check for updates daily");
+                        ui.add(Switch::new(&mut draft.updates.automatic, "Check for updates daily"));
                         if let Err(reason) = crate::core::updates::Source::configured() { ui.small(reason); }
                         ui.separator();
                         settings_heading(ui, "Choose your workflow");
@@ -261,7 +262,9 @@ impl PhotoSortApp {
                             }
                         });
                         ui.separator();
-                        ui.checkbox(&mut draft.show_shortcuts, "Show workflow shortcut hints");
+                        ui.add(Switch::new(&mut draft.show_shortcuts, "Show workflow shortcut hints"));
+                        ui.add(Switch::new(&mut draft.reduce_motion, "Reduce motion"))
+                            .on_hover_text("Panels, tabs and photos appear instantly instead of sliding and fading");
                     ui.separator();
                     settings_heading(ui, "Easy Delete sensitivity");
                     ui.add(egui::Slider::new(&mut draft.easy_delete.blur,10.0..=1000.0).text("Blur threshold"));
@@ -294,8 +297,8 @@ impl PhotoSortApp {
                                 .on_hover_text(if rating==0 { "Jump to unrated photos".into() } else { format!("Jump to photos rated exactly {rating} stars") });
                         }
                     });
-                    ui.checkbox(&mut draft.navigation.skip_singletons, "Skip single-photo groups with Up/Down");
-                    ui.checkbox(&mut draft.navigation.cycle_similarity, "Cycle Left/Right within similarity groups");
+                    ui.add(Switch::new(&mut draft.navigation.skip_singletons, "Skip single-photo groups with Up/Down"));
+                    ui.add(Switch::new(&mut draft.navigation.cycle_similarity, "Cycle Left/Right within similarity groups"));
                     settings_note(ui, "Rating jumps take priority. Ctrl/Cmd bypasses movement filters and includes Trash marks. Group options use Cull analysis results; photos remain visible.");
                     ui.separator();
                     settings_heading(ui, "RAW photos");
@@ -438,7 +441,7 @@ impl PhotoSortApp {
                             "Metadata",
                             if cfg!(feature = "metadata-native") { "Exiv2" } else { "kamadak-exif" }.to_owned(),
                         ),
-                        ("Typeface", "IBM Plex Sans".to_owned()),
+                        ("Typeface", "Inter".to_owned()),
                     ] {
                         ui.horizontal(|ui| {
                             ui.allocate_ui_with_layout(

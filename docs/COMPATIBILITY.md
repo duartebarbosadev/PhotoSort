@@ -1,12 +1,11 @@
 # Native design and current limits
 
-PhotoSort Rust is designed around photographic results, responsive interaction and
-safe file operations. The original application is a workflow reference. Matching
-its appearance or numerical implementation is not a product requirement. There
-is no Python runtime dependency. Historical comparison fixtures remain useful
-regression evidence, but do not establish photographic accuracy or relative speed.
-See [PARITY.md](PARITY.md) for the detailed implementation status and
-[VALIDATION.md](history/VALIDATION-LOG.md) for the checks actually performed.
+PhotoSort Rust is designed around photographic results, responsive interaction and safe
+file operations. The original application is a workflow reference. Matching its
+appearance or numerical implementation is not a product requirement. There is no Python
+runtime dependency. Historical comparison fixtures remain useful regression evidence,
+but do not establish photographic accuracy or relative speed. See [PARITY.md](PARITY.md)
+for the detailed implementation status.
 
 ## Photo review and organization
 
@@ -143,18 +142,17 @@ cancellation.
 
 ## Persistence and platform limits
 
-Ratings and rotations support Embed where supported or Sidecars only. Native
-embedded writes use an independent temporary copy, verify EXIF/XMP values and
-source identity, then atomically replace without re-encoding pixels. Unsupported
-formats fall back to sidecars. The opt-in "Embed, or rotate pixels" setting instead
-rotates the pixels of rotation-only BMP edits (and PNG/TIFF in minimal builds)
-losslessly, verified by decoding the result before it replaces the file. Embedded HEIF/container transforms, broader camera
-interoperability and broader platform/volume attributes need more coverage. A
-macOS probe of the existing staging copy and production metadata bridge preserves
-Finder-tag/custom extended attributes, ACLs, ownership, file flags, permissions and
-creation time on all seven disposable samples; modification time updates after
-editing. This is a bridge/copy-path check, with explicit limits in
-`diagnostics/metadata-attributes-2026-10-06/README.md`.
+Ratings and rotations support Embed where supported or Sidecars only. Native embedded
+writes use an independent temporary copy, verify EXIF/XMP values and source identity,
+then atomically replace without re-encoding pixels. Unsupported formats fall back to
+sidecars. The opt-in "Embed, or rotate pixels" setting instead rotates the pixels of
+rotation-only BMP edits (and PNG/TIFF in minimal builds) losslessly, verified by
+decoding the result before it replaces the file. Embedded HEIF/container transforms,
+broader camera interoperability and broader platform/volume attributes need more
+coverage. A macOS probe of the existing staging copy and production metadata bridge
+preserves Finder-tag/custom extended attributes, ACLs, ownership, file flags,
+permissions and creation time on all seven disposable samples; modification time updates
+after editing. This is a bridge/copy-path check with explicit limits.
 
 Saved views and manual group intent live outside disposable caches. Folder and
 workflow bookmarks restore focus, filters, selection and presentation without
@@ -162,19 +160,17 @@ applying file operations. Changed/replaced photos invalidate saved identities.
 Existing sessions from the original application are not imported.
 
 macOS videos now play inside the shared review canvas using AVFoundation, with
-play/pause, seeking, volume and focus/modal pause. Frames and native thumbnails
-are bounded to a 1280-pixel long edge. Windows/Linux default builds use the shared
-GStreamer backend for embedded playback and posters; builds without portable-video
-retain external playback and FFmpeg posters. The Linux aarch64 backend has passed
-its portable-feature suite, while Windows runtime and Linux desktop interaction
-remain unverified; see `diagnostics/portable-video-2026-10-06/README.md`. Muted macOS
-fixtures and native playback controls passed; audible A/V synchronization,
-HDR/color fidelity still need validation. Native compact resizing and controls
-passed the later `diagnostics/video-layout-2026-10-07/README.md` check. Finder/
-Explorer reveal and external-player launch now share one lazy bounded desktop
-service. Service and all-workflow routing tests pass. Packaged macOS checks passed
-for Organize/Cull reveal, the exact context-clicked file without changing review
-focus, quoted/Unicode filenames and external QuickTime launch. Windows/Linux
+play/pause, seeking, volume and focus/modal pause. Frames and native thumbnails are
+bounded to a 1280-pixel long edge. Windows/Linux default builds use the shared GStreamer
+backend for embedded playback and posters; builds without portable-video retain external
+playback and FFmpeg posters. The Linux aarch64 backend has passed its portable-feature
+suite, while Windows runtime and Linux desktop interaction remain unverified. Muted
+macOS fixtures and native playback controls passed; audible A/V synchronization,
+HDR/color fidelity still need validation. Native compact resizing and controls passed
+the later check. Finder/ Explorer reveal and external-player launch now share one lazy
+bounded desktop service. Service and all-workflow routing tests pass. Packaged macOS
+checks passed for Organize/Cull reveal, the exact context-clicked file without changing
+review focus, quoted/Unicode filenames and external QuickTime launch. Windows/Linux
 native desktop handoff still needs platform verification.
 
 Manual update checks and persistent daily startup checks are implemented, with
@@ -194,7 +190,6 @@ Synthetic performance checks establish local behavior only. They do not establis
 a speed ratio against the original application or sustained whole-library memory
 use. Live UI checks, real-library accuracy, and workload-matched measurements
 remain separate acceptance criteria.
-
 
 ## Startup maintenance and diagnostics
 
@@ -219,31 +214,26 @@ It reports per-stage failures and rejects unsupported minimal builds. It tests t
 contract when present. Automatic GUI smoke exit, codec/video/package relocation
 checks and wider photographic accuracy remain separate work.
 
-
 ## Evidence reconciliation — 2026-10-05
 
 The recovery, multi-person, update-check and quit descriptions above were checked
-against the current shared implementations and recorded validation, replacing
-stale claims of missing features. Relevant evidence includes
-`diagnostics/multiple-people-native-2026-10-04.json`,
-`diagnostics/partial-companions-native-2026-10-04.json`,
-`diagnostics/resumable-quit-native-2026-10-04.json`, the durable destination editing
-and update-check sections in history/VALIDATION-LOG.md, and the current default/minimal suite
-record in `diagnostics/desktop-final-validation-2026-10-05.json`. Historical native
-checks establish the stated scenarios, not fresh execution on every later build.
-
+against the current shared implementations and recorded validation, replacing stale
+claims of missing features.
+Historical native checks establish the stated scenarios, not fresh execution on every
+later build.
 
 ## Context paths — 6 October 2026
 
-Library views and Organize now share Open in default app, Reveal and full/relative
-path copying. Organize also copies the proposed destination, preserving companion
-extensions. Preview moves remains authoritative for collision-resolved paths.
-New or ambiguously merged draft folders have no original directory to open;
-copying their displayed relative/proposed path remains available. This replaces
-the reference's fallback of opening the library root for a missing draft folder.
-Non-UTF8 filesystem paths remain valid OS handoff targets but are not copied as
-lossy clipboard text. Open terminal here is now implemented through the same desktop service. Native macOS menu/clipboard checks now pass for source and staged paths, Unicode paths and compact Organize controls; automated pointer, clipboard-output and worker tests cover shared behavior. See diagnostics/path-actions-native-2026-10-06/README.md.
-
+Library views and Organize now share Open in default app, Reveal and full/relative path
+copying. Organize also copies the proposed destination, preserving companion extensions.
+Preview moves remains authoritative for collision-resolved paths. New or ambiguously
+merged draft folders have no original directory to open; copying their displayed
+relative/proposed path remains available. This replaces the reference's fallback of
+opening the library root for a missing draft folder. Non-UTF8 filesystem paths remain
+valid OS handoff targets but are not copied as lossy clipboard text. Open terminal here
+is now implemented through the same desktop service. Native macOS menu/clipboard checks
+now pass for source and staged paths, Unicode paths and compact Organize controls;
+automated pointer, clipboard-output and worker tests cover shared behavior.
 
 ## Open terminal here — 6 October 2026
 
@@ -267,60 +257,49 @@ The UI requests a one-second maintenance frame only while such children remain.
 Shell profiles and terminal preferences still control normal shell startup.
 The user confirmed a native macOS file action opened Terminal in the correct containing folder (A café/Day1) and closed it afterward; tool policy prevented independent Terminal inspection. Windows/Linux native window behavior still requires separate verification; command construction and shared-worker tests do not establish it.
 
-
 ## HEIF write capability audit — 6 October 2026
 
 Both installed piexif 1.1.3 (used by the reference rotation path) and native Exiv2
-0.28.9 reject HEIF writes on all eight pinned orientation fixtures. Disposable
-copies remain byte-identical. Rust continues to write non-destructive XMP sidecars;
-embedded HEIF/container transforms are a possible interoperability improvement,
-not an established working Python behavior. No library or write policy changed.
-See `diagnostics/heif-write-feasibility-2026-10-06/README.md` for the source trace,
-probe scope and unadopted library candidate.
-
+0.28.9 reject HEIF writes on all eight pinned orientation fixtures. Disposable copies
+remain byte-identical. Rust continues to write non-destructive XMP sidecars; embedded
+HEIF/container transforms are a possible interoperability improvement, not an
+established working Python behavior. No library or write policy changed.
 
 ## Move cancellation — 7 October 2026
 
-Shared Move staging now responds to worker cancellation between companions and
-between 1 MiB fallback-copy chunks. Before source removal, cancellation removes
-staged destinations and preserves all sources plus the exact reviewed retry.
-After source removal begins, the companion cohort finishes together. Cleanup
-failures remain operation errors. Native filesystem calls already in progress
-cannot be preempted, and this change adds no in-progress UI Cancel button.
-Shared recovery/retry tests, the full native suite and seven-sample move checks
-pass; see diagnostics/move-cancel-2026-10-07/README.md.
-
+Shared Move staging now responds to worker cancellation between companions and between 1
+MiB fallback-copy chunks. Before source removal, cancellation removes staged
+destinations and preserves all sources plus the exact reviewed retry. After source
+removal begins, the companion cohort finishes together. Cleanup failures remain
+operation errors. Native filesystem calls already in progress cannot be preempted, and
+this change adds no in-progress UI Cancel button. Shared recovery/retry tests, the full
+native suite and seven-sample move checks pass.
 
 ### Shared Stop control — 7 October 2026
 
-The shared footer now offers Stop for running file plans in every workflow. It
-preserves the accepted plan, completes any current indivisible operation, and
-leaves unfinished work available for Retry. Move staging uses the cancellation
-and rollback boundary described above. Stop stays visible in compact windows;
-retries get fresh cancellation state. Automated all-workflow pointer, recovery
-and source-preservation tests pass, together with the complete native suite.
-Native Stop/Retry also passes on 20,007 disposable images: 893 completed before
-Stop, 19,114 retained and retried, then zero unfinished operations. All hashes
-match; original profiles were restored and fixtures removed. See
-diagnostics/stop-apply-2026-10-07/README.md. This supersedes the earlier statement
-that only worker cancellation existed without a UI control.
-
+The shared footer now offers Stop for running file plans in every workflow. It preserves
+the accepted plan, completes any current indivisible operation, and leaves unfinished
+work available for Retry. Move staging uses the cancellation and rollback boundary
+described above. Stop stays visible in compact windows; retries get fresh cancellation
+state. Automated all-workflow pointer, recovery and source-preservation tests pass,
+together with the complete native suite. Native Stop/Retry also passes on 20,007
+disposable images: 893 completed before Stop, 19,114 retained and retried, then zero
+unfinished operations. All hashes match; original profiles were restored and fixtures
+removed. This supersedes the earlier statement that only worker cancellation existed
+without a UI control.
 
 ### Fallback move attributes — 7 October 2026
 
-Shared fallback moves now preserve modification/access times and source
-permissions, with private Unix partial copies and existing cancellable rollback.
-Same-volume hard links retain their fast path. The before/after disposable probe
-and three shared regressions pass, as do the full suite, strict Clippy and rebuilt
-bundle/runtime checks. Actual cross-volume/platform execution and extended
-attributes are not claimed. See diagnostics/copy-attributes-2026-10-07/README.md.
-
+Shared fallback moves now preserve modification/access times and source permissions,
+with private Unix partial copies and existing cancellable rollback. Same-volume hard
+links retain their fast path. The before/after disposable probe and three shared
+regressions pass, as do the full suite, strict Clippy and rebuilt bundle/runtime checks.
+Actual cross-volume/platform execution and extended attributes are not claimed.
 
 ### Compact video review — 7 October 2026
 
-Short video review slots now use the existing compact controls, preserving
-picture space. A rendered-mesh regression covers all five workflows and texture
-reuse during resizing. Full validation and rebuilt native/runtime checks pass.
-The formerly locked native seeking check is complete on disposable macOS video
-fixtures; audio remained muted. See diagnostics/video-layout-2026-10-07/README.md
-and native-checks.json for exact interaction coverage and platform limits.
+Short video review slots now use the existing compact controls, preserving picture
+space. A rendered-mesh regression covers all five workflows and texture reuse during
+resizing. Full validation and rebuilt native/runtime checks pass. The formerly locked
+native seeking check is complete on disposable macOS video fixtures; audio remained
+muted.

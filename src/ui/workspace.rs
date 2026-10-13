@@ -122,6 +122,8 @@ pub struct PhotoSortApp {
     /// Recent folders that were missing at startup (e.g. an unplugged drive):
     /// hidden from the menu but kept, so they return once available again.
     missing_recent: HashSet<PathBuf>,
+    /// A saved "Reduce motion" choice to apply to the context next frame.
+    reduce_motion_pending: Option<bool>,
     /// A crash report to tell the user about, and whether it is from a
     /// previous session (true) or a background panic in this one (false).
     crash_notice: Option<(PathBuf, bool)>,
@@ -332,6 +334,7 @@ impl PhotoSortApp {
         app.runtime.cache.configure(app.preferences.cache);
         app.runtime.processing.configure(app.preferences.processing);
         app.runtime.raw_look.set(app.preferences.raw_look);
+        set_reduce_motion(&cc.egui_ctx, app.preferences.reduce_motion);
         app.runtime.cache.request(false);
         app.preferences_path = Some(path);
         if let Some(folder) = folder {
@@ -353,6 +356,7 @@ impl PhotoSortApp {
             video_context: None,
             preferences: Default::default(),
             missing_recent: HashSet::new(),
+            reduce_motion_pending: None,
             crash_notice: None,
             crash_notice_shown: false,
             preferences_path: None,
@@ -1405,6 +1409,9 @@ impl PhotoSortApp {
 }
 fn theme_install(ctx: &egui::Context) {
     super::theme::install(ctx);
+    // Headless frames carry no real time; finish every animation at once so
+    // tests never measure a layout mid-slide.
+    ctx.global_style_mut(|style| style.animation_time = 0.0);
 }
 fn paint_image(
     ui: &egui::Ui,
@@ -1413,6 +1420,19 @@ fn paint_image(
     zoom: f32,
     pan: Vec2,
     turns: u8,
+) {
+    paint_image_tinted(ui, texture, rect, zoom, pan, turns, Color32::WHITE);
+}
+
+/// [`paint_image`] multiplied by `tint`; a translucent white fades it in.
+fn paint_image_tinted(
+    ui: &egui::Ui,
+    texture: &TextureHandle,
+    rect: egui::Rect,
+    zoom: f32,
+    pan: Vec2,
+    turns: u8,
+    tint: Color32,
 ) {
     let dimensions = texture.size_vec2();
     let oriented = if turns % 2 == 1 {
@@ -1442,7 +1462,7 @@ fn paint_image(
         mesh.vertices.push(egui::epaint::Vertex {
             pos: center + rot * (p * size),
             uv,
-            color: Color32::WHITE,
+            color: tint,
         });
     }
     mesh.indices = vec![0, 1, 2, 0, 2, 3];
@@ -1456,6 +1476,9 @@ impl PhotoSortApp {
     // without constructing a GPU window or replacing the native delegate.
     fn update_workspace(&mut self, root: &mut egui::Ui, native_requested: bool) {
         let ctx = &root.ctx().clone();
+        if let Some(reduce) = self.reduce_motion_pending.take() {
+            set_reduce_motion(ctx, reduce);
+        }
         self.check_updates_at_startup();
         self.tick += 1;
         self.poll(ctx);
@@ -1473,20 +1496,32 @@ impl PhotoSortApp {
         self.track_progress_clock();
         self.header(root);
         self.footer(root);
-        if self.inspector && self.catalog.is_some() && ctx.content_rect().width() > 1180.0 {
-            egui::Panel::right("inspector")
-                .resizable(true)
-                .default_size(300.0)
-                .size_range(260.0..=440.0)
-                .frame(
-                    egui::Frame::new()
-                        .fill(PANEL)
-                        .inner_margin(S4 as i8)
-                        .stroke(Stroke::new(1.0, LINE)),
-                )
-                .show(root, |ui| {
+        // Details slides in and out beside the photos in wide windows;
+        // narrow windows use the drawer instead.
+        let wide = ctx.content_rect().width() > 1180.0;
+        let shown = self.inspector && self.catalog.is_some() && wide;
+        let mut expanded = shown;
+        egui::Panel::right("inspector")
+            .resizable(true)
+            .drag_to_open(false)
+            .default_size(300.0)
+            .size_range(260.0..=440.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .inner_margin(S4 as i8)
+                    .stroke(Stroke::new(1.0, LINE)),
+            )
+            .show_collapsible(root, &mut expanded, |ui| {
+                // While sliding out after the folder closed or the window
+                // narrowed (the drawer then shows Details), the panel stays empty.
+                if self.catalog.is_some() && wide {
                     egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
-                });
+                }
+            });
+        // Dragging the edge past its minimum closes Details.
+        if shown && !expanded {
+            self.inspector = false;
         }
         egui::CentralPanel::default()
             .frame(

@@ -150,6 +150,9 @@ impl PhotoSortApp {
         // are active, so photos keep the vertical space.
         let overlay = true;
         ui.horizontal_wrapped(|ui| {
+            // Buttons keep their text on one line, so a control that does not
+            // fit moves to the next row instead of being squeezed.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             if overlay {
                 let active = [
                     self.browse.rating != RatingFilter::All,
@@ -205,8 +208,9 @@ impl PhotoSortApp {
         if !overlay {
             self.browse_filter_controls(ui);
         }
-        // Progress and cancellation remain visible even while filters are closed.
-        self.metadata_status(ui);
+        // Metadata progress and cancellation live in the status bar
+        // (`footer_metadata`): a row here would push the grid down as soon
+        // as a folder opens and back up when reading ends.
     }
     fn browse_filter_controls(&mut self, ui: &mut egui::Ui) {
         let columns = ((ui.available_width() / 220.0).floor() as usize).clamp(1, 4);
@@ -371,7 +375,7 @@ impl PhotoSortApp {
             if ui
                 .add_enabled(
                     self.browse.folder.path.is_some(),
-                    egui::Checkbox::new(&mut self.browse.folder.recursive, "Include subfolders"),
+                    Switch::new(&mut self.browse.folder.recursive, "Include subfolders"),
                 )
                 .changed()
             {
@@ -386,12 +390,48 @@ impl PhotoSortApp {
             }
         });
     }
+    /// The status bar's metadata controls, for Cull and metadata-based
+    /// Organize. Called inside the footer's right-to-left layout: Cancel is
+    /// added first so the changing count to its left never moves it.
+    pub(super) fn footer_metadata(&mut self, ui: &mut egui::Ui) {
+        if self.root.is_none()
+            || !(self.step == Step::Cull
+                || (self.step == Step::Organize && self.metadata_organize_mode()))
+        {
+            return;
+        }
+        if let Some((done, total)) = self.metadata_progress
+            && self.metadata_run.is_some()
+        {
+            if ui.small_button("Cancel metadata reading").clicked() {
+                self.cancel_metadata_index();
+            }
+            ui.label(
+                RichText::new(format!("Reading metadata · {done} / {total}"))
+                    .small()
+                    .color(MUTED),
+            );
+        } else if self.metadata.len() < self.media.len()
+            && ui.small_button("Read remaining metadata").clicked()
+        {
+            self.resume_suspended = false;
+            self.start_metadata_index();
+        }
+        if !self.metadata_failures.is_empty() {
+            ui.label(
+                RichText::new(format!(
+                    "{} files have unavailable metadata",
+                    self.metadata_failures.len()
+                ))
+                .small()
+                .color(RED),
+            )
+            .on_hover_text("Restore access and retry metadata reading. Folder proposals wait for complete metadata; photos remain browsable.");
+        }
+    }
     pub(super) fn metadata_status(&mut self, ui: &mut egui::Ui) {
         let reading = self.metadata_progress.is_some() && self.metadata_run.is_some();
-        if !reading
-            && self.metadata.len() >= self.media.len()
-            && self.metadata_failures.is_empty()
-            && self.browse_run.is_none()
+        if !reading && self.metadata.len() >= self.media.len() && self.metadata_failures.is_empty()
         {
             return; // An empty row would still take a full line of height.
         }
@@ -408,9 +448,6 @@ impl PhotoSortApp {
                 ui.colored_label(RED, format!("{} files have unavailable metadata", self.metadata_failures.len()))
                     .on_hover_text("Restore access and retry metadata reading. Folder proposals wait for complete metadata; photos remain browsable.");
             }
-            // Browsing can finish between pointer down and up. Keep its changing
-            // indicator after metadata actions so Cancel does not move or change ID.
-            if self.browse_run.is_some() { ui.spinner(); ui.label("Updating library view…"); }
         });
     }
 }

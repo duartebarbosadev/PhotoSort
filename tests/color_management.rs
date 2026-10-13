@@ -278,7 +278,7 @@ fn cmyk_and_ycck_profiles_preserve_ink_channels_and_share_corrected_results() {
             .unwrap();
         // Independent CMMs are not pixel-identical. Preserve the existing
         // moxcms bound; track the measured libvips/LCMS fixture envelope
-        // separately (see diagnostics/vips-color-comparison-2026-10-05).
+        // separately.
         let bound = if cfg!(feature = "native-imaging") {
             9
         } else {

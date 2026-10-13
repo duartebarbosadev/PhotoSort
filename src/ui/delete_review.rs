@@ -105,7 +105,11 @@ impl PhotoSortApp {
         self.review_changed();
     }
     pub(super) fn delete_controls(&mut self, ui: &mut egui::Ui) {
+        // Category chips and the review actions share one row; it wraps on
+        // narrow windows instead of squeezing labels.
         ui.horizontal_wrapped(|ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            let mut chips = false;
             for category in Category::ALL {
                 let count = self
                     .delete_review
@@ -116,6 +120,7 @@ impl PhotoSortApp {
                 if count == 0 {
                     continue;
                 }
+                chips = true;
                 let enabled = self.delete_categories.contains(&category);
                 if chip(ui, enabled, &format!("{} ({count})", category.title()))
                     .on_hover_text(if enabled {
@@ -134,8 +139,9 @@ impl PhotoSortApp {
                     self.filter_dirty = true;
                 }
             }
-        });
-        ui.horizontal_wrapped(|ui| {
+            if chips {
+                divider(ui);
+            }
             if let Some(id) = self.delete_current {
                 let confirmed = self.delete_review.confirmed(id);
                 let confirm = if confirmed {

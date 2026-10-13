@@ -206,6 +206,26 @@ impl PhotoSortApp {
     }
     /// Inline, so it wraps with whatever row it is placed in.
     pub(super) fn selection_controls(&mut self, ui: &mut egui::Ui) {
+        // The enabled scope below is one block, which cannot wrap inside a
+        // wrapping row; start a new row when the whole group does not fit.
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let pad = 2.0 * ui.spacing().button_padding.x + ui.spacing().item_spacing.x;
+        let needed: f32 = [
+            format!("{} selected", self.selection.len()),
+            "Selection".into(),
+            "Groups".into(),
+            "Compare selected".into(),
+        ]
+        .into_iter()
+        .map(|text| {
+            ui.painter()
+                .layout_no_wrap(text, font.clone(), INK)
+                .size()
+                .x
+                + pad
+        })
+        .sum();
+        wrap_before(ui, needed);
         {
             ui.label(RichText::new(format!("{} selected", self.selection.len())).color(MUTED));
             ui.add_enabled_ui(self.selection_ready(), |ui| {

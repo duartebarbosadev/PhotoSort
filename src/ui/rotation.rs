@@ -183,7 +183,9 @@ impl PhotoSortApp {
                 divider(ui);
             }
             let mut queue_only = self.rotation_queue_only;
-            if ui.checkbox(&mut queue_only, "Suggestions only").changed()
+            if ui
+                .add(Switch::new(&mut queue_only, "Suggestions only"))
+                .changed()
                 && self.allow_review_departure()
             {
                 self.rotation_queue_only = queue_only;
