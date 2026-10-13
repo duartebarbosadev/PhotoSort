@@ -4,10 +4,7 @@ PhotoSort Rust is one process with a thin immediate-mode UI over a set of
 long-lived worker threads. `src/core` has no UI dependency; `src/ui` never
 decodes images, reads metadata or touches the filesystem on the frame thread.
 
-Long-form design records for individual subsystems (cache identities, recovery
-journals, subject grouping, people recognition and so on) are kept, unedited,
-in [history/ARCHITECTURE-NOTES.md](history/ARCHITECTURE-NOTES.md). This file is
-the current map.
+This file is the current map of the application.
 
 ## Why egui
 
@@ -80,9 +77,8 @@ atomically swapped in.
 
 ## Verification policy
 
-Tests use generated images and temporary directories and never mutate reference
-sample libraries (`--ignored` tests that read real samples are opt-in). The expected
-checks are `cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings` and
-`cargo test --locked`, each also with `--no-default-features`. Runtime and platform
-checks are recorded separately in [history/VALIDATION-LOG.md](history/VALIDATION-LOG.md)
-and `docs/diagnostics/`.
+Tests use generated images and temporary directories and never mutate reference sample
+libraries (`--ignored` tests that read real samples are opt-in). The expected checks are
+`cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test
+--locked`, each also with `--no-default-features`. Runtime and platform checks were
+run and recorded during development.

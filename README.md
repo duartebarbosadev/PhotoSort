@@ -28,11 +28,9 @@ the latest shared move, video and comparison fixes. From the repository root:
 open ".tools/native-vips/PhotoSort Rust.app"
 ```
 
-The older `.tools/native/PhotoSort Rust.app` is a previous build. The current
-bundle was built from `d436ad2` (10 October 2026) after the full default and minimal
-suites, strict clippy and fmt passed; `--diagnostics`, `--check-runtime` and
-`--smoke-test` pass on it. Earlier native interaction checks are in
-`docs/diagnostics/` and [the validation log](docs/history/VALIDATION-LOG.md).
+The older `.tools/native/PhotoSort Rust.app` is a previous build. The current bundle was
+built from `d436ad2` (10 October 2026) after the full default and minimal suites, strict
+clippy and fmt passed; `--diagnostics`, `--check-runtime` and `--smoke-test` pass on it.
 [PARITY.md](docs/PARITY.md) lists covered workflows and remaining work. These checks
 cover this macOS development build; they do not establish Windows, CUDA or DirectML
 runtime readiness.
@@ -118,7 +116,6 @@ can take minutes and individual native calls cannot be interrupted.
 Diagnostic JSON uses display text for paths containing non-UTF-8 bytes; actual
 filesystem/model paths retain their original bytes.
 
-
 `--clear-models` removes only known model copies in PhotoSort Rust's managed data
 folder before normal startup. It preserves bundled resources, custom override
 files outside that managed set, runtime libraries, photos and review state.
@@ -194,27 +191,27 @@ Usage is a snapshot; use Refresh for a new reading. `--clear-cache` clears gener
 disk previews and analysis evidence before normal startup without loading models.
 
 Rust 1.92+ and C/C++ compilers are required. HEIF uses system ImageIO on macOS.
-Linux/Windows full builds also require Exiv2 0.28+, LibRaw and libheif 1.23+ development libraries and a HEVC decoder plugin (for example libde265);
-the shared core and native image pipeline have been tested on Linux aarch64 in an isolated Debian container. Linux desktop interaction/distribution and Windows native builds remain unverified. See [Linux validation](docs/diagnostics/linux-native-2026-10-05/README.md). `cargo run --no-default-features`
-builds the raster-photo/manual-review version without native codecs or neural inference.
-On macOS, videos play in the shared review canvas with native AVFoundation decoding,
-seeking, volume and automatic pause on focus loss. Native video thumbnails need no
-FFmpeg installation. Windows/Linux default builds use GStreamer 1.20+ through
-its maintained Rust bindings for the same in-app controls and cached posters.
-Install its development/runtime libraries plus playback, video conversion,
+Linux/Windows full builds also require Exiv2 0.28+, LibRaw and libheif 1.23+ development
+libraries and a HEVC decoder plugin (for example libde265); the shared core and native
+image pipeline have been tested on Linux aarch64 in an isolated Debian container. Linux
+desktop interaction/distribution and Windows native builds remain unverified. `cargo run
+--no-default-features` builds the raster-photo/manual-review version without native
+codecs or neural inference. On macOS, videos play in the shared review canvas with
+native AVFoundation decoding, seeking, volume and automatic pause on focus loss. Native
+video thumbnails need no FFmpeg installation. Windows/Linux default builds use GStreamer
+1.20+ through its maintained Rust bindings for the same in-app controls and cached
+posters. Install its development/runtime libraries plus playback, video conversion,
 scaling, rotation, audio-output and relevant decoder plugins. On Debian, these are
-`libgstreamer1.0-dev`, `libgstreamer-plugins-base1.0-dev`,
-`gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good` and `gstreamer1.0-libav`.
-Windows needs the matching official GStreamer MSVC runtime and development
-installation on the build/runtime search paths. `--no-default-features --features
-portable-video` enables playback without RAW/HEIF/AI dependencies. Builds without
-`portable-video` retain FFmpeg-on-PATH posters and external playback.
-The GStreamer sink retains at most one queued frame and prepares at most a
-1280-pixel edge for display. Decoding, audio timing and rotation belong to the
-library; PhotoSort owns selection, cancellation, UI state and cache reuse.
-Real Linux codec tests are run separately from desktop, audible audio-sync and
-Windows validation; availability of hardware decoder plugins is not a hardware
-acceleration claim.
+`libgstreamer1.0-dev`, `libgstreamer-plugins-base1.0-dev`, `gstreamer1.0-plugins-base`,
+`gstreamer1.0-plugins-good` and `gstreamer1.0-libav`. Windows needs the matching
+official GStreamer MSVC runtime and development installation on the build/runtime search
+paths. `--no-default-features --features portable-video` enables playback without
+RAW/HEIF/AI dependencies. Builds without `portable-video` retain FFmpeg-on-PATH posters
+and external playback. The GStreamer sink retains at most one queued frame and prepares
+at most a 1280-pixel edge for display. Decoding, audio timing and rotation belong to the
+library; PhotoSort owns selection, cancellation, UI state and cache reuse. Real Linux
+codec tests are run separately from desktop, audible audio-sync and Windows validation;
+availability of hardware decoder plugins is not a hardware acceleration claim.
 
 MOV/MP4/M4V capture dates come from embedded movie headers when EXIF/XMP dates
 are absent. Sorting, calendar navigation and date organization share this metadata
@@ -385,17 +382,14 @@ results use the current production consistency policy. It uses a disposable phot
 )
 ```
 
-Model scores are softmax outputs, not calibrated probabilities of correctness.
-Restoring an image to its starting orientation does not prove that starting
-orientation was upright. See the [recorded diagnostic](docs/diagnostics/orientation-2026-10-02.json)
-for the supplied samples and the original single-pass night-city failure.
-That historical report predates the production consistency policy; new runs
-identify their policy explicitly. The policy checks consistency rather than
-calibrating confidence, and an incorrect initial upright prediction can still
-be missed by the fast path.
+Model scores are softmax outputs, not calibrated probabilities of correctness. Restoring
+an image to its starting orientation does not prove that starting orientation was
+upright. That historical report predates the production consistency policy; new runs
+identify their policy explicitly. The policy checks consistency rather than calibrating
+confidence, and an incorrect initial upright prediction can still be missed by the fast
+path.
 
 Feature parity work is active; see the [parity table](docs/PARITY.md).
-See [validation log](docs/history/VALIDATION-LOG.md) for executed checks and remaining boundaries.
 
 Real reference fixtures can be checked explicitly without modifying them:
 
@@ -404,20 +398,17 @@ PHOTOSORT_SAMPLE_DIR=/path/to/PhotoSort/tests/samples \
   cargo test --release --test reference_samples -- --ignored --nocapture
 ```
 
-
 Cull offers **Photos · no group ordering**, **Groups · earliest photo**, and
 **Groups · similarity then time**. Run Analyze library to create similarity
 groups. Group ordering keeps each group's photos together; the existing photo
 sort controls their order within the group. Photos without a group remain
 available at the end. The selected ordering is restored with the folder's view.
 
-
 Cull includes an optional **Library navigator** in its browse controls. Expand
 folders or calendar years/months, or choose a similarity group; the existing
 photo grid/list shows the result alongside your rating and search filters.
 Previous/Next moves between sibling nodes. Left/Right cycles within the current
 folder or day unless similarity cycling is enabled. Browsing never moves files.
-
 
 ## Development build storage
 
@@ -441,7 +432,6 @@ it automatically. This is not a hard bound or a controlled comparison with old
 accumulated output.
 
 Profile behavior follows the [Cargo profile documentation](https://doc.rust-lang.org/cargo/reference/profiles.html).
-
 
 ## Application updates
 

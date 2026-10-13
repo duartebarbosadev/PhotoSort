@@ -5,9 +5,8 @@ reference application menus, Preferences, Cache Management, image context menu,
 Organize context actions and workflow-panel toggle. It is not a fresh native run
 or an assertion that every widget in both applications is equivalent.
 
-The [snapshot](diagnostics/interaction-audit-2026-10-09/snapshot.json) records
-reference handler locations and hashes, current source equivalence to the last
-full validation, and the packaged executable identity. No application code,
+The snapshot records reference handler locations and hashes, current source equivalence
+to the last full validation, and the packaged executable identity. No application code,
 profile, sample or original-project file was changed for this audit.
 
 ## Application actions
@@ -100,18 +99,16 @@ tree controls and reviewed operation planner:
 
 ## Outcome and validation boundary
 
-The scoped reference inventory is now accounted for. **Open cache folder remains
-an implementation follow-up**, and the explicitly listed differences must not be
-described as exact UI parity. No new test run was needed for these documentation
-changes: all 211 source fingerprints and the executable match the previous
-[Organize-mode validation](diagnostics/organize-modes-2026-10-09/README.md), whose
-68 commands passed. That evidence retains its original scope and ignored tests.
-Distribution, hardware, accuracy and long-session gaps remain in the
-[completion audit](history/COMPLETION_AUDIT.md).
+The scoped reference inventory is now accounted for. **Open cache folder remains an
+implementation follow-up**, and the explicitly listed differences must not be described
+as exact UI parity. No new test run was needed for these documentation changes: all 211
+source fingerprints and the executable match the previous Organize-mode validation,
+whose 68 commands passed. That evidence retains its original scope and ignored tests.
+Distribution, hardware, accuracy and long-session gaps remain open.
 
 ## Follow-up
 
-The [cache-folder task](diagnostics/cache-folder-2026-10-09/README.md) implements
-and locally validates the baseline omission recorded above, including bounded
-Settings errors. This report and its snapshot still describe the audited
-`979b0e6` baseline; the follow-up has a separate current-source validation record.
+The cache-folder task implements and locally validates the baseline omission recorded
+above, including bounded Settings errors. This report and its snapshot still describe
+the audited `979b0e6` baseline; the follow-up has a separate current-source validation
+record.

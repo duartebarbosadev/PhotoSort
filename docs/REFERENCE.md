@@ -60,7 +60,6 @@ unbounded per-workflow state and Python packaging are not migration targets.
 * Do not present heuristic grouping/ranking as DINOv2/BeIT/face model equivalence.
   Native model parity requires separate real-model and real-camera validation.
 
-
 ## Organize context-action audit — 6 October 2026
 
 The reference `grouping_step_widget.py` context menu also provides Open, Reveal,
@@ -72,18 +71,15 @@ folders that do not exist. The Rust editor instead disables Open/Reveal when a
 draft folder has no unique original directory, keeping proposed paths available
 for copying. The Rust terminal shortcut now shares the desktop worker; its platform behavior is recorded in COMPATIBILITY.md.
 
-
 ## HEIF rotation claim correction — 6 October 2026
 
-The initial overview describes the reference's intended HEIF metadata rotation.
-A later complete source trace and dependency probe show that its installed
-`piexif.insert` accepts JPEG/WebP and rejects HEIF. The shared rotation worker
-therefore reports a failed HEIF rotation when it reaches this path. Do not treat
-embedded HEIF rotation as a demonstrated working reference capability. Rust's
-sidecar rotation is an intentional working alternative; embedded container edits
-would improve interoperability beyond this broken reference path. Evidence:
-`diagnostics/heif-write-feasibility-2026-10-06/README.md`.
-
+The initial overview describes the reference's intended HEIF metadata rotation. A later
+complete source trace and dependency probe show that its installed `piexif.insert`
+accepts JPEG/WebP and rejects HEIF. The shared rotation worker therefore reports a
+failed HEIF rotation when it reaches this path. Do not treat embedded HEIF rotation as a
+demonstrated working reference capability. Rust's sidecar rotation is an intentional
+working alternative; embedded container edits would improve interoperability beyond this
+broken reference path.
 
 ## Location fallback and selective reset audit — 7 October 2026
 
@@ -99,7 +95,6 @@ initially unassigned entries. Rust's selective destination reset restores its
 initial generated proposal while preserving unrelated edits and file names.
 Explicit empty-directory edits remain separate intent. Both reset and move use
 the same companion expansion; no image work is repeated.
-
 
 ## Library-wide mark clearing audit — 8 October 2026
 
@@ -118,7 +113,6 @@ restoring old marks from Keep-all reviews after the earlier Alt+D implementation
 Review owners now clear those mark baselines before normal reconciliation, while
 retaining applicable current choices and cached analysis.
 
-
 ## Organize keyboard editing audit — 8 October 2026
 
 `ORGANIZE_SHORTCUTS` reaches `_shortcut_item`, then the existing rename,
@@ -133,7 +127,6 @@ action. This keeps the available workflow while making shortcut scope predictabl
 for generated or merged destinations. Folder rename/create remains draft-only,
 and both move and Trash execution require a separately reviewed Apply action.
 
-
 ## Settings and cache entry points — 8 October 2026
 
 The reference MenuManager binds F10 to DialogManager.show_preferences_dialog and F9
@@ -143,11 +136,10 @@ draft, adding direct keyboard/menu entry points and in-dialog section links.
 F9 opens usage and controls; it does not clear caches. Ctrl/Cmd+, is an additional
 standard Settings shortcut. Existing modal, busy and held-key guards are reused.
 
-The reference cache dialog also offers Open Cache Folder. Rust now exposes the
-actual runtime-injected reusable-cache directory through Settings → Caches and
-the existing desktop worker. The UI neither constructs a cache nor creates a
-missing folder. Directory checks and the system file-manager handoff remain off
-the UI thread; see [cache-folder validation](diagnostics/cache-folder-2026-10-09/README.md).
+The reference cache dialog also offers Open Cache Folder. Rust now exposes the actual
+runtime-injected reusable-cache directory through Settings → Caches and the existing
+desktop worker. The UI neither constructs a cache nor creates a missing folder.
+Directory checks and the system file-manager handoff remain off the UI thread.
 
 ## Analysis keyboard entry point — 8 October 2026
 
@@ -187,12 +179,11 @@ addition to every extension in the reference scanner. This compares discovery
 policy; it does not prove that every camera variant or video codec decodes.
 
 Organize installs Alt+1–5 for Current, Mixed, Similarity, Face and Location; the
-handlers select enabled mode buttons and emit the existing mode-change signal.
-The audit at `b37d86b` confirmed that Rust exposed all those modes through its
-Group by control, but ignored the Organize Alt+number bindings. The subsequent
-Organize mode task routes those keys through `set_group_mode`, retaining draft
-and metadata ownership. The additional Date/Camera dropdown choices do not change
-the established shortcut mapping. See diagnostics/organize-modes-2026-10-09/README.md.
+handlers select enabled mode buttons and emit the existing mode-change signal. The audit
+at `b37d86b` confirmed that Rust exposed all those modes through its Group by control,
+but ignored the Organize Alt+number bindings. The subsequent Organize mode task routes
+those keys through `set_group_mode`, retaining draft and metadata ownership. The
+additional Date/Camera dropdown choices do not change the established shortcut mapping.
 
 Ctrl/Cmd+Shift+L in the reference hides the active workflow's content panel, not
 the five-step navigation. Rust uses a different layout: guided review queues are

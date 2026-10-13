@@ -76,19 +76,17 @@ the pipeline owns sidecar precedence, bounds checks, source invalidation and
 cancellation. There is no independent tile cache or workflow decoder.
 
 The seven focused region regressions cover all eight orientations, 16-bit pixels,
-ICC/alpha, clipped bounds, budget eviction, nearby-pan reuse, latest-worker epochs
-and rotated fit views. Complete native/default macOS suites, release measurements and native
-Organize/Cull detail checks now pass; see
-`docs/diagnostics/native-regions-2026-10-06/README.md`. On the controlled
-24-megapixel sample JPEG/PNG nearby-pan workload, peak process RSS is 61–63% lower
-and total time 17–38% shorter than the previous full-original allocation, with
-identical native crop pixels. These results do not establish savings for every
-decoder or whole-application performance. Subsequent macOS checks verified native
-panning in Organize and Cull on disposable JPEG/PNG and sidecar-rotated samples;
-see [shared canvas gesture evidence](../../docs/diagnostics/canvas-gestures-2026-10-06/README.md).
-All-five-workflow tests cover pointer ownership, completed gestures, nearby-pan
-reuse, bounds and cancellation. The native checks cover the recorded workflows
-and inputs; they do not establish every workflow or platform's interaction.
+ICC/alpha, clipped bounds, budget eviction, nearby-pan reuse, latest-worker epochs and
+rotated fit views. Complete native/default macOS suites, release measurements and native
+Organize/Cull detail checks now pass. On the controlled 24-megapixel sample JPEG/PNG
+nearby-pan workload, peak process RSS is 61–63% lower and total time 17–38% shorter than
+the previous full-original allocation, with identical native crop pixels. These results
+do not establish savings for every decoder or whole-application performance. Subsequent
+macOS checks verified native panning in Organize and Cull on disposable JPEG/PNG and
+sidecar-rotated samples. All-five-workflow tests
+cover pointer ownership, completed gestures, nearby-pan reuse, bounds and cancellation.
+The native checks cover the recorded workflows and inputs; they do not establish every
+workflow or platform's interaction.
 
 To run the optional application path after building the private dependency, set
 `PKG_CONFIG_PATH` and `CARGO_TARGET_DIR` as above, then run
@@ -100,32 +98,24 @@ resolves transitive native libraries from their original loader paths, retains
 license/provenance notices, audits the resulting dependency graph and verifies
 the local signature. The default packaging command keeps the previous backend.
 
-The optional macOS package now passes launch, shared warning display, original
-detail, active 80-image analysis cancellation, post-cancellation navigation and
-warning persistence after restart. See
-`docs/diagnostics/vips-native-validation-2026-10-05.json`.
+The optional macOS package now passes launch, shared warning display, original detail,
+active 80-image analysis cancellation, post-cancellation navigation and warning
+persistence after restart.
 
-The adapter and shared application pipeline also pass headless Linux aarch64 tests
-in an isolated Debian container; see `docs/diagnostics/linux-native-2026-10-05/README.md`.
-Private builds use a fixed `lib` directory on both platforms. On Linux, set
-`LD_LIBRARY_PATH` to the private prefix’s `lib` directory as well as setting
-`PKG_CONFIG_PATH` before running the application or tests.
+The adapter and shared application pipeline also pass headless Linux aarch64 tests in an
+isolated Debian container. Private builds use a fixed `lib` directory on both platforms.
+On Linux, set `LD_LIBRARY_PATH` to the private prefix’s `lib` directory as well as
+setting `PKG_CONFIG_PATH` before running the application or tests.
 
 Before making this the default application backend: complete supported-platform
-validation. Linux desktop interaction/distribution and Windows native execution
-remain unverified. A successful crate test does not establish application parity. See
-`docs/diagnostics/vips-color-comparison-2026-10-05` for the explicitly accepted,
-measured CMYK difference between color engines; it is not an accuracy improvement
-claim or a promise of pixel-identical output.
+validation. Linux desktop interaction/distribution and Windows native execution remain
+unverified. A successful crate test does not establish application parity.
 
-The combined seven-sample comparison is recorded in
-`docs/diagnostics/proxy-workload-2026-10-05/README.md`. SIMD resolves the earlier
-scalar first-browsing regression: 15% faster first browsing and 29% shorter combined
-pipeline time than the default path in the same run. Peak whole-process RSS is
-only 3% lower once originals are included. This is not whole-app, Python or
-large-library/model-accuracy evidence.
+SIMD resolves the earlier scalar first-browsing regression: 15% faster first browsing
+and 29% shorter combined pipeline time than the default path in the same run. Peak
+whole-process RSS is only 3% lower once originals are included. This is not whole-app,
+Python or large-library/model-accuracy evidence.
 
-The final SIMD macOS package passes native transparent/warning rendering, JPEG
-original detail, active analysis cancellation, post-cancellation navigation and
-restart checks. Evidence: `docs/diagnostics/simd-native-validation-2026-10-05.json`
-(repository-relative path). The default app bundle remains separate.
+The final SIMD macOS package passes native transparent/warning rendering, JPEG original
+detail, active analysis cancellation, post-cancellation navigation and restart checks.
+The default app bundle remains separate.

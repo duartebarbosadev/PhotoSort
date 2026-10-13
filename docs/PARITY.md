@@ -1,12 +1,10 @@
 # Parity with the Python PhotoSort
 
-Reference: the sibling `PhotoSort` checkout at commit `7c62143` (read-only).
-The target is the same workflows with native design and better performance, not a
-pixel- or number-identical copy. Per-row history, with the evidence behind each
-claim, is in [history/PARITY-DETAIL.md](history/PARITY-DETAIL.md) and
-[history/COMPLETION_AUDIT.md](history/COMPLETION_AUDIT.md). Menu-by-menu mapping is
-in [INTERACTION_AUDIT.md](INTERACTION_AUDIT.md); deliberate design differences are
-in [COMPATIBILITY.md](COMPATIBILITY.md).
+Reference: the sibling `PhotoSort` checkout at commit `7c62143` (read-only). The target
+is the same workflows with native design and better performance, not a pixel- or
+number-identical copy.
+Menu-by-menu mapping is in [INTERACTION_AUDIT.md](INTERACTION_AUDIT.md); deliberate
+design differences are in [COMPATIBILITY.md](COMPATIBILITY.md).
 
 Status: **Done** = implemented and covered by automated tests; **Redesigned** = same
 goal, different mechanism; **Open** = not done.
