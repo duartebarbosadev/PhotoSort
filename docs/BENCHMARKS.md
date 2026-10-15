@@ -33,8 +33,8 @@ one-second view-checkpoint heartbeat (`loading_grid_animates_then_comes_to_rest`
 ## Grid and thumbnails — 10 October 2026
 
 `examples/perf_budget` (release, temporary data and cache roots, copies of
-`sample_images_photosort`: 677 files, of which 24 fill the first screen at
-1440×900). Apple M4 Max. CPU frame time is `Harness::step` (layout and paint
+a sample library: 677 files, of which 24 fill the first screen at 1440×900) on an
+Apple Silicon Mac. CPU frame time is `Harness::step` (layout and paint
 lists, no GPU), scrolling 120 px per frame through generated photos.
 
 | Measurement | Before | After |
@@ -55,8 +55,8 @@ around libvips' global error buffer, and libvips threads each render itself.
 ## Analysis on a real library — 9 October 2026
 
 `examples/audit_library` (release, read-only, temporary cache, CPU backend, 8
-threads) on `sample_images_photosort`: 517 photos (353 ARW, 90 HEIC, 74 JPEG) plus
-10 videos, which are skipped. Apple M4 Max, 36 GiB. Each run analyses once cold,
+threads) on a sample library: 517 photos (353 ARW, 90 HEIC, 74 JPEG) plus 10 videos,
+which are skipped, on an Apple Silicon Mac. Each run analyses once cold,
 then reopens the same cache in a fresh runtime. RSS is `/usr/bin/time -l` maximum.
 
 | Profile | Cold | Reopened | Peak RSS |
@@ -96,7 +96,7 @@ This is not an overall application speed, UI startup, decoder or AI benchmark.
 
 ## Method and limits
 
-* macOS 26.5.2 arm64; Rust 1.94.1 release build; the reference project's Python
+* macOS on Apple Silicon; Rust 1.94.1 release build; the reference project's Python
   3.14.5 virtual environment and clean commit
   `7c62143f8ba80247b10dac8ebf38a37beacdd170`.
 * Both implementations scanned exactly the same temporary directory: 100,000
@@ -270,7 +270,7 @@ These small fixtures are not large-library startup or overall app speed results.
 
 ### Method and correctness boundaries
 
-- Apple M4 Max, 36 GiB memory, macOS 26.5.2 arm64. Rust 1.94.1 release/native Exiv2
+- An Apple Silicon Mac. Rust 1.94.1 release/native Exiv2
   0.28.9 versus the unchanged Python 3.14.5 project with pyexiv2 2.16.0/Exiv2 0.28.8.
 - Seven independent disposable copies of the original JPEG, PNG and ARW samples.
   The nested fixture has 300 directories, each hardlinked to those seven copies:
@@ -387,7 +387,7 @@ and 14.61 / 14.78 MiB respectively. Both paths retain at most 128 descriptors.
 Each resident descriptor adds one f32 bound plus struct padding; no larger
 image cache or per-photo search index was introduced.
 
-Method: Apple M4 Max, 36 GiB, macOS 26.5.2 arm64, Rust 1.94.1 default-feature
+Method: an Apple Silicon Mac, Rust 1.94.1 default-feature
 release test executable (opt-level 3, thin LTO, one codegen unit). For each
 size, six fresh processes ran full/early, early/full, full/early. Each process
 ran four passes, excluded its first, and retained nine timed passes per path.

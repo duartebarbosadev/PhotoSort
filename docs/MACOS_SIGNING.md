@@ -18,7 +18,7 @@ Pass the exact name or SHA-1 of your existing development signing identity:
 
 ```sh
 python3 scripts/package_macos.py \
-  --native-imaging --native-prefix .tools/vips-simd \
+  --native-imaging \
   --sign-identity 'Apple Development: Your Name (TEAMID)' \
   --output '/path/to/PhotoSort Rust.app'
 ```

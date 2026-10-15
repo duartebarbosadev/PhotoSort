@@ -1,6 +1,7 @@
 # Parity with the Python PhotoSort
 
-Reference: the sibling `PhotoSort` checkout at commit `7c62143` (read-only). The target
+Reference: the Python version of PhotoSort that this rewrite replaces, compared at
+commit `7c62143`; the Python app remains on `main` and in this repository's history. The target
 is the same workflows with native design and better performance, not a pixel- or
 number-identical copy.
 Menu-by-menu mapping is in [INTERACTION_AUDIT.md](INTERACTION_AUDIT.md); deliberate

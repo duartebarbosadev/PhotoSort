@@ -18,41 +18,31 @@ the default external player; both actions run off the UI thread.
 
 Packaging creates `target/PhotoSort Rust.app`. The bundle contains its models,
 ONNX Runtime and native image libraries. It can be moved independently of this
-source directory. This is a locally signed development build, not a notarized release.
-
-The current verified development bundle is
-`.tools/native-vips/PhotoSort Rust.app`. It includes the libvips image backend and
-the latest shared move, video and comparison fixes. From the repository root:
+source directory. This is a locally signed development build, not a notarized
+release. Model and runtime assets are installed separately, as described in
+[asset provenance](resources/ASSETS.md). From the repository root:
 
 ```sh
-open ".tools/native-vips/PhotoSort Rust.app"
+python3 scripts/package_macos.py
+open "target/PhotoSort Rust.app"
 ```
 
-The older `.tools/native/PhotoSort Rust.app` is a previous build. The current bundle was
-built from `d436ad2` (10 October 2026) after the full default and minimal suites, strict
-clippy and fmt passed; `--diagnostics`, `--check-runtime` and `--smoke-test` pass on it.
-[PARITY.md](docs/PARITY.md) lists covered workflows and remaining work. These checks
-cover this macOS development build; they do not establish Windows, CUDA or DirectML
-runtime readiness.
-
-To rebuild the current variant using the existing verified SIMD prefix, keep
-compiler output temporary and clean it after packaging:
+To include the optional libvips image backend, first follow the
+[native dependency setup](crates/imaging-vips/README.md), which builds a private copy
+under `.tools/vips`, then package with `--native-imaging`. To keep compiler output
+temporary and clean it after packaging:
 
 ```sh
 (
   build_dir="$(mktemp -d)"
   trap 'cargo clean --target-dir "$build_dir"' EXIT
-  CARGO_TARGET_DIR="$build_dir" python3 scripts/package_macos.py \
-    --native-imaging --native-prefix .tools/vips-simd \
-    --output ".tools/native-vips/PhotoSort Rust.app"
+  CARGO_TARGET_DIR="$build_dir" python3 scripts/package_macos.py --native-imaging
 )
 ```
 
-On a fresh checkout, first follow the [native dependency setup](crates/imaging-vips/README.md)
-and use the prefix it creates (`.tools/vips` by default). Model/runtime assets are
-installed separately as described in [asset provenance](resources/ASSETS.md).
-Running `scripts/package_macos.py` without these options builds the default image
-backend into `target/PhotoSort Rust.app`.
+[PARITY.md](docs/PARITY.md) lists covered workflows and remaining work. Automated
+tests pass on macOS, Linux and Windows; desktop use on Windows and the CUDA and
+DirectML runtimes have not been verified on real machines.
 
 From source with the default image backend:
 
@@ -323,10 +313,8 @@ python3 scripts/package_macos.py
 The optional `native-imaging` feature uses libvips and Little CMS for JPEG, PNG,
 TIFF and GIF through the same shared image pipeline. Build the pinned private
 dependency with `python3 scripts/build_vips.py` (Highway SIMD enabled by default),
-then add `--native-imaging` to the macOS packaging command. For the existing
-verified SIMD prefix, also pass `--native-prefix .tools/vips-simd`. The separately verified development bundle is at
-`.tools/native-vips/PhotoSort Rust.app`; normal builds still use the default
-backend. See [native imaging](crates/imaging-vips/README.md) for requirements,
+then add `--native-imaging` to the macOS packaging command; `--native-prefix`
+selects a prefix other than `.tools/vips`. Normal builds use the default backend. See [native imaging](crates/imaging-vips/README.md) for requirements,
 validation and measured color differences.
 
 The macOS packager accepts `--output /path/to/PhotoSort.app` and honors

@@ -91,9 +91,8 @@ workflow or platform's interaction.
 To run the optional application path after building the private dependency, set
 `PKG_CONFIG_PATH` and `CARGO_TARGET_DIR` as above, then run
 `cargo run --locked --features native-imaging -- --folder /path/to/library`.
-On macOS, `python3 scripts/package_macos.py --native-imaging --native-prefix
-.tools/vips-simd --output ".tools/native-vips/PhotoSort Rust.app"` bundles the
-verified SIMD prefix. Omit `--native-prefix` to use `.tools/vips`. The packager
+On macOS, `python3 scripts/package_macos.py --native-imaging` bundles the private
+build from `.tools/vips`; `--native-prefix` selects another prefix. The packager
 resolves transitive native libraries from their original loader paths, retains
 license/provenance notices, audits the resulting dependency graph and verifies
 the local signature. The default packaging command keeps the previous backend.
