@@ -536,6 +536,8 @@ fn details_slide_out_never_doubles_or_outlives_its_folder() {
     theme_install(&ctx);
     ctx.enable_accesskit();
     set_reduce_motion(&ctx, false);
+    // The reveal button is named per platform (Finder, Explorer, file manager).
+    let reveal = crate::core::desktop::Action::Reveal.label();
     let run = |app: &mut PhotoSortApp, width: f32, frame: u32| {
         let out = ctx.run_test(
             egui::RawInput {
@@ -553,7 +555,7 @@ fn details_slide_out_never_doubles_or_outlives_its_folder() {
             .unwrap()
             .nodes
             .iter()
-            .filter(|(_, n)| n.label() == Some("Show in Finder"))
+            .filter(|(_, n)| n.label() == Some(reveal))
             .count()
     };
     let mut frame = 0;
