@@ -1,4 +1,4 @@
-use photosort::core::model_assets::{self, Health, Id, Inspector, Work, Worker};
+use photosort::core::model_assets::{self, Health, Id, Work, Worker};
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -86,7 +86,7 @@ fn replacement_links_and_linked_managed_roots_cannot_remove_external_models() {
     let report = model_assets::remove_reviewed(dir.path(), &[copy], &|| false).unwrap();
     assert_eq!(report.errors.len(), 1);
     assert!(model_assets::review_managed(dir.path(), Id::Detector).is_err());
-    let snapshot = Inspector::default()
+    let snapshot = model_assets::Inspector::default()
         .inspect(&[dir.path().into()], &|| false)
         .unwrap();
     assert!(snapshot.rows.iter().all(|row| row.managed.is_none()));
