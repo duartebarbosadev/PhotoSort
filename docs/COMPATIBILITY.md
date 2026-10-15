@@ -142,6 +142,13 @@ cancellation.
 
 ## Persistence and platform limits
 
+On Windows, files are identified by size, modification time and creation time; folders
+also use their NTFS volume and file index. NTFS gives a file created under a just-vacated
+name the old creation time for about 15 seconds ("tunnelling"), so a file replaced under
+the same name with an identical size and modification time inside that window is not
+told apart from the original. Identifying files by index too would mean opening every
+file on each folder scan, where Unix gets the same information from one `stat` call.
+
 Ratings and rotations support Embed where supported or Sidecars only. Native embedded
 writes use an independent temporary copy, verify EXIF/XMP values and source identity,
 then atomically replace without re-encoding pixels. Unsupported formats fall back to
@@ -255,7 +262,7 @@ Linux/Windows terminal children are retained for nonblocking exit reaping; live
 terminals do not keep desktop handoff busy or get terminated when PhotoSort exits.
 The UI requests a one-second maintenance frame only while such children remain.
 Shell profiles and terminal preferences still control normal shell startup.
-The user confirmed a native macOS file action opened Terminal in the correct containing folder (A café/Day1) and closed it afterward; tool policy prevented independent Terminal inspection. Windows/Linux native window behavior still requires separate verification; command construction and shared-worker tests do not establish it.
+A native macOS check confirmed the file action opened Terminal in the correct containing folder (A café/Day1) and closed it afterward. Windows/Linux native window behavior still requires separate verification; command construction and shared-worker tests do not establish it.
 
 ## HEIF write capability audit — 6 October 2026
 

@@ -152,7 +152,7 @@ fn extras_reuse_inventory_and_follow_reference_directory_scope() {
     photosort::core::organize::include_inventory(&catalog, &mut labels);
     assert_eq!(labels[&MediaId(1)], "generated");
     assert_eq!(
-        labels[&MediaId::for_path(std::path::Path::new("/nonexistent/photos/a.json"))],
+        labels[&MediaId::for_path(&std::path::Path::new("/nonexistent").join("photos/a.json"))],
         "photos"
     );
     // All paths are nonexistent: inventory augmentation cannot walk or decode.
