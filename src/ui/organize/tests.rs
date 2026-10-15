@@ -1202,7 +1202,9 @@ fn app() -> PhotoSortApp {
 fn path_menus_keep_originals_separate_from_renamed_companions_and_new_folders() {
     use crate::ui::test_frame::absolute;
     let mut app = app();
-    let root = absolute("/missing");
+    // The shared fixture places its photos under /missing; only the output
+    // folder must be absolute for proposed destinations to exist.
+    let root = PathBuf::from("/missing");
     let document = root.join("trip").join("notes and café.txt");
     let catalog = Arc::get_mut(app.catalog.as_mut().unwrap()).unwrap();
     catalog.inventory.push(document.clone());
