@@ -4,10 +4,7 @@ use photosort::core::{
     operations::{self, Action, Plan},
     organize::Draft,
 };
-use std::{
-    collections::HashMap,
-    path::Path,
-};
+use std::{collections::HashMap, path::Path};
 fn scan(root: &Path) -> Catalog {
     Catalog::scan(root, || false, |_| {}).unwrap()
 }
