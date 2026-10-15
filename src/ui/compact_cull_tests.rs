@@ -311,10 +311,12 @@ fn compact_filter_panel_keeps_nested_rating_folder_choices_and_keyboard_ownershi
     assert_eq!(app.filtered.len(), 1);
     app.browse_filters_open = true;
     click_label(&mut app, &ctx, size, "All folders");
-    click_label(&mut app, &ctx, size, "A/Day1");
+    // Folder labels use the platform's separator (A\Day1 on Windows).
+    let day = std::path::Path::new("A").join("Day1");
+    click_label(&mut app, &ctx, size, &day.display().to_string());
     assert_eq!(
         app.browse.folder.path,
-        Some(app.root.as_ref().unwrap().join("A/Day1"))
+        Some(app.root.as_ref().unwrap().join(&day))
     );
     assert_eq!(app.filtered.len(), 1);
     app.browse_filters_open = true;

@@ -1200,13 +1200,15 @@ fn app() -> PhotoSortApp {
 }
 #[test]
 fn path_menus_keep_originals_separate_from_renamed_companions_and_new_folders() {
+    use crate::ui::test_frame::absolute;
     let mut app = app();
-    let root = PathBuf::from("/missing");
-    let document = root.join("trip/notes and café.txt");
+    let root = absolute("/missing");
+    let document = root.join("trip").join("notes and café.txt");
     let catalog = Arc::get_mut(app.catalog.as_mut().unwrap()).unwrap();
     catalog.inventory.push(document.clone());
     catalog.directories = vec![root.clone(), root.join("trip")];
-    app.output = "/output".into();
+    let output = absolute("/output");
+    app.output = output.display().to_string();
     app.companions = true;
     app.open_organize_editor();
     let mut editor = app.organize_editor.take().unwrap();
@@ -1221,18 +1223,18 @@ fn path_menus_keep_originals_separate_from_renamed_companions_and_new_folders() 
     for (id, original, destination) in [
         (
             MediaId(0),
-            root.join("trip/a.jpg"),
-            PathBuf::from("/output/Selected/Keeper.jpg"),
+            root.join("trip").join("a.jpg"),
+            output.join("Selected").join("Keeper.jpg"),
         ),
         (
             MediaId(1),
-            root.join("trip/a.ARW"),
-            PathBuf::from("/output/Selected/Keeper.ARW"),
+            root.join("trip").join("a.ARW"),
+            output.join("Selected").join("Keeper.ARW"),
         ),
         (
             MediaId::for_path(&document),
             document.clone(),
-            PathBuf::from("/output/Selected/notes and café.txt"),
+            output.join("Selected").join("notes and café.txt"),
         ),
     ] {
         let row = editor.rows.iter().find(|row| row.id == id).unwrap();
@@ -1244,12 +1246,12 @@ fn path_menus_keep_originals_separate_from_renamed_companions_and_new_folders() 
     let renamed = editor.folder_locations("Selected");
     assert_eq!(renamed.source, Some(root.join("trip")));
     assert_eq!(renamed.relative, Some(PathBuf::from("Selected")));
-    assert_eq!(renamed.proposed, Some(PathBuf::from("/output/Selected")));
+    assert_eq!(renamed.proposed, Some(output.join("Selected")));
     editor.draft.create_folder("", "New folder").unwrap();
     let created = editor.folder_locations("New folder");
     assert!(created.source.is_none());
     assert_eq!(created.relative, Some(PathBuf::from("New folder")));
-    assert_eq!(created.proposed, Some(PathBuf::from("/output/New folder")));
+    assert_eq!(created.proposed, Some(output.join("New folder")));
     assert_eq!(editor.folder_locations("").source, Some(root));
     assert_eq!(
         editor.folder_locations("").relative,
