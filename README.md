@@ -18,41 +18,30 @@ the default external player; both actions run off the UI thread.
 
 Packaging creates `target/PhotoSort Rust.app`. The bundle contains its models,
 ONNX Runtime and native image libraries. It can be moved independently of this
-source directory. This is a locally signed development build, not a notarized release.
-
-The current verified development bundle is
-`.tools/native-vips/PhotoSort Rust.app`. It includes the libvips image backend and
-the latest shared move, video and comparison fixes. From the repository root:
+source directory. This is a locally signed development build, not a notarized
+release. Model and runtime assets are installed separately, as described in
+[asset provenance](resources/ASSETS.md). From the repository root:
 
 ```sh
-open ".tools/native-vips/PhotoSort Rust.app"
+python3 scripts/package_macos.py
+open "target/PhotoSort Rust.app"
 ```
 
-The older `.tools/native/PhotoSort Rust.app` is a previous build. The current bundle was
-built from `d436ad2` (10 October 2026) after the full default and minimal suites, strict
-clippy and fmt passed; `--diagnostics`, `--check-runtime` and `--smoke-test` pass on it.
-[PARITY.md](docs/PARITY.md) lists covered workflows and remaining work. These checks
-cover this macOS development build; they do not establish Windows, CUDA or DirectML
-runtime readiness.
-
-To rebuild the current variant using the existing verified SIMD prefix, keep
-compiler output temporary and clean it after packaging:
+To include the optional libvips image backend, first follow the
+[native dependency setup](crates/imaging-vips/README.md), which builds a private copy
+under `.tools/vips`, then package with `--native-imaging`. To keep compiler output
+temporary and clean it after packaging:
 
 ```sh
 (
   build_dir="$(mktemp -d)"
   trap 'cargo clean --target-dir "$build_dir"' EXIT
-  CARGO_TARGET_DIR="$build_dir" python3 scripts/package_macos.py \
-    --native-imaging --native-prefix .tools/vips-simd \
-    --output ".tools/native-vips/PhotoSort Rust.app"
+  CARGO_TARGET_DIR="$build_dir" python3 scripts/package_macos.py --native-imaging
 )
 ```
 
-On a fresh checkout, first follow the [native dependency setup](crates/imaging-vips/README.md)
-and use the prefix it creates (`.tools/vips` by default). Model/runtime assets are
-installed separately as described in [asset provenance](resources/ASSETS.md).
-Running `scripts/package_macos.py` without these options builds the default image
-backend into `target/PhotoSort Rust.app`.
+Automated tests pass on macOS, Linux and Windows; desktop use on Windows and the CUDA and
+DirectML runtimes have not been verified on real machines.
 
 From source with the default image backend:
 
@@ -171,8 +160,7 @@ the review plan; other data stored inside such files is not carried over.
 Settings also offers CPU, Automatic, Apple Core ML, NVIDIA CUDA and Windows
 DirectML inference. CPU remains the default. Provider/model failures fall back to
 CPU with an explanation; settings take effect on the next analysis. Apple model
-preparation may take minutes on first use. See [native acceleration](docs/ACCELERATION.md)
-for measured Apple results, setup requirements and unverified Windows/Linux limits.
+preparation may take minutes on first use.
 
 Settings offers Balanced, Maximum and Custom AI thread allocation. Changes apply
 to the next analysis or rotation run, preserving current reviews and cached
@@ -190,7 +178,7 @@ image worker and preserves current reviews, decisions, bookmarks and model files
 Usage is a snapshot; use Refresh for a new reading. `--clear-cache` clears generated
 disk previews and analysis evidence before normal startup without loading models.
 
-Rust 1.92+ and C/C++ compilers are required. HEIF uses system ImageIO on macOS.
+Rust 1.95+ and C/C++ compilers are required. HEIF uses system ImageIO on macOS.
 Linux/Windows full builds also require Exiv2 0.28+, LibRaw and libheif 1.23+ development
 libraries and a HEVC decoder plugin (for example libde265); the shared core and native
 image pipeline have been tested on Linux aarch64 in an isolated Debian container. Linux
@@ -281,8 +269,8 @@ keep their comparisons until you explicitly analyze again. No files move when
 you edit similarity groups.
 
 Steps are optional and revisitable. Decisions persist per folder. No image is
-uploaded and no analysis starts during scanning. Read the [native design and current limits](docs/COMPATIBILITY.md)
-before using the new app on an existing editing workflow.
+uploaded and no analysis starts during scanning. Try it on a copy of a folder before
+using it on an existing editing workflow.
 
 ## Local AI setup
 
@@ -309,8 +297,7 @@ review and explain that AI inference is unavailable.
 
 The UI uses egui/eframe with wgpu. Its custom photo canvas, virtualized rows and
 on-demand repainting fit this workload without a web frontend runtime. Navigation
-adapts between a sidebar and compact stepper. See [architecture](docs/ARCHITECTURE.md)
-and the [reference audit](docs/REFERENCE.md).
+adapts between a sidebar and compact stepper.
 
 ```sh
 cargo fmt --all --check
@@ -323,10 +310,8 @@ python3 scripts/package_macos.py
 The optional `native-imaging` feature uses libvips and Little CMS for JPEG, PNG,
 TIFF and GIF through the same shared image pipeline. Build the pinned private
 dependency with `python3 scripts/build_vips.py` (Highway SIMD enabled by default),
-then add `--native-imaging` to the macOS packaging command. For the existing
-verified SIMD prefix, also pass `--native-prefix .tools/vips-simd`. The separately verified development bundle is at
-`.tools/native-vips/PhotoSort Rust.app`; normal builds still use the default
-backend. See [native imaging](crates/imaging-vips/README.md) for requirements,
+then add `--native-imaging` to the macOS packaging command; `--native-prefix`
+selects a prefix other than `.tools/vips`. Normal builds use the default backend. See [native imaging](crates/imaging-vips/README.md) for requirements,
 validation and measured color differences.
 
 The macOS packager accepts `--output /path/to/PhotoSort.app` and honors
@@ -346,8 +331,7 @@ The bundle contains its models and runtime. Packaging verifies the local code
 signature and a streamed resource manifest before replacing the output bundle.
 By default this is an ad-hoc signed local build, not a notarized distribution.
 Use `--sign-identity` with an existing certificate name or SHA-1 for consistent
-development signing; see [macOS signing and folder access](docs/MACOS_SIGNING.md).
-Ad-hoc rebuilds can trigger a new macOS folder-access prompt. The packager's
+development signing. Ad-hoc rebuilds can trigger a new macOS folder-access prompt. The packager's
 integrity and output-safety regressions run without compiling Rust:
 
 ```sh
@@ -388,8 +372,6 @@ upright. That historical report predates the production consistency policy; new 
 identify their policy explicitly. The policy checks consistency rather than calibrating
 confidence, and an incorrect initial upright prediction can still be missed by the fast
 path.
-
-Feature parity work is active; see the [parity table](docs/PARITY.md).
 
 Real reference fixtures can be checked explicitly without modifying them:
 

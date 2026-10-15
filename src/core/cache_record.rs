@@ -66,7 +66,7 @@ pub(crate) fn write(path: &Path, bytes: &[u8]) -> Result<()> {
         .suffix(".tmp")
         .tempfile_in(parent)?;
     temp.write_all(bytes)?;
-    temp.persist(path).map_err(|error| error.error)?;
+    super::replace::persist(temp, path)?;
     Ok(())
 }
 pub(crate) fn read(path: &Path) -> Option<Vec<u8>> {
@@ -76,7 +76,7 @@ pub(crate) fn read(path: &Path) -> Option<Vec<u8>> {
         return None;
     }
     let mut bytes = Vec::new();
-    std::fs::File::open(path)
+    super::replace::open(path)
         .ok()?
         .take(MAX_BYTES as u64 + 1)
         .read_to_end(&mut bytes)

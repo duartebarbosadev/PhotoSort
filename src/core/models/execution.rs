@@ -87,8 +87,7 @@ fn cached_model(
     )?))
 }
 // On Apple Silicon at 2–4 CPU threads, separate MatMul/Add kernels are faster
-// for our BeIT aesthetic export. Other budgets/providers retain ORT defaults. See
-// docs/BENCHMARKS.md for the real-photo comparison.
+// for our BeIT aesthetic export. Other budgets/providers retain ORT defaults.
 fn disabled_optimizers(kind: &str, backend: Backend, threads: usize) -> Option<&'static str> {
     (cfg!(all(target_os = "macos", target_arch = "aarch64"))
         && backend == Backend::Cpu

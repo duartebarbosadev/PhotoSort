@@ -133,7 +133,7 @@ pub(super) fn decode(
         pixels.extend_from_slice(row);
         // Normalize each row while it is hot in the cache, without traversing
         // the complete image again or allocating another pixel buffer.
-        for pixel in pixels[output_start..].chunks_exact_mut(4) {
+        for pixel in pixels[output_start..].as_chunks_mut::<4>().0 {
             let alpha = u16::from(pixel[3]);
             if alpha == 0 {
                 pixel[..3].fill(0);

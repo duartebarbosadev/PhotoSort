@@ -56,12 +56,13 @@ fn organize_trash_staging_and_folder_scope_use_cached_inventory_without_io() {
         .map(|(id, p)| {
             (
                 id,
+                // Folder labels always use `/`, as the app writes them.
                 p.parent()
                     .unwrap()
                     .strip_prefix(&c.root)
                     .unwrap()
                     .to_string_lossy()
-                    .into_owned(),
+                    .replace('\\', "/"),
             )
         })
         .collect();

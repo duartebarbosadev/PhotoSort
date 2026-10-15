@@ -449,9 +449,16 @@ fn case_only_file_edit_uses_shared_review_and_preserves_staged_rating_after_relo
         ));
     }
     let tree = output.unwrap().platform_output.accesskit_update.unwrap();
-    for label in ["From  Before/a.jpg", "To    Before/A.jpg"] {
+    // Relative paths are shown with the platform's separator.
+    let before = std::path::Path::new("Before");
+    for label in [
+        format!("From  {}", before.join("a.jpg").display()),
+        format!("To    {}", before.join("A.jpg").display()),
+    ] {
         assert!(
-            tree.nodes.iter().any(|(_, n)| n.value() == Some(label)),
+            tree.nodes
+                .iter()
+                .any(|(_, n)| n.value() == Some(label.as_str())),
             "{label}"
         );
     }

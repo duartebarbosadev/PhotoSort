@@ -82,8 +82,10 @@ mod tests {
             let mut request = [0; 4096];
             let _ = socket.read(&mut request);
             let _ = socket.write_all(&reply);
+            // Stall well past the cancellation bound below, so a slow shared
+            // CI machine cannot mistake the server finishing for cancellation.
             if stall {
-                thread::sleep(Duration::from_millis(700));
+                thread::sleep(Duration::from_secs(3));
             }
         });
         (url, handle)
@@ -139,7 +141,7 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(
-            started.elapsed() < Duration::from_millis(600),
+            started.elapsed() < Duration::from_secs(2),
             "Cancellation must interrupt stalled body reads"
         );
         timer.join().unwrap();
@@ -166,7 +168,7 @@ mod tests {
             &|_| {},
         );
         assert!(result.is_err());
-        assert!(start.elapsed() < Duration::from_millis(600));
+        assert!(start.elapsed() < Duration::from_secs(2));
         handle.join().unwrap();
         assert!(!dir.path().join("models").exists());
     }

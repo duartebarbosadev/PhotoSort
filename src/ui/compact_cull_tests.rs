@@ -311,10 +311,12 @@ fn compact_filter_panel_keeps_nested_rating_folder_choices_and_keyboard_ownershi
     assert_eq!(app.filtered.len(), 1);
     app.browse_filters_open = true;
     click_label(&mut app, &ctx, size, "All folders");
-    click_label(&mut app, &ctx, size, "A/Day1");
+    // Folder labels use the platform's separator (A\Day1 on Windows).
+    let day = std::path::Path::new("A").join("Day1");
+    click_label(&mut app, &ctx, size, &day.display().to_string());
     assert_eq!(
         app.browse.folder.path,
-        Some(app.root.as_ref().unwrap().join("A/Day1"))
+        Some(app.root.as_ref().unwrap().join(&day))
     );
     assert_eq!(app.filtered.len(), 1);
     app.browse_filters_open = true;
@@ -536,6 +538,8 @@ fn details_slide_out_never_doubles_or_outlives_its_folder() {
     theme_install(&ctx);
     ctx.enable_accesskit();
     set_reduce_motion(&ctx, false);
+    // The reveal button is named per platform (Finder, Explorer, file manager).
+    let reveal = crate::core::desktop::Action::Reveal.label();
     let run = |app: &mut PhotoSortApp, width: f32, frame: u32| {
         let out = ctx.run_test(
             egui::RawInput {
@@ -553,7 +557,7 @@ fn details_slide_out_never_doubles_or_outlives_its_folder() {
             .unwrap()
             .nodes
             .iter()
-            .filter(|(_, n)| n.label() == Some("Show in Finder"))
+            .filter(|(_, n)| n.label() == Some(reveal))
             .count()
     };
     let mut frame = 0;

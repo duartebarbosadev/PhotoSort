@@ -141,16 +141,20 @@ mod tests {
     use super::*;
     #[test]
     fn shared_path_menu_copies_exact_text_without_dispatching_or_mutating_files() {
+        use crate::ui::test_frame::absolute;
+        let source = absolute("/library/a ' café.jpg");
+        let proposed = absolute("/output/Chosen/Keeper.jpg");
         let paths = Locations {
-            source: Some(PathBuf::from("/library/a ' café.jpg")),
+            source: Some(source.clone()),
             relative: Some(PathBuf::from("a ' café.jpg")),
-            proposed: Some(PathBuf::from("/output/Chosen/Keeper.jpg")),
+            proposed: Some(proposed.clone()),
         };
+        let (source, proposed) = (source.display().to_string(), proposed.display().to_string());
         for (label, expected) in [
-            ("Copy full path", "/library/a ' café.jpg"),
+            ("Copy full path", source.as_str()),
             ("Copy relative path", "a ' café.jpg"),
-            ("Copy proposed destination", "/output/Chosen/Keeper.jpg"),
-            ("Open terminal here", "/library/a ' café.jpg"),
+            ("Copy proposed destination", proposed.as_str()),
+            ("Open terminal here", source.as_str()),
         ] {
             let ctx = egui::Context::default();
             theme_install(&ctx);

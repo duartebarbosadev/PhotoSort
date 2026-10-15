@@ -70,7 +70,19 @@ impl Fingerprint {
         if !m.is_dir() || m.file_type().is_symlink() {
             return Err(std::io::Error::other("Not a regular directory"));
         }
-        Self::from_metadata(&m)
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut fingerprint = Self::from_metadata(&m)?;
+        #[cfg(windows)]
+        {
+            // NTFS "tunnelling" hands a folder created under a just-vacated
+            // name the old creation time, so a replaced folder would look
+            // unchanged. Folders are only ever renamed, which keeps the file
+            // index; volume serial + file index are NTFS's device and inode.
+            let info = winapi_util::file::information(winapi_util::Handle::from_path_any(path)?)?;
+            fingerprint.identity[1] = info.volume_serial_number();
+            fingerprint.identity[2] = info.file_index();
+        }
+        Ok(fingerprint)
     }
     fn from_metadata(m: &std::fs::Metadata) -> std::io::Result<Self> {
         #[cfg(unix)]
@@ -92,6 +104,8 @@ impl Fingerprint {
         #[cfg(windows)]
         let identity = {
             use std::os::windows::fs::MetadataExt;
+            // Files keep creation time only: moves may copy, and the copy
+            // receives the original's creation time but a new file index.
             [m.creation_time(), 0, 0, 0]
         };
         #[cfg(not(any(unix, windows)))]

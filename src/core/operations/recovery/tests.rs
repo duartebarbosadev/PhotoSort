@@ -471,6 +471,8 @@ fn verified_move_with_torn_receipt_is_checkpointed_without_repeating_it() {
 #[test]
 fn malformed_receipts_wrong_roots_symlinks_and_concurrent_owners_fail_closed() {
     let (_temp, store, context, plan) = fixture();
+    // The journal path is used only by the Unix symlink check below.
+    #[cfg_attr(not(unix), allow(unused_variables))]
     let log = prepared(
         &store,
         &context,

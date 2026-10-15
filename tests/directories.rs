@@ -4,10 +4,7 @@ use photosort::core::{
     operations::{self, Action, Plan},
     organize::Draft,
 };
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, path::Path};
 fn scan(root: &Path) -> Catalog {
     Catalog::scan(root, || false, |_| {}).unwrap()
 }
@@ -172,7 +169,7 @@ fn cleanup_rejects_replaced_symlinks_and_paths_outside_the_library() {
         outside.path().to_path_buf(),
         root.clone(),
     ] {
-        let dependency: PathBuf = root.join("created");
+        let dependency: std::path::PathBuf = root.join("created");
         let p = Plan {
             actions: vec![
                 Action::CreateDirectory {
