@@ -452,8 +452,12 @@ pub(crate) fn replace_verified(
     edit(staged.path())?;
     // The editor may replace its input while rewriting the container. Reopen the
     // path so we sync the verified result rather than an obsolete file handle.
-    fs::File::open(staged.path())?.sync_all()?;
+    // Windows flushes only through a handle with write access.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(staged.path())?
+        .sync_all()?;
     verify()?;
-    staged.persist(path).map_err(|e| e.error)?;
+    super::replace::persist(staged, path)?;
     Ok(())
 }

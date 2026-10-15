@@ -12,8 +12,9 @@ use std::{
 };
 use tempfile::NamedTempFile;
 
-/// How long a Windows writer keeps retrying before the error stands.
-const PATIENCE: Duration = Duration::from_secs(2);
+/// How long a Windows writer keeps retrying before the error stands. Virus
+/// scanners and indexers can also hold a just-written file for a moment.
+const PATIENCE: Duration = Duration::from_secs(5);
 
 /// Publishes `temp` at `dest`, replacing any existing file.
 pub(crate) fn persist(mut temp: NamedTempFile, dest: &Path) -> io::Result<()> {
@@ -53,6 +54,6 @@ fn busy(error: &io::Error, started: Instant, attempt: &mut u64) -> bool {
         return false;
     }
     *attempt += 1;
-    std::thread::sleep(Duration::from_millis((*attempt).min(10)));
+    std::thread::sleep(Duration::from_millis((*attempt).min(20)));
     true
 }

@@ -135,8 +135,10 @@ fn extras_reuse_inventory_and_follow_reference_directory_scope() {
     let paths: Vec<_> = catalog
         .organize_files()
         .into_iter()
-        .map(|(_, p)| p.to_string_lossy().into_owned())
+        .map(|(_, p)| p)
         .collect();
+    // Compared as paths: Windows joins with `\`, and paths treat both
+    // separators alike there.
     assert_eq!(
         paths,
         [
@@ -144,6 +146,7 @@ fn extras_reuse_inventory_and_follow_reference_directory_scope() {
             "/nonexistent/photos/a.json",
             "/nonexistent/photos/sub/README"
         ]
+        .map(std::path::PathBuf::from)
     );
     let mut labels = HashMap::from([(MediaId(1), "generated".into())]);
     photosort::core::organize::include_inventory(&catalog, &mut labels);
