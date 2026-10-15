@@ -109,10 +109,18 @@ fn replaced_and_missing_files_do_not_inherit_focus_or_comparison() {
     assert_ne!(fresh.fingerprint.identity, photo.fingerprint.identity);
     saved.reconcile(&current.media);
     let view = &saved.bookmarks[&Step::Cull];
-    assert_eq!(view.active, None);
-    assert!(view.missing_focus);
-    assert_eq!(view.selected, vec![catalog.media[0].id]);
-    assert!(view.comparison.is_empty());
+    // A file that disappeared drops out everywhere.
+    assert!(!view.selected.contains(&catalog.media[2].id));
+    // Telling the same-size, same-time replacement apart needs a file identity
+    // that changes with the file. Windows has none from metadata alone: NTFS
+    // hands a file renamed onto a just-vacated name the old creation time, and
+    // its timestamps tick every ~15 ms (see docs/COMPATIBILITY.md).
+    if cfg!(unix) {
+        assert_eq!(view.active, None);
+        assert!(view.missing_focus);
+        assert_eq!(view.selected, vec![catalog.media[0].id]);
+        assert!(view.comparison.is_empty());
+    }
 }
 #[test]
 fn relocation_uses_verified_report_fingerprints_without_reading_images() {
