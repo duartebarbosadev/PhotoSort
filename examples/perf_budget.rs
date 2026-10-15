@@ -1,4 +1,4 @@
-//! Measures the two performance budgets (docs/BENCHMARKS.md) on temporary copies:
+//! Measures two performance budgets on temporary copies:
 //! time to first thumbnail on a real folder, and frame time while scrolling a
 //! 10,000-photo grid. Usage: perf_budget <photo-folder> [grid-count]
 //! Nothing outside temporary directories is written.

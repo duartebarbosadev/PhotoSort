@@ -114,7 +114,7 @@ fn replaced_and_missing_files_do_not_inherit_focus_or_comparison() {
     // Telling the same-size, same-time replacement apart needs a file identity
     // that changes with the file. Windows has none from metadata alone: NTFS
     // hands a file renamed onto a just-vacated name the old creation time, and
-    // its timestamps tick every ~15 ms (see docs/COMPATIBILITY.md).
+    // its timestamps tick every ~15 ms.
     if cfg!(unix) {
         assert_eq!(view.active, None);
         assert!(view.missing_focus);
@@ -583,7 +583,7 @@ fn supporting_file_bookmarks_reuse_catalog_identity_without_becoming_review_medi
     windows,
     ignore = "NTFS tunnelling reuses the creation time of a file replaced under the same name \
               within 15 s; telling files apart there would need a handle per file on every \
-              scan (see docs/COMPATIBILITY.md)"
+              scan"
 )]
 fn replaced_supporting_file_does_not_inherit_selection_at_same_size_and_mtime() {
     use photosort::core::views::EditorBookmark;

@@ -40,8 +40,7 @@ temporary and clean it after packaging:
 )
 ```
 
-[PARITY.md](docs/PARITY.md) lists covered workflows and remaining work. Automated
-tests pass on macOS, Linux and Windows; desktop use on Windows and the CUDA and
+Automated tests pass on macOS, Linux and Windows; desktop use on Windows and the CUDA and
 DirectML runtimes have not been verified on real machines.
 
 From source with the default image backend:
@@ -161,8 +160,7 @@ the review plan; other data stored inside such files is not carried over.
 Settings also offers CPU, Automatic, Apple Core ML, NVIDIA CUDA and Windows
 DirectML inference. CPU remains the default. Provider/model failures fall back to
 CPU with an explanation; settings take effect on the next analysis. Apple model
-preparation may take minutes on first use. See [native acceleration](docs/ACCELERATION.md)
-for measured Apple results, setup requirements and unverified Windows/Linux limits.
+preparation may take minutes on first use.
 
 Settings offers Balanced, Maximum and Custom AI thread allocation. Changes apply
 to the next analysis or rotation run, preserving current reviews and cached
@@ -271,8 +269,8 @@ keep their comparisons until you explicitly analyze again. No files move when
 you edit similarity groups.
 
 Steps are optional and revisitable. Decisions persist per folder. No image is
-uploaded and no analysis starts during scanning. Read the [native design and current limits](docs/COMPATIBILITY.md)
-before using the new app on an existing editing workflow.
+uploaded and no analysis starts during scanning. Try it on a copy of a folder before
+using it on an existing editing workflow.
 
 ## Local AI setup
 
@@ -299,8 +297,7 @@ review and explain that AI inference is unavailable.
 
 The UI uses egui/eframe with wgpu. Its custom photo canvas, virtualized rows and
 on-demand repainting fit this workload without a web frontend runtime. Navigation
-adapts between a sidebar and compact stepper. See [architecture](docs/ARCHITECTURE.md)
-and the [reference audit](docs/REFERENCE.md).
+adapts between a sidebar and compact stepper.
 
 ```sh
 cargo fmt --all --check
@@ -334,8 +331,7 @@ The bundle contains its models and runtime. Packaging verifies the local code
 signature and a streamed resource manifest before replacing the output bundle.
 By default this is an ad-hoc signed local build, not a notarized distribution.
 Use `--sign-identity` with an existing certificate name or SHA-1 for consistent
-development signing; see [macOS signing and folder access](docs/MACOS_SIGNING.md).
-Ad-hoc rebuilds can trigger a new macOS folder-access prompt. The packager's
+development signing. Ad-hoc rebuilds can trigger a new macOS folder-access prompt. The packager's
 integrity and output-safety regressions run without compiling Rust:
 
 ```sh
@@ -376,8 +372,6 @@ upright. That historical report predates the production consistency policy; new 
 identify their policy explicitly. The policy checks consistency rather than calibrating
 confidence, and an incorrect initial upright prediction can still be missed by the fast
 path.
-
-Feature parity work is active; see the [parity table](docs/PARITY.md).
 
 Real reference fixtures can be checked explicitly without modifying them:
 
