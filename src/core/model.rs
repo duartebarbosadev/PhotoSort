@@ -63,17 +63,28 @@ impl Fingerprint {
         if !m.is_file() {
             return Err(std::io::Error::other("Not a regular file"));
         }
-        Self::from_metadata(path, &m)
+        Self::from_metadata(&m)
     }
     pub(crate) fn read_directory(path: &Path) -> std::io::Result<Self> {
         let m = std::fs::symlink_metadata(path)?;
         if !m.is_dir() || m.file_type().is_symlink() {
             return Err(std::io::Error::other("Not a regular directory"));
         }
-        Self::from_metadata(path, &m)
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut fingerprint = Self::from_metadata(&m)?;
+        #[cfg(windows)]
+        {
+            // NTFS "tunnelling" hands a folder created under a just-vacated
+            // name the old creation time, so a replaced folder would look
+            // unchanged. Folders are only ever renamed, which keeps the file
+            // index; volume serial + file index are NTFS's device and inode.
+            let info = winapi_util::file::information(winapi_util::Handle::from_path_any(path)?)?;
+            fingerprint.identity[1] = info.volume_serial_number();
+            fingerprint.identity[2] = info.file_index();
+        }
+        Ok(fingerprint)
     }
-    #[cfg_attr(not(windows), allow(unused_variables))]
-    fn from_metadata(path: &Path, m: &std::fs::Metadata) -> std::io::Result<Self> {
+    fn from_metadata(m: &std::fs::Metadata) -> std::io::Result<Self> {
         #[cfg(unix)]
         let identity = {
             use std::os::unix::fs::MetadataExt;
@@ -93,17 +104,9 @@ impl Fingerprint {
         #[cfg(windows)]
         let identity = {
             use std::os::windows::fs::MetadataExt;
-            // NTFS "tunnelling" hands a new file or folder the old creation
-            // time when it reuses a name within seconds, so creation time
-            // alone cannot tell a replacement apart. The volume serial number
-            // and file index are the NTFS equivalent of device and inode.
-            let info = winapi_util::file::information(winapi_util::Handle::from_path_any(path)?)?;
-            [
-                info.volume_serial_number(),
-                info.file_index(),
-                m.creation_time(),
-                0,
-            ]
+            // Files keep creation time only: moves may copy, and the copy
+            // receives the original's creation time but a new file index.
+            [m.creation_time(), 0, 0, 0]
         };
         #[cfg(not(any(unix, windows)))]
         let identity = [0; 4];
