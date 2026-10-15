@@ -3404,6 +3404,7 @@ dependencies = [
  "trash",
  "walkdir",
  "wgpu",
+ "winapi-util",
 ]
 
 [[package]]

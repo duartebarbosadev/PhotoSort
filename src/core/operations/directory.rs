@@ -20,7 +20,14 @@ impl DirectoryStamp {
             use std::os::unix::fs::MetadataExt;
             [meta.dev(), meta.ino()]
         };
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        let identity = {
+            // Volume serial + file index: NTFS's device and inode. Creation
+            // time alone is reused when a folder is replaced under its name.
+            let info = winapi_util::file::information(winapi_util::Handle::from_path_any(path)?)?;
+            [info.volume_serial_number(), info.file_index()]
+        };
+        #[cfg(not(any(unix, windows)))]
         let identity = [0, 0];
         Ok(Self {
             modified_ns: meta

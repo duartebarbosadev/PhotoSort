@@ -93,6 +93,8 @@ wgpu = { version = "30", default-features = false, features = ["metal", "wgsl"] 
 
 [target.'cfg(target_os = "windows")'.dependencies]
 libc = "0.2"
+# NTFS file identity (volume serial + file index); already used by walkdir.
+winapi-util = "0.1.11"
 wgpu = { version = "30", default-features = false, features = ["dx12", "wgsl"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
