@@ -66,29 +66,8 @@ pub(crate) fn write(path: &Path, bytes: &[u8]) -> Result<()> {
         .suffix(".tmp")
         .tempfile_in(parent)?;
     temp.write_all(bytes)?;
-    let mut attempt = 0;
-    loop {
-        match temp.persist(path) {
-            Ok(_) => return Ok(()),
-            Err(error) if replace_in_progress(&error.error, attempt) => {
-                temp = error.file;
-                attempt += 1;
-            }
-            Err(error) => return Err(error.error.into()),
-        }
-    }
-}
-/// Windows refuses to replace or open a file for a moment while another
-/// thread replaces it ("Access is denied"). Workers race to publish the same
-/// regenerable record, so wait briefly and retry there; elsewhere, and after
-/// about a third of a second, the error stands.
-fn replace_in_progress(error: &std::io::Error, attempt: u32) -> bool {
-    if cfg!(windows) && error.kind() == std::io::ErrorKind::PermissionDenied && attempt < 24 {
-        std::thread::sleep(std::time::Duration::from_millis(u64::from(attempt) + 1));
-        true
-    } else {
-        false
-    }
+    super::replace::persist(temp, path)?;
+    Ok(())
 }
 pub(crate) fn read(path: &Path) -> Option<Vec<u8>> {
     let metadata = std::fs::symlink_metadata(path).ok()?;
@@ -97,15 +76,9 @@ pub(crate) fn read(path: &Path) -> Option<Vec<u8>> {
         return None;
     }
     let mut bytes = Vec::new();
-    let mut attempt = 0;
-    let file = loop {
-        match std::fs::File::open(path) {
-            Ok(file) => break file,
-            Err(error) if replace_in_progress(&error, attempt) => attempt += 1,
-            Err(_) => return None,
-        }
-    };
-    file.take(MAX_BYTES as u64 + 1)
+    super::replace::open(path)
+        .ok()?
+        .take(MAX_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .ok()?;
     (bytes.len() <= MAX_BYTES).then_some(bytes)

@@ -352,7 +352,7 @@ pub fn atomic_write(dest: &Path, bytes: &[u8]) -> Result<()> {
         .tempfile_in(parent)?;
     temp.write_all(bytes)?;
     temp.as_file().sync_all()?;
-    temp.persist(dest).map_err(|error| error.error)?;
+    super::replace::persist(temp, dest)?;
     Ok(())
 }
 pub fn rotate_orientation(mut orientation: u8, turns: u8) -> u8 {
