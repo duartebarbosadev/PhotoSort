@@ -305,106 +305,110 @@ impl PhotoSortApp {
             });
             return;
         }
-        floating_bar(ui, egui::Id::new(("review_bar", compact, self.step)), |ui| {
-            use egui_phosphor::regular as icon;
-            const NAVIGATION: &str = "Cull follows Up/Down navigation preferences. Hold Ctrl or Cmd to include marked photos and bypass movement filters.";
-            if icon_button(
-                ui,
-                icon::CARET_LEFT,
-                &format!("Previous photo · Up\n{NAVIGATION}"),
-            )
-            .clicked()
-            {
-                self.navigate_selection(
-                    -1,
-                    false,
-                    ui.input(|i| i.modifiers.command || i.modifiers.ctrl),
-                );
-            }
-            if icon_button(
-                ui,
-                icon::CARET_RIGHT,
-                &format!("Next photo · Down\n{NAVIGATION}"),
-            )
-            .clicked()
-            {
-                self.navigate_selection(
-                    1,
-                    false,
-                    ui.input(|i| i.modifiers.command || i.modifiers.ctrl),
-                );
-            }
-            if self.step == Step::EasyDelete {
-                for (side, id) in ids.iter().enumerate() {
-                    let keep = self
-                        .delete_current
-                        .is_none_or(|review| self.delete_review.keeps(review, *id));
-                    if ui
-                        .add(decision_button(side, keep))
-                        .on_hover_text(format!("Toggle photo {} · {}", side + 1, side + 1))
-                        .clicked()
-                    {
-                        self.toggle_delete_candidate(side);
-                    }
-                }
-            } else if self.step == Step::PickBest {
-                let paths = self
-                    .pick_review
-                    .comparison()
-                    .map(|c| c.paths.clone())
-                    .unwrap_or_default();
-                for (side, id) in paths.iter().enumerate() {
-                    let keep = self.pick_review.comparison().is_none_or(|c| c.keeps(*id));
-                    if ui
-                        .add(decision_button(side, keep))
-                        .on_hover_text(format!("Toggle photo {} · {}", side + 1, side + 1))
-                        .clicked()
-                    {
-                        self.toggle_pick(*id);
-                    }
-                }
-            } else {
-                let rejected = self.decision(active).rejected;
-                // Both labels get the wider label's width so toggling never
-                // resizes the bar.
-                let font = egui::TextStyle::Button.resolve(ui.style());
-                let wide = ui
-                    .painter()
-                    .layout_no_wrap(format!("{}  Marked for Trash", icon::TRASH), font, INK)
-                    .size()
-                    .x
-                    + 2.0 * ui.spacing().button_padding.x;
-                if icon_text_button_min(
+        floating_bar(
+            ui,
+            egui::Id::new(("review_bar", compact, self.step)),
+            |ui| {
+                use egui_phosphor::regular as icon;
+                const NAVIGATION: &str = "Cull follows Up/Down navigation preferences. Hold Ctrl or Cmd to include marked photos and bypass movement filters.";
+                if icon_button(
                     ui,
-                    true,
-                    rejected,
-                    icon::TRASH,
-                    if rejected {
-                        "Marked for Trash"
-                    } else {
-                        "Trash"
-                    },
-                    wide,
+                    icon::CARET_LEFT,
+                    &format!("Previous photo · Up\n{NAVIGATION}"),
                 )
-                .on_hover_text(if rejected {
-                    "Unmark · D"
-                } else {
-                    "Mark for Trash · D"
-                })
                 .clicked()
                 {
-                    self.reject(active);
+                    self.navigate_selection(
+                        -1,
+                        false,
+                        ui.input(|i| i.modifiers.command || i.modifiers.ctrl),
+                    );
                 }
-            }
-            if !self.comparison.is_empty() && ui.small_button("End comparison").clicked() {
-                self.comparison.clear();
-                self.focused_slot = 0;
-            }
-            if compact {
-                ui.end_row();
-            }
-            self.review_ratings(ui, active);
-        });
+                if icon_button(
+                    ui,
+                    icon::CARET_RIGHT,
+                    &format!("Next photo · Down\n{NAVIGATION}"),
+                )
+                .clicked()
+                {
+                    self.navigate_selection(
+                        1,
+                        false,
+                        ui.input(|i| i.modifiers.command || i.modifiers.ctrl),
+                    );
+                }
+                if self.step == Step::EasyDelete {
+                    for (side, id) in ids.iter().enumerate() {
+                        let keep = self
+                            .delete_current
+                            .is_none_or(|review| self.delete_review.keeps(review, *id));
+                        if ui
+                            .add(decision_button(side, keep))
+                            .on_hover_text(format!("Toggle photo {} · {}", side + 1, side + 1))
+                            .clicked()
+                        {
+                            self.toggle_delete_candidate(side);
+                        }
+                    }
+                } else if self.step == Step::PickBest {
+                    let paths = self
+                        .pick_review
+                        .comparison()
+                        .map(|c| c.paths.clone())
+                        .unwrap_or_default();
+                    for (side, id) in paths.iter().enumerate() {
+                        let keep = self.pick_review.comparison().is_none_or(|c| c.keeps(*id));
+                        if ui
+                            .add(decision_button(side, keep))
+                            .on_hover_text(format!("Toggle photo {} · {}", side + 1, side + 1))
+                            .clicked()
+                        {
+                            self.toggle_pick(*id);
+                        }
+                    }
+                } else {
+                    let rejected = self.decision(active).rejected;
+                    // Both labels get the wider label's width so toggling never
+                    // resizes the bar.
+                    let font = egui::TextStyle::Button.resolve(ui.style());
+                    let wide = ui
+                        .painter()
+                        .layout_no_wrap(format!("{}  Marked for Trash", icon::TRASH), font, INK)
+                        .size()
+                        .x
+                        + 2.0 * ui.spacing().button_padding.x;
+                    if icon_text_button_min(
+                        ui,
+                        true,
+                        rejected,
+                        icon::TRASH,
+                        if rejected {
+                            "Marked for Trash"
+                        } else {
+                            "Trash"
+                        },
+                        wide,
+                    )
+                    .on_hover_text(if rejected {
+                        "Unmark · D"
+                    } else {
+                        "Mark for Trash · D"
+                    })
+                    .clicked()
+                    {
+                        self.reject(active);
+                    }
+                }
+                if !self.comparison.is_empty() && ui.small_button("End comparison").clicked() {
+                    self.comparison.clear();
+                    self.focused_slot = 0;
+                }
+                if compact {
+                    ui.end_row();
+                }
+                self.review_ratings(ui, active);
+            },
+        );
         if show_filmstrip {
             ui.add_space(S1);
             self.filmstrip(ui);

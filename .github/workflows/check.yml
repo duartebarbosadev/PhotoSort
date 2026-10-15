@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # Debian's security repository supplies libheif >= 1.23, required by the Rust binding.
-      image: rust:1.94.1-slim-trixie@sha256:cf09adf8c3ebaba10779e5c23ff7fe4df4cccdab8a91f199b0c142c53fef3e1a
+      image: rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581
     env:
       CARGO_HOME: /tmp/photosort-cargo
       CARGO_TARGET_DIR: /tmp/photosort-target

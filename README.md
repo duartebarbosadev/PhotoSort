@@ -190,7 +190,7 @@ image worker and preserves current reviews, decisions, bookmarks and model files
 Usage is a snapshot; use Refresh for a new reading. `--clear-cache` clears generated
 disk previews and analysis evidence before normal startup without loading models.
 
-Rust 1.92+ and C/C++ compilers are required. HEIF uses system ImageIO on macOS.
+Rust 1.95+ and C/C++ compilers are required. HEIF uses system ImageIO on macOS.
 Linux/Windows full builds also require Exiv2 0.28+, LibRaw and libheif 1.23+ development
 libraries and a HEVC decoder plugin (for example libde265); the shared core and native
 image pipeline have been tested on Linux aarch64 in an isolated Debian container. Linux

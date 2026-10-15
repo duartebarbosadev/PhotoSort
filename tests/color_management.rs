@@ -293,8 +293,10 @@ fn cmyk_and_ycck_profiles_preserve_ink_channels_and_share_corrected_results() {
             let mean = display
                 .pixels
                 .as_raw()
-                .chunks_exact(4)
-                .zip(native.chunks_exact(4))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(native.as_chunks::<4>().0)
                 .flat_map(|(a, b)| {
                     (0..3).map(move |channel| a[channel].abs_diff(b[channel]) as f64)
                 })

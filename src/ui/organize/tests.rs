@@ -2712,6 +2712,12 @@ fn organize_preview_preserves_draft_and_view_and_reuses_textures_at_both_sizes()
     use super::super::compact_cull_tests::{click_label, fixture, rendered};
     for size in [egui::vec2(640., 600.), egui::vec2(1440., 960.)] {
         let (_temp, mut app) = fixture();
+        // The 16-pixel textures below are the whole photos. Builds without
+        // native metadata cannot read PNG dimensions, and an unknown size
+        // would rightly fetch originals once a zoomed view settles.
+        for metadata in app.metadata.values_mut() {
+            (metadata.width, metadata.height) = (16, 16);
+        }
         app.step = Step::Organize;
         app.review = true;
         let ids: Vec<_> = app.media.iter().map(|m| m.id).collect();
