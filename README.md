@@ -1,449 +1,286 @@
-# PhotoSort Rust
+# PhotoSort
 
-An independent native photo workspace rebuilt from PhotoSort's functional behavior.
-Rust owns the UI, catalog, image pipeline, local inference and file operations.
-The original Python project is not a runtime dependency and was not modified.
+A local-first desktop app for culling and organizing photo libraries.
 
-Embedded RGB/grayscale and CMYK JPEG ICC profiles are normalized to sRGB once in the shared
-image pipeline, so thumbnails, previews, original detail and standard-photo
-analysis agree. Profile transforms are reused in a bounded cache. Untagged images
-retain the sRGB assumption. Unsupported or invalid profiles report a preview
-error rather than silently presenting an accurate-color claim.
+[![Rust checks](https://github.com/duartebarbosadev/PhotoSort/actions/workflows/check.yml/badge.svg)](https://github.com/duartebarbosadev/PhotoSort/actions/workflows/check.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-In every workflow, the shared inspector and photo context menu can reveal the
-clicked file in Finder, Explorer or the system file manager. Videos can open in
-the default external player; both actions run off the UI thread.
+> This is the native rewrite of PhotoSort. The previous Python app is available at tag
+> [`python-final`](https://github.com/duartebarbosadev/PhotoSort/tree/python-final) and in
+> [releases](https://github.com/duartebarbosadev/PhotoSort/releases) up to v2.1.0.
 
-## Open the app
+## What it is
 
-Packaging creates `target/PhotoSort Rust.app`. The bundle contains its models,
-ONNX Runtime and native image libraries. It can be moved independently of this
-source directory. This is a locally signed development build, not a notarized
-release. Model and runtime assets are installed separately, as described in
-[asset provenance](resources/ASSETS.md). From the repository root:
+PhotoSort takes a folder of new photos to a sorted, culled library. It is a native app
+written in Rust with egui/eframe and wgpu. All analysis runs on your computer with local
+AI models, and no photo is uploaded. Files change on disk only after you review a plan of
+the exact moves, renames and edits; try it on a copy of a folder first.
 
-```sh
-python3 scripts/package_macos.py
-open "target/PhotoSort Rust.app"
-```
+## Features
 
-To include the optional libvips image backend, first follow the
-[native dependency setup](crates/imaging-vips/README.md), which builds a private copy
-under `.tools/vips`, then package with `--native-imaging`. To keep compiler output
-temporary and clean it after packaging:
+### Five steps
 
-```sh
-(
-  build_dir="$(mktemp -d)"
-  trap 'cargo clean --target-dir "$build_dir"' EXIT
-  CARGO_TARGET_DIR="$build_dir" python3 scripts/package_macos.py --native-imaging
-)
-```
+The steps sit in a bar at the bottom center of the window. Each one is optional and can be
+revisited, Settings can hide the three middle steps, and decisions are saved per folder.
 
-Automated tests pass on macOS, Linux and Windows; desktop use on Windows and the CUDA and
-DirectML runtimes have not been verified on real machines.
+| Step | What it does |
+| --- | --- |
+| **1. Organize** | Proposes folders from current folders, capture date, camera, offline location, visual similarity, faces, or date then similarity. On the folder board, drag photos onto folders and create or rename folders in place. Moves are previewed and collision-checked, and RAW/JPEG/XMP companions move together. |
+| **2. Easy Delete** | Reviews exact duplicates, near-duplicates, and blurry, dark or bright photos as paired Keep/Trash suggestions. Confirm, revoke or reset each one, or accept the defaults in bulk. |
+| **3. Fix Rotation** | A local model suggests quarter turns, cross-checked against rotated copies of each photo; uncertain ones need individual confirmation. Compare the original and corrected views, rotate manually, and apply only confirmed corrections. |
+| **4. Pick Best** | Two-photo comparisons within groups of shots of the same subject. Suggestions combine an aesthetic score, sharpness and a closed-eye penalty, and choices never change star ratings. |
+| **5. Cull** | List, icon and grid views, and up to nine photos side by side with synchronized or independent zoom down to native pixels. Rate, mark for Trash, filter and sort. The library navigator browses folders, dates or similarity groups, and the Groups menu corrects groups with Undo. The filmstrip sits at the bottom or on the left, with optional file names. **Analyze library** (More menu or Ctrl/Cmd+S) builds similarity groups. Here and in Organize, right-click marks every photo in a comparison at once. |
 
-From source with the default image backend:
+### Across every step
+
+- **Reviewed file plans.** Moves, renames, Trash and metadata edits are listed before they
+  run. If the app stops mid-plan, reopen the library and use **Review changes** to retry
+  unfinished operations; completed ones are not repeated.
+- **Local AI.** Models run through ONNX Runtime on your computer, and models are downloaded
+  only when you ask.
+- **Metadata write modes.** Ratings and rotation are embedded where the format supports it,
+  or written to XMP sidecars only. Embedded edits are verified on a temporary copy and
+  never re-encode pixels. An optional mode losslessly rotates the pixels of files that
+  cannot store orientation, such as BMP.
+- **Color management.** Embedded ICC profiles (RGB, grayscale and CMYK JPEG) are converted
+  to sRGB once, so thumbnails, previews, detail views and analysis agree.
+- **Reveal in file manager.** Any file can be shown in Finder, Explorer or the system file
+  manager, and videos can open in the default player.
+
+### Supported formats
+
+| Kind | Formats |
+| --- | --- |
+| Photos | JPEG, PNG, TIFF, GIF, WebP, BMP |
+| RAW | ARW, CR2, CR3, NEF, NRW, DNG, ORF, RAF, RW2, PEF, SRW and other LibRaw formats |
+| HEIF | HEIC, HEIF |
+| Video | MOV, MP4, M4V; also AVI, MKV, MPEG, WMV and WebM |
+
+RAW and HEIF need the default build; RAW browsing uses the camera's embedded preview until
+you zoom in. Video plays through AVFoundation on macOS and GStreamer on Linux and Windows,
+so codec support follows the system.
+
+## Platform status
+
+| Platform | Status |
+| --- | --- |
+| macOS 13+ | Full build, CI-tested with both image backends |
+| Linux | Full build and tests CI-tested in a Debian container; desktop use not yet verified |
+| Windows | Minimal build CI-tested; full native build not verified |
+
+Releases of the native app are not yet published; build from source or package a macOS app.
+
+## Building from source
+
+You need Rust 1.95 or later, a C/C++ compiler and pkg-config. Default builds also need
+LibRaw 0.21+ and Exiv2 0.28+, and on Linux and Windows libheif 1.23+ with an HEVC decoder
+plugin and GStreamer 1.20+. On macOS, HEIF and video use system frameworks.
+
+**macOS** (with the Xcode command line tools):
 
 ```sh
 brew install libraw exiv2 pkg-config
-cargo run --release -- --folder /absolute/path/to/photos
 ```
 
-`photosort --last-folder` reopens the most recent available library; `--help`
-and `--version` run without opening the UI. `--diagnostics` prints a read-only JSON
-report and exits: build capabilities, shared model SHA-256/size verification,
-runtime-file presence, data/cache paths and the orientation override. It returns
-failure when enabled AI model verification fails, its runtime file is missing,
-or the configured orientation override is missing/empty.
-It does not load the runtime, run inference or initialize graphics. Diagnostics
-cannot be combined with folder-opening or clearing options.
-
-For an optional session log, add `--log-file /existing/folder/photosort-session.log`
-and, when needed, `--log-level debug` (default: `info`). The destination must be a
-new file; existing files and symlinks are rejected. Help/version create no log.
-The shared worker/model events include discovery, analysis, setup/fallback,
-file-plan outcomes, cancellation requests and errors. Logs may contain local
-paths and error details; photo pixels and embeddings are not recorded.
-
-Logging uses a bounded background queue and stops at 16 MiB with an explicit
-marker. Individual events are capped at 8 KiB; a saturated 256-event queue drops
-logs instead of blocking the UI. Drop counts and write failures are reported to
-stderr at shutdown. These are best-effort troubleshooting logs, separate from
-durable file-operation recovery journals. Normal startup creates no log. Logging
-also works with the JSON diagnostic commands and leaves stdout as JSON.
-
-`--check-runtime` goes further: it verifies the files, loads the native inference
-engine and runs two CPU passes on an embedded licensed fixture through the shared
-scene, aesthetic, face geometry, recognition and orientation services. Its JSON
-reports each stage, counters and session reuse. All seven model sessions must be
-reused on the second pass; replacing a failed accelerator during the first pass
-is allowed. It uses one inference thread, never opens a
-window or a photo library, and writes no analysis cache. It exits with failure in
-minimal builds or when any prerequisite, inference contract or reuse check fails.
-This checks native AI execution; it is not a graphics/video smoke test or an
-accuracy/speed benchmark. A custom orientation override is exercised in place of
-the default orientation model, whose inventory row is marked unselected.
-Add `--runtime-backend cpu|auto|coreml|cuda|directml` to exercise another backend
-through the same registry and fallback policy as Settings. Omitting it keeps the
-CPU baseline. For example:
+**Linux** (Debian 13 "trixie", as in CI; other distributions may ship older libheif or
+Exiv2 versions):
 
 ```sh
-photosort --check-runtime --runtime-backend coreml
+sudo apt-get install build-essential pkg-config \
+  libraw-dev libexiv2-dev libheif-dev libheif-plugin-libde265 \
+  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+  gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav \
+  libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxcursor-dev \
+  libxrandr-dev libxinerama-dev libegl1-mesa-dev
 ```
 
-The JSON includes `requested_backend`, `model_providers` (with fallback reasons),
-`accelerated_models` and `cpu_models`. **A successful exit validates inference,
-including CPU fallback; it does not prove the requested accelerator was selected.**
-Check all seven provider records. Native compiler/runtime messages go to stderr,
-keeping stdout valid JSON even during native shutdown. The two counts summarize configured sessions only
-after a complete successful check, not individual operator placement. This command
-does not change Settings or persist PhotoSort prepared-model caches; native
-runtimes may create their own OS temporary caches. Cold accelerator compilation
-can take minutes and individual native calls cannot be interrupted.
+**Windows** (untested): install Exiv2 0.28+, LibRaw, libheif 1.23+ with an HEVC decoder
+plugin, and the official GStreamer MSVC runtime and development packages, all
+discoverable through pkg-config. The minimal build needs none of them.
 
-Diagnostic JSON uses display text for paths containing non-UTF-8 bytes; actual
-filesystem/model paths retain their original bytes.
-
-`--clear-models` removes only known model copies in PhotoSort Rust's managed data
-folder before normal startup. It preserves bundled resources, custom override
-files outside that managed set, runtime libraries, photos and review state.
-Unknown files/subdirectories are retained; linked paths are refused. If a managed
-file changes during clearing, the command reports the incomplete operation and
-exits instead of opening the app. Bundled copies remain usable without a download.
-It can be combined with `--clear-cache` and a startup folder.
-
-`--smoke-test` opens the native application and requests normal quit two seconds
-after its first UI frame. `--smoke-delay-ms N` sets 200–60000 milliseconds and
-requires `--smoke-test`. It supports the normal folder arguments; without one it
-opens the welcome screen. The timer runs once, after keyboard/widget handling,
-through the shared departure guard. Existing staged choices, unfinished reviews,
-open plans or active file work can prevent automatic exit. Cancel keeps the app
-open without repeating the timer. Use a disposable clean library for unattended
-checks and an external timeout to detect hangs. This is a startup/lifecycle check,
-not proof that a library finished scanning or that AI/codec checks passed.
-It uses normal preferences, caches and bookmark/session persistence.
-
-Menu offers recent folders, Settings,
-the keyboard guide and About. Settings can hide optional middle steps and shortcut
-hints; Organize and Cull remain available. Easy Delete blur, near-black and
-overexposed thresholds apply to future analyses and preserve current reviews. Ctrl/Cmd+Alt+1–5 and Previous/Next use
-the same workflow guards as clicking a step. Ctrl/Cmd+O opens a library,
-Ctrl/Cmd+F focuses its search field (outside Pick Best), and F12 opens About.
-Ctrl/Cmd+S runs the active workflow's analysis, or orientation detection in Fix
-Rotation. It uses the same controls and review guards as the buttons; additional
-presses leave an active analysis running. Use Cancel analysis to stop it.
-In Organize, Alt+1–5 selects Current folders, Date + similarity, Visual similarity,
-Faces and Location through the same Group by control. Changing mode does not start
-AI or apply files. In Cull, Alt+1/2/3 selects list/icons/grid; F and S toggle the folder and
-similarity-group navigator. Text fields keep ordinary typing and selection keys;
-modal dialogs and active file work keep keyboard ownership. The keyboard guide
-scrolls in small windows. Cull navigation settings can jump
-Up/Down (and Previous/Next) by exact star rating or skip single-photo similarity
-groups. Left/Right cycles through visible photos, with an option to stay within
-the current similarity group. Ctrl/Cmd includes marked photos and bypasses movement
-filters; these preferences never hide photos. Rating jumps take priority over group
-skipping. Unknown ratings remain unknown until shared metadata loading completes.
-
-Conservative, Standard and Broad settings control future Cull/Pick Best same-subject analyses. Dense regions, face identities and complete-link verification share model evidence and cached pair results.
-
-Settings controls how ratings and rotation are saved: embed metadata where the
-format supports it, or use sidecars only. Existing XMP sidecars remain authoritative;
-unsupported formats use a sidecar. The review plan names the destination. Embedded
-edits modify and verify an independent temporary copy before replacing the photo;
-pixels are not re-encoded. RAW/JPEG pairs sharing a sidecar must agree on its edits.
-A third choice, "Embed, or rotate pixels", rotates the pixels of files that cannot
-store orientation themselves (BMP, or PNG/TIFF in minimal builds) instead of using a
-sidecar. It is off by default, lossless, keeps the colour profile and is listed in
-the review plan; other data stored inside such files is not carried over.
-
-Settings also offers CPU, Automatic, Apple Core ML, NVIDIA CUDA and Windows
-DirectML inference. CPU remains the default. Provider/model failures fall back to
-CPU with an explanation; settings take effect on the next analysis. Apple model
-preparation may take minutes on first use.
-
-Settings offers Balanced, Maximum and Custom AI thread allocation. Changes apply
-to the next analysis or rotation run, preserving current reviews and cached
-results. This sets model-inference threads, not a whole-app CPU usage limit.
-
-Settings also shows shared cache usage and controls preview RAM, original-detail
-RAM and disk-cache limits. These bound retained cache entries, not total app
-memory: displayed textures, active decodes, metadata and models need extra space.
-Disk limits are enforced periodically during writes and when settings are saved.
-The disk budget includes previews, technical measurements, full-content hashes and AI evidence.
-Unchanged photos reuse measurements and aesthetic scores after restart; analysis loads
-pixels only when required evidence is missing. Sensitivity changes reclassify cached
-measurements without decoding photos again. Set it to zero to disable persistent caching; active grouping may still need temporary disk space. Clearing reusable caches runs in the
-image worker and preserves current reviews, decisions, bookmarks and model files.
-Usage is a snapshot; use Refresh for a new reading. `--clear-cache` clears generated
-disk previews and analysis evidence before normal startup without loading models.
-
-Rust 1.95+ and C/C++ compilers are required. HEIF uses system ImageIO on macOS.
-Linux/Windows full builds also require Exiv2 0.28+, LibRaw and libheif 1.23+ development
-libraries and a HEVC decoder plugin (for example libde265); the shared core and native
-image pipeline have been tested on Linux aarch64 in an isolated Debian container. Linux
-desktop interaction/distribution and Windows native builds remain unverified. `cargo run
---no-default-features` builds the raster-photo/manual-review version without native
-codecs or neural inference. On macOS, videos play in the shared review canvas with
-native AVFoundation decoding, seeking, volume and automatic pause on focus loss. Native
-video thumbnails need no FFmpeg installation. Windows/Linux default builds use GStreamer
-1.20+ through its maintained Rust bindings for the same in-app controls and cached
-posters. Install its development/runtime libraries plus playback, video conversion,
-scaling, rotation, audio-output and relevant decoder plugins. On Debian, these are
-`libgstreamer1.0-dev`, `libgstreamer-plugins-base1.0-dev`, `gstreamer1.0-plugins-base`,
-`gstreamer1.0-plugins-good` and `gstreamer1.0-libav`. Windows needs the matching
-official GStreamer MSVC runtime and development installation on the build/runtime search
-paths. `--no-default-features --features portable-video` enables playback without
-RAW/HEIF/AI dependencies. Builds without `portable-video` retain FFmpeg-on-PATH posters
-and external playback. The GStreamer sink retains at most one queued frame and prepares
-at most a 1280-pixel edge for display. Decoding, audio timing and rotation belong to the
-library; PhotoSort owns selection, cancellation, UI state and cache reuse. Real Linux
-codec tests are run separately from desktop, audible audio-sync and Windows validation;
-availability of hardware decoder plugins is not a hardware acceleration claim.
-
-MOV/MP4/M4V capture dates come from embedded movie headers when EXIF/XMP dates
-are absent. Sorting, calendar navigation and date organization share this metadata
-without decoding frames. Invalid or missing dates retain filename/filesystem
-fallbacks; movie times are interpreted as UTC and displayed in local time.
-
-Reviewed file plans survive an interrupted run. Reopen the same library and use
-**Review changes** to inspect and retry unfinished operations. Recorded completions
-are not repeated. If an action stopped before its completion was recorded, the
-review warns that it may already be partly applied; inspect its exact source and
-destination paths before retrying. Discard abandons the unfinished plan and keeps
-completed files and the audit log. Recovery does not apply file operations by itself. Pending
-moves offer **Edit destination…** to correct the folder or base name while keeping
-photo companions together and preserving extensions. Saving updates the plan;
-review the revised paths before choosing **Retry unfinished changes**.
-
-## Five steps, one library
-
-1. **Organize:** preserve folders, capture date, camera, offline location, visual
-   similarity, faces, or date followed by similarity. Organize defaults to the selected
-   library folder; an alternate destination remains available. Edit folder hierarchies, drag selected files or folders between groups, and edit file stems;
-   review collision-safe moves with RAW/JPEG/XMP companions. Location offers country,
-   country/city or country/region/city folders. Changing levels reuses loaded
-   metadata and asks before replacing custom location folder edits. Date, camera and
-   location grouping automatically read missing metadata without AI analysis;
-   cancel or resume that read while browsing. Generated folder edits and move
-   previews wait for complete metadata, including photos outside the viewport. Reset destinations
-   restores only selected files to their initial grouping proposal, keeping
-   other edits and staged names. File and folder context menus offer the same action.
-2. **Easy Delete:** categorized sharpness/exposure and duplicate reviews, paired
-   Keep/Trash choices, confirm/advance/revoke, reset one/all and accept filtered
-   defaults. Exact copies are paired without face comparison; near pairs use camera-aligned
-   subject-change checks with lazy, shared face evidence and cached assessments.
-   Provisional choices never change shared Trash marks before confirmation.
-3. **Fix Rotation:** compare original and corrected views, use manual quarter turns
-   or local orientation suggestions, then confirm each choice. Confirm/advance,
-   revoke, reset and apply only confirmed corrections through a reviewed plan.
-   Proposed nonzero corrections are cross-checked against rotated views of the
-   same prepared image. Disagreement without a majority starts on the original,
-   shows an uncertainty explanation and requires individual confirmation;
-   Confirm all skips those photos. Upright predictions retain a one-pass fast path.
-   Rotation evidence is cached across runs and restarts, including uncertainty.
-   Unchanged photos need no repeated decoding or model inference. Photo, sidecar,
-   model and recipe changes invalidate the evidence; the shared cache limit and
-   Clear cache controls apply. Confirmations and manual choices are not cached.
-4. **Pick Best:** progressive two-photo tournaments within shared same-subject groups. Choose
-   Keep/Trash, confirm, keep both, revisit comparisons, or reset. BeIT aesthetics,
-   whole-image sharpness, relative-sharpness gating and eye-closure penalties
-   provide suggestions; choices do not assign star ratings.
-5. **Cull:** virtualized grid, up to nine comparison panes, native-pixel detail inspection, synchronized or independent zoom/pan,
-   exact/minimum-star and similarity-group filters, filename/capture-time sorting,
-   shared background metadata reading, cancellable background filtering/sorting,
-   ratings, staged Trash marks, and navigation that skips marked photos
-   unless Ctrl/Cmd is held.
-
-In Organize and Cull review, right-click a photo or video to mark or unmark the
-other displayed comparison items together. The menu shows the affected count;
-it leaves the clicked item and any selection outside the comparison unchanged.
-These are staged marks: use Review changes before sending files to Trash.
-Guided reviews keep their existing Keep/Trash and confirmation controls.
-
-Cull’s **Groups** menu moves selected photos into a new or existing group. The
-picker shows counts and an example filename. Corrections survive reanalysis,
-restart and verified file moves; Undo and Restore automatic grouping are available.
-Manual membership also guides newly built Pick Best reviews. Existing reviews
-keep their comparisons until you explicitly analyze again. No files move when
-you edit similarity groups.
-
-Steps are optional and revisitable. Decisions persist per folder. No image is
-uploaded and no analysis starts during scanning. Try it on a copy of a folder before
-using it on an existing editing workflow.
-
-## Local AI setup
-
-**Menu → AI models** verifies installed models, reports missing or damaged files,
-and repairs them from the app bundle or a prepared ONNX file. DINOv2, SFace and the
-orientation model can also be downloaded directly from pinned upstream releases
-or revisions. Transfers show their size and progress, can be canceled, and verify
-exact size and SHA-256 before
-replacing any installed file. Existing models survive failed transfers.
-
-Missing prerequisites stop analysis before image decoding and preserve current
-reviews. After repair, **Retry analysis** resumes the requested workflow explicitly.
-Model setup has its own lazy worker, so browsing and photo operations stay
-independent of slow downloads. Closing the panel leaves a transfer running;
-quitting cancels it. No downloads occur automatically and no photos are uploaded.
-
-The other three prepared models come with the full bundle and support verified
-import/restore. Public native export downloads for them are not yet published.
-The model manager does not download executable ONNX Runtime libraries; restore
-the full application if its native runtime is missing. Minimal builds keep manual
-review and explain that AI inference is unavailable.
-
-## Design and development
-
-The UI uses egui/eframe with wgpu. Its custom photo canvas, virtualized rows and
-on-demand repainting fit this workload without a web frontend runtime. Navigation
-adapts between a sidebar and compact stepper.
+Build and open a folder:
 
 ```sh
-cargo fmt --all --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-cargo test --no-default-features
+cargo run --release -- --folder /path/to/photos
+```
+
+The minimal build supports standard photo formats and manual review, without RAW, HEIF,
+native metadata or AI:
+
+```sh
+cargo run --release --no-default-features
+```
+
+On Linux and Windows, `portable-video` adds in-app playback to the minimal build; without
+it, video posters need `ffmpeg` on the PATH. macOS always uses AVFoundation.
+
+```sh
+cargo run --release --no-default-features --features portable-video
+```
+
+## AI models and ONNX Runtime
+
+| Model | Purpose | Used by | In-app download |
+| --- | --- | --- | --- |
+| `dinov2-small.onnx` (DINOv2 small) | Scene similarity | Organize (visual, date + similarity), Easy Delete, Pick Best, Cull | Yes |
+| `aesthetic.onnx` (cafe_aesthetic, BEiT) | Aesthetic score | Pick Best | No |
+| `face_detector.onnx` (MediaPipe) | Face detection | Organize (faces), Easy Delete, Pick Best, Cull | No |
+| `face_landmarks_detector.onnx` (MediaPipe Face Mesh V2) | Eye positions and alignment | Organize (faces), Easy Delete, Pick Best, Cull | No |
+| `face_blendshapes.onnx` (MediaPipe) | Eye openness | Easy Delete, Pick Best, Cull | No |
+| `face_recognition_sface.onnx` (OpenCV Zoo SFace) | Same person across photos | Organize (faces) | Yes |
+| `orientation.onnx` (deep-image-orientation-detection v2) | Sideways and upside-down photos | Fix Rotation | Yes |
+
+Model weights are not in git; `resources/SHA256SUMS` pins their exact content. **Menu → AI
+models** checks installed models and restores missing or damaged ones from the app bundle
+or a prepared ONNX file. DINOv2, SFace and the orientation model can also be downloaded
+there from pinned upstream files, verified by size and SHA-256. The other four are
+converted exports with no public download: they ship in an app bundle packaged with them in
+`resources/models`, or can be prepared with the recipes in
+[resources/ASSETS.md](resources/ASSETS.md). Manual review works without any model.
+
+ONNX Runtime is loaded at run time. It is not in git and the model manager does not
+download it. PhotoSort looks for it in this order:
+
+1. The path in `ORT_DYLIB_PATH`.
+2. `runtime/libonnxruntime.dylib` (`onnxruntime.dll` on Windows, `libonnxruntime.so` on
+   Linux) in the app's data folder, in `./resources`, or in the app bundle's resources.
+3. `/opt/homebrew/lib/libonnxruntime.dylib` and `/usr/local/lib/libonnxruntime.so`.
+
+The bundled runtime is ONNX Runtime 1.29.0. `photosort --diagnostics` shows which files
+were found, and `photosort --check-runtime` loads the runtime and runs every model.
+
+Settings selects the inference backend: CPU (the default), Automatic, Apple Core ML, NVIDIA
+CUDA or Windows DirectML. A backend that fails falls back to CPU with an explanation. Core
+ML can take minutes to prepare on first use; CUDA and DirectML are not verified on real
+hardware.
+
+## Command-line usage
+
+Usage: `photosort [--folder PATH | --last-folder] [options]` or `photosort [PATH]`.
+
+| Option | Description |
+| --- | --- |
+| `--folder PATH`, `PATH` | Open a photo folder. |
+| `--last-folder` | Open the most recent folder that still exists. |
+| `--clear-cache` | Clear regenerable previews and analysis evidence before startup; reviews and decisions are kept. |
+| `--clear-models` | Remove managed model copies before startup; bundled models are kept. |
+| `--diagnostics` | Print JSON file and readiness diagnostics and exit without a window; cannot be combined with folder or clearing options. |
+| `--check-runtime` | Run native inference checks, print JSON and exit without a window. |
+| `--runtime-backend NAME` | `cpu` (default), `auto`, `coreml`, `cuda` or `directml`; requires `--check-runtime`. A pass includes CPU fallback, so check `model_providers` in the JSON. |
+| `--smoke-test` | Request a normal, guarded quit after the first UI frame and a delay; unapplied choices can keep the app open. |
+| `--smoke-delay-ms N` | Delay of 200–60000 ms (default 2000); requires `--smoke-test`. |
+| `--log-file PATH` | Write optional session diagnostics to a new file (16 MiB cap); logs may contain local paths. |
+| `--log-level LEVEL` | `error`, `warn`, `info` (default), `debug` or `trace`; requires `--log-file`. |
+| `-h`, `--help` | Show help. |
+| `-V`, `--version` | Show the version. |
+
+From source, pass options after `--`, for example `cargo run --release -- --diagnostics`.
+
+## Keyboard shortcuts
+
+| Keys | Action |
+| --- | --- |
+| Ctrl/Cmd+O | Open a library |
+| Ctrl/Cmd+F | Focus library search (except in Pick Best) |
+| Ctrl/Cmd+S | Analyze this step; detect rotations in Fix Rotation |
+| Ctrl/Cmd+Alt+1–5 | Switch to a workflow step |
+| Shift+Enter | Review staged changes |
+| Alt+1–5 (Organize) | Group by current folders, date + similarity, visual, faces or location |
+| Alt+1/2/3 (Cull) | List, icons or grid |
+| F / S (Cull) | Folder or similarity-group navigator |
+| Left / Right (Cull) | Cycle through visible photos or the current similarity group |
+| Ctrl/Cmd+0–5 | Rate the selection |
+| D (Cull) | Toggle the Trash mark |
+| R / Shift+R / Alt+R (Cull) | Rotate right, left or 180 degrees |
+
+Each step shows its own keys in the status bar, and **Menu → Keyboard guide** has the full
+list.
+
+## macOS app bundle
+
+```sh
 python3 scripts/package_macos.py
 ```
 
-The optional `native-imaging` feature uses libvips and Little CMS for JPEG, PNG,
-TIFF and GIF through the same shared image pipeline. Build the pinned private
-dependency with `python3 scripts/build_vips.py` (Highway SIMD enabled by default),
-then add `--native-imaging` to the macOS packaging command; `--native-prefix`
-selects a prefix other than `.tools/vips`. Normal builds use the default backend. See [native imaging](crates/imaging-vips/README.md) for requirements,
-validation and measured color differences.
-
-The macOS packager accepts `--output /path/to/PhotoSort.app` and honors
-`CARGO_TARGET_DIR`. To keep compiler output out of the project and remove it after
-packaging (including failed builds):
-
 ```sh
-(
-  build_dir="$(mktemp -d)"
-  trap 'cargo clean --target-dir "$build_dir"' EXIT
-  CARGO_TARGET_DIR="$build_dir" python3 scripts/package_macos.py \
-    --output "/tmp/PhotoSort Rust.app"
-)
+open target/PhotoSort.app
 ```
 
-The bundle contains its models and runtime. Packaging verifies the local code
-signature and a streamed resource manifest before replacing the output bundle.
-By default this is an ad-hoc signed local build, not a notarized distribution.
-Use `--sign-identity` with an existing certificate name or SHA-1 for consistent
-development signing. Ad-hoc rebuilds can trigger a new macOS folder-access prompt. The packager's
-integrity and output-safety regressions run without compiling Rust:
+The packager builds a release binary and copies it, `resources/` (including any models and
+ONNX Runtime there) and the linked native libraries with their license notices into a
+relocatable bundle, then verifies its signature and resource manifest.
+`--output /path/to/PhotoSort.app` chooses another destination, and `CARGO_TARGET_DIR` is
+honored (see [CONTRIBUTING.md](CONTRIBUTING.md#build-storage) for a temporary build
+directory).
+
+Bundles are ad-hoc signed and not notarized by default, so macOS may ask again for folder
+access after a rebuild. `--sign-identity` takes an existing codesign identity name or SHA-1
+for a consistent signature.
+
+## Optional libvips backend
+
+The `native-imaging` feature decodes JPEG, PNG, TIFF and GIF through libvips and Little CMS
+instead of the default Rust decoders. It is opt-in, faster for JPEG, PNG and TIFF, and
+required for ICC-profiled CMYK TIFF. `scripts/build_vips.py` builds a pinned private copy
+into `.tools/vips`, and the packager's `--native-imaging` option bundles it
+(`--native-prefix` selects another location). To run from source, set
+`PKG_CONFIG_PATH="$PWD/.tools/vips/lib/pkgconfig"` and pass `--features native-imaging` to
+cargo. See [crates/imaging-vips/README.md](crates/imaging-vips/README.md) for details.
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_package_macos.py'
+brew install glib jpeg-turbo libpng libtiff little-cms2 highway
 ```
-
-All workflows share one catalog, one bounded image pipeline, one lazy model
-registry and one mutation worker. CPU proxy cache: 128 MiB; canonical source cache: 256 MiB; browser GPU textures: 96 MiB;
-disk proxies: 1 GiB, pruned in 32 MiB write batches. Inspection GPU textures hold visible crops rather than whole original photos. These are cache limits, not
-whole-process memory limits: full camera decoding and optional neural models need
-additional working memory. Scanning is batched and analysis yields between photos. All workflows share neutral
-1024-pixel analysis inputs. RAW browsing and analysis share LibRaw's embedded
-camera preview, with a neutral half-size fallback for missing or corrupt previews.
-Full RAW rendering is deferred until the view needs more pixels or the user selects
-100%. Camera previews can differ in color and crop from full RAW detail.
-
-Models are already installed in this working copy. Large weights/native runtime
-are excluded from Git; [asset provenance](resources/ASSETS.md) and SHA-256 manifest
-record the exact files. Python conversion scripts are build tools only.
-
-To investigate orientation suggestions without changing photos, the native audit
-prints quarter-turn predictions, model scores, view counts, uncertainty,
-resize-filter comparisons and pipeline/session reuse counters as JSON. These
-results use the current production consistency policy. It uses a disposable photo cache:
 
 ```sh
-(
-  audit_build_dir="$(mktemp -d)"
-  trap 'cargo clean --target-dir "$audit_build_dir"' EXIT
-  CARGO_TARGET_DIR="$audit_build_dir" cargo run --release --locked \
-    --example audit_orientation -- /path/to/photo.jpg
-)
+python3 scripts/build_vips.py
 ```
-
-Model scores are softmax outputs, not calibrated probabilities of correctness. Restoring
-an image to its starting orientation does not prove that starting orientation was
-upright. That historical report predates the production consistency policy; new runs
-identify their policy explicitly. The policy checks consistency rather than calibrating
-confidence, and an incorrect initial upright prediction can still be missed by the fast
-path.
-
-Real reference fixtures can be checked explicitly without modifying them:
 
 ```sh
-PHOTOSORT_SAMPLE_DIR=/path/to/PhotoSort/tests/samples \
-  cargo test --release --test reference_samples -- --ignored --nocapture
+python3 scripts/package_macos.py --native-imaging
 ```
 
-Cull offers **Photos · no group ordering**, **Groups · earliest photo**, and
-**Groups · similarity then time**. Run Analyze library to create similarity
-groups. Group ordering keeps each group's photos together; the existing photo
-sort controls their order within the group. Photos without a group remain
-available at the end. The selected ordering is restored with the folder's view.
+## Updates (for packagers)
 
-Cull includes an optional **Library navigator** in its browse controls. Expand
-folders or calendar years/months, or choose a similarity group; the existing
-photo grid/list shows the result alongside your rating and search filters.
-Previous/Next moves between sibling nodes. Left/Right cycles within the current
-folder or day unless similarity cycling is enabled. Browsing never moves files.
+Menu → Check for updates reads the GitHub releases of the repository set with
+`PHOTOSORT_RELEASE_REPOSITORY=owner/repository` at build time. Builds with it also check
+once a day at startup unless that is turned off in Settings; builds without it make no
+update requests. Release tags must be semantic versions such as `3.0.1` or `v3.0.1`, and
+drafts, prereleases and downgrades are ignored. The app links to the release page and
+never downloads or installs an update.
 
-## Development build storage
+## Project layout
 
-Development and test builds use line-table debug information and disable
-incremental compilation. This retains filename/line information in backtraces
-while avoiding full variable/type debug data and retained incremental state.
-Recompiling changed Rust code can take longer. Release optimization is unchanged.
-The test profile inherits the development profile, so normal full/minimal test
-commands use the same policy. Environment or user Cargo configuration overrides
-can change it; this is a storage reduction policy, not a hard disk quota.
+```text
+src/core/             catalog, image pipeline, metadata, models, file operations
+src/ui/               egui interface and the five steps
+crates/imaging-vips/  optional libvips adapter (native-imaging feature)
+native/               ImageIO, AVFoundation, LibRaw, Exiv2 and libheif bindings
+resources/            fonts, location data, license notices, model checksums
+scripts/              macOS packager, libvips build, model export, test oracles
+examples/             developer audits and benchmarks
+tests/                integration tests
+tests/fixtures/       small generated fixtures
+tests/samples/        seven camera samples for opt-in reference tests
+```
 
-For an explicit full-debug session, use `CARGO_PROFILE_DEV_DEBUG=2
-CARGO_INCREMENTAL=1 cargo run` (or set those variables in your shell). Clean those
-artifacts afterwards if disk space matters. `cargo clean` removes generated build
-output, including `target/PhotoSort Rust.app`; source, fixtures and model resources
-remain. The 1 October cleanup removed 573,236 generated files; Cargo reported
-97.1 GiB logical size while `du -sh` had reported `61G` allocated. The project then
-occupied 668 MB. A subsequent fresh full/minimal validation with the smaller
-profile reached a sampled 4.29 GiB in a temporary target directory, then cleaned
-it automatically. This is not a hard bound or a controlled comparison with old
-accumulated output.
+## Contributing
 
-Profile behavior follows the [Cargo profile documentation](https://doc.rust-lang.org/cargo/reference/profiles.html).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks and developer tools. Report bugs
+and request features in [GitHub issues](https://github.com/duartebarbosadev/PhotoSort/issues).
 
-## Application updates
+## License
 
-Menu → Check for updates uses one lazy application-owned worker, independent of
-photo scanning, decoding and AI jobs. Settings and the update dialog share the
-persistent daily-check preference. Eligible builds check once on startup when at
-least 24 hours have elapsed since the previous attempt; automatic failures are
-quiet, and an available release appears in the Menu label. Manual checks show
-errors, cancellation, the latest stable version and plain-text release notes.
-Long notes use a UTF-8-safe 16 KiB preview prepared by the background worker;
-the release link stays visible below the scroll area. The release page opens only
-when its link is clicked. No automatic download or
-installation occurs.
+PhotoSort's source code is licensed under the Apache License 2.0 ([LICENSE](LICENSE)).
+Third-party components keep their own terms:
 
-This development checkout has **no release repository configured**. It reports
-that condition explicitly and makes no update request. A distributor must supply
-`PHOTOSORT_RELEASE_REPOSITORY=owner/repository` at **build time**, pointing to the
-repository publishing the Rust application, and retain the default `updates`
-feature. Do not use the Python application's release feed. No repository was
-created or release published by this implementation. Minimal builds explain that
-online checks are unavailable.
+- Default builds link Exiv2 (GPL-2.0-or-later) and LibRaw (LGPL-2.1 or CDDL-1.0).
+- The aesthetic model (`aesthetic.onnx`) is AGPL-3.0 per its model card; the other models
+  are Apache-2.0 or MIT.
+- ONNX Runtime is MIT-licensed.
+- Offline location data is derived from GeoNames (CC BY 4.0) through the reverse_geocode
+  package (LGPL).
+- The Inter font is licensed under the SIL Open Font License 1.1.
 
-Release tags must be `1.2.3` or `v1.2.3` semantic versions. Stable release checks
-reject drafts, prereleases and malformed data, ignore build metadata when
-comparing precedence, and never offer a downgrade. Prerelease app versions do not
-check automatically. There is no token, photo data or library path in requests.
-The response is limited to 2 MiB, HTTPS requests have a 12-second deadline, and
-cancel/shutdown interrupts stalled header/body waits. Redirects are rejected;
-repository renames require a build with the updated release identity.
-
-Protocol and version ordering follow the
-[GitHub releases API](https://docs.github.com/en/rest/releases/releases#get-the-latest-release)
-and [semver crate](https://docs.rs/semver/latest/semver/struct.Version.html).
+See [resources/ASSETS.md](resources/ASSETS.md) for provenance and
+[resources/licenses/](resources/licenses/) for license texts. The macOS packager also
+copies the notices of bundled native libraries into the app.

@@ -1,120 +1,88 @@
 # PhotoSort native image engine
 
-Implementation stage: connected to `core::pipeline` through the optional
-`native-imaging` feature. Default builds retain the existing Rust image/color
-path while supported-platform validation continues. No workflow constructs
-or directly calls this crate.
+`photosort-imaging-vips` is an optional image backend for PhotoSort, enabled with the
+`native-imaging` feature. It hands JPEG, PNG, TIFF and GIF decoding, color conversion,
+thumbnail shrinking and region reads to libvips 8.18+ and Little CMS 2.16+, behind the same
+shared image pipeline (`core::pipeline`) as the default Rust backend. RAW, HEIF and video
+keep their own services. No workflow calls this crate directly.
 
-The adapter delegates codecs, color conversion, thumbnail shrinking and regions
-to libvips 8.18+ and Little CMS 2.16+. It owns only the native interface:
+Compared with the default backend it is faster on large JPEG/PNG/TIFF files (libvips can
+shrink while decoding) and it supports ICC-profiled CMYK TIFF.
 
-- Process initialization once, four native evaluation threads, no global operation
-  cache and no per-owner global shutdown. Native calls are serialized to protect
-  libvips' process-global error buffer; waiting admission remains cancellable.
+## What the adapter owns
+
+- One process-wide initialization, four native evaluation threads, no global operation
+  cache and no per-owner global shutdown. Native calls are serialized to protect libvips'
+  process-global error buffer; waiting for admission stays cancellable.
 - Literal filesystem paths (including libvips option-like brackets).
-- Native errors, null pointers, buffer lengths and cleanup checked before Rust
-  constructs slices; native allocations always released by their allocator.
-- Borrowed, synchronous cancellation callbacks requiring `Sync`, with panics
-  contained at the Rust boundary. Failed/cancelled renders never return pixels.
-- 32768 maximum dimension, 512 MiB source/output byte limits, 4 MiB ICC limit,
-  and preview edges from 1 to 4096. These are allocation limits, not a promise
-  about total process RSS. Rust currently copies the native output once.
-- Exposed invalid, mismatched or relative-intent-incompatible ICC profiles return a visible
-  error rather than allowing an unreported profile fallback. The shared UI uses its
-  existing image-error and Retry handling. If a loader discards
-  metadata first (for example libpng rejecting iCCP), its setup warning is returned
-  separately with the pixels and must be surfaced by the shared UI. Warning
-  capture is scoped to the calling thread/job, not another concurrent image.
-- Straight-alpha sRGB RGBA; 16-bit integer precision retained for full resolution.
-  EXIF and sidecar orientation remain the shared pipeline's responsibility.
+- Native errors, null pointers, buffer lengths and cleanup are checked before Rust builds
+  slices; native allocations are always released by their own allocator.
+- Borrowed, synchronous cancellation callbacks requiring `Sync`, with panics contained at
+  the Rust boundary. Failed or cancelled renders never return pixels.
+- Limits: 32768 maximum dimension, 512 MiB source/output bytes, 4 MiB ICC profiles, and
+  preview edges from 1 to 4096. These bound allocations, not total process memory.
+- Invalid, mismatched or relative-intent-incompatible ICC profiles return a visible error
+  instead of an unreported fallback. If a loader discards metadata first (for example
+  libpng rejecting iCCP), its warning is returned separately with the pixels. Warning
+  capture is scoped to the calling thread.
+- Output is straight-alpha sRGB RGBA, keeping 16-bit precision at full resolution. EXIF
+  and sidecar orientation stay the shared pipeline's responsibility.
 
-Build the small private native dependency with `python3 scripts/build_vips.py`
-from the repository root. The script verifies the pinned upstream source checksum,
-uses temporary build tools/source/output, retains license notices and provenance,
-and installs only to `.tools/vips` by default. Highway SIMD is enabled by default;
-`--no-simd` is available for scalar comparisons. Existing prefixes are never overwritten.
-Python is not a runtime dependency. Native development libraries must already be
-installed; the script does not change the system package manager.
+Original inspection requests oriented source regions through the shared image actor and
+detail cache. Source-resolution requests expand to 512-pixel grid bounds so nearby pans
+can reuse one prepared neighborhood; cropping happens before rotation. Cache identities
+include the libvips version, target architecture and private build recipe, so a custom
+rebuild of the same version needs a cache clear.
 
-For the currently verified macOS setup, run from the repository root:
+## Building the private dependency
+
+`scripts/build_vips.py` builds a pinned libvips into `.tools/vips` (or `--prefix`). It
+verifies the upstream source checksum, builds in temporary directories, keeps licence
+notices and provenance, and never overwrites an existing prefix. Highway SIMD is on by
+default (`--no-simd` builds the scalar variant). The script does not install system
+packages; on macOS install the dependencies first:
+
+```sh
+brew install glib jpeg-turbo libpng libtiff little-cms2 highway
+python3 scripts/build_vips.py
+```
+
+On Debian/Ubuntu, see the package list in `.github/workflows/check.yml`.
+
+## Testing
+
+From the repository root:
 
 ```sh
 export PKG_CONFIG_PATH="$PWD/.tools/vips/lib/pkgconfig"
-export CARGO_TARGET_DIR=/private/tmp/photosort-vips-rust-build
 cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
-PHOTOSORT_SAMPLE_DIR="$PWD/../PhotoSort/tests/samples" cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml original_jpeg_png_samples -- --ignored
 cargo clippy --locked --manifest-path crates/imaging-vips/Cargo.toml --all-targets -- -D warnings
-cargo clean --manifest-path crates/imaging-vips/Cargo.toml
 ```
 
-Tests cover transparent pixels, ICC correction, 16-bit low bits, CMYK/YCCK JPEG,
-packed/planar/LZW CMYK TIFF, malformed inputs/profiles, crop bounds, orientation,
-concurrent initialization, cancellation/panic recovery and the six original
-raster samples. TIFF generators reuse the archived evaluation fixture code.
-The seventh sample is RAW and remains owned by LibRaw.
+The tests cover transparency, ICC correction, 16-bit low bits, CMYK/YCCK JPEG, packed,
+planar and LZW CMYK TIFF, malformed inputs and profiles, crop bounds, orientation,
+concurrent initialization and cancellation/panic recovery. TIFF fixtures are generated by
+`src/tiff_fixture.rs`. An opt-in test decodes the repository's sample photos:
 
-The shared pipeline prepares one 2048-edge working image for display and neutral
-analysis, loads originals on demand, and keeps both recipes in its bounded LRU.
-Analysis geometry comes from source dimensions, avoiding rounding drift from an
-intermediate image. Analysis pixels are independent of original-view order.
-Warnings and geometry are persisted with both proxy types, then reach the shared
-inspector and review canvas. Opaque 8-bit proxies omit redundant alpha channels on disk, while retaining exact
-RGBA pixels after reopening; transparent and 16-bit behavior remains unchanged.
-Cache identities include library versions, target architecture and the private
-build recipe (codec versions and options). External packages without that recipe
-retain version/target identity and require cache clearing after custom same-version
-rebuilds.
-RAW, HEIF, video and unsupported native formats retain their established services.
-Original inspection now requests oriented source regions through the same image
-actor and detail LRU. Source-resolution requests expand to 512-pixel grid bounds
-so nearby pans and workflow changes can reuse one prepared neighborhood. Scaled
-requests retain only their output-size pixels. Cropping occurs before rotation;
-rotation materializes the crop after any display-size reduction so sequential
-codecs do not need to reread earlier rows. Existing full-resolution working images
-are reused when available. The adapter returns canonical source dimensions and
-the pipeline owns sidecar precedence, bounds checks, source invalidation and
-cancellation. There is no independent tile cache or workflow decoder.
+```sh
+PHOTOSORT_SAMPLE_DIR="$PWD/tests/samples" cargo test --locked \
+  --manifest-path crates/imaging-vips/Cargo.toml original_jpeg_png_samples -- --ignored
+```
 
-The seven focused region regressions cover all eight orientations, 16-bit pixels,
-ICC/alpha, clipped bounds, budget eviction, nearby-pan reuse, latest-worker epochs and
-rotated fit views. Complete native/default macOS suites, release measurements and native
-Organize/Cull detail checks now pass. On the controlled 24-megapixel sample JPEG/PNG
-nearby-pan workload, peak process RSS is 61–63% lower and total time 17–38% shorter than
-the previous full-original allocation, with identical native crop pixels. These results
-do not establish savings for every decoder or whole-application performance. Subsequent
-macOS checks verified native panning in Organize and Cull on disposable JPEG/PNG and
-sidecar-rotated samples. All-five-workflow tests
-cover pointer ownership, completed gestures, nearby-pan reuse, bounds and cancellation.
-The native checks cover the recorded workflows and inputs; they do not establish every
-workflow or platform's interaction.
+On Linux, also set `LD_LIBRARY_PATH` to the prefix's `lib` directory before running tests
+or the application.
 
-To run the optional application path after building the private dependency, set
-`PKG_CONFIG_PATH` and `CARGO_TARGET_DIR` as above, then run
-`cargo run --locked --features native-imaging -- --folder /path/to/library`.
-On macOS, `python3 scripts/package_macos.py --native-imaging` bundles the private
-build from `.tools/vips`; `--native-prefix` selects another prefix. The packager
-resolves transitive native libraries from their original loader paths, retains
-license/provenance notices, audits the resulting dependency graph and verifies
-the local signature. The default packaging command keeps the previous backend.
+## Using it in the app
 
-The optional macOS package now passes launch, shared warning display, original detail,
-active 80-image analysis cancellation, post-cancellation navigation and warning
-persistence after restart.
+```sh
+export PKG_CONFIG_PATH="$PWD/.tools/vips/lib/pkgconfig"
+cargo run --release --features native-imaging -- --folder /path/to/photos
+```
 
-The adapter and shared application pipeline also pass headless Linux aarch64 tests in an
-isolated Debian container. Private builds use a fixed `lib` directory on both platforms.
-On Linux, set `LD_LIBRARY_PATH` to the private prefix’s `lib` directory as well as
-setting `PKG_CONFIG_PATH` before running the application or tests.
+On macOS, `python3 scripts/package_macos.py --native-imaging` bundles the private build
+(`--native-prefix` selects another prefix). The packager resolves transitive native
+libraries, keeps their licence notices, audits the resulting dependency graph and verifies
+the code signature.
 
-Before making this the default application backend: complete supported-platform
-validation. Linux desktop interaction/distribution and Windows native execution remain
-unverified. A successful crate test does not establish application parity.
-
-SIMD resolves the earlier scalar first-browsing regression: 15% faster first browsing
-and 29% shorter combined pipeline time than the default path in the same run. Peak
-whole-process RSS is only 3% lower once originals are included. This is not whole-app,
-Python or large-library/model-accuracy evidence.
-
-The final SIMD macOS package passes native transparent/warning rendering, JPEG original
-detail, active analysis cancellation, post-cancellation navigation and restart checks.
-The default app bundle remains separate.
+CI builds and tests this backend on macOS and Linux. Desktop use on Linux and Windows
+native builds have not been verified, so the default backend remains the default.
