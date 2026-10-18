@@ -412,8 +412,9 @@ fn a_single_comparison_row_fits_the_short_canvas_without_clipping() {
         .shapes
         .iter()
         .filter_map(|shape| {
+            // Compared photos sit on CHROME cards.
             if let egui::Shape::Rect(rect) = &shape.shape
-                && rect.fill == BG
+                && rect.fill == CHROME
                 && rect.rect.width() > 200.0
                 && rect.rect.width() < 400.0
             {
@@ -597,4 +598,147 @@ fn each_compared_photo_can_be_rated_from_its_own_stars() {
     }
     assert_eq!(app.selected_rating(id), 3);
     app.runtime.shutdown();
+}
+
+#[test]
+fn stepping_to_an_unloaded_photo_keeps_the_previous_one_instead_of_flashing() {
+    let (_temp, mut app) = comparison_fixture(Step::Cull);
+    app.comparison.clear();
+    app.selection.clear();
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    let first = ctx.load_texture(
+        "first",
+        egui::ColorImage::filled([40, 30], Color32::WHITE),
+        egui::TextureOptions::LINEAR,
+    );
+    let first_id = first.id();
+    app.textures.insert(
+        (MediaId(0), true),
+        Texture {
+            handle: first,
+            bytes: 4800,
+            used: 0,
+        },
+    );
+    let draw = |app: &mut PhotoSortApp| {
+        ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let id = app.active.unwrap();
+                    app.photo_canvas(ui, id, 0, egui::vec2(700.0, 500.0), true);
+                });
+            },
+        )
+    };
+    let _ = draw(&mut app);
+    // The next photo has no pixels yet: the first stays on screen and no
+    // loading text appears.
+    app.set_active(MediaId(1));
+    let output = draw(&mut app);
+    let painted = |shape: &egui::Shape, texture: egui::TextureId| match shape {
+        egui::Shape::Mesh(mesh) => mesh.texture_id == texture,
+        _ => false,
+    };
+    assert!(
+        output
+            .shapes
+            .iter()
+            .any(|clipped| painted(&clipped.shape, first_id)),
+        "The previous photo must stay on screen while the next loads"
+    );
+    let text = |shape: &egui::Shape| match shape {
+        egui::Shape::Text(text) => text.galley.text().contains("Loading preview"),
+        _ => false,
+    };
+    assert!(!output.shapes.iter().any(|clipped| text(&clipped.shape)));
+    // The previous photo's neighbours were asked for ahead of time.
+    assert!(app.requested.contains(&(MediaId(1), true)));
+}
+
+#[test]
+fn fast_scrolling_keeps_only_a_few_thumbnails_queued() {
+    let (_temp, mut app) = comparison_fixture(Step::Cull);
+    for n in 0..12 {
+        let _ = app.texture(MediaId(n), false);
+    }
+    let queued = app.requested.iter().filter(|(_, preview)| !preview).count();
+    const { assert!(THUMBNAILS_IN_FLIGHT < 12) };
+    assert_eq!(queued, THUMBNAILS_IN_FLIGHT);
+    // Previews for the photo being viewed are never held back.
+    let _ = app.texture(MediaId(0), true);
+    assert!(app.requested.contains(&(MediaId(0), true)));
+}
+
+#[test]
+fn guided_comparisons_never_show_the_previous_photo_under_the_new_ones_pill() {
+    for step in [Step::EasyDelete, Step::PickBest, Step::Rotation] {
+        let (_temp, mut app) = comparison_fixture(step);
+        app.comparison.clear();
+        app.selection.clear();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        let first = ctx.load_texture(
+            "first",
+            egui::ColorImage::filled([40, 30], Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        );
+        let first_id = first.id();
+        for preview in [true, false] {
+            app.textures.insert(
+                (MediaId(0), preview),
+                Texture {
+                    handle: first.clone(),
+                    bytes: 4800,
+                    used: 0,
+                },
+            );
+        }
+        let draw = |app: &mut PhotoSortApp| {
+            ctx.run_test(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let id = app.active.unwrap();
+                        app.photo_canvas(ui, id, 0, egui::vec2(700.0, 500.0), true);
+                    });
+                },
+            )
+        };
+        let shows_pill = |output: &egui::FullOutput| {
+            output.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => {
+                    let text = text.galley.text();
+                    text.contains("Keep") || text.contains("Trash") || text.contains("Suggested")
+                }
+                _ => false,
+            })
+        };
+        let loaded = draw(&mut app);
+        // With its pixels, a guided candidate carries its Keep/Trash pill.
+        assert_eq!(shows_pill(&loaded), step != Step::Rotation, "{step:?}");
+        app.set_active(MediaId(1));
+        let output = draw(&mut app);
+        let old_photo = output.shapes.iter().any(|clipped| {
+            matches!(&clipped.shape, egui::Shape::Mesh(mesh) if mesh.texture_id == first_id)
+        });
+        assert!(!old_photo, "{step:?} kept the previous photo on screen");
+        assert!(
+            !shows_pill(&output),
+            "{step:?} showed a decision before the photo loaded"
+        );
+    }
 }

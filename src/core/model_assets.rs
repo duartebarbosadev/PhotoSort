@@ -29,8 +29,18 @@ pub struct Asset {
     pub title: &'static str,
     pub purpose: &'static str,
     pub bytes: u64,
+    /// Direct download, when there is a public pinned file.
     pub url: Option<&'static str>,
     pub license: &'static str,
+    /// The upstream model or project page (resources/ASSETS.md).
+    pub page: &'static str,
+    /// Where the file comes from and what kind of model it is.
+    pub origin: &'static str,
+    /// What it does, in plain language.
+    pub about: &'static str,
+    /// Needed only by an optional mode or step (People folders, Fix
+    /// Rotation) rather than by the analysis most steps share.
+    pub optional: bool,
 }
 pub const ALL: [Asset; 7] = [
     Asset {
@@ -43,6 +53,10 @@ pub const ALL: [Asset; 7] = [
             "https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/model.onnx",
         ),
         license: "Apache-2.0",
+        page: "https://huggingface.co/onnx-community/dinov2-small/tree/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d",
+        origin: "Meta DINOv2 small (ViT-S/14), ONNX export by onnx-community, pinned revision",
+        about: "Recognises what each photo shows, so similar shots and bursts can be grouped.",
+        optional: false,
     },
     Asset {
         id: Id::Aesthetic,
@@ -53,6 +67,10 @@ pub const ALL: [Asset; 7] = [
         bytes: 534_515_358,
         url: None,
         license: "AGPL-3.0 model card",
+        page: "https://huggingface.co/cafeai/cafe_aesthetic/tree/48a343764f786abc1ca8aaddfcd60a688a70da9b",
+        origin: "cafe_aesthetic (BEiT image classifier), exported to ONNX and folded for this app",
+        about: "Rates how appealing a photo looks, to rank the candidates in Pick Best.",
+        optional: false,
     },
     Asset {
         id: Id::Detector,
@@ -62,6 +80,10 @@ pub const ALL: [Asset; 7] = [
         bytes: 425_659,
         url: None,
         license: "MediaPipe / Apache-2.0",
+        page: "https://github.com/google-ai-edge/mediapipe",
+        origin: "Google MediaPipe face detector from face_landmarker.task, converted to ONNX",
+        about: "Finds the faces in each photo.",
+        optional: false,
     },
     Asset {
         id: Id::Landmarks,
@@ -72,6 +94,10 @@ pub const ALL: [Asset; 7] = [
         bytes: 4_996_107,
         url: None,
         license: "MediaPipe / Apache-2.0",
+        page: "https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf",
+        origin: "Google MediaPipe Face Mesh V2, converted to ONNX",
+        about: "Maps the points of each face, used for eyes and alignment.",
+        optional: false,
     },
     Asset {
         id: Id::Blendshapes,
@@ -82,6 +108,10 @@ pub const ALL: [Asset; 7] = [
         bytes: 1_884_171,
         url: None,
         license: "MediaPipe / Apache-2.0",
+        page: "https://github.com/google-ai-edge/mediapipe",
+        origin: "Google MediaPipe face blendshapes (52 expression scores), converted to ONNX",
+        about: "Tells whether eyes are open or closed.",
+        optional: false,
     },
     Asset {
         id: Id::People,
@@ -93,6 +123,10 @@ pub const ALL: [Asset; 7] = [
             "https://media.githubusercontent.com/media/opencv/opencv_zoo/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
         ),
         license: "Apache-2.0",
+        page: "https://github.com/opencv/opencv_zoo/tree/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface",
+        origin: "OpenCV Zoo SFace (MobileFaceNet), unmodified, pinned revision",
+        about: "Recognises the same person across photos, for People folders in Organize.",
+        optional: true,
     },
     Asset {
         id: Id::Rotation,
@@ -104,6 +138,10 @@ pub const ALL: [Asset; 7] = [
             "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases/download/v2/orientation_model_v2_0.9882.onnx",
         ),
         license: "MIT (upstream repository)",
+        page: "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases/tag/v2",
+        origin: "deep-image-orientation-detection v2 release asset, unmodified",
+        about: "Spots photos that are sideways or upside down.",
+        optional: true,
     },
 ];
 impl Id {

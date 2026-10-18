@@ -1,32 +1,41 @@
-//! Visual system ("Studio"). A cool, low-saturation slate surround keeps colour
-//! judgement honest; one azure accent marks focus and the primary action, and
-//! selection is a lifted neutral. Type is Inter (compact); icons are Phosphor.
+//! Visual system ("Grade"). A neutral graphite surround, like a colour
+//! grading suite, keeps colour judgement honest: no tint competes with the
+//! photographs. Panels step up in small, even increments; one warm orange
+//! marks focus, the active page and the primary action. Selection is a lifted
+//! neutral. Type is Inter (compact); icons are Phosphor.
 use eframe::egui::{self, Color32, CornerRadius, FontFamily, FontId, Stroke, TextStyle};
 
 const fn rgb(hex: u32) -> Color32 {
     Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
 /// Surround behind photographs and the main canvas.
-pub const BG: Color32 = rgb(0x15171B);
+pub const BG: Color32 = rgb(0x121213);
+/// The title and page bars that frame the window.
+pub const CHROME: Color32 = rgb(0x161618);
 /// Bars and panels.
-pub const PANEL: Color32 = rgb(0x1B1E23);
+pub const PANEL: Color32 = rgb(0x1C1C1E);
+/// Floating bars and popovers, one step above the panels.
+pub const ELEVATED: Color32 = rgb(0x252528);
 /// Raised controls and tiles.
-pub const CARD: Color32 = rgb(0x23272E);
-pub const CARD_HOVER: Color32 = rgb(0x2C313A);
-pub const LINE: Color32 = rgb(0x2B3038);
-pub const INK: Color32 = rgb(0xE9ECF1);
-pub const MUTED: Color32 = rgb(0x8B93A0);
-pub const FAINT: Color32 = rgb(0x59616E);
-/// The one accent: focus, the primary action per screen.
-pub const ACCENT: Color32 = rgb(0x4F8CFF);
+pub const CARD: Color32 = rgb(0x262629);
+pub const CARD_HOVER: Color32 = rgb(0x303034);
+/// Hairlines inside menus and lists; panels are separated by tone instead.
+pub const LINE: Color32 = rgb(0x2E2E32);
+/// A barely-there edge that catches light on raised surfaces.
+pub const EDGE: Color32 = Color32::from_rgba_premultiplied(9, 9, 9, 9);
+pub const INK: Color32 = rgb(0xDCDCDF);
+pub const MUTED: Color32 = rgb(0x8E8E95);
+pub const FAINT: Color32 = rgb(0x5C5C63);
+/// The one accent: focus, the active page, the primary action per screen.
+pub const ACCENT: Color32 = rgb(0xE8873A);
 /// Text and icons drawn on an accent fill.
-pub const ON_ACCENT: Color32 = rgb(0xFFFFFF);
+pub const ON_ACCENT: Color32 = rgb(0x17120E);
 /// Selected toggles and rows: a lifted neutral, never a muddy tint.
-pub const SELECTED: Color32 = rgb(0x283B5C);
+pub const SELECTED: Color32 = rgb(0x3A3A40);
 /// Translucent accent for text selection.
-pub const ACCENT_SOFT: Color32 = Color32::from_rgba_premultiplied(15, 28, 51, 51);
-pub const RED: Color32 = rgb(0xF0605A);
-pub const GREEN: Color32 = rgb(0x4CC38A);
+pub const ACCENT_SOFT: Color32 = Color32::from_rgba_premultiplied(58, 34, 15, 64);
+pub const RED: Color32 = rgb(0xE5554F);
+pub const GREEN: Color32 = rgb(0x5DBE7E);
 
 /// Spacing scale (points).
 pub const S1: f32 = 4.0;
@@ -34,10 +43,11 @@ pub const S2: f32 = 8.0;
 pub const S3: f32 = 12.0;
 pub const S4: f32 = 16.0;
 pub const S6: f32 = 24.0;
-/// Corner radii by hierarchy: controls, tiles, floating surfaces.
-pub const R_CONTROL: u8 = 6;
-pub const R_TILE: u8 = 8;
-pub const R_SURFACE: u8 = 10;
+/// Corner radii by hierarchy: controls, tiles and thumbnails, floating
+/// surfaces and panels.
+pub const R_CONTROL: u8 = 7;
+pub const R_TILE: u8 = 10;
+pub const R_SURFACE: u8 = 12;
 
 pub const MEDIUM: &str = "ui-medium";
 pub const SEMIBOLD: &str = "ui-semibold";
@@ -66,12 +76,34 @@ pub(super) fn button_row_height(ui: &egui::Ui) -> f32 {
 pub(super) fn primary(text: impl Into<String>) -> egui::Button<'static> {
     egui::Button::new(
         egui::RichText::new(text.into())
-            .font(medium(13.0))
+            .font(medium(12.0))
             .color(ON_ACCENT),
     )
     .fill(ACCENT)
     .stroke(Stroke::NONE)
     .corner_radius(R_CONTROL)
+}
+/// A small uppercase panel caption, as used over panel sections.
+pub(super) fn caption(text: &str) -> egui::RichText {
+    egui::RichText::new(text.to_uppercase())
+        .font(semibold(10.0))
+        .color(MUTED)
+}
+/// A "More" button that opens a menu of secondary actions, so a toolbar
+/// shows only what is used most. The tooltip is also its accessible name.
+pub(super) fn more_menu(
+    ui: &mut egui::Ui,
+    tooltip: &str,
+    add: impl FnOnce(&mut egui::Ui),
+) -> egui::Response {
+    let response = icon_button(ui, egui_phosphor::regular::DOTS_THREE, tooltip);
+    egui::Popup::menu(&response)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.set_min_width(200.0);
+            add(ui);
+        });
+    response
 }
 /// A frameless icon button. Its tooltip is also its accessible name, so
 /// assistive technology never reads the icon font's private-use glyph.
@@ -86,6 +118,17 @@ pub(super) fn icon_button(ui: &mut egui::Ui, icon: &str, tooltip: &str) -> egui:
     let name = tooltip.lines().next().unwrap_or(tooltip).to_owned();
     let enabled = response.enabled();
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
+    response
+}
+/// Gives an icon-only control a readable accessible name, so assistive
+/// technology never reads the icon font's private-use glyph.
+pub(super) fn named(
+    response: egui::Response,
+    kind: egui::WidgetType,
+    name: &str,
+) -> egui::Response {
+    let enabled = response.enabled();
+    response.widget_info(|| egui::WidgetInfo::labeled(kind, enabled, name));
     response
 }
 /// A button with a leading icon; `text` alone is the accessible name.
@@ -128,7 +171,7 @@ pub(super) fn modal(id: egui::Id) -> egui::Modal {
         .frame(
             egui::Frame::new()
                 .fill(PANEL)
-                .stroke(Stroke::new(1.0, LINE))
+                .stroke(Stroke::new(1.0, EDGE))
                 .corner_radius(R_SURFACE + 2)
                 .inner_margin(egui::Margin::same(20))
                 .shadow(egui::Shadow {
@@ -158,15 +201,15 @@ pub(super) fn floating_bar<R>(
     ui.horizontal(|ui| {
         ui.add_space(inset);
         let output = egui::Frame::new()
-            .fill(PANEL)
-            .stroke(Stroke::new(1.0, LINE))
-            .corner_radius(R_SURFACE)
-            .inner_margin(egui::Margin::symmetric(MARGIN as i8, S1 as i8))
+            .fill(ELEVATED)
+            .stroke(Stroke::new(1.0, EDGE))
+            .corner_radius(R_SURFACE + 4)
+            .inner_margin(egui::Margin::symmetric(MARGIN as i8, (S1 + 1.0) as i8))
             .shadow(egui::epaint::Shadow {
-                offset: [0, 4],
-                blur: 14,
+                offset: [0, 8],
+                blur: 28,
                 spread: 0,
-                color: Color32::from_black_alpha(70),
+                color: Color32::from_black_alpha(120),
             })
             .show(ui, |ui| {
                 let inner = available - 2.0 * MARGIN - 2.0;
@@ -191,7 +234,7 @@ pub(super) fn chip(ui: &mut egui::Ui, selected: bool, text: &str) -> egui::Respo
     ui.add(
         egui::Button::new(egui::RichText::new(text).color(if selected { INK } else { MUTED }))
             .selected(selected)
-            .corner_radius(14)
+            .corner_radius(12)
             .stroke(Stroke::new(1.0, if selected { ACCENT } else { LINE })),
     )
 }
@@ -309,13 +352,8 @@ pub(super) fn segmented(
     let total = widths.iter().sum::<f32>() + 2.0 * pad;
     let (track, _) = ui.allocate_exact_size(egui::vec2(total, height), egui::Sense::hover());
     let painter = ui.painter_at(track.expand(4.0));
-    painter.rect_filled(track, CornerRadius::same(R_CONTROL + 2), BG);
-    painter.rect_stroke(
-        track,
-        CornerRadius::same(R_CONTROL + 2),
-        Stroke::new(1.0, LINE),
-        egui::StrokeKind::Inside,
-    );
+    let track_radius = CornerRadius::same((height / 2.0).min(255.0) as u8);
+    painter.rect_filled(track, track_radius, BG);
     let mut x = track.left() + pad;
     let mut rects = Vec::with_capacity(segments.len());
     for width in &widths {
@@ -335,12 +373,14 @@ pub(super) fn segmented(
             .ctx()
             .animate_value_with_time(id.with("right"), target.right(), time);
         let pill = egui::Rect::from_x_y_ranges(left..=right, target.y_range());
-        painter.rect_filled(pill, CornerRadius::same(R_CONTROL), SELECTED);
-        painter.hline(
-            pill.x_range().shrink(4.0),
-            pill.top() + 0.5,
-            Stroke::new(1.0, Color32::from_white_alpha(14)),
+        let radius = CornerRadius::same((pill.height() / 2.0) as u8);
+        // A one-pixel drop shadow lifts the pill off its track.
+        painter.rect_filled(
+            pill.translate(egui::vec2(0.0, 1.0)),
+            radius,
+            Color32::from_black_alpha(60),
         );
+        painter.rect_filled(pill, radius, SELECTED);
     }
     let mut clicked = None;
     for (index, (segment, rect)) in segments.iter().zip(&rects).enumerate() {
@@ -385,15 +425,32 @@ pub(super) fn wrap_before(ui: &mut egui::Ui, width: f32) {
         ui.end_row();
     }
 }
+/// Rounds the corners of an image already painted in `rect` by covering
+/// them with `behind`, the colour around it. One anti-aliased stroke whose
+/// inner edge is the rounded outline: cheap enough for every grid tile.
+pub(super) fn round_corners(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    radius: f32,
+    behind: Color32,
+) {
+    if radius < 1.0 || rect.width() < 2.0 * radius || rect.height() < 2.0 * radius {
+        return;
+    }
+    // The band must reach past each corner: wider than (√2 − 1) × radius.
+    let band = (radius * 0.6).max(2.0);
+    painter.rect_stroke(
+        rect.expand(band / 2.0),
+        CornerRadius::same((radius + band / 2.0).round() as u8),
+        Stroke::new(band, behind),
+        egui::StrokeKind::Middle,
+    );
+}
 /// A thin vertical rule between groups of controls in one toolbar row.
 pub(super) fn divider(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(9.0, 20.0), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(11.0, 16.0), egui::Sense::hover());
     ui.painter()
         .vline(rect.center().x, rect.y_range(), Stroke::new(1.0, LINE));
-}
-/// The quiet guidance line under a step's controls.
-pub(super) fn step_hint(ui: &mut egui::Ui, text: &str) {
-    ui.add(egui::Label::new(egui::RichText::new(text).small().color(MUTED)).wrap());
 }
 
 /// Seconds for interface animations; zero when motion is reduced.
@@ -439,8 +496,8 @@ pub fn install(ctx: &egui::Context) {
     let mut style = (*ctx.global_style()).clone();
     let mut visuals = egui::Visuals::dark();
     visuals.panel_fill = PANEL;
-    visuals.window_fill = PANEL;
-    visuals.window_stroke = Stroke::new(1.0, LINE);
+    visuals.window_stroke = Stroke::new(1.0, EDGE);
+    visuals.window_fill = ELEVATED;
     visuals.window_corner_radius = CornerRadius::same(R_SURFACE + 2);
     visuals.menu_corner_radius = CornerRadius::same(R_SURFACE);
     let shadow = egui::Shadow {
@@ -464,7 +521,7 @@ pub fn install(ctx: &egui::Context) {
     visuals.hyperlink_color = ACCENT;
     visuals.selection.bg_fill = ACCENT_SOFT;
     visuals.selection.stroke = Stroke::new(1.0, ACCENT);
-    visuals.warn_fg_color = rgb(0xF2B544);
+    visuals.warn_fg_color = rgb(0xE6B450);
     visuals.error_fg_color = RED;
     visuals.handle_shape = egui::style::HandleShape::Circle;
     visuals.slider_trailing_fill = true;
@@ -490,7 +547,7 @@ pub fn install(ctx: &egui::Context) {
     w.hovered.fg_stroke = Stroke::new(1.0, INK);
     w.active.fg_stroke = Stroke::new(1.0, INK);
     w.open.fg_stroke = Stroke::new(1.0, INK);
-    w.hovered.bg_stroke = Stroke::new(1.0, LINE);
+    w.hovered.bg_stroke = Stroke::NONE;
     // Selected toggles reuse the selection colours: a lifted neutral.
     visuals.selection.bg_fill = SELECTED;
     visuals.selection.stroke = Stroke::new(1.0, INK);
@@ -507,9 +564,9 @@ pub fn install(ctx: &egui::Context) {
     style.spacing.icon_width = 14.0;
     style.spacing.icon_width_inner = 8.0;
     style.animation_time = MOTION;
-    let (body, button, small) = (12.5, 12.5, 11.0);
+    let (body, button, small) = (12.0, 12.0, 10.5);
     for (text, font) in [
-        (TextStyle::Heading, semibold(18.0)),
+        (TextStyle::Heading, semibold(16.0)),
         (TextStyle::Body, FontId::proportional(body)),
         (TextStyle::Button, FontId::proportional(button)),
         (TextStyle::Small, FontId::proportional(small)),

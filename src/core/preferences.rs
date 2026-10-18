@@ -27,6 +27,17 @@ pub struct Preferences {
     pub raw_look: super::raw_look::RawLook,
     /// Finish every interface animation instantly.
     pub reduce_motion: bool,
+    /// Where Cull's Review shows the strip of photos.
+    pub cull_strip: StripPosition,
+    /// Cull only: file names under thumbnails in its grid and photo strips.
+    pub show_filenames: bool,
+}
+/// The side of the Review canvas that holds the photo strip.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StripPosition {
+    #[default]
+    Bottom,
+    Left,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -46,6 +57,8 @@ impl Default for Preferences {
             keep_companions: true,
             raw_look: Default::default(),
             reduce_motion: false,
+            cull_strip: StripPosition::Bottom,
+            show_filenames: true,
         }
     }
 }

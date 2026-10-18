@@ -11,6 +11,70 @@ impl PhotoSortApp {
         self.query.clear();
         self.filter_dirty = true;
     }
+    /// What is narrowing Cull's view, in words; empty when nothing is.
+    pub(super) fn active_cull_filters(&self) -> Vec<String> {
+        let mut active = Vec::new();
+        if !self.query.trim().is_empty() {
+            active.push(format!("Search “{}”", self.query.trim()));
+        }
+        if self.filter != Filter::All {
+            active.push(self.filter.title().to_owned());
+        }
+        if self.browse.rating != RatingFilter::All {
+            active.push(self.browse.rating.title().to_string());
+        }
+        if let Some(group) = self.browse.group {
+            active.push(format!("Group {group}"));
+        }
+        if let Some(date) = &self.browse.date {
+            active.push(if date.is_empty() {
+                "Unknown date".to_owned()
+            } else {
+                date.clone()
+            });
+        }
+        if let Some(path) = &self.browse.folder.path {
+            let folder = self
+                .root
+                .as_ref()
+                .and_then(|root| path.strip_prefix(root).ok())
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Library root".into());
+            active.push(format!("Folder {folder}"));
+        }
+        active
+    }
+    /// A line above the photos whenever Cull shows only some of them, so a
+    /// filter restored with the folder's saved view is never a surprise.
+    pub(super) fn cull_filter_notice(&mut self, ui: &mut egui::Ui) {
+        let active = self.active_cull_filters();
+        if active.is_empty() {
+            return;
+        }
+        let total = self.media.len();
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(egui_phosphor::regular::FUNNEL).color(ACCENT));
+            ui.label(
+                RichText::new(format!(
+                    "Showing {} of {total} {}",
+                    self.filtered.len(),
+                    if total == 1 { "item" } else { "items" }
+                ))
+                .color(INK),
+            );
+            if ui
+                .small_button("Clear filters")
+                .on_hover_text("Show every photo and video in this folder")
+                .clicked()
+            {
+                self.clear_browse_filters();
+            }
+            let reasons = active.join(" · ");
+            ui.add(egui::Label::new(RichText::new(&reasons).small().color(MUTED)).truncate())
+                .on_hover_text(reasons);
+        });
+    }
     fn browse_item(&self, id: MediaId) -> crate::core::browsing::Update {
         crate::core::browsing::Update {
             embedding: self.embeddings.get(&id).cloned(),
@@ -145,66 +209,111 @@ impl PhotoSortApp {
             Err(error) => self.error = Some(error),
         }
     }
+    /// Cull's view options: where Review's photo strip sits and whether
+    /// thumbnails carry file names. Both persist as user preferences.
+    pub(super) fn cull_view_options(&mut self, ui: &mut egui::Ui) {
+        use crate::core::preferences::StripPosition;
+        use egui_phosphor::regular as icon;
+        let response = icon_button(ui, icon::SLIDERS_HORIZONTAL, "View options");
+        egui::Popup::menu(&response)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_min_width(220.0);
+                ui.label(caption("Photo strip in Review"));
+                let positions = [StripPosition::Bottom, StripPosition::Left];
+                let segments: Vec<Segment> = positions
+                    .iter()
+                    .map(|position| {
+                        let (glyph, name) = match position {
+                            StripPosition::Bottom => (icon::SQUARE_HALF_BOTTOM, "Bottom"),
+                            StripPosition::Left => (icon::SQUARE_HALF, "Left"),
+                        };
+                        Segment {
+                            shown: format!("{glyph}  {name}"),
+                            name: format!("Photo strip: {name}"),
+                            hover: None,
+                        }
+                    })
+                    .collect();
+                let current = positions
+                    .iter()
+                    .position(|p| *p == self.preferences.cull_strip);
+                if let Some(index) = segmented(
+                    ui,
+                    egui::Id::new("cull-strip-position"),
+                    &segments,
+                    current,
+                    button_row_height(ui),
+                ) && self.preferences.cull_strip != positions[index]
+                {
+                    self.preferences.cull_strip = positions[index];
+                    self.save_preferences();
+                }
+                ui.add_space(S2);
+                ui.label(caption("Thumbnails"));
+                let mut names = self.preferences.show_filenames;
+                if ui.add(Switch::new(&mut names, "Show filenames")).changed() {
+                    self.preferences.show_filenames = names;
+                    self.save_preferences();
+                }
+            });
+    }
     pub(super) fn browse_controls(&mut self, ui: &mut egui::Ui) {
         // One row at every size: filters live in a popover that shows how many
         // are active, so photos keep the vertical space.
         let overlay = true;
-        ui.horizontal_wrapped(|ui| {
-            // Buttons keep their text on one line, so a control that does not
-            // fit moves to the next row instead of being squeezed.
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            if overlay {
-                let active = [
-                    self.browse.rating != RatingFilter::All,
-                    self.browse.group.is_some(),
-                    self.browse.date.is_some(),
-                    self.browse.folder.path.is_some(),
-                ]
-                .into_iter()
-                .filter(|active| *active)
-                .count();
-                let label = if active == 0 {
-                    "Filters & sort".to_owned()
-                } else {
-                    format!("Filters & sort · {active}")
-                };
-                let response = icon_text_button(
-                    ui,
-                    true,
-                    active > 0 || self.browse_filters_open,
-                    egui_phosphor::regular::FUNNEL,
-                    &label,
-                );
-                let mut open = self.browse_filters_open;
-                if response.clicked() {
-                    open = !open;
-                }
-                let width = (ui.ctx().content_rect().width() - 64.).clamp(240., 460.);
-                let height = (ui.ctx().content_rect().height() - 180.).clamp(160., 440.);
-                // This parent owns its transient state so nested rating/folder
-                // ComboBoxes can use egui's normal popup state independently.
-                egui::Popup::from_response(&response)
-                    .id(egui::Id::new("compact_browse_filters"))
-                    .open_bool(&mut open)
-                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                    .width(width)
-                    .show(|ui| {
-                        ui.set_width(width);
-                        ui.heading("Filters & sort");
-                        egui::ScrollArea::vertical()
-                            .max_height(height)
-                            .show(ui, |ui| self.browse_filter_controls(ui));
-                    });
-                self.browse_filters_open = open;
+        self.search_field(ui);
+        self.filter_combo(ui);
+        if overlay {
+            let active = [
+                self.browse.rating != RatingFilter::All,
+                self.browse.group.is_some(),
+                self.browse.date.is_some(),
+                self.browse.folder.path.is_some(),
+            ]
+            .into_iter()
+            .filter(|active| *active)
+            .count();
+            let label = if active == 0 {
+                "Filters & sort".to_owned()
             } else {
-                self.browse_filters_open = false;
+                format!("Filters & sort · {active}")
+            };
+            let response = icon_text_button(
+                ui,
+                true,
+                active > 0 || self.browse_filters_open,
+                egui_phosphor::regular::FUNNEL,
+                &label,
+            );
+            let mut open = self.browse_filters_open;
+            if response.clicked() {
+                open = !open;
             }
-            self.navigator_controls(ui);
-            if !self.review {
-                ui.add_space(S3);
-                self.selection_controls(ui);
-            }
-        });
+            let width = (ui.ctx().content_rect().width() - 64.).clamp(240., 460.);
+            let height = (ui.ctx().content_rect().height() - 180.).clamp(160., 440.);
+            // This parent owns its transient state so nested rating/folder
+            // ComboBoxes can use egui's normal popup state independently.
+            egui::Popup::from_response(&response)
+                .id(egui::Id::new("compact_browse_filters"))
+                .open_bool(&mut open)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .width(width)
+                .show(|ui| {
+                    ui.set_width(width);
+                    ui.heading("Filters & sort");
+                    egui::ScrollArea::vertical()
+                        .max_height(height)
+                        .show(ui, |ui| self.browse_filter_controls(ui));
+                });
+            self.browse_filters_open = open;
+        } else {
+            self.browse_filters_open = false;
+        }
+        self.navigator_controls(ui);
+        if !self.review {
+            self.selection_controls(ui);
+        }
         if !overlay {
             self.browse_filter_controls(ui);
         }
@@ -393,7 +502,8 @@ impl PhotoSortApp {
     /// The status bar's metadata controls, for Cull and metadata-based
     /// Organize. Called inside the footer's right-to-left layout: Cancel is
     /// added first so the changing count to its left never moves it.
-    pub(super) fn footer_metadata(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn footer_metadata(&mut self, ui: &mut egui::Ui, narrow: bool) {
+        use egui_phosphor::regular as icon;
         if self.root.is_none()
             || !(self.step == Step::Cull
                 || (self.step == Step::Organize && self.metadata_organize_mode()))
@@ -403,30 +513,46 @@ impl PhotoSortApp {
         if let Some((done, total)) = self.metadata_progress
             && self.metadata_run.is_some()
         {
-            if ui.small_button("Cancel metadata reading").clicked() {
-                self.cancel_metadata_index();
+            let progress = format!("Reading metadata · {done} / {total}");
+            if narrow {
+                if icon_button(ui, icon::X_CIRCLE, "Cancel metadata reading")
+                    .on_hover_text(&progress)
+                    .clicked()
+                {
+                    self.cancel_metadata_index();
+                }
+            } else {
+                if ui.small_button("Cancel metadata reading").clicked() {
+                    self.cancel_metadata_index();
+                }
+                ui.label(RichText::new(progress).small().color(MUTED));
             }
-            ui.label(
-                RichText::new(format!("Reading metadata · {done} / {total}"))
-                    .small()
-                    .color(MUTED),
-            );
-        } else if self.metadata.len() < self.media.len()
-            && ui.small_button("Read remaining metadata").clicked()
-        {
-            self.resume_suspended = false;
-            self.start_metadata_index();
+        } else if self.metadata.len() < self.media.len() {
+            let clicked = if narrow {
+                icon_button(ui, icon::ARROW_CLOCKWISE, "Read remaining metadata").clicked()
+            } else {
+                ui.small_button("Read remaining metadata").clicked()
+            };
+            if clicked {
+                self.resume_suspended = false;
+                self.start_metadata_index();
+            }
         }
         if !self.metadata_failures.is_empty() {
+            let text = format!(
+                "{} files have unavailable metadata",
+                self.metadata_failures.len()
+            );
             ui.label(
-                RichText::new(format!(
-                    "{} files have unavailable metadata",
-                    self.metadata_failures.len()
-                ))
+                RichText::new(if narrow {
+                    icon::WARNING.to_owned()
+                } else {
+                    text.clone()
+                })
                 .small()
                 .color(RED),
             )
-            .on_hover_text("Restore access and retry metadata reading. Folder proposals wait for complete metadata; photos remain browsable.");
+            .on_hover_text(format!("{text}. Restore access and retry metadata reading. Folder proposals wait for complete metadata; photos remain browsable."));
         }
     }
     pub(super) fn metadata_status(&mut self, ui: &mut egui::Ui) {

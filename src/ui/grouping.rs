@@ -13,7 +13,7 @@ impl PhotoSortApp {
         self.step == Step::Organize && self.group_mode == GroupMode::Visual
     }
     pub(super) fn library_selection_mode(&self) -> bool {
-        (self.step == Step::Cull || self.scene_editing()) && !self.review
+        matches!(self.step, Step::Cull | Step::Organize) && !self.review
     }
     fn groups_ready(&self) -> bool {
         (self.step == Step::Cull
@@ -201,10 +201,13 @@ impl PhotoSortApp {
     }
     /// Dragging photos onto a navigator group: Cull, with groups to move into.
     pub(super) fn photo_drag_enabled(&self) -> bool {
-        self.step == Step::Cull
-            && !self.review
-            && !self.cull_groups.is_empty()
-            && self.groups_ready()
+        !self.review
+            && match self.step {
+                Step::Cull => !self.cull_groups.is_empty() && self.groups_ready(),
+                // Onto a proposed folder in Organize's board.
+                Step::Organize => self.can_edit_folders() && self.organize_editor.is_none(),
+                _ => false,
+            }
     }
     /// Moves dropped photos into `group` with the same edit as the Groups menu.
     pub(super) fn drop_on_group(&mut self, drag: &PhotoDrag, group: usize) {
@@ -229,7 +232,12 @@ impl PhotoSortApp {
         };
         ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         let count = drag.0.len();
-        let text = if self.navigator.enabled
+        let text = if self.step == Step::Organize {
+            format!(
+                "Move {count} {} to a folder",
+                if count == 1 { "item" } else { "items" }
+            )
+        } else if self.navigator.enabled
             && self.navigator.mode == crate::core::browsing::tree::Mode::Groups
         {
             format!(

@@ -620,3 +620,37 @@ fn status_bar_metadata_controls_never_overlap_the_status_text() {
         app.runtime.shutdown();
     }
 }
+
+#[test]
+fn a_restored_filter_says_how_many_items_are_hidden_and_clears_in_one_click() {
+    let (_temp, mut app) = fixture();
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let size = egui::vec2(1440., 900.);
+    // No filter: no notice.
+    let nodes = rendered(&mut app, &ctx, size);
+    assert!(!nodes.iter().any(|(label, _)| label == "Clear filters"));
+    // A folder filter, as a saved view would restore it.
+    app.browse.folder.path = Some(app.root.clone().unwrap().join("B"));
+    app.filter_dirty = true;
+    settle(&mut app);
+    assert_eq!(app.filtered.len(), 5);
+    let nodes = rendered(&mut app, &ctx, size);
+    assert!(
+        nodes
+            .iter()
+            .any(|(label, _)| label == "Showing 5 of 9 items"),
+        "{:?}",
+        nodes.iter().map(|(l, _)| l).collect::<Vec<_>>()
+    );
+    assert!(nodes.iter().any(|(label, _)| label == "Folder B"));
+    click_label(&mut app, &ctx, size, "Clear filters");
+    settle(&mut app);
+    assert_eq!(app.filtered.len(), 9);
+    assert!(app.active_cull_filters().is_empty());
+    let nodes = rendered(&mut app, &ctx, size);
+    assert!(!nodes.iter().any(|(label, _)| label == "Clear filters"));
+    assert!(app.decisions.is_empty());
+    app.runtime.shutdown();
+}

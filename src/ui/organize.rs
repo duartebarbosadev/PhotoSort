@@ -1595,7 +1595,7 @@ impl PhotoSortApp {
     /// the photos going there. Only that folder's thumbnails are requested.
     fn folder_hover_preview(&mut self, ctx: &egui::Context, editor: &Editor) {
         const DELAY: f64 = 0.4;
-        const EDGE: f32 = 72.0;
+        const THUMB_EDGE: f32 = 72.0;
         let Some((path, row, since)) = &editor.folder_hover else {
             return;
         };
@@ -1626,8 +1626,8 @@ impl PhotoSortApp {
             .interactable(false)
             .show(ctx, |ui| {
                 egui::Frame::new()
-                    .fill(PANEL)
-                    .stroke(Stroke::new(1.0, LINE))
+                    .fill(ELEVATED)
+                    .stroke(Stroke::new(1.0, EDGE))
                     .corner_radius(R_SURFACE)
                     .inner_margin(S2)
                     .show(ui, |ui| {
@@ -1646,12 +1646,14 @@ impl PhotoSortApp {
                         }
                         ui.horizontal(|ui| {
                             for id in photos {
-                                let (rect, _) =
-                                    ui.allocate_exact_size(egui::vec2(EDGE, EDGE), Sense::hover());
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(THUMB_EDGE, THUMB_EDGE),
+                                    Sense::hover(),
+                                );
                                 ui.painter().rect_filled(rect, R_CONTROL, CARD);
                                 if let Some(texture) = self.texture(id, false) {
                                     let size = texture.size_vec2();
-                                    let scale = (EDGE / size.x).min(EDGE / size.y);
+                                    let scale = (THUMB_EDGE / size.x).min(THUMB_EDGE / size.y);
                                     let fit =
                                         egui::Rect::from_center_size(rect.center(), size * scale);
                                     ui.painter().image(

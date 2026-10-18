@@ -173,7 +173,7 @@ impl PhotoSortApp {
             .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(PANEL)
-                    .stroke(Stroke::new(1.0, LINE))
+                    .stroke(Stroke::new(1.0, EDGE))
                     .shadow(egui::Shadow {
                         offset: [-6, 0],
                         blur: 18,

@@ -74,10 +74,15 @@ impl PhotoSortApp {
         }
         self.changed_items(changed);
     }
-    fn selection_ready(&self) -> bool {
-        self.step == Step::Cull && !self.busy && !self.scanning && self.browse_run.is_none()
+    pub(super) fn selection_ready(&self) -> bool {
+        let step = match self.step {
+            Step::Cull => self.browse_run.is_none(),
+            Step::Organize => !self.review && !self.filter_dirty,
+            _ => false,
+        };
+        step && !self.busy && !self.scanning
     }
-    fn scene_selection_ready(&self) -> bool {
+    pub(super) fn scene_selection_ready(&self) -> bool {
         self.scene_editing() && !self.busy && !self.scanning && !self.filter_dirty
     }
     pub(super) fn select_library(&mut self, id: MediaId, toggle: bool, extend: bool) {
@@ -129,7 +134,9 @@ impl PhotoSortApp {
         self.active = None;
     }
     fn stage_selection(&mut self, change: Change) {
-        if !self.selection_ready() {
+        // Batch ratings and marks belong to Cull; Organize's board selects
+        // photos to move them.
+        if self.step != Step::Cull || !self.selection_ready() {
             return;
         }
         let ids = self.selection.ordered(&self.media, &self.filtered);
@@ -210,36 +217,37 @@ impl PhotoSortApp {
         // wrapping row; start a new row when the whole group does not fit.
         let font = egui::TextStyle::Button.resolve(ui.style());
         let pad = 2.0 * ui.spacing().button_padding.x + ui.spacing().item_spacing.x;
-        let needed: f32 = [
-            format!("{} selected", self.selection.len()),
-            "Selection".into(),
-            "Groups".into(),
-            "Compare selected".into(),
-        ]
-        .into_iter()
-        .map(|text| {
-            ui.painter()
-                .layout_no_wrap(text, font.clone(), INK)
-                .size()
-                .x
-                + pad
-        })
-        .sum();
+        let label = format!("{} selected", self.selection.len());
+        let compare = (2..=9).contains(&self.selection.len());
+        let menu = format!("{label}  {}", egui_phosphor::regular::CARET_DOWN);
+        let needed: f32 = [menu.clone(), "Compare selected".into()]
+            .into_iter()
+            .map(|text| {
+                ui.painter()
+                    .layout_no_wrap(text, font.clone(), INK)
+                    .size()
+                    .x
+                    + pad
+            })
+            .sum();
         wrap_before(ui, needed);
-        {
-            ui.label(RichText::new(format!("{} selected", self.selection.len())).color(MUTED));
-            ui.add_enabled_ui(self.selection_ready(), |ui| {
-                ui.menu_button("Selection", |ui| {
-                    if ui.button("Select all visible · Ctrl/Cmd+A").clicked() { self.select_all_visible(); ui.close(); }
-                    if ui.button("Clear selection").clicked() { self.clear_library_selection(); ui.close(); }
-                    ui.separator();
-                    self.selection_actions(ui);
-                });
-                self.group_controls(ui);
-                if ui.add_enabled((2..=9).contains(&self.selection.len()), egui::Button::new("Compare selected"))
-                    .on_hover_text("Compare 2–9 selected photos. Larger selections can still be rated, rotated or marked together.").clicked() { self.compare_selection(); }
+        // Selection, group and batch actions share one menu; comparing is
+        // offered directly once it is possible.
+        ui.add_enabled_ui(self.selection_ready(), |ui| {
+            ui.menu_button(menu, |ui| {
+                if ui.button("Select all visible · Ctrl/Cmd+A").clicked() { self.select_all_visible(); ui.close(); }
+                if ui.button("Clear selection").clicked() { self.clear_library_selection(); ui.close(); }
+                ui.separator();
+                self.selection_actions(ui);
             });
-        }
+            if compare
+                && ui.button("Compare selected")
+                    .on_hover_text("Compare 2–9 selected photos. Larger selections can still be rated, rotated or marked together.")
+                    .clicked()
+            {
+                self.compare_selection();
+            }
+        });
     }
     pub(super) fn selection_actions(&mut self, ui: &mut egui::Ui) {
         self.group_controls(ui);
@@ -288,7 +296,8 @@ impl PhotoSortApp {
         key: egui::Key,
         modifiers: egui::Modifiers,
     ) -> bool {
-        if self.scene_editing() && !self.review {
+        // Organize's folder board selects photos to move or compare them.
+        if self.step == Step::Organize && !self.review {
             match key {
                 egui::Key::A if modifiers.command || modifiers.ctrl => {
                     self.select_all_visible();

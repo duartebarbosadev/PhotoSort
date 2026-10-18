@@ -63,6 +63,12 @@ fn main() -> anyhow::Result<()> {
             [1440.0, 900.0],
         ),
         (
+            "03b-organize-by-date-wide",
+            Some(Step::Organize),
+            false,
+            [1440.0, 900.0],
+        ),
+        (
             "04-easy-delete-wide",
             Some(Step::EasyDelete),
             true,
@@ -77,6 +83,24 @@ fn main() -> anyhow::Result<()> {
         (
             "06-pick-best-wide",
             Some(Step::PickBest),
+            true,
+            [1440.0, 900.0],
+        ),
+        (
+            "02b-cull-review-left-strip",
+            Some(Step::Cull),
+            true,
+            [1440.0, 900.0],
+        ),
+        (
+            "02c-cull-grid-no-names",
+            Some(Step::Cull),
+            false,
+            [1440.0, 900.0],
+        ),
+        (
+            "02d-cull-review-left-strip-no-names",
+            Some(Step::Cull),
             true,
             [1440.0, 900.0],
         ),
@@ -112,10 +136,23 @@ fn main() -> anyhow::Result<()> {
             .with_pixels_per_point(2.0)
             .build_eframe(|cc| PhotoSortApp::new(cc, Some(folder)));
         settle(&mut harness);
+        harness.state_mut().gallery_seed_reviews();
+        harness
+            .state_mut()
+            .gallery_left_strip(name.contains("left-strip"));
+        harness
+            .state_mut()
+            .gallery_show_filenames(!name.contains("no-names"));
         if let Some(step) = step {
             harness.state_mut().gallery_step(*step);
             settle(&mut harness);
+            if name.contains("by-date") {
+                harness.state_mut().gallery_organize_by_date();
+                settle(&mut harness);
+            }
             harness.state_mut().gallery_review(*review);
+            settle(&mut harness);
+            harness.state_mut().gallery_close_model_dialog();
             settle(&mut harness);
         }
         let image = harness.render().map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -129,6 +166,7 @@ fn main() -> anyhow::Result<()> {
         ("15-about", Dialog::About),
         ("16-organize-editor", Dialog::OrganizeEditor),
         ("17-cull-compare", Dialog::Compare),
+        ("18-ai-models", Dialog::Models),
     ] {
         let folder = library.path().to_path_buf();
         let mut harness = Harness::builder()
@@ -143,6 +181,7 @@ fn main() -> anyhow::Result<()> {
             Dialog::PlanReview => harness.state_mut().gallery_plan_review(3),
             Dialog::About => harness.state_mut().gallery_about(),
             Dialog::Compare => harness.state_mut().gallery_compare(3),
+            Dialog::Models => harness.state_mut().gallery_models(),
             Dialog::OrganizeEditor => {
                 harness.state_mut().gallery_step(Step::Organize);
                 settle(&mut harness);
@@ -192,6 +231,7 @@ enum Dialog {
     About,
     OrganizeEditor,
     Compare,
+    Models,
 }
 
 /// Step frames until background work settles (or ~20 s pass).

@@ -6,7 +6,7 @@ use crate::core::{
 
 fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
     // Relative paths are resolved against Cargo's cwd without changing the
-    // process-wide cwd or touching the read-only Python reference.
+    // process-wide cwd; the library is a disposable temporary folder.
     let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let root = dir.path().join("library");
     std::fs::create_dir(&root).unwrap();

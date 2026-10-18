@@ -77,9 +77,14 @@ impl PhotoSortApp {
         response.context_menu(|ui| self.review_context_menu(ui, id));
         let active = self.active == Some(id);
         let painter = ui.painter().with_clip_rect(rect);
-        painter.rect_filled(rect, 10.0, BG);
+        painter.rect_filled(rect, R_SURFACE, BG);
         if active {
-            painter.rect_stroke(rect, 10.0, Stroke::new(1.0, ACCENT), StrokeKind::Inside);
+            painter.rect_stroke(
+                rect,
+                R_SURFACE,
+                Stroke::new(1.5, ACCENT),
+                StrokeKind::Inside,
+            );
         }
         // Full transport controls reserve 80 points plus the title. Collapse
         // them before they consume most of a short review slot's picture area.

@@ -34,6 +34,10 @@ impl PhotoSortApp {
     }
 
     pub(super) fn library(&mut self, ui: &mut egui::Ui) {
+        if self.step == Step::Organize {
+            self.organize_board(ui);
+            return;
+        }
         if self.step != Step::Cull || self.library_layout == Layout::Grid {
             self.grid(ui);
         } else {
@@ -120,9 +124,12 @@ impl PhotoSortApp {
                         egui::vec2(size, size),
                     );
                     let shown = reveal(ui, id, texture.is_some());
-                    ui.painter().rect_filled(image, 3.0, WELL);
+                    let fill = lerp_color(CARD, CARD_HOVER, hover);
+                    if texture.is_none() || shown < 1.0 {
+                        ui.painter().rect_filled(image, 5.0, WELL);
+                    }
                     if let Some(texture) = texture {
-                        paint_image_tinted(
+                        let drawn = paint_image_tinted(
                             ui,
                             &texture,
                             image,
@@ -131,6 +138,7 @@ impl PhotoSortApp {
                             self.preview_turns(id),
                             Color32::from_white_alpha((shown * 255.0) as u8),
                         );
+                        round_corners(ui.painter(), drawn, 5.0, fill);
                     } else if self.requested.contains(&(id, false)) {
                         shimmer(ui, image);
                     } else {
@@ -231,7 +239,9 @@ impl PhotoSortApp {
         let columns = ((ui.available_width() + gap) / 200.0).floor().max(1.0) as usize;
         let cell_width =
             (ui.available_width() - gap * (columns.saturating_sub(1) as f32)) / columns as f32;
-        let row_height = cell_width * 0.75 + CAPTION;
+        // Cull can hide captions for a denser, image-only grid.
+        let captioned = self.step != Step::Cull || self.preferences.show_filenames;
+        let row_height = cell_width * 0.75 + if captioned { CAPTION } else { 0.0 };
         let rows = self.filtered.len().div_ceil(columns);
         let scroll = self.library_scroll(ui, row_height, columns, egui::Id::new("library_grid"));
         let output = scroll.show_rows(ui, row_height, rows, |ui, range| {
@@ -240,7 +250,7 @@ impl PhotoSortApp {
                     for column in 0..columns {
                         let pos = row * columns + column;
                         if let Some(&index) = self.filtered.get(pos) {
-                            self.card(ui, index, cell_width, row_height);
+                            self.card(ui, index, cell_width, row_height, captioned);
                         }
                     }
                 });
@@ -249,9 +259,17 @@ impl PhotoSortApp {
         self.library_offset = output.state.offset.y;
     }
 
-    /// A photo tile. Grid tiles carry a two-line caption; short tiles (the
-    /// filmstrip) are image-only and name the photo in their tooltip.
-    pub(super) fn card(&mut self, ui: &mut egui::Ui, index: usize, width: f32, height: f32) {
+    /// A photo tile, shared by grids and photo strips. With `captioned` it
+    /// carries a two-line caption (name and detail) under the image;
+    /// otherwise it is image-only. Its tooltip always gives the file's path.
+    pub(super) fn card(
+        &mut self,
+        ui: &mut egui::Ui,
+        index: usize,
+        width: f32,
+        height: f32,
+        captioned: bool,
+    ) {
         use egui_phosphor::regular as icon;
         let media = self.media[index].clone();
         let id = media.id;
@@ -260,7 +278,6 @@ impl PhotoSortApp {
         let active = self.active == Some(id);
         let comparison = self.comparison.contains(&id);
         let selected = self.library_selection_mode() && self.selection.contains(id);
-        let captioned = height >= 2.0 * CAPTION + 40.0;
         let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), self.tile_sense());
         response.widget_info(|| {
             egui::WidgetInfo::selected(
@@ -275,18 +292,27 @@ impl PhotoSortApp {
         let hover = ui
             .ctx()
             .animate_bool_responsive(response.id.with("hover"), hovered);
-        painter.rect_filled(rect, R_TILE, lerp_color(CARD, CARD_HOVER, hover));
+        let fill = lerp_color(CARD, CARD_HOVER, hover);
+        painter.rect_filled(rect, R_TILE, fill);
+        // Thumbnails sit on the tile itself, inset so their rounded corners
+        // follow the tile's.
+        let inset = if captioned { 6.0 } else { 4.0 };
         let image_rect = egui::Rect::from_min_max(
-            rect.min + egui::vec2(S1, S1),
+            rect.min + egui::vec2(inset, inset),
             egui::pos2(
-                rect.right() - S1,
-                rect.bottom() - if captioned { CAPTION } else { S1 },
+                rect.right() - inset,
+                rect.bottom() - if captioned { CAPTION } else { inset },
             ),
         );
+        let image_radius = if captioned { 8.0 } else { 6.0 };
         let shown = reveal(ui, id, texture.is_some());
-        painter.rect_filled(image_rect, 4.0, WELL);
+        let mut drawn = image_rect;
+        // The placeholder stays under a thumbnail while it fades in.
+        if texture.is_none() || shown < 1.0 {
+            painter.rect_filled(image_rect, image_radius, WELL);
+        }
         if let Some(texture) = texture {
-            paint_image_tinted(
+            drawn = paint_image_tinted(
                 ui,
                 &texture,
                 image_rect,
@@ -295,6 +321,7 @@ impl PhotoSortApp {
                 self.preview_turns(id),
                 Color32::from_white_alpha((shown * 255.0) as u8),
             );
+            round_corners(&painter, drawn, image_radius, fill);
         } else if self.requested.contains(&(id, false)) {
             shimmer(ui, image_rect);
         } else {
@@ -322,7 +349,7 @@ impl PhotoSortApp {
             );
         }
         if d.rejected {
-            painter.rect_filled(image_rect, 4.0, Color32::from_black_alpha(130));
+            painter.rect_filled(drawn, image_radius, Color32::from_black_alpha(130));
             badge(
                 &painter,
                 image_rect.left_top() + egui::vec2(S1, S1),
@@ -376,34 +403,11 @@ impl PhotoSortApp {
                 egui::pos2(left, image_rect.bottom() + 11.0),
                 Align2::LEFT_CENTER,
                 name,
-                FontId::proportional(12.0),
+                FontId::proportional(11.5),
                 INK,
             );
-            // Organize shows the destination once one exists; before analysis
-            // the label is an instruction, which would repeat on every tile.
-            let destination = (self.step == Step::Organize)
-                .then(|| {
-                    self.organize_drafts
-                        .get(&self.group_mode)
-                        .and_then(|draft| draft.labels().get(&id))
-                        .cloned()
-                        .unwrap_or_else(|| self.label_for(&media))
-                })
-                .filter(|folder| !folder.starts_with("Analyze to"));
-            let (detail, color) = if let Some(folder) = destination {
-                (
-                    format!(
-                        "{}  {}",
-                        icon::FOLDER_SIMPLE,
-                        if folder.is_empty() {
-                            "Library root"
-                        } else {
-                            &folder
-                        }
-                    ),
-                    MUTED,
-                )
-            } else if self.step == Step::Rotation {
+            // Organize names each tile's folder in the board's section header.
+            let (detail, color) = if self.step == Step::Rotation {
                 (
                     self.rotation_review
                         .choice(id)
@@ -447,7 +451,7 @@ impl PhotoSortApp {
                 egui::pos2(left, image_rect.bottom() + 25.0),
                 Align2::LEFT_CENTER,
                 detail,
-                FontId::proportional(11.0),
+                FontId::proportional(10.5),
                 color,
             );
         }
@@ -490,11 +494,11 @@ impl PhotoSortApp {
             }
         }
         if response.double_clicked() {
-            if self.step == Step::Cull || self.scene_editing() {
+            if matches!(self.step, Step::Cull | Step::Organize) {
                 self.selection.single(id);
             }
             self.set_active(id);
-            self.review = true;
+            self.review = self.step != Step::Organize;
         }
         if response.secondary_clicked()
             && self.library_selection_mode()
@@ -506,8 +510,23 @@ impl PhotoSortApp {
             self.library_path_menu(ui, id);
             ui.separator();
             if self.library_selection_mode() {
-                if self.scene_editing() {
-                    self.group_controls(ui);
+                if self.step == Step::Organize {
+                    self.board_move_menu(ui, id);
+                    if self.scene_editing() {
+                        self.group_controls(ui);
+                    }
+                    ui.separator();
+                    let count = self.selection.len();
+                    if ui
+                        .add_enabled(
+                            (2..=9).contains(&count),
+                            egui::Button::new("Compare selected"),
+                        )
+                        .clicked()
+                    {
+                        self.compare_selection();
+                        ui.close();
+                    }
                 } else {
                     self.selection_actions(ui);
                 }
@@ -566,9 +585,9 @@ fn badge(painter: &egui::Painter, anchor: egui::Pos2, align: Align2, text: &str,
     painter.galley(rect.min + egui::vec2(6.0, 2.0), galley, color);
 }
 
-/// The recessed surface a thumbnail sits in, so letterboxing reads as a
-/// frame and a loading tile already has its final shape.
-const WELL: Color32 = Color32::from_rgb(0x1D, 0x20, 0x25);
+/// A loading thumbnail's placeholder: a shade lighter than its tile, so a
+/// photo arriving brightens the tile instead of flashing dark first.
+const WELL: Color32 = Color32::from_rgb(0x2D, 0x2D, 0x31);
 
 /// How far a thumbnail has faded in. The first frame with pixels starts the
 /// fade, so a scrolling grid fills softly instead of popping; thumbnails that
@@ -589,7 +608,7 @@ fn reveal(ui: &egui::Ui, id: MediaId, loaded: bool) -> f32 {
 /// Reduce motion keeps the well and drops the sweep.
 fn shimmer(ui: &egui::Ui, rect: egui::Rect) {
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-    painter.rect_filled(rect, 4.0, WELL);
+    painter.rect_filled(rect, 6.0, WELL);
     if ui.ctx().global_style().animation_time == 0.0 {
         return;
     }
@@ -710,6 +729,8 @@ mod tests {
             Step::Rotation,
         ] {
             app.step = step;
+            // Each workflow is checked on its own requests.
+            app.requested.clear();
             for turns in [0, 1, 2, 3] {
                 app.decisions.entry(id).or_default().turns = turns;
                 app.rotation_review.replace_suggestions(vec![(id, turns)]);
@@ -729,21 +750,33 @@ mod tests {
                             });
                         },
                     );
-                    let mut bounds = egui::Rect::NOTHING;
-                    for primitive in ctx.tessellate(output.shapes, output.pixels_per_point) {
-                        if let egui::epaint::Primitive::Mesh(mesh) = primitive.primitive
+                    // Every image drawn from the texture (a tile, and in
+                    // Organize also its preview panel) keeps the turned shape.
+                    let mut images = Vec::new();
+                    for clipped in &output.shapes {
+                        if let egui::Shape::Mesh(mesh) = &clipped.shape
                             && mesh.texture_id == texture_id
                         {
-                            for vertex in mesh.vertices {
+                            let mut bounds = egui::Rect::NOTHING;
+                            for vertex in &mesh.vertices {
                                 bounds.extend_with(vertex.pos);
                             }
+                            images.push(bounds);
                         }
                     }
-                    assert!(bounds.is_positive());
+                    assert!(!images.is_empty());
                     let expected = if turns % 2 == 0 { 2.0 } else { 0.5 };
-                    assert!((bounds.width() / bounds.height() - expected).abs() < 0.01);
+                    for bounds in images {
+                        assert!(bounds.is_positive());
+                        assert!((bounds.width() / bounds.height() - expected).abs() < 0.01);
+                    }
+                    // Organize's preview panel asks for the larger preview
+                    // of the clicked photo, rotated or not; thumbnails are
+                    // never decoded again for a rotation.
                     assert!(
-                        app.requested.is_empty(),
+                        app.requested
+                            .iter()
+                            .all(|request| step == Step::Organize && *request == (id, true)),
                         "rotation must reuse canonical pixels"
                     );
                     assert_eq!(app.textures.len(), 1);
@@ -837,6 +870,9 @@ mod tests {
             0.0,
             "selecting a visible row must not jump the viewport"
         );
+        // The thumbnails asked for so far have arrived; at most a few are
+        // queued at once, so the revealed item can be requested next.
+        app.requested.clear();
         app.set_active(MediaId(99_999));
         render(&mut app, 576.0);
         assert!(

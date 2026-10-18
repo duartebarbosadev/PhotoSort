@@ -377,7 +377,7 @@ fn repaired_models_update_footer_and_dialog_without_restarting_analysis() {
         assert!(
             labels
                 .iter()
-                .any(|label| label.starts_with("Models are ready."))
+                .any(|label| label.starts_with("The models this analysis needs are ready."))
         );
         assert!(
             !labels
@@ -404,8 +404,86 @@ fn repaired_models_update_footer_and_dialog_without_restarting_analysis() {
         !labels
             .iter()
             .any(|label| label.starts_with("Needed for this analysis")
-                || label.starts_with("Models are ready."))
+                || label.starts_with("The models this analysis needs are ready."))
     );
+    assert!(app.analysis_run.is_none());
+    assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+}
+#[test]
+fn model_panel_summarises_groups_and_links_every_model_source() {
+    let (_dir, mut app) = app();
+    app.step = Step::Cull;
+    pending_recovery(&mut app);
+    app.open_model_setup();
+    let until = Instant::now() + Duration::from_secs(5);
+    while app.runtime.model_assets.state().running {
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let state = app.runtime.model_assets.state();
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let mut nodes = Vec::new();
+    for _ in 0..3 {
+        let out = ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900., 4000.),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.render_model_setup(ctx, &state)
+            },
+        );
+        nodes = out
+            .platform_output
+            .accesskit_update
+            .unwrap()
+            .nodes
+            .into_iter()
+            .map(|(_, n)| (n.role(), n.label().or_else(|| n.value()).map(str::to_owned)))
+            .collect();
+    }
+    // Wrapped text also appears as text runs; count each widget once.
+    let labels: Vec<String> = nodes
+        .iter()
+        .filter(|(role, _)| *role != egui::accesskit::Role::TextRun)
+        .filter_map(|(_, l)| l.clone())
+        .collect();
+    assert!(
+        labels
+            .iter()
+            .any(|l| l == "0 of 7 models installed · 0.0 MB downloaded or imported")
+    );
+    // What the paused analysis needs comes first, then the shared and
+    // optional groups; nothing is said twice.
+    for group in ["NEEDED FOR THE PAUSED ANALYSIS", "OPTIONAL FEATURES"] {
+        assert!(labels.iter().any(|l| l == group), "{group}: {labels:?}");
+    }
+    assert_eq!(
+        labels
+            .iter()
+            .filter(|l| l.contains("ship only inside the full app bundle"))
+            .count(),
+        1
+    );
+    assert_eq!(labels.iter().filter(|l| *l == "Missing").count(), 7);
+    // Every model links its upstream page; links open only when clicked.
+    let links = nodes
+        .iter()
+        .filter(|(role, _)| *role == egui::accesskit::Role::Link)
+        .count();
+    assert_eq!(links, model_assets::ALL.len());
+    for asset in model_assets::ALL {
+        assert!(asset.page.starts_with("https://"));
+        let name = format!("Source page for {}", asset.title);
+        assert!(labels.contains(&name), "{name}");
+        assert!(labels.iter().any(|l| l == asset.about));
+    }
     assert!(app.analysis_run.is_none());
     assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
 }

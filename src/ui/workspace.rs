@@ -24,6 +24,8 @@ mod navigation;
 mod navigator;
 #[path = "organize.rs"]
 mod organize;
+#[path = "organize_board.rs"]
+mod organize_board;
 #[path = "pick_review.rs"]
 mod pick_review;
 #[path = "plan_review.rs"]
@@ -236,6 +238,9 @@ pub struct PhotoSortApp {
     pending_location_layout: Option<crate::core::geography::Layout>,
     output: String,
     organize_drafts: HashMap<GroupMode, crate::core::organize::Draft>,
+    /// Organize's folder board and a counter bumped by its own edits.
+    board: organize_board::Board,
+    board_epoch: u64,
     organize_editor: Option<organize::Editor>,
     face_groups: Option<crate::core::regional::grouping::Output>,
     mixed_labels: Option<HashMap<MediaId, String>>,
@@ -264,6 +269,12 @@ pub struct PhotoSortApp {
     dirty: Option<Instant>,
     inspection_view: InspectionView,
     canvas_drag: pointer::DragTracker,
+    /// The last image each canvas slot showed, kept on screen briefly while
+    /// the next photo's pixels load so stepping through photos never flashes
+    /// an empty canvas.
+    held: HashMap<u64, review::Held>,
+    /// The photo whose neighbours' previews were last requested ahead.
+    prefetched_for: Option<MediaId>,
     independent_views: HashMap<u64, InspectionView>,
     sync_views: bool,
     focused_slot: u64,
@@ -468,6 +479,8 @@ impl PhotoSortApp {
             pending_location_layout: None,
             output: String::new(),
             organize_drafts: HashMap::new(),
+            board: Default::default(),
+            board_epoch: 0,
             organize_editor: None,
             face_groups: None,
             mixed_labels: None,
@@ -496,6 +509,8 @@ impl PhotoSortApp {
             dirty: None,
             inspection_view: InspectionView::default(),
             canvas_drag: Default::default(),
+            held: HashMap::new(),
+            prefetched_for: None,
             independent_views: HashMap::new(),
             sync_views: true,
             focused_slot: 0,
@@ -637,6 +652,10 @@ impl PhotoSortApp {
         self.inspection_wanted.clear();
         self.inspection_frames.clear();
         self.textures.clear();
+        self.held.clear();
+        self.prefetched_for = None;
+        self.board.editing = None;
+        self.board.focus = None;
         self.requested.clear();
         self.failures.clear();
         self.image_warnings.clear();
@@ -848,6 +867,12 @@ impl PhotoSortApp {
             t.used = self.tick;
             return Some(t.handle.clone());
         }
+        // Keep few thumbnails queued: tiles ask again every frame while they
+        // are visible, so after a fast scroll the photos on screen are next
+        // in line instead of waiting behind ones already scrolled past.
+        if !preview && self.requested.iter().filter(|(_, p)| !p).count() >= THUMBNAILS_IN_FLIGHT {
+            return None;
+        }
         if !self.requested.contains(&(id, preview))
             && !self.failures.contains_key(&id)
             && let Some(&i) = self.index.get(&id)
@@ -901,6 +926,9 @@ impl PhotoSortApp {
             })
             .map(|(i, _)| i)
             .collect();
+        if self.step == Step::Organize {
+            self.arrange_board();
+        }
         if self.step == Step::Rotation {
             self.filtered.retain(|i| {
                 self.media[*i].kind != MediaKind::Video
@@ -1374,7 +1402,8 @@ impl PhotoSortApp {
         if self.step == Step::Cull && current == Some(id) && !extend {
             return;
         }
-        if self.library_selection_mode() {
+        if self.library_selection_mode() && (self.selection_ready() || self.scene_selection_ready())
+        {
             self.select_library(id, false, extend);
             return;
         }
@@ -1407,6 +1436,8 @@ impl PhotoSortApp {
             || self.departure.is_some()
     }
 }
+/// Thumbnail decodes queued at once; see [`PhotoSortApp::texture`].
+pub(super) const THUMBNAILS_IN_FLIGHT: usize = 8;
 fn theme_install(ctx: &egui::Context) {
     super::theme::install(ctx);
     // Headless frames carry no real time; finish every animation at once so
@@ -1425,6 +1456,7 @@ fn paint_image(
 }
 
 /// [`paint_image`] multiplied by `tint`; a translucent white fades it in.
+/// Returns the area the image covers inside `rect`.
 fn paint_image_tinted(
     ui: &egui::Ui,
     texture: &TextureHandle,
@@ -1433,7 +1465,7 @@ fn paint_image_tinted(
     pan: Vec2,
     turns: u8,
     tint: Color32,
-) {
+) -> egui::Rect {
     let dimensions = texture.size_vec2();
     let oriented = if turns % 2 == 1 {
         egui::vec2(dimensions.y, dimensions.x)
@@ -1469,6 +1501,7 @@ fn paint_image_tinted(
     ui.painter()
         .with_clip_rect(rect)
         .add(egui::Shape::mesh(mesh));
+    egui::Rect::from_center_size(center, oriented * scale).intersect(rect)
 }
 
 impl PhotoSortApp {
@@ -1482,9 +1515,21 @@ impl PhotoSortApp {
         self.check_updates_at_startup();
         self.tick += 1;
         self.poll(ctx);
+        self.check_board();
         self.refilter();
         self.restore_bookmark();
         self.keyboard(ctx);
+        // Pick Best is always a side-by-side review: it has no grid view, and
+        // its choices and Confirm live under the photos. Older saved views
+        // may still ask for the grid.
+        if self.step == Step::PickBest {
+            self.review = true;
+        }
+        // Organize has no separate Review: its board shows the clicked
+        // photo in a preview panel beside the folders and thumbnails.
+        if self.step == Step::Organize {
+            self.review = false;
+        }
         self.sync_playback(ctx);
         self.inspection_wanted.clear();
         let wide = ctx.content_rect().width() > 1180.0;
@@ -1502,16 +1547,12 @@ impl PhotoSortApp {
         let shown = self.inspector && self.catalog.is_some() && wide;
         let mut expanded = shown;
         egui::Panel::right("inspector")
+            .show_separator_line(false)
             .resizable(true)
             .drag_to_open(false)
             .default_size(300.0)
             .size_range(260.0..=440.0)
-            .frame(
-                egui::Frame::new()
-                    .fill(PANEL)
-                    .inner_margin(S4 as i8)
-                    .stroke(Stroke::new(1.0, LINE)),
-            )
+            .frame(egui::Frame::new().fill(PANEL).inner_margin(S4 as i8))
             .show_collapsible(root, &mut expanded, |ui| {
                 // While sliding out after the folder closed or the window
                 // narrowed (the drawer then shows Details), the panel stays empty.
@@ -1524,14 +1565,12 @@ impl PhotoSortApp {
             self.inspector = false;
         }
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::new()
-                    .fill(BG)
-                    .inner_margin(if compact { 12 } else { 16 }),
-            )
+            .frame(egui::Frame::new().fill(BG))
             .show(root, |ui| {
                 if self.root.is_none() {
-                    self.welcome(ui);
+                    egui::Frame::new()
+                        .inner_margin(if compact { 12 } else { 16 })
+                        .show(ui, |ui| self.welcome(ui));
                 } else {
                     // Reduce control padding in short windows so every workflow
                     // leaves useful vertical space for the photographs.
@@ -1539,36 +1578,48 @@ impl PhotoSortApp {
                         ui.spacing_mut().button_padding = egui::vec2(8.0, 4.0);
                         ui.spacing_mut().item_spacing = egui::vec2(8.0, 5.0);
                     }
-                    if self.group_task.is_some() {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label("Updating groups…");
-                            if ui.button("Cancel group update").clicked() { self.cancel_group_edit(); }
-                        });
-                    }
                     if self.busy { ui.disable(); }
-                    self.toolbar(ui);
-                    self.navigator_panel(ui);
-                    if self.step == Step::PickBest && self.pick_run.is_some() {
-                        self.working_state(ui, "Finding similar photos", "Grouping bursts and near-identical frames, then scoring each photo.");
-                    } else if self.step == Step::EasyDelete && self.delete_run.is_some() {
-                        self.working_state(ui, "Looking for photos to clean up", "Checking for duplicates, near-duplicates, and blurry or badly exposed shots.");
-                    } else if self.step == Step::Rotation && self.rotation_run.is_some() {
-                        self.working_state(ui, "Checking orientation", "Looking at each photo to find the ones that are sideways or upside down.");
-                    } else if self.media.is_empty() && self.scanning {
-                        self.working_state(ui, "Finding your photos", "Reading the folder and its subfolders.");
-                    } else if self.filtered.is_empty() && self.browse_run.is_some() && self.step == Step::Cull {
-                        self.working_state(ui, "Updating the view", "Applying the search and filters.");
-                    } else if self.media.is_empty() || self.filtered.is_empty() {
-                        self.empty_state(ui);
-                    } else if self.organize_editor.is_some() {
-                        // The editor owns the visible content. Do not render or
-                        // submit hidden image/detail requests behind its modal.
-                    } else if self.review {
-                        self.review_canvas(ui);
-                    } else {
-                        self.library(ui);
-                    }
+                    // The step's controls sit on a panel strip above the photos.
+                    egui::Frame::new()
+                        .fill(PANEL)
+                        .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: 2 })
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            if self.group_task.is_some() {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label("Updating groups…");
+                                    if ui.button("Cancel group update").clicked() { self.cancel_group_edit(); }
+                                });
+                            }
+                            self.toolbar(ui);
+                        });
+                    egui::Frame::new()
+                        .inner_margin(if compact { 8 } else { 12 })
+                        .show(ui, |ui| {
+                            ui.set_min_size(ui.available_size());
+                            self.navigator_panel(ui);
+                            if self.step == Step::PickBest && self.pick_run.is_some() {
+                                self.working_state(ui, "Finding similar photos", "Grouping bursts and near-identical frames, then scoring each photo.");
+                            } else if self.step == Step::EasyDelete && self.delete_run.is_some() {
+                                self.working_state(ui, "Looking for photos to clean up", "Checking for duplicates, near-duplicates, and blurry or badly exposed shots.");
+                            } else if self.step == Step::Rotation && self.rotation_run.is_some() {
+                                self.working_state(ui, "Checking orientation", "Looking at each photo to find the ones that are sideways or upside down.");
+                            } else if self.media.is_empty() && self.scanning {
+                                self.working_state(ui, "Finding your photos", "Reading the folder and its subfolders.");
+                            } else if self.filtered.is_empty() && self.browse_run.is_some() && self.step == Step::Cull {
+                                self.working_state(ui, "Updating the view", "Applying the search and filters.");
+                            } else if self.media.is_empty() || self.filtered.is_empty() {
+                                self.empty_state(ui);
+                            } else if self.organize_editor.is_some() {
+                                // The editor owns the visible content. Do not render or
+                                // submit hidden image/detail requests behind its modal.
+                            } else if self.review && self.step != Step::Organize {
+                                self.review_canvas(ui);
+                            } else {
+                                self.library(ui);
+                            }
+                        });
                 }
             });
         if self.inspector && self.catalog.is_some() && ctx.content_rect().width() <= 1180.0 {
@@ -1619,6 +1670,80 @@ impl PhotoSortApp {
     pub fn gallery_step(&mut self, step: Step) {
         self.switch_step(step);
     }
+    /// Seeds Easy Delete, Fix Rotation and Pick Best with synthetic
+    /// suggestions from the scanned photos, so screenshots need no models.
+    pub fn gallery_seed_reviews(&mut self) {
+        use crate::core::delete_review::{Category, Entry};
+        let ids: Vec<MediaId> = self.media.iter().map(|m| m.id).collect();
+        if ids.len() < 10 {
+            return;
+        }
+        let entries = vec![
+            Entry {
+                subject: ids[1],
+                companion: Some(ids[2]),
+                category: Category::Near,
+                reason: "Near-duplicate of the photo beside it · slightly softer".into(),
+            },
+            Entry {
+                subject: ids[4],
+                companion: None,
+                category: Category::Blur,
+                reason: "Blurry · motion blur across the frame".into(),
+            },
+        ];
+        self.delete_review.replace(entries);
+        self.view_data_ready.insert(Step::EasyDelete);
+        self.delete_categories = Category::ALL.into_iter().collect();
+        for (n, id) in ids.iter().take(3).enumerate() {
+            self.rotations.insert(
+                *id,
+                crate::core::models::RotationSuggestion {
+                    turns: 1,
+                    confidence: 0.9,
+                    uncertain: n == 2,
+                    views: 3,
+                },
+            );
+        }
+        self.finish_rotation_detection();
+        let cluster = |key: usize, members: &[MediaId]| crate::core::pick_review::Cluster {
+            key,
+            ordered: members.to_vec(),
+            scores: members
+                .iter()
+                .enumerate()
+                .map(|(i, id)| (*id, 5.0 + ((i * 7) % 5) as f64 * 0.6))
+                .collect(),
+        };
+        self.pick_review.replace(
+            vec![cluster(1, &ids[0..5]), cluster(2, &ids[7..10])],
+            &mut self.decisions,
+        );
+        self.view_data_ready.insert(Step::PickBest);
+        self.filter_dirty = true;
+    }
+    /// Closes the Local AI models dialog. Builds without the native runtime
+    /// open it whenever a step would analyze.
+    pub fn gallery_close_model_dialog(&mut self) {
+        self.model_dialog = false;
+    }
+    /// Shows or hides Cull's file names (preference, not saved).
+    pub fn gallery_show_filenames(&mut self, show: bool) {
+        self.preferences.show_filenames = show;
+    }
+    /// Groups Organize by capture date.
+    pub fn gallery_organize_by_date(&mut self) {
+        self.set_group_mode(GroupMode::Date);
+    }
+    /// Shows Cull's photo strip on the left (preference, not saved).
+    pub fn gallery_left_strip(&mut self, left: bool) {
+        self.preferences.cull_strip = if left {
+            crate::core::preferences::StripPosition::Left
+        } else {
+            crate::core::preferences::StripPosition::Bottom
+        };
+    }
     pub fn gallery_review(&mut self, review: bool) {
         self.review = review;
     }
@@ -1640,6 +1765,10 @@ impl PhotoSortApp {
     }
     pub fn gallery_about(&mut self) {
         self.about = true;
+    }
+    /// Opens Menu → AI models.
+    pub fn gallery_models(&mut self) {
+        self.open_model_setup();
     }
     pub fn gallery_settings(&mut self) {
         self.preferences_draft = Some(self.preferences.clone());

@@ -216,7 +216,26 @@ impl PhotoSortApp {
         // On short windows, give the photos room and use Previous/Next instead
         // of squeezing both the canvas and a clipped thumbnail strip below it.
         let editor_preview = self.organize_preview().is_some();
-        let show_filmstrip = !editor_preview && ui.available_height() >= 360.0;
+        // Cull can keep its strip in a column on the left instead.
+        let side_strip = self.step == Step::Cull
+            && !editor_preview
+            && self.preferences.cull_strip == crate::core::preferences::StripPosition::Left
+            && ui.available_width() >= 640.0;
+        if side_strip {
+            egui::Panel::left("cull_side_strip")
+                .resizable(true)
+                .default_size(150.0)
+                .size_range(100.0..=300.0)
+                .frame(egui::Frame::new().inner_margin(egui::Margin {
+                    left: 0,
+                    right: 8,
+                    top: 0,
+                    bottom: 0,
+                }))
+                .show(ui, |ui| self.side_strip(ui));
+        }
+        let show_filmstrip = !editor_preview && !side_strip && ui.available_height() >= 360.0;
+        let filmstrip_height = FILMSTRIP + if self.strip_names() { STRIP_NAME } else { 0.0 };
         let short = ui.ctx().content_rect().height() < 760.0;
         let controls_height = match (compact, short) {
             (true, true) => 80.0,
@@ -225,7 +244,11 @@ impl PhotoSortApp {
         };
         let height = (ui.available_height()
             - controls_height
-            - if show_filmstrip { FILMSTRIP } else { 0.0 })
+            - if show_filmstrip {
+                filmstrip_height
+            } else {
+                0.0
+            })
         .max(40.0);
         let ideal_columns = if ids.len() == 4 { 2 } else { 3 };
         let columns = ((ui.available_width() / 250.0).floor() as usize)
@@ -350,6 +373,8 @@ impl PhotoSortApp {
                             self.toggle_delete_candidate(side);
                         }
                     }
+                    divider(ui);
+                    self.delete_confirm_button(ui);
                 } else if self.step == Step::PickBest {
                     let paths = self
                         .pick_review
@@ -366,7 +391,13 @@ impl PhotoSortApp {
                             self.toggle_pick(*id);
                         }
                     }
+                    divider(ui);
+                    self.pick_confirm_buttons(ui);
                 } else {
+                    if self.step == Step::Rotation {
+                        self.rotation_confirm_buttons(ui);
+                        divider(ui);
+                    }
                     let rejected = self.decision(active).rejected;
                     // Both labels get the wider label's width so toggling never
                     // resizes the bar.
@@ -414,7 +445,7 @@ impl PhotoSortApp {
             self.filmstrip(ui);
         }
     }
-    fn review_ratings(&mut self, ui: &mut egui::Ui, active: MediaId) {
+    pub(super) fn review_ratings(&mut self, ui: &mut egui::Ui, active: MediaId) {
         if self
             .index
             .get(&active)
@@ -431,27 +462,41 @@ impl PhotoSortApp {
         ui.add_space(S2);
         let rating = self.selected_rating(active);
         for star in 1..=5 {
-            if ui
-                .add(
+            let name = if star == 1 {
+                "Rate 1 star".to_owned()
+            } else {
+                format!("Rate {star} stars")
+            };
+            if named(
+                ui.add(
                     egui::Button::new(RichText::new("★").size(16.0).color(if rating >= star {
                         ACCENT
                     } else {
                         FAINT
                     }))
                     .frame(false),
-                )
-                .on_hover_text(if rating == star {
-                    "Clear rating · Ctrl/Cmd+0".to_owned()
-                } else {
-                    format!("Rate {star} · Ctrl/Cmd+{star}")
-                })
-                .clicked()
+                ),
+                egui::WidgetType::Button,
+                &name,
+            )
+            .on_hover_text(if rating == star {
+                "Clear rating · Ctrl/Cmd+0".to_owned()
+            } else {
+                format!("Rate {star} · Ctrl/Cmd+{star}")
+            })
+            .clicked()
             {
                 // Clicking the current rating again clears it.
                 self.rating(active, if rating == star { 0 } else { star });
             }
         }
-        if ui.small_button("Clear rating").clicked() {
+        // Offered only when there is a rating to clear.
+        if rating > 0
+            && ui
+                .small_button("Clear rating")
+                .on_hover_text("Ctrl/Cmd+0")
+                .clicked()
+        {
             self.rating(active, 0);
         }
         self.review_view_controls(ui);
@@ -487,7 +532,9 @@ impl PhotoSortApp {
             self.toggle_sync();
         }
         let mut view = self.view_for(self.focused_slot);
-        ui.spacing_mut().slider_width = 65.0;
+        ui.spacing_mut().slider_width = 60.0;
+        // A small handle suits the floating bar.
+        ui.spacing_mut().interact_size.y = 14.0;
         if ui
             .add(
                 egui::Slider::new(
@@ -509,10 +556,43 @@ impl PhotoSortApp {
         )
         .on_hover_text("Zoom relative to fitting the whole photo");
     }
+    /// Whether photo-strip tiles show file names: only in Cull, and only
+    /// while its Show filenames preference is on.
+    pub(super) fn strip_names(&self) -> bool {
+        self.step == Step::Cull && self.preferences.show_filenames
+    }
+    /// One strip tile: the shared card, with its name below when enabled.
+    fn strip_tile(&mut self, ui: &mut egui::Ui, position: usize, rect: egui::Rect, image: Vec2) {
+        let index = self.filtered[position];
+        ui.scope_builder(
+            egui::UiBuilder::new().id_salt(position).max_rect(rect),
+            |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(rect));
+                self.card(ui, index, image.x, image.y, false);
+            },
+        );
+        if self.strip_names() {
+            let active = Some(self.media[index].id) == self.active;
+            let color = if active { INK } else { MUTED };
+            let mut job = egui::text::LayoutJob::simple_singleline(
+                self.media[index].name(),
+                FontId::proportional(10.0),
+                color,
+            );
+            job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 4.0);
+            let galley = ui.painter().layout_job(job);
+            let at = egui::pos2(
+                rect.center().x - galley.size().x / 2.0,
+                rect.top() + image.y + (STRIP_NAME - galley.size().y) / 2.0 + 1.0,
+            );
+            ui.painter().with_clip_rect(rect).galley(at, galley, color);
+        }
+    }
     fn filmstrip(&mut self, ui: &mut egui::Ui) {
-        // Image-only tiles: the strip is for orientation, the canvas for judging.
+        // The strip is for orientation, the canvas for judging.
         const WIDTH: f32 = 84.0;
         const HEIGHT: f32 = 56.0;
+        let name = if self.strip_names() { STRIP_NAME } else { 0.0 };
         let stride = WIDTH + ui.spacing().item_spacing.x;
         let selection_key = egui::Id::new("filmstrip_selection");
         let previous = ui.data(|data| data.get_temp::<MediaId>(selection_key));
@@ -523,12 +603,12 @@ impl PhotoSortApp {
         egui::ScrollArea::horizontal()
             .id_salt("review_filmstrip")
             .auto_shrink([false, false])
-            .max_height(HEIGHT + 8.0)
+            .max_height(HEIGHT + name + 8.0)
             .show_viewport(ui, |ui, viewport| {
                 let origin = ui.max_rect().min;
                 ui.set_min_size(egui::vec2(
                     (self.filtered.len() as f32 * stride - ui.spacing().item_spacing.x).max(0.0),
-                    HEIGHT,
+                    HEIGHT + name,
                 ));
                 if follow
                     && let Some(position) = self
@@ -545,23 +625,60 @@ impl PhotoSortApp {
                 let start = (viewport.min.x / stride).floor().max(0.0) as usize;
                 let end = ((viewport.max.x / stride).ceil() as usize + 1).min(self.filtered.len());
                 for position in start..end {
-                    let index = self.filtered[position];
                     let rect = egui::Rect::from_min_size(
                         origin + egui::vec2(position as f32 * stride, 0.0),
-                        egui::vec2(WIDTH, HEIGHT),
+                        egui::vec2(WIDTH, HEIGHT + name),
                     );
-                    ui.scope_builder(
-                        egui::UiBuilder::new().id_salt(position).max_rect(rect),
-                        |ui| {
-                            ui.set_clip_rect(ui.clip_rect().intersect(rect));
-                            self.card(ui, index, WIDTH, HEIGHT);
-                        },
+                    self.strip_tile(ui, position, rect, egui::vec2(WIDTH, HEIGHT));
+                }
+            });
+    }
+    /// Cull's photo strip as a vertical column beside the canvas.
+    fn side_strip(&mut self, ui: &mut egui::Ui) {
+        let name = if self.strip_names() { STRIP_NAME } else { 0.0 };
+        let width = (ui.available_width() - 10.0).max(60.0);
+        let height = (width * 0.66).round();
+        let stride = height + name + ui.spacing().item_spacing.y;
+        let selection_key = egui::Id::new("side_strip_selection");
+        let previous = ui.data(|data| data.get_temp::<MediaId>(selection_key));
+        let follow = previous != self.active;
+        if let Some(active) = self.active {
+            ui.data_mut(|data| data.insert_temp(selection_key, active));
+        }
+        egui::ScrollArea::vertical()
+            .id_salt("review_side_strip")
+            .auto_shrink([false, false])
+            .show_viewport(ui, |ui, viewport| {
+                let origin = ui.max_rect().min;
+                ui.set_min_size(egui::vec2(
+                    width,
+                    (self.filtered.len() as f32 * stride - ui.spacing().item_spacing.y).max(0.0),
+                ));
+                if follow
+                    && let Some(position) = self
+                        .filtered
+                        .iter()
+                        .position(|index| Some(self.media[*index].id) == self.active)
+                {
+                    let rect = egui::Rect::from_min_size(
+                        origin + egui::vec2(0.0, position as f32 * stride),
+                        egui::vec2(width, height),
                     );
+                    ui.scroll_to_rect(rect, Some(Align::Center));
+                }
+                let start = (viewport.min.y / stride).floor().max(0.0) as usize;
+                let end = ((viewport.max.y / stride).ceil() as usize + 1).min(self.filtered.len());
+                for position in start..end {
+                    let rect = egui::Rect::from_min_size(
+                        origin + egui::vec2(0.0, position as f32 * stride),
+                        egui::vec2(width, height + name),
+                    );
+                    self.strip_tile(ui, position, rect, egui::vec2(width, height));
                 }
             });
     }
 
-    fn photo_canvas(
+    pub(super) fn photo_canvas(
         &mut self,
         ui: &mut egui::Ui,
         id: MediaId,
@@ -602,11 +719,21 @@ impl PhotoSortApp {
         let texture = self
             .texture(id, count <= 4)
             .or_else(|| self.texture(id, false));
+        if count == 1 && self.textures.contains_key(&(id, true)) {
+            self.prefetch_neighbours(id);
+        }
         let d = self.decision(id);
-        ui.painter().rect_filled(rect, 10.0, BG);
+        // Compared photos sit on soft cards; the focused one is outlined.
+        if count > 1 {
+            ui.painter().rect_filled(rect, R_SURFACE, CHROME);
+        }
         if count > 1 && self.focused_slot == slot {
-            ui.painter()
-                .rect_stroke(rect, 10.0, Stroke::new(1.0, ACCENT), StrokeKind::Inside);
+            ui.painter().rect_stroke(
+                rect,
+                R_SURFACE,
+                Stroke::new(1.5, ACCENT.gamma_multiply(0.85)),
+                StrokeKind::Inside,
+            );
         }
         let content = egui::Rect::from_min_max(
             rect.min + egui::vec2(8.0, 28.0),
@@ -707,18 +834,49 @@ impl PhotoSortApp {
                 ui.ctx().request_repaint_after(Duration::from_millis(300));
             }
         }
-        if texture.is_none() && !detail {
-            ui.painter().text(
-                content.center(),
-                Align2::CENTER_CENTER,
-                self.failures
-                    .get(&id)
-                    .map(|_| "Preview unavailable · see Details")
-                    .unwrap_or("Loading preview…"),
-                FontId::proportional(13.0),
-                MUTED,
+        if let Some(texture) = &texture {
+            self.held.insert(
+                slot,
+                Held {
+                    id,
+                    handle: texture.clone(),
+                    turns,
+                    shown: Instant::now(),
+                },
             );
+        } else if !detail {
+            // Until this photo's pixels arrive, Cull's single view keeps the
+            // previous photo on screen rather than flashing an empty canvas.
+            // Guided comparisons never do: their pills, badges and keys
+            // already belong to the new photo, so they show it loading.
+            let hold = self.step == Step::Cull && count == 1;
+            let held = self
+                .held
+                .get(&slot)
+                .filter(|held| hold && held.id != id && held.shown.elapsed() < HOLD)
+                .map(|held| (held.handle.clone(), held.turns));
+            let failed = self.failures.contains_key(&id);
+            if let Some((handle, turns)) = held.filter(|_| !failed) {
+                paint_image(ui, &handle, content, 1.0, Vec2::ZERO, turns);
+                ui.ctx().request_repaint_after(HOLD);
+            } else if failed || self.view_started.elapsed() >= LOADING_TEXT_DELAY {
+                ui.painter().text(
+                    content.center(),
+                    Align2::CENTER_CENTER,
+                    if failed {
+                        "Preview unavailable · see Details"
+                    } else {
+                        "Loading preview…"
+                    },
+                    FontId::proportional(13.0),
+                    MUTED,
+                );
+            } else {
+                ui.ctx().request_repaint_after(LOADING_TEXT_DELAY);
+            }
         }
+        // Decision pills, badges and stars appear with the photo's own pixels.
+        let pixels = texture.is_some() || detail;
         response.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::WidgetType::Button,
@@ -793,7 +951,11 @@ impl PhotoSortApp {
             let pill = matches!(self.step, Step::EasyDelete | Step::PickBest) || d.rejected;
             let mut label_clip = rect;
             if pill {
-                label_clip.max.x -= 104.0;
+                label_clip.max.x -= if self.step == Step::PickBest {
+                    210.0
+                } else {
+                    104.0
+                };
             }
             ui.painter().with_clip_rect(label_clip).text(
                 rect.left_top() + egui::vec2(10.0, 14.0),
@@ -822,20 +984,29 @@ impl PhotoSortApp {
             )
             .on_hover_text(warning);
         }
-        if matches!(self.step, Step::EasyDelete | Step::PickBest) {
+        if pixels && matches!(self.step, Step::EasyDelete | Step::PickBest) {
             let keep = if self.step == Step::PickBest {
                 self.pick_review.comparison().is_none_or(|c| c.keeps(id))
             } else {
                 self.delete_current
                     .is_none_or(|review| self.delete_review.keeps(review, id))
             };
-            decision_pill(ui.painter(), rect, keep);
-        } else if d.rejected {
+            let pill = decision_pill(ui.painter(), rect, keep);
+            if self.step == Step::PickBest
+                && self
+                    .pick_review
+                    .comparison()
+                    .is_some_and(|c| c.ai_pick == id)
+            {
+                suggested_badge(ui.painter(), pill);
+            }
+        } else if pixels && d.rejected {
             decision_pill(ui.painter(), rect, false);
         }
         // In a comparison each photo carries its own stars, so several can be
         // rated without changing focus. Single view keeps the toolbar stars.
-        if matches!(self.step, Step::Cull | Step::Organize)
+        if pixels
+            && matches!(self.step, Step::Cull | Step::Organize)
             && self.comparison_ids().len() > 1
             && self.organize_preview().is_none()
         {
@@ -921,8 +1092,48 @@ fn paint_region(
         .add(egui::Shape::mesh(mesh));
 }
 
+/// The image a canvas slot last showed. See `PhotoSortApp::held`.
+pub(super) struct Held {
+    id: MediaId,
+    handle: TextureHandle,
+    turns: u8,
+    shown: Instant,
+}
+/// How long a slot keeps showing the previous photo while the next loads.
+const HOLD: Duration = Duration::from_millis(700);
+/// How long a slot stays quiet before saying the preview is loading.
+const LOADING_TEXT_DELAY: Duration = Duration::from_millis(250);
+
+impl PhotoSortApp {
+    /// Requests the previews of the photos before and after `id` in view
+    /// order, so stepping to them is instant. Once per active photo, and
+    /// only after its own preview has arrived, so it never delays it.
+    fn prefetch_neighbours(&mut self, id: MediaId) {
+        if self.prefetched_for == Some(id) {
+            return;
+        }
+        self.prefetched_for = Some(id);
+        let Some(position) = self
+            .index
+            .get(&id)
+            .and_then(|index| self.filtered.iter().position(|i| i == index))
+        else {
+            return;
+        };
+        for next in [position + 1, position.wrapping_sub(1)] {
+            if let Some(&index) = self.filtered.get(next)
+                && self.media[index].kind != MediaKind::Video
+            {
+                let _ = self.texture(self.media[index].id, true);
+            }
+        }
+    }
+}
+
 /// Height reserved for the filmstrip below the review canvas.
 const FILMSTRIP: f32 = 72.0;
+/// Height of a file name under a strip tile.
+const STRIP_NAME: f32 = 15.0;
 
 /// Keep/Trash toggle for one side of a guided comparison.
 fn decision_button(side: usize, keep: bool) -> egui::Button<'static> {
@@ -944,18 +1155,34 @@ mod tests;
 
 /// The Keep/Trash state of a compared photo, pinned to the slot's top-right
 /// corner where it stays readable on any image.
-fn decision_pill(painter: &egui::Painter, slot: egui::Rect, keep: bool) {
+fn decision_pill(painter: &egui::Painter, slot: egui::Rect, keep: bool) -> egui::Rect {
     use egui_phosphor::regular as icon;
     let (text, fill) = if keep {
         (format!("{}  Keep", icon::CHECK), GREEN)
     } else {
         (format!("{}  Trash", icon::TRASH), RED)
     };
-    let galley = painter.layout_no_wrap(text, medium(13.0), Color32::from_rgb(16, 16, 16));
+    let galley = painter.layout_no_wrap(text, medium(12.0), Color32::from_rgb(16, 16, 16));
     let size = galley.size() + egui::vec2(20.0, 8.0);
     let rect = Align2::RIGHT_TOP.anchor_size(slot.right_top() + egui::vec2(-S2, S2), size);
-    painter.rect_filled(rect, size.y / 2.0, fill);
+    painter.rect_filled(rect, R_CONTROL, fill);
     painter.galley(rect.min + egui::vec2(10.0, 4.0), galley, Color32::BLACK);
+    rect
+}
+/// Marks Pick Best's suggested keeper, beside its Keep/Trash pill.
+fn suggested_badge(painter: &egui::Painter, pill: egui::Rect) {
+    let text = format!("{}  Suggested", egui_phosphor::regular::STAR);
+    let galley = painter.layout_no_wrap(text, medium(12.0), ACCENT);
+    let size = galley.size() + egui::vec2(16.0, 8.0);
+    let rect = Align2::RIGHT_TOP.anchor_size(pill.left_top() - egui::vec2(S1 + 2.0, 0.0), size);
+    painter.rect_filled(rect, R_CONTROL, Color32::from_black_alpha(170));
+    painter.rect_stroke(
+        rect,
+        R_CONTROL,
+        Stroke::new(1.0, ACCENT.gamma_multiply(0.6)),
+        StrokeKind::Inside,
+    );
+    painter.galley(rect.min + egui::vec2(8.0, 4.0), galley, ACCENT);
 }
 
 impl PhotoSortApp {

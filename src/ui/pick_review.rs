@@ -1,7 +1,7 @@
 use super::*;
 impl PhotoSortApp {
-    /// Start the current step's analysis on entry when it has nothing to show
-    /// yet, as the reference app does for Easy Delete, Fix Rotation and Pick Best.
+    /// Easy Delete, Fix Rotation and Pick Best start their analysis on entry
+    /// when they have nothing to show yet, so the step is never empty.
     pub(super) fn start_ready_analysis(&mut self) {
         let unanalysed = match self.step {
             Step::PickBest => self.pick_review.tournaments().is_empty(),
@@ -138,250 +138,283 @@ impl PhotoSortApp {
         self.independent_views.clear();
         self.view_started = Instant::now();
     }
+    /// One group's status for the group list.
+    fn pick_group_status(&self, index: usize) -> String {
+        let t = &self.pick_review.tournaments()[index];
+        if t.finalized {
+            let kept = t
+                .cluster
+                .ordered
+                .iter()
+                .filter(|id| !self.decisions.get(id).is_some_and(|d| d.rejected))
+                .count();
+            format!("Complete · keeping {kept}")
+        } else if t.comparisons.iter().any(|c| c.confirmed) {
+            "In progress".to_owned()
+        } else {
+            "Not started".to_owned()
+        }
+    }
+    /// Where the review stands: which group, how far through it, and how
+    /// many groups are done. Choices and Confirm live under the photos.
     pub(super) fn pick_controls(&mut self, ui: &mut egui::Ui) {
+        use egui_phosphor::regular as icon;
         if self.pick_run.is_some() {
             return;
         }
         let current = self.pick_review.current_index();
+        let groups = self.pick_review.tournaments().len();
         let Some(t) = self.pick_review.current() else {
             return;
         };
+        let (photos, round, rounds) = (
+            t.cluster.ordered.len(),
+            t.current,
+            t.comparisons.len() + t.upcoming().len(),
+        );
+        let confirmed: Vec<bool> = t.comparisons.iter().map(|c| c.confirmed).collect();
         let mut selected_cluster = current;
-        let mut selected_round = t.current;
-        ui.horizontal_wrapped(|ui| {
-            egui::ComboBox::from_id_salt("pick_cluster")
-                .selected_text(format!(
-                    "Group {} / {} · {} photos",
-                    current + 1,
-                    self.pick_review.tournaments().len(),
-                    t.cluster.ordered.len()
-                ))
-                .show_ui(ui, |ui| {
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                    egui::ScrollArea::vertical()
-                        .id_salt("pick_clusters_scroll")
-                        .max_height(240.0)
-                        .show_rows(
-                            ui,
-                            button_row_height(ui),
-                            self.pick_review.tournaments().len(),
-                            |ui, rows| {
-                                for i in rows {
-                                    let t = &self.pick_review.tournaments()[i];
-                                    if ui
-                                        .selectable_value(
-                                            &mut selected_cluster,
-                                            i,
-                                            format!(
-                                                "Group {} · {} photos · {}",
-                                                i + 1,
-                                                t.cluster.ordered.len(),
-                                                if t.finalized {
-                                                    let kept = t
-                                                        .cluster
-                                                        .ordered
-                                                        .iter()
-                                                        .filter(|id| {
-                                                            !self
-                                                                .decisions
-                                                                .get(id)
-                                                                .is_some_and(|d| d.rejected)
-                                                        })
-                                                        .count();
-                                                    format!("Complete · keeping {kept}")
-                                                } else if t.comparisons.iter().any(|c| c.confirmed)
-                                                {
-                                                    "In progress".to_owned()
-                                                } else {
-                                                    "Not started".to_owned()
-                                                }
-                                            ),
-                                        )
-                                        .clicked()
-                                    {
-                                        ui.close();
-                                    }
-                                }
-                            },
-                        );
-                });
-            egui::ComboBox::from_id_salt("pick_comparison")
-                .selected_text(format!(
-                    "Comparison {}{}",
-                    t.current + 1,
-                    if t.comparison().confirmed {
-                        " · Confirmed"
-                    } else {
-                        ""
-                    }
-                ))
-                .show_ui(ui, |ui| {
-                    ui.set_width(ui.ctx().content_rect().width().min(520.0) - 48.0);
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                    egui::ScrollArea::vertical()
-                        .id_salt("pick_comparisons_scroll")
-                        .max_height(240.0)
-                        .show_rows(
-                            ui,
-                            button_row_height(ui),
-                            t.comparisons.len() + t.upcoming().len(),
-                            |ui, rows| {
-                                for i in rows {
-                                    if let Some(c) = t.comparisons.get(i) {
-                                        let names = c
-                                            .paths
-                                            .iter()
-                                            .map(|id| {
-                                                self.index
-                                                    .get(id)
-                                                    .map(|i| self.media[*i].name())
-                                                    .unwrap_or_default()
-                                            })
-                                            .collect::<Vec<_>>()
-                                            .join(" ↔ ");
-                                        if ui
-                                            .selectable_value(
-                                                &mut selected_round,
-                                                i,
-                                                format!(
-                                                    "{} · {} · {}",
-                                                    i + 1,
-                                                    names,
-                                                    if c.confirmed {
-                                                        "Confirmed"
-                                                    } else {
-                                                        "Needs review"
-                                                    }
-                                                ),
-                                            )
-                                            .on_hover_text(names)
-                                            .clicked()
-                                        {
-                                            ui.close();
-                                        }
-                                    } else {
-                                        let id = t.upcoming()[i - t.comparisons.len()];
-                                        let name = self
-                                            .index
-                                            .get(&id)
-                                            .map(|i| self.media[*i].name())
-                                            .unwrap_or_default();
-                                        ui.add_enabled(
-                                            false,
-                                            egui::Button::new(format!("Up next · {name}"))
-                                                .frame(false),
-                                        )
-                                        .on_disabled_hover_text(name);
-                                    }
-                                }
-                            },
-                        );
-                });
-            let complete = self
-                .pick_review
-                .tournaments()
-                .iter()
-                .filter(|t| t.finalized)
-                .count();
-            ui.label(
+        if named(
+            ui.add_enabled(current > 0, egui::Button::new(icon::CARET_LEFT)),
+            egui::WidgetType::Button,
+            "Previous group",
+        )
+        .on_hover_text("Previous group · Left")
+        .clicked()
+        {
+            selected_cluster = current - 1;
+        }
+        let group = ui
+            .add(egui::Button::new(
                 RichText::new(format!(
-                    "{complete} of {} groups complete",
-                    self.pick_review.tournaments().len()
+                    "Group {} of {groups}  ·  {photos} photos  {}",
+                    current + 1,
+                    icon::CARET_DOWN
                 ))
+                .font(medium(12.0)),
+            ))
+            .on_hover_text("Jump to another group");
+        if named(
+            ui.add_enabled(current + 1 < groups, egui::Button::new(icon::CARET_RIGHT)),
+            egui::WidgetType::Button,
+            "Next group",
+        )
+        .on_hover_text("Next group · Right")
+        .clicked()
+        {
+            selected_cluster = current + 1;
+        }
+        egui::Popup::menu(&group)
+            .id(egui::Id::new("pick_clusters_menu"))
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_min_width(260.0);
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                egui::ScrollArea::vertical()
+                    .id_salt("pick_clusters_scroll")
+                    .max_height(280.0)
+                    .show_rows(ui, button_row_height(ui), groups, |ui, rows| {
+                        for i in rows {
+                            let text = format!(
+                                "Group {} · {} photos · {}",
+                                i + 1,
+                                self.pick_review.tournaments()[i].cluster.ordered.len(),
+                                self.pick_group_status(i)
+                            );
+                            if ui
+                                .selectable_value(&mut selected_cluster, i, text)
+                                .clicked()
+                            {
+                                ui.close();
+                            }
+                        }
+                    });
+            });
+        // Rounds: each one brings the next photo against the current keeper.
+        ui.add_space(S2);
+        ui.label(RichText::new(format!("Round {} of {rounds}", round + 1)).color(MUTED));
+        let mut selected_round = round;
+        ui.add_space(S1);
+        let dot = 8.0;
+        // Long groups show a window of twelve rounds around the current one.
+        let shown = rounds.min(12);
+        let first = round.saturating_sub(6).min(rounds - shown);
+        let (strip, _) = ui.allocate_exact_size(
+            egui::vec2(shown as f32 * (dot + 5.0), dot + 6.0),
+            Sense::hover(),
+        );
+        for (slot, i) in (first..first + shown).enumerate() {
+            let center = egui::pos2(
+                strip.left() + dot / 2.0 + slot as f32 * (dot + 5.0),
+                strip.center().y,
+            );
+            let rect = egui::Rect::from_center_size(center, egui::vec2(dot + 4.0, dot + 4.0));
+            let done = confirmed.get(i).copied().unwrap_or(false);
+            let reachable = i < confirmed.len();
+            let response = ui.interact(rect, egui::Id::new(("pick-round", i)), Sense::click());
+            let name = format!(
+                "Round {}: {}",
+                i + 1,
+                if done {
+                    "confirmed"
+                } else if reachable {
+                    "needs review"
+                } else {
+                    "up next"
+                }
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::WidgetType::Button, reachable, i == round, &name)
+            });
+            let response = response.on_hover_text(&name);
+            let painter = ui.painter();
+            if done {
+                painter.circle_filled(center, dot / 2.0, ACCENT.gamma_multiply(0.75));
+            } else if reachable {
+                painter.circle_filled(center, dot / 2.0, CARD_HOVER);
+            } else {
+                painter.circle_stroke(center, dot / 2.0 - 0.5, Stroke::new(1.0, FAINT));
+            }
+            if i == round {
+                painter.circle_stroke(center, dot / 2.0 + 2.0, Stroke::new(1.5, INK));
+            }
+            if reachable && response.clicked() {
+                selected_round = i;
+            }
+        }
+        let complete = self
+            .pick_review
+            .tournaments()
+            .iter()
+            .filter(|t| t.finalized)
+            .count();
+        ui.add_space(S2);
+        ui.add(
+            egui::ProgressBar::new(complete as f32 / groups.max(1) as f32)
+                .desired_width(90.0)
+                .desired_height(6.0),
+        )
+        .on_hover_text(format!("{complete} of {groups} groups complete"));
+        ui.label(
+            RichText::new(format!("{complete} of {groups} groups complete"))
                 .small()
                 .color(MUTED),
-            );
-        });
+        );
+        if icon_text_button(ui, true, self.pick_focus, icon::CORNERS_OUT, "Focus photo")
+            .on_hover_text("Show one photo at a time · C")
+            .clicked()
+        {
+            self.toggle_pick_focus();
+        }
         if selected_cluster != current && self.allow_review_departure() {
             self.pick_review.select_cluster(selected_cluster);
             self.sync_pick_view();
-        } else if self
-            .pick_review
-            .current()
-            .is_some_and(|t| t.current != selected_round)
-            && self.allow_review_departure()
-        {
+        } else if selected_round != round && self.allow_review_departure() {
             self.pick_review.select_comparison(selected_round);
             self.sync_pick_view();
         }
-        let confirmed = self.pick_review.comparison().is_some_and(|c| c.confirmed);
-        ui.horizontal_wrapped(|ui| {
-            let confirm = if confirmed {
-                egui::Button::new("Confirmed")
-            } else {
-                primary("Confirm")
-            };
+    }
+    pub(super) fn pick_menu(&mut self, ui: &mut egui::Ui) {
+        let ready = self.pick_review.current().is_some() && self.pick_run.is_none();
+        ui.add_enabled_ui(ready, |ui| {
             if ui
-                .add_enabled(!confirmed, confirm)
-                .on_hover_text(
-                    "Apply these Keep/Trash choices and move to the next comparison · Enter",
-                )
+                .button("Keep all in this round · K")
+                .on_hover_text("Keep every photo shown and move on")
                 .clicked()
             {
-                self.confirm_pick(false);
-            }
-            if ui.button("Keep all").on_hover_text("K").clicked() {
                 self.confirm_pick(true);
+                ui.close();
             }
             if ui
-                .button("Reset")
-                .on_hover_text("Back to the suggestion · R")
+                .button("Reset this round · R")
+                .on_hover_text("Back to the suggestion")
                 .clicked()
             {
                 self.reset_pick(false);
+                ui.close();
             }
-            if ui.button("Reset all").clicked() {
+            if ui.button("Reset all groups").clicked() {
                 self.reset_pick(true);
-            }
-            divider(ui);
-            if icon_text_button(
-                ui,
-                true,
-                self.pick_focus,
-                egui_phosphor::regular::CORNERS_OUT,
-                "Focus photo",
-            )
-            .on_hover_text("Show one photo at a time · C")
-            .clicked()
-            {
-                self.toggle_pick_focus();
+                ui.close();
             }
         });
-        if let Some(c) = self.pick_review.comparison() {
-            let name = self
-                .index
-                .get(&c.ai_pick)
-                .map(|i| self.media[*i].name())
-                .unwrap_or_default();
-            let score = self.pick_review.current().unwrap().cluster.scores[&c.ai_pick];
-            // Why these were grouped: the least similar photo to the suggested
-            // keeper, from the same normalized embeddings the grouping used.
-            let alike = self.embeddings.get(&c.ai_pick).and_then(|keeper| {
-                c.paths
-                    .iter()
-                    .filter(|id| **id != c.ai_pick)
-                    .map(|id| {
-                        self.embeddings
-                            .get(id)
-                            .map(|other| crate::core::analysis::cosine(keeper, other))
-                    })
-                    .collect::<Option<Vec<_>>>()
-                    .and_then(|values| values.into_iter().reduce(f32::min))
-            });
-            let alike = alike
-                .map(|value| format!(" These look {:.0}% alike.", value.clamp(0.0, 1.0) * 100.0))
-                .unwrap_or_default();
-            step_hint(
-                ui,
-                &format!(
-                    "Suggested keeper: {name} (score {score:.1}).{alike} {}",
-                    if c.confirmed {
-                        "Choices confirmed."
-                    } else {
-                        "Choose Keep or Trash for each photo, then confirm."
-                    }
-                ),
+    }
+    /// The suggestion and how alike the photos are, in one quiet line.
+    pub(super) fn pick_context(&mut self, ui: &mut egui::Ui) {
+        if self.pick_run.is_some() {
+            return;
+        }
+        let Some(c) = self.pick_review.comparison() else {
+            return;
+        };
+        let name = self
+            .index
+            .get(&c.ai_pick)
+            .map(|i| self.media[*i].name())
+            .unwrap_or_default();
+        let score = self.pick_review.current().unwrap().cluster.scores[&c.ai_pick];
+        // Why these were grouped: the least similar photo to the suggested
+        // keeper, from the same normalized embeddings the grouping used.
+        let alike = self.embeddings.get(&c.ai_pick).and_then(|keeper| {
+            c.paths
+                .iter()
+                .filter(|id| **id != c.ai_pick)
+                .map(|id| {
+                    self.embeddings
+                        .get(id)
+                        .map(|other| crate::core::analysis::cosine(keeper, other))
+                })
+                .collect::<Option<Vec<_>>>()
+                .and_then(|values| values.into_iter().reduce(f32::min))
+        });
+        let alike = alike
+            .map(|value| format!(" · {:.0}% alike", value.clamp(0.0, 1.0) * 100.0))
+            .unwrap_or_default();
+        let next = if c.confirmed {
+            "Confirmed."
+        } else {
+            "Click a photo (or press its number) to switch Keep/Trash, then Confirm."
+        };
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!(
+                    "{}  Suggested: {name}",
+                    egui_phosphor::regular::STAR
+                ))
+                .small()
+                .color(ACCENT),
             );
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!("score {score:.1}{alike} · {next}"))
+                        .small()
+                        .color(MUTED),
+                )
+                .truncate(),
+            );
+        });
+    }
+    /// Confirm (and keep all) under the compared photos.
+    pub(super) fn pick_confirm_buttons(&mut self, ui: &mut egui::Ui) {
+        let confirmed = self.pick_review.comparison().is_some_and(|c| c.confirmed);
+        let confirm = if confirmed {
+            egui::Button::new(format!("{}  Confirmed", egui_phosphor::regular::CHECK))
+        } else {
+            primary(format!("Confirm  {}", egui_phosphor::regular::ARROW_RIGHT))
+        };
+        if ui
+            .add_enabled(!confirmed, confirm)
+            .on_hover_text("Apply these Keep/Trash choices and move to the next round · Enter")
+            .clicked()
+        {
+            self.confirm_pick(false);
+        }
+        if ui
+            .button("Keep all")
+            .on_hover_text("Keep every photo shown and move on · K")
+            .clicked()
+        {
+            self.confirm_pick(true);
         }
     }
 }

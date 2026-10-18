@@ -104,90 +104,99 @@ impl PhotoSortApp {
             .accept_defaults(&ids, &mut self.decisions);
         self.review_changed();
     }
+    /// The categories to review, as filter chips with their counts. The
+    /// decision and Confirm live under the photos; bulk actions in More.
     pub(super) fn delete_controls(&mut self, ui: &mut egui::Ui) {
-        // Category chips and the review actions share one row; it wraps on
-        // narrow windows instead of squeezing labels.
-        ui.horizontal_wrapped(|ui| {
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            let mut chips = false;
-            for category in Category::ALL {
-                let count = self
-                    .delete_review
-                    .entries()
-                    .iter()
-                    .filter(|e| e.category == category)
-                    .count();
-                if count == 0 {
-                    continue;
-                }
-                chips = true;
-                let enabled = self.delete_categories.contains(&category);
-                if chip(ui, enabled, &format!("{} ({count})", category.title()))
-                    .on_hover_text(if enabled {
-                        "Hide this kind of suggestion"
-                    } else {
-                        "Show this kind of suggestion"
-                    })
-                    .clicked()
-                    && self.allow_review_departure()
-                {
-                    if enabled {
-                        self.delete_categories.remove(&category);
-                    } else {
-                        self.delete_categories.insert(category);
-                    }
-                    self.filter_dirty = true;
-                }
+        // In the grid the bar under the photos is not shown.
+        if !self.review && self.delete_current.is_some() {
+            self.delete_confirm_button(ui);
+            divider(ui);
+        }
+        for category in Category::ALL {
+            let count = self
+                .delete_review
+                .entries()
+                .iter()
+                .filter(|e| e.category == category)
+                .count();
+            if count == 0 {
+                continue;
             }
-            if chips {
-                divider(ui);
-            }
-            if let Some(id) = self.delete_current {
-                let confirmed = self.delete_review.confirmed(id);
-                let confirm = if confirmed {
-                    ui.button("Cancel confirmation")
+            let enabled = self.delete_categories.contains(&category);
+            if chip(ui, enabled, &format!("{} ({count})", category.title()))
+                .on_hover_text(if enabled {
+                    "Hide this kind of suggestion"
                 } else {
-                    ui.add(primary("Confirm"))
-                };
-                if confirm.on_hover_text("Enter").clicked() {
-                    self.confirm_delete();
-                }
-                if ui
-                    .button("Reset")
-                    .on_hover_text("Back to the suggestion · R")
-                    .clicked()
-                {
-                    self.reset_delete(false);
-                }
-                if ui.button("Reset all").on_hover_text("Shift+R").clicked() {
-                    self.reset_delete(true);
-                }
-                divider(ui);
-            }
-            if !self.filtered.is_empty()
-                && ui
-                .add_enabled(
-                    true,
-                    egui::Button::new(format!("Accept suggestions ({} shown)", self.filtered.len())),
-                )
-                .on_hover_text("Confirm the suggested Keep/Trash choice for every photo in the categories shown · A")
+                    "Show this kind of suggestion"
+                })
                 .clicked()
+                && self.allow_review_departure()
             {
-                self.accept_delete_defaults();
+                if enabled {
+                    self.delete_categories.remove(&category);
+                } else {
+                    self.delete_categories.insert(category);
+                }
+                self.filter_dirty = true;
+            }
+        }
+    }
+    pub(super) fn delete_menu(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .add_enabled(
+                !self.filtered.is_empty(),
+                egui::Button::new(format!(
+                    "Accept suggestions ({} shown) · A",
+                    self.filtered.len()
+                )),
+            )
+            .on_hover_text(
+                "Confirm the suggested Keep/Trash choice for every photo in the categories shown",
+            )
+            .clicked()
+        {
+            self.accept_delete_defaults();
+            ui.close();
+        }
+        ui.add_enabled_ui(self.delete_current.is_some(), |ui| {
+            if ui.button("Reset this photo · R").clicked() {
+                self.reset_delete(false);
+                ui.close();
+            }
+            if ui.button("Reset all · Shift+R").clicked() {
+                self.reset_delete(true);
+                ui.close();
             }
         });
+    }
+    /// Why the current photo was suggested, in one line.
+    pub(super) fn delete_context(&mut self, ui: &mut egui::Ui) {
         if let Some(id) = self.delete_current
             && let Some(entry) = self.delete_review.entry(id)
         {
-            ui.add(egui::Label::new(RichText::new(&entry.reason).color(INK)).wrap());
-            step_hint(
-                ui,
-                if self.delete_review.confirmed(id) {
-                    "Confirmed. The Trash marks are shared with every step."
-                } else {
-                    "Choose Keep or Trash for each photo, then confirm. Files stay unchanged until you review changes."
-                },
-            );
+            let state = if self.delete_review.confirmed(id) {
+                "Confirmed · the Trash marks are shared with every step."
+            } else {
+                "Choose Keep or Trash for each photo, then confirm. Files stay unchanged until you review changes."
+            };
+            ui.horizontal(|ui| {
+                ui.add(egui::Label::new(RichText::new(&entry.reason).color(INK)).truncate())
+                    .on_hover_text(state);
+            });
+        }
+    }
+    /// The confirmation under the compared photos.
+    pub(super) fn delete_confirm_button(&mut self, ui: &mut egui::Ui) {
+        if let Some(id) = self.delete_current {
+            let confirmed = self.delete_review.confirmed(id);
+            let confirm = if confirmed {
+                ui.button("Cancel confirmation")
+            } else {
+                ui.add(primary("Confirm"))
+            };
+            if confirm.on_hover_text("Enter").clicked() {
+                self.confirm_delete();
+            }
         }
     }
 }
