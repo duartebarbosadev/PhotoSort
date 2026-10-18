@@ -5,13 +5,17 @@ prepared, and the terms it is distributed under. `SHA256SUMS` pins the exact con
 each file; the app and the macOS packager verify against it.
 
 Large ONNX weights and native runtime libraries are not stored in Git (see `.gitignore`).
-A fresh clone gets them in one of three ways:
+A fresh clone gets them in one of four ways:
 
 - **In the app.** Menu → AI models downloads the pinned DINOv2, SFace and orientation files.
   Downloads stream into private temporary files and are installed only after their exact
   size and SHA-256 match. Nothing is downloaded automatically.
 - **Import.** The same panel imports a prepared ONNX file and verifies it against
   `SHA256SUMS` (for example, from another copy of a full app bundle).
+- **Download the converted exports.** The aesthetic and MediaPipe files that release
+  builds ship are assets of the
+  [`models-1` prerelease](https://github.com/duartebarbosadev/PhotoSort/releases/tag/models-1);
+  check them with `shasum -a 256 -c --ignore-missing SHA256SUMS` from `resources/`.
 - **Recreate.** The aesthetic and MediaPipe exports can be rebuilt with the recipes below.
 
 ONNX Runtime itself is never downloaded by the app; see [ONNX Runtime](#onnx-runtime).

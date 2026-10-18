@@ -206,9 +206,11 @@ Apple Silicon and drafts a GitHub release. To release:
 
 The workflow runs on a pinned `macos-15` runner. It installs the Homebrew libraries, builds
 the private libvips copy, downloads ONNX Runtime 1.29.0 from the official release archive,
-fetches the models, checks every file against `resources/SHA256SUMS`, and packages the app
-with `--native-imaging` and `PHOTOSORT_RELEASE_REPOSITORY=duartebarbosadev/PhotoSort`. It
-then runs `photosort --check-runtime` from the finished bundle and uploads
+fetches DINOv2, SFace and the orientation model from their pinned upstream URLs and the
+four converted models from the `models-1` prerelease (see
+[Converted models](#converted-models)), checks every file against `resources/SHA256SUMS`,
+and packages the app with `--native-imaging` and
+`PHOTOSORT_RELEASE_REPOSITORY=duartebarbosadev/PhotoSort`. It then runs `photosort --check-runtime` from the finished bundle and uploads
 `PhotoSort-<version>-macos-arm64.zip`, its SHA-256 checksum file and notes filled in from
 [`.github/release-notes.md`](.github/release-notes.md). The app's update dialog shows release
 notes as plain text, so keep them readable without Markdown rendering. Bundled Homebrew
@@ -226,6 +228,28 @@ and checks everything, including signing and notarization when the secrets are s
 keeps the zip, checksums and notes as the `photosort-macos-arm64` workflow artifact for
 14 days. It never creates a tag or a release; only a pushed `v*` tag reaches the release
 job.
+
+### Converted models
+
+`aesthetic.onnx`, `face_detector.onnx`, `face_landmarks_detector.onnx` and
+`face_blendshapes.onnx` are converted exports with no upstream download (see
+[resources/ASSETS.md](resources/ASSETS.md)). Release builds download them from the assets
+of this repository's `models-1` prerelease and then check them against
+`resources/SHA256SUMS`, so a changed asset fails the build instead of shipping. Create
+the prerelease once, from a folder of files that match those pins:
+
+```sh
+gh release create models-1 --repo duartebarbosadev/PhotoSort --target main --prerelease \
+  --title "Converted models 1" \
+  --notes "Converted ONNX models for release builds; provenance and licenses in resources/ASSETS.md. aesthetic.onnx is AGPL-3.0." \
+  aesthetic.onnx face_detector.onnx face_landmarks_detector.onnx face_blendshapes.onnx
+```
+
+Keep it a prerelease: PhotoSort 3 and 2.x both read the latest release, and its tag is not
+a version. Its tag must not start with `v`, or it would start this workflow. To change a
+converted model, publish a new prerelease (`models-2`), update its pin in
+`resources/SHA256SUMS` and `MODELS_RELEASE` in the workflow, and leave older ones in place so
+earlier tags still build.
 
 ### Signing and notarization
 

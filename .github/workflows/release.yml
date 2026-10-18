@@ -30,6 +30,8 @@ jobs:
       ORT_VERSION: 1.29.0
       # onnxruntime-osx-arm64-1.29.0.tgz; resources/SHA256SUMS pins the library inside.
       ORT_ARCHIVE_SHA256: d0706fc34f315d8c88639d0a8c81f2e09e815f282cabed3493c06a054352cf92
+      # Prerelease holding the converted models (CONTRIBUTING.md#converted-models).
+      MODELS_RELEASE: models-1
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -128,13 +130,17 @@ jobs:
           fetch orientation.onnx \
             https://github.com/duartebarbosadev/deep-image-orientation-detection/releases/download/v2/orientation_model_v2_0.9882.onnx
       - name: Fetch the converted models
-        # The aesthetic and MediaPipe exports have no public download. Their source
-        # is not decided yet, so releases stop here rather than ship without them.
+        # The aesthetic and MediaPipe exports have no upstream download, so they are
+        # assets of a prerelease in this repository. The next step checks their pins,
+        # so a replaced asset fails the build.
         run: |
-          echo "::error::Choose where aesthetic.onnx and the three MediaPipe models come from"
-          exit 1
+          for name in aesthetic.onnx face_detector.onnx face_landmarks_detector.onnx face_blendshapes.onnx; do
+            curl --fail --location --proto '=https' --retry 3 --output "resources/models/$name" \
+              "https://github.com/duartebarbosadev/PhotoSort/releases/download/$MODELS_RELEASE/$name"
+          done
       - name: Verify resources against SHA256SUMS
         working-directory: resources
+        # Every pinned file, including each downloaded model and the runtime.
         run: shasum -a 256 --check --strict SHA256SUMS
       - name: Import the Developer ID certificate
         id: certificate
