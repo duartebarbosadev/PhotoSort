@@ -1,0 +1,9 @@
+Offline location data (resources/locations.tsv)
+
+Contains place names and coordinates derived from GeoNames (https://www.geonames.org/),
+as packaged by reverse_geocode 1.6.6 (https://github.com/richardpenman/reverse_geocode).
+
+GeoNames data is licensed under the Creative Commons Attribution 4.0 International
+License (CC BY 4.0): https://creativecommons.org/licenses/by/4.0/
+
+The records were reduced to latitude, longitude, country, region and city columns.

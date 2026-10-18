@@ -1,6 +1,6 @@
 //! Decode-independent evidence for subject-safe near-duplicate review.
 //!
-//! This is the reference comparator's measurement layer. Integration must supply
+//! This is the comparator's measurement layer. Integration must supply
 //! aligned previews and shared face geometry; similarity alone is not acceptance.
 pub mod batch;
 mod comparator;
@@ -47,7 +47,7 @@ impl<'a> Gray<'a> {
     }
 }
 
-/// The reference's admissible affine motion, in source-pixel coordinates.
+/// Admissible affine motion between two frames, in source-pixel coordinates.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Alignment {
     pub transform: [[f64; 3]; 2],

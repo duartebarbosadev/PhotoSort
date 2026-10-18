@@ -29,8 +29,8 @@ impl Embedding {
                 .all(|v| v.len() == 384 && v.iter().all(|v| v.is_finite()))
     }
 }
-/// The whole image is supplied separately. These five crop rectangles use the
-/// same Python ties-to-even rounding and clamping, including tiny images.
+/// The whole image is supplied separately. These five crop rectangles round half
+/// to even and clamp to the image, including tiny images.
 pub fn crop_boxes(width: u32, height: u32) -> Vec<[u32; 4]> {
     if width <= 1 || height <= 1 {
         return Vec::new();
@@ -62,7 +62,7 @@ pub fn crop_boxes(width: u32, height: u32) -> Vec<[u32; 4]> {
     })
     .collect()
 }
-/// Landscape and near-square frames share one partition in the reference.
+/// Landscape and near-square frames share one partition.
 pub fn portrait(width: u32, height: u32) -> bool {
     width > 0 && height > 0 && f64::from(width) / f64::from(height) < 0.9
 }

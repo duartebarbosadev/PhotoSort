@@ -99,7 +99,7 @@ impl Snapshot {
             .parse()
             .unwrap_or(self.summary.height);
         result.camera = self.raw("Exif.Image.Model").into();
-        // Same fallbacks as the reference sidebar: model, specification, XMP.
+        // Lens fallbacks, in order: model, specification, XMP.
         result.lens = [
             self.raw("Exif.Photo.LensModel").trim().to_owned(),
             crate::core::details::lens_specification(

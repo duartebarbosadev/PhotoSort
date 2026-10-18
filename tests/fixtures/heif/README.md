@@ -18,8 +18,8 @@ To regenerate a disposable candidate from the repository root:
 ```sh
 clang tests/fixtures/heif/generate_alpha.c native/apple_image.m \
   -framework Foundation -framework CoreFoundation -framework CoreGraphics -framework ImageIO \
-  -framework Accelerate -o /private/tmp/photosort-heif-alpha-probe
-/private/tmp/photosort-heif-alpha-probe /private/tmp/photosort-alpha.heic
+  -framework Accelerate -o $TMPDIR/photosort-heif-alpha-probe
+$TMPDIR/photosort-heif-alpha-probe $TMPDIR/photosort-alpha.heic
 ```
 
 The helper also prints four pixels from the production decoder. Re-encoding on
@@ -73,8 +73,8 @@ Generate a disposable candidate with:
 ```sh
 clang -O2 scripts/generate_heif_preview_fixture.c \
   -framework CoreFoundation -framework CoreGraphics -framework ImageIO \
-  -o /private/tmp/photosort-heif-preview-fixture
-/private/tmp/photosort-heif-preview-fixture /private/tmp/photosort-heif-preview-candidate.heic
+  -o $TMPDIR/photosort-heif-preview-fixture
+$TMPDIR/photosort-heif-preview-fixture $TMPDIR/photosort-heif-preview-candidate.heic
 ```
 
 Encoding is lossy; exact file bytes may vary with OS/codec versions. The regression

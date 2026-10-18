@@ -3,7 +3,7 @@ use anyhow::Result;
 
 /// Compact evidence from one DINO forward pass. Raw patch tensors are discarded.
 /// CLS remains full precision for existing consumers; subject evidence matches
-/// the reference's float16 cache precision on cold and warm runs alike.
+/// float16 cache precision on cold and warm runs alike.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DenseEmbedding {
     pub global: Vec<f32>,

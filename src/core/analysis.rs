@@ -53,7 +53,7 @@ impl Analysis {
     /// Classify cached measurements. No pixels, metadata, models or IO are needed.
     pub fn reclassify(&mut self, thresholds: Thresholds) {
         self.issues.clear();
-        // Match the reference's dark-before-blur precedence, preserving night photos.
+        // Check darkness before blur so night photos are not reported as blurry.
         if self.brightness < thresholds.dark {
             if self.black_fraction >= 0.98 {
                 self.issues.push("Very dark".into());
@@ -81,7 +81,7 @@ fn measurement_frame(asset: &Asset, cancelled: &impl Fn() -> bool) -> Option<ima
         Some(rgb)
     }
 }
-/// Never enlarge small photos. Python rounds detection dimensions ties-to-even.
+/// Never enlarge small photos. Detection dimensions round half to even.
 pub fn detection_size(width: u32, height: u32) -> (u32, u32) {
     let scale = (640. / f64::from(width))
         .min(480. / f64::from(height))
@@ -221,7 +221,7 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(a, b)| a * b).sum()
 }
 
-/// Select a candidate per group after the reference relative-sharpness gate.
+/// Select a candidate per group after the relative-sharpness gate.
 /// This only suggests keepers; it never creates deletion marks.
 pub fn best_per_group(
     entries: impl IntoIterator<Item = (super::model::MediaId, usize, Analysis)>,

@@ -1,5 +1,5 @@
 //! Phase correlation followed by a two-resolution affine ECC fit.
-//! Numerical policy follows the Python reference; this implementation keeps only
+//! Numerical policy matches the captured test oracles; the solver keeps only
 //! image-sized buffers and a 6x6 normal system, not six full Jacobian planes.
 use super::{Alignment, Gray, raster};
 use nalgebra::{SMatrix, SVector};

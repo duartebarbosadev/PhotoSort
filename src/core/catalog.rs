@@ -32,8 +32,8 @@ impl Catalog {
             ..Default::default()
         };
         let mut pending = Vec::with_capacity(128);
-        // The reference discovers media and Organize inventory inside hidden
-        // folders too. Keep one complete walk; do not follow file/directory links.
+        // Media and Organize inventory are discovered inside hidden folders
+        // too. Keep one complete walk; do not follow file/directory links.
         for entry in WalkDir::new(&root).follow_links(false) {
             if cancelled() {
                 anyhow::bail!("Cancelled");
@@ -106,7 +106,7 @@ impl Catalog {
         catalog.media.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(catalog)
     }
-    /// Organize reuses the scan inventory. Match the reference scope: extra
+    /// Organize reuses the scan inventory. Its scope is the media plus any extra
     /// files in media directories or their descendants; XMP stays companion-owned.
     pub fn organize_files(&self) -> Vec<(MediaId, &Path)> {
         let directories: HashSet<_> = self.media.iter().filter_map(|m| m.path.parent()).collect();

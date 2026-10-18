@@ -188,8 +188,8 @@ fn morphology(
 }
 
 /// Robust difference threshold, 3x3 opening, 5x5 closing and eight-connected
-/// components. A flood visits each pixel once, avoiding one full image scan per
-/// component as in the reference implementation. No decoding/model ownership.
+/// components. A flood fill visits each pixel once instead of scanning the whole
+/// image per component. No decoding/model ownership.
 pub fn coherent_change(
     first: Gray<'_>,
     second: Gray<'_>,
@@ -245,7 +245,7 @@ pub fn coherent_change(
         .component_min_pixels
         .max((area as f64 * options.component_min_fraction).ceil() as usize);
     let (mut total, mut largest, mut largest_p90, mut significant) = (0, 0, 0.0, false);
-    // Row-major label order keeps equal-area ties consistent with the reference.
+    // Row-major label order keeps equal-area ties deterministic.
     let mut queue = Vec::new();
     let mut component = Vec::new();
     for start in 0..changed.len() {

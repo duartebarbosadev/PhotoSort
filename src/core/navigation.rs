@@ -228,7 +228,7 @@ impl Index {
                 {
                     return Some(id);
                 }
-                // Python falls back to sequential movement when there is no further
+                // Fall back to sequential movement when there is no further
                 // multi-photo group, keeping the final singletons reachable.
             }
         }

@@ -1,4 +1,4 @@
-//! Native BlazeFace and Face Mesh inference. No Python or MediaPipe runtime.
+//! Native BlazeFace and Face Mesh inference through ONNX Runtime.
 use super::{models::model_path, pipeline::Asset};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -464,7 +464,7 @@ pub fn aligned_crop(asset: &Asset, face: &Face) -> Result<Asset> {
     let [left, top, right, bottom] = face.bbox;
     let pad_x = ((right - left) * w).max(1.0) * 0.25;
     let pad_y = ((bottom - top) * h).max(1.0) * 0.25;
-    // Match the reference's integer padded crop extent, clipped to the source.
+    // Expand the padded crop outward to whole pixels, clipped to the source.
     let x0 = ((left * w - pad_x).trunc().max(0.0)).min(w) as u32;
     let y0 = ((top * h - pad_y).trunc().max(0.0)).min(h) as u32;
     let x1 = ((right * w + pad_x).ceil().max(0.0)).min(w) as u32;

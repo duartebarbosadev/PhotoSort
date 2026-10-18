@@ -171,7 +171,7 @@ fn match_sets(a: &[Evidence], b: &[Evidence]) -> (bool, f64) {
         }
     }
     // Hungarian assignment maximizes total similarity, then returns the weakest
-    // chosen match, exactly as the reference's linear_sum_assignment path does.
+    // chosen match (equivalent to SciPy's linear_sum_assignment).
     let (mut u, mut v, mut p, mut way) = (
         vec![0.0; n + 1],
         vec![0.0; n + 1],

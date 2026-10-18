@@ -90,8 +90,8 @@ fn pair(a: &Input, b: &Input, assessment: Assessment) -> Pair {
     }
 }
 /// Exact cohorts are paired in linear space before any image requests. Remaining
-/// near candidates use the shared general similarity groups and the reference
-/// .97 cosine gate. Never use Cull's same-subject groups as deletion evidence.
+/// near candidates use the shared general similarity groups and a .97 cosine
+/// gate. Never use Cull's same-subject groups as deletion evidence.
 pub fn review(
     inputs: &[Input],
     store: &Store,

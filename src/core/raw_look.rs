@@ -1,5 +1,5 @@
 //! How RAW photos are shown. Neutral is the camera-faithful render; Enhanced
-//! adds the punchier look the Python app used (per-channel auto levels, then
+//! adds a punchier look (per-channel auto levels, then
 //! 1.2× saturation). The look only changes display pixels: analysis, scores
 //! and the shared disk proxies always use the neutral render.
 use image::RgbaImage;

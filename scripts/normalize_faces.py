@@ -1,4 +1,4 @@
-"""Normalize constant float16 TFLite weights to float32 for tract.
+"""Normalize constant float16 TFLite weights to float32 before ONNX export.
 Build-time only. Requires tflite, flatbuffers, numpy. Graph math is unchanged;
 constant DEQUANTIZE nodes are folded and every consumer is rewired.
 Usage: python scripts/normalize_faces.py face_landmarker.task resources/models

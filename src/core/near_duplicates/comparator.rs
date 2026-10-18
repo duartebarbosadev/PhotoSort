@@ -202,7 +202,7 @@ impl Comparator {
             return result;
         };
         result.face_motion = Some(motion);
-        // Count/overlap veto precedes crop work in the reference.
+        // The face count/overlap veto runs before any crop work.
         if motion.changed && motion.max_median.is_none() {
             result.decision = Decision::SubjectChanged;
             result.reason = Reason::FaceChanged;
