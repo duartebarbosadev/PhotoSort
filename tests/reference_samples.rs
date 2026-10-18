@@ -1,5 +1,5 @@
 //! Opt-in real-camera regression tests. Originals are read-only; edits use copies.
-//! PHOTOSORT_SAMPLE_DIR=/path/to/PhotoSort/tests/samples cargo test --release --test reference_samples -- --ignored --nocapture
+//! PHOTOSORT_SAMPLE_DIR=tests/samples cargo test --release --test reference_samples -- --ignored --nocapture
 use photosort::core::{
     catalog::Catalog, metadata, model::*, models::Models, operations, pipeline::Pipeline,
 };
@@ -222,10 +222,10 @@ fn native_trash_moves_only_the_disposable_test_file() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let path = temp
         .path()
-        .join("PhotoSort-Rust-disposable-trash-verification.txt");
+        .join("PhotoSort-disposable-trash-verification.txt");
     fs::write(
         &path,
-        b"Disposable PhotoSort Rust test artifact; safe to discard.",
+        b"Disposable PhotoSort test artifact; safe to discard.",
     )?;
     let plan = operations::Plan {
         actions: vec![operations::Action::Trash {

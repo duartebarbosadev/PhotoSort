@@ -6,7 +6,7 @@ async fn fetch(url: &str, https_only: bool) -> Result<Vec<u8>> {
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(12))
-        .user_agent(concat!("PhotoSort-Rust/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("PhotoSort/", env!("CARGO_PKG_VERSION")))
         .build()?;
     let mut response = client
         .get(url)
@@ -105,7 +105,7 @@ mod tests {
             State::Available(_)
         ));
         let headers = rx.recv().unwrap().to_lowercase();
-        assert!(headers.contains("user-agent: photosort-rust/"));
+        assert!(headers.contains("user-agent: photosort/"));
         assert!(headers.contains("accept: application/vnd.github+json"));
         assert!(!headers.contains("authorization:"));
         handle.join().unwrap();

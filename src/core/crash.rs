@@ -122,7 +122,7 @@ fn write(
         std::process::id()
     ));
     let report = format!(
-        "PhotoSort Rust {}\nOS: {} {}\nThread: {thread}\nLocation: {location}\nMessage: {message}\n\nBacktrace:\n{backtrace}\n",
+        "PhotoSort {}\nOS: {} {}\nThread: {thread}\nLocation: {location}\nMessage: {message}\n\nBacktrace:\n{backtrace}\n",
         env!("CARGO_PKG_VERSION"),
         std::env::consts::OS,
         std::env::consts::ARCH,

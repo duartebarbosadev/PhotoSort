@@ -1,10 +1,14 @@
 [package]
 name = "photosort"
-version = "0.1.0"
+version = "3.0.0"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
-description = "A native Rust workspace for deliberate photo culling"
+description = "A local-first desktop app for organizing and culling photo libraries"
+authors = ["Duarte Barbosa"]
+repository = "https://github.com/duartebarbosadev/PhotoSort"
+readme = "README.md"
+publish = false
 
 [dependencies]
 photosort-imaging-vips = { path = "crates/imaging-vips", optional = true }

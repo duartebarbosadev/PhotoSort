@@ -7,8 +7,10 @@ import shutil
 import subprocess
 import tempfile
 import hashlib
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = tomllib.loads((ROOT/'Cargo.toml').read_text())['package']['version']
 def bundle_manifest(contents):
     """Hash finalized resources with bounded memory; codesign verifies executable code."""
     checksums = []
@@ -115,7 +117,7 @@ def sign_bundle(app, binaries, identity):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', type=Path, help='Destination .app bundle (default: target/PhotoSort Rust.app)')
+    parser.add_argument('--output', type=Path, help='Destination .app bundle (default: target/PhotoSort.app)')
     parser.add_argument('--native-imaging', action='store_true', help='Include the opt-in libvips backend built by scripts/build_vips.py')
     parser.add_argument('--native-prefix', type=Path, help='Private libvips prefix to bundle with --native-imaging (default: .tools/vips)')
     parser.add_argument('--sign-identity', default='-', help='Existing codesign identity name or SHA-1; default: ad-hoc (-). No notarization is performed.')
@@ -128,7 +130,7 @@ def main():
     if not target.is_absolute():
         target = ROOT/target
     target = target.resolve()
-    destination = (args.output or ROOT/'target'/'PhotoSort Rust.app').expanduser().absolute()
+    destination = (args.output or ROOT/'target'/'PhotoSort.app').expanduser().absolute()
     if destination.suffix != '.app' or destination.is_symlink():
         parser.error('--output must name a non-symlink .app bundle')
     if destination.exists() and not (destination/'Contents'/'Info.plist').is_file():
@@ -144,7 +146,7 @@ def main():
     subprocess.run(command, cwd=ROOT, env=env, check=True)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=destination.parent, prefix='photosort-bundle-') as staging:
-        app = Path(staging) / 'PhotoSort Rust.app'
+        app = Path(staging) / 'PhotoSort.app'
         contents = app / 'Contents'
         for name in ('MacOS', 'Resources', 'Frameworks'):
             (contents/name).mkdir(parents=True, exist_ok=True)
@@ -153,8 +155,8 @@ def main():
         shutil.copytree(ROOT/'resources', contents/'Resources', dirs_exist_ok=True)
         shutil.copy2(ROOT/'LICENSE', contents/'Resources/LICENSE')
         plist = dict(CFBundleExecutable='photosort', CFBundleIdentifier='dev.duartebarbosa.photosort.rust',
-                     CFBundleName='PhotoSort Rust', CFBundleDisplayName='PhotoSort Rust',
-                     CFBundleVersion='1', CFBundleShortVersionString='0.1.0', CFBundlePackageType='APPL',
+                     CFBundleName='PhotoSort', CFBundleDisplayName='PhotoSort',
+                     CFBundleVersion='1', CFBundleShortVersionString=VERSION, CFBundlePackageType='APPL',
                      NSHighResolutionCapable=True, LSMinimumSystemVersion='13.0')
         (contents/'Info.plist').write_bytes(plistlib.dumps(plist))
         visited = set()

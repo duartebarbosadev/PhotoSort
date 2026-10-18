@@ -23,7 +23,7 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     if options.version {
-        println!("PhotoSort Rust {}", env!("CARGO_PKG_VERSION"));
+        println!("PhotoSort {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     let _logging = session_logging::start(options.log_file.as_deref(), options.log_level)
@@ -124,7 +124,7 @@ fn run(options: photosort::core::startup::Options) -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "PhotoSort Rust",
+        "PhotoSort",
         options,
         Box::new(move |cc| {
             let mut app = photosort::ui::PhotoSortApp::new(cc, folder);

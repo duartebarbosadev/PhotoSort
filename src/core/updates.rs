@@ -56,7 +56,7 @@ pub struct Source {
     repository: String,
 }
 impl Source {
-    /// Explicit build identity, never inferred from the Python reference or a Git remote.
+    /// Explicit build identity, never inferred from a Git remote.
     pub fn new(repository: &str) -> Result<Self> {
         let parts: Vec<_> = repository.split('/').collect();
         ensure!(
@@ -316,7 +316,7 @@ mod tests {
     }
     #[test]
     fn semantic_versions_do_not_offer_downgrades_or_build_metadata_updates() {
-        let source = Source::new("example/PhotoSort-Rust").unwrap();
+        let source = Source::new("example/PhotoSort").unwrap();
         for (tag, current, available) in [
             ("v0.2.0", "0.1.0", true),
             ("v1.0.0", "1.0.0-rc.2", true),
@@ -330,7 +330,7 @@ mod tests {
             if let State::Available(release) = state {
                 assert_eq!(
                     release.url,
-                    format!("https://github.com/example/PhotoSort-Rust/releases/tag/{tag}")
+                    format!("https://github.com/example/PhotoSort/releases/tag/{tag}")
                 );
                 assert!(release.notes.starts_with("<img")); // plain text, never parsed as HTML
             }
