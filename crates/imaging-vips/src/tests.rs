@@ -139,7 +139,7 @@ fn embedded_linear_profile_normalizes_rgb_but_preserves_alpha() {
     for edge in [None, Some(10)] {
         let output = render(&path, Request { edge, region: None }, || false).unwrap();
         assert!(output.profiled);
-        for pixel in rgba(output).chunks_exact(4) {
+        for pixel in rgba(output).as_chunks::<4>().0 {
             for sample in &pixel[..3] {
                 assert!(sample.abs_diff(188) <= 1, "{pixel:?}");
             }
@@ -343,14 +343,19 @@ fn tagged_rgb16_preserves_alpha_and_more_than_eight_bits_of_color() {
     let Pixels::U16(samples) = output.pixels else {
         panic!("lost native precision")
     };
-    let unique: std::collections::BTreeSet<_> =
-        samples.chunks_exact(4).take(64).map(|p| p[0]).collect();
+    let unique: std::collections::BTreeSet<_> = samples
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .take(64)
+        .map(|p| p[0])
+        .collect();
     assert!(
         unique.len() > 40,
         "color was quantized to eight bits: {} values",
         unique.len()
     );
-    for pixel in samples.chunks_exact(4) {
+    for pixel in samples.as_chunks::<4>().0 {
         assert_eq!(pixel[3], 32767);
     }
 }
@@ -377,7 +382,7 @@ fn cmyk_and_ycck_jpeg_are_converted_before_exposing_rgb() {
         let full = render(&path, Request::default(), || false).unwrap();
         assert!(full.profiled);
         let pixels = rgba(full);
-        assert!(pixels.chunks_exact(4).all(|p| p[3] == 255));
+        assert!(pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
         if let Some(reference) = &reference {
             let max = pixels
                 .iter()

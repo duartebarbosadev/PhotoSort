@@ -1,8 +1,31 @@
-/target/
-.DS_Store
-*.log
+# Rust build output (root and nested crates)
+target/
+
+# Prepared models and native runtimes are installed locally, not versioned
 /resources/models/*.onnx
 /resources/runtime/*.dylib
 /resources/runtime/*.dll
 /resources/runtime/*.so*
+
+# Private native dependency prefix built by scripts/build_vips.py
 /.tools/
+
+# Python tooling in scripts/
+__pycache__/
+*.py[cod]
+.venv/
+.coverage
+.coverage.*
+coverage.xml
+
+# Local photo libraries, models and build output from the previous Python app
+/sample*/
+/models/
+/build/
+/dist/
+/temp/
+
+# Environment and OS files
+.env
+.DS_Store
+*.log

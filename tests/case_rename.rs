@@ -279,10 +279,7 @@ fn output_library_keeps_source_folder_spelling() {
 #[test]
 #[ignore = "copies all seven original photo samples into a disposable library"]
 fn native_seven_samples_keep_content_and_identity_through_case_renames() {
-    let samples = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("PhotoSort/tests/samples");
+    let samples = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/samples");
     let temp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(temp.path().join("Samples/Set")).unwrap();
     let reference: serde_json::Value = serde_json::from_slice(

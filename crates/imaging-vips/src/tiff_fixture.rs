@@ -58,10 +58,20 @@ pub fn write(path: &Path, profile: Option<&[u8]>, bits: u16, planar: bool, compr
     let mut offsets = Vec::new();
     for channel in 0..4 {
         let offset = if bits == 8 {
-            let plane: Vec<u8> = pixels.chunks_exact(4).map(|p| p[channel]).collect();
+            let plane: Vec<u8> = pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p[channel])
+                .collect();
             directory.write_data(plane.as_slice()).unwrap()
         } else {
-            let plane: Vec<u16> = words.chunks_exact(4).map(|p| p[channel]).collect();
+            let plane: Vec<u16> = words
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p[channel])
+                .collect();
             directory.write_data(plane.as_slice()).unwrap()
         };
         offsets.push(u32::try_from(offset).unwrap());

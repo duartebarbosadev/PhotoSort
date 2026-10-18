@@ -1,7 +1,17 @@
 name: Rust checks
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   core:
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -17,6 +27,7 @@ jobs:
       - run: cargo clippy --locked --no-default-features --all-targets -- -D warnings
       - run: cargo check --locked --no-default-features --features onnx --all-targets
   native-macos:
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -44,6 +55,7 @@ jobs:
       - if: matrix.flags != ''
         run: cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
   native-linux:
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     container:
       # Debian's security repository supplies libheif >= 1.23, required by the Rust binding.
