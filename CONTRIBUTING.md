@@ -45,7 +45,8 @@ find models in `resources/models/`, not in the app's data folder, unless
 
 CI ([`.github/workflows/check.yml`](.github/workflows/check.yml)) runs the minimal build on
 Ubuntu, macOS and Windows, the default build on macOS (with and without libvips), and the
-libvips build in a Debian container. Run the same checks before opening a pull request:
+libvips build in a Debian container. Release builds are separate (see [Releases](#releases)).
+Run the same checks before opening a pull request:
 
 ```sh
 cargo fmt --all --check
@@ -191,6 +192,64 @@ To package the macOS app from a temporary build directory that is removed afterw
 ```
 
 `cargo clean` removes all build output, including `target/PhotoSort.app`.
+
+## Releases
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) builds the macOS app for
+Apple Silicon and drafts a GitHub release. To release:
+
+1. Set the version in `Cargo.toml` (and `Cargo.lock`, with `cargo check`), merge to `main`
+   and wait for the checks to pass.
+2. Tag that commit `v` plus the version, for example `v3.0.0`, and push the tag. The
+   workflow stops if the tag and `Cargo.toml` disagree.
+3. Review the draft release, replace the summary placeholder in its notes, and publish it.
+
+The workflow runs on a pinned `macos-15` runner. It installs the Homebrew libraries, builds
+the private libvips copy, downloads ONNX Runtime 1.29.0 from the official release archive,
+fetches the models, checks every file against `resources/SHA256SUMS`, and packages the app
+with `--native-imaging` and `PHOTOSORT_RELEASE_REPOSITORY=duartebarbosadev/PhotoSort`. It
+then runs `photosort --check-runtime` from the finished bundle and uploads
+`PhotoSort-<version>-macos-arm64.zip`, its SHA-256 checksum file and notes filled in from
+[`.github/release-notes.md`](.github/release-notes.md). The app's update dialog shows release
+notes as plain text, so keep them readable without Markdown rendering. Bundled Homebrew
+libraries require the macOS version they were built for, so the runner image sets the
+app's minimum macOS; the packager writes it to `Info.plist` and the notes repeat it.
+
+Drafts are not "latest", so neither PhotoSort 3 nor PhotoSort 2.x sees a release until it
+is published. PhotoSort 2.x announces any newer published release on every platform and
+opens its page, even without a build for that platform; the notes template says so.
+
+**Dry run.** Once the workflow is on `main` (GitHub only offers manual runs for workflows
+on the default branch), run it by hand from the Actions tab (Release → Run workflow, then
+pick a branch) or with `gh workflow run release.yml --ref <branch>`. A manual run builds
+and checks everything, including signing and notarization when the secrets are set, and
+keeps the zip, checksums and notes as the `photosort-macos-arm64` workflow artifact for
+14 days. It never creates a tag or a release; only a pushed `v*` tag reaches the release
+job.
+
+### Signing and notarization
+
+Without secrets, releases keep the packager's ad-hoc signature and are not notarized, so
+macOS asks users to approve the first launch; the notes explain how. Set these repository
+secrets (Settings → Secrets and variables → Actions) to sign and notarize instead:
+
+| Secret | Value |
+| --- | --- |
+| `MACOS_CERTIFICATE` | Base64 of a `.p12` export of the Developer ID Application certificate with its private key (`base64 -i certificate.p12`) |
+| `MACOS_CERTIFICATE_PASSWORD` | The password chosen for that export |
+| `APPLE_ID` | Apple Account email of a member of the developer team |
+| `APPLE_TEAM_ID` | The ten-character team ID |
+| `APPLE_APP_PASSWORD` | An app-specific password for that Apple Account |
+
+The two certificate secrets alone give a Developer ID signature with a secure timestamp
+and the hardened runtime, but no notarization. All five also notarize the zip with
+`notarytool`, staple the ticket to the app and zip it again. A partial set of either group
+stops the workflow instead of silently producing a weaker build. The certificate goes into
+a temporary keychain that is deleted at the end of the job.
+
+The hardened runtime enables library validation, so a Developer ID build loads only code
+signed by the same team: its bundled ONNX Runtime works, but `ORT_DYLIB_PATH` or a Homebrew
+copy of the library is refused. Ad-hoc builds are unaffected.
 
 ## Commit style
 

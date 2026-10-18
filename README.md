@@ -68,7 +68,9 @@ so codec support follows the system.
 | Linux | Full build and tests CI-tested in a Debian container; desktop use not yet verified |
 | Windows | Minimal build CI-tested; full native build not verified |
 
-Releases of the native app are not yet published; build from source or package a macOS app.
+Release builds for Apple Silicon Macs come from a tagged release workflow (see
+[CONTRIBUTING.md](CONTRIBUTING.md#releases)) and need the macOS version stated in their
+release notes. Until a release is published, build from source or package a macOS app.
 
 ## Building from source
 
@@ -244,9 +246,9 @@ python3 scripts/package_macos.py --native-imaging
 ## Updates (for packagers)
 
 Menu → Check for updates reads the GitHub releases of the repository set with
-`PHOTOSORT_RELEASE_REPOSITORY=owner/repository` at build time. Builds with it also check
-once a day at startup unless that is turned off in Settings; builds without it make no
-update requests. Release tags must be semantic versions such as `3.0.1` or `v3.0.1`, and
+`PHOTOSORT_RELEASE_REPOSITORY=owner/repository` at build time (the release workflow sets
+`duartebarbosadev/PhotoSort`). Builds with it also check once a day at startup unless that
+is turned off in Settings; builds without it make no update requests. Release tags must be semantic versions such as `3.0.1` or `v3.0.1`, and
 drafts, prereleases and downgrades are ignored. The app links to the release page and
 never downloads or installs an update.
 
