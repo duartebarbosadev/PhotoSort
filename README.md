@@ -215,7 +215,9 @@ directory).
 
 Bundles are ad-hoc signed and not notarized by default, so macOS may ask again for folder
 access after a rebuild. `--sign-identity` takes an existing codesign identity name or SHA-1
-for a consistent signature.
+for a consistent signature; named identities also get a secure timestamp and the hardened
+runtime, which notarization requires. The bundle's minimum macOS is the highest required by
+any binary in it, and Homebrew libraries require the macOS version they were built for.
 
 ## Optional libvips backend
 
