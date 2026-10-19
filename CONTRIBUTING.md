@@ -20,10 +20,10 @@ cargo run --release -- --folder ~/photosort-scratch
 ```
 
 The AI models and ONNX Runtime are not in git. For the AI steps, put the runtime library
-in `resources/runtime/` (or set `ORT_DYLIB_PATH`) and the models in `resources/models/`.
-You can copy them from an existing `PhotoSort.app/Contents/Resources`, download DINOv2,
-SFace and the orientation model from Menu → AI models, or prepare the others with the
-recipes in [resources/ASSETS.md](resources/ASSETS.md); the face recipes start from
+in `resources/runtime/` (or set `ORT_DYLIB_PATH`). Menu → AI models downloads all seven
+models into the app's data folder. Alternatively, put them in `resources/models/`: copy
+them from an existing `PhotoSort.app/Contents/Resources`, or recreate the converted ones
+with the recipes in [resources/ASSETS.md](resources/ASSETS.md); the face recipes start from
 `assets/models/face_landmarker.task` in the `python-final` tag. `cargo run -- --diagnostics`
 reports what was found.
 

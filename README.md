@@ -123,20 +123,23 @@ cargo run --release --no-default-features --features portable-video
 | Model | Purpose | Used by | In-app download |
 | --- | --- | --- | --- |
 | `dinov2-small.onnx` (DINOv2 small) | Scene similarity | Organize (visual, date + similarity), Easy Delete, Pick Best, Cull | Yes |
-| `aesthetic.onnx` (cafe_aesthetic, BEiT) | Aesthetic score | Pick Best | No |
-| `face_detector.onnx` (MediaPipe) | Face detection | Organize (faces), Easy Delete, Pick Best, Cull | No |
-| `face_landmarks_detector.onnx` (MediaPipe Face Mesh V2) | Eye positions and alignment | Organize (faces), Easy Delete, Pick Best, Cull | No |
-| `face_blendshapes.onnx` (MediaPipe) | Eye openness | Easy Delete, Pick Best, Cull | No |
+| `aesthetic.onnx` (cafe_aesthetic, BEiT) | Aesthetic score | Pick Best | Yes |
+| `face_detector.onnx` (MediaPipe) | Face detection | Organize (faces), Easy Delete, Pick Best, Cull | Yes |
+| `face_landmarks_detector.onnx` (MediaPipe Face Mesh V2) | Eye positions and alignment | Organize (faces), Easy Delete, Pick Best, Cull | Yes |
+| `face_blendshapes.onnx` (MediaPipe) | Eye openness | Easy Delete, Pick Best, Cull | Yes |
 | `face_recognition_sface.onnx` (OpenCV Zoo SFace) | Same person across photos | Organize (faces) | Yes |
 | `orientation.onnx` (deep-image-orientation-detection v2) | Sideways and upside-down photos | Fix Rotation | Yes |
 
 Model weights are not in git; `resources/SHA256SUMS` pins their exact content. **Menu → AI
-models** checks installed models and restores missing or damaged ones from the app bundle
-or a prepared ONNX file. DINOv2, SFace and the orientation model can also be downloaded
-there from pinned upstream files, verified by size and SHA-256. The other four are
-converted exports with no public download: they ship in an app bundle packaged with them in
-`resources/models`, or can be prepared with the recipes in
-[resources/ASSETS.md](resources/ASSETS.md). Manual review works without any model.
+models** checks installed models and downloads any of the seven, so running from source
+needs no model files copied by hand. DINOv2, SFace and the orientation model come from pinned upstream
+files; the four converted exports come from this repository's
+[`models-1` prerelease](https://github.com/duartebarbosadev/PhotoSort/releases/tag/models-1).
+Every download is verified by size and SHA-256 before it is installed, and nothing
+downloads unless you ask. The aesthetic model is licensed under AGPL-3.0; the others are
+Apache-2.0 or MIT. The same panel also restores a bundled copy or imports a prepared ONNX
+file, and [resources/ASSETS.md](resources/ASSETS.md) has the recipes to recreate the
+converted exports. Manual review works without any model.
 
 ONNX Runtime is loaded at run time. It is not in git and the model manager does not
 download it. PhotoSort looks for it in this order:

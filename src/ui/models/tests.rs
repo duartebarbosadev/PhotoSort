@@ -464,14 +464,28 @@ fn model_panel_summarises_groups_and_links_every_model_source() {
     for group in ["NEEDED FOR THE PAUSED ANALYSIS", "OPTIONAL FEATURES"] {
         assert!(labels.iter().any(|l| l == group), "{group}: {labels:?}");
     }
-    assert_eq!(
-        labels
-            .iter()
-            .filter(|l| l.contains("ship only inside the full app bundle"))
-            .count(),
-        1
-    );
     assert_eq!(labels.iter().filter(|l| *l == "Missing").count(), 7);
+    // Every model downloads from its pinned file; Import stays in Details.
+    // Builds without downloads offer Import instead and say why, once.
+    let downloads = cfg!(feature = "model-downloads");
+    let count = |pred: &dyn Fn(&str) -> bool| labels.iter().filter(|l| pred(l)).count();
+    let total = model_assets::ALL.len();
+    assert_eq!(
+        count(&|l| l.starts_with("Download ") && l.ends_with(" MB")),
+        if downloads { total } else { 0 }
+    );
+    assert_eq!(
+        count(&|l| l == "Import prepared model…"),
+        if downloads { 0 } else { total }
+    );
+    assert_eq!(
+        count(&|l| l.starts_with("This build cannot download models")),
+        usize::from(!downloads && cfg!(feature = "onnx"))
+    );
+    assert_eq!(count(&|l| l.contains("no public download")), 0);
+    // The aesthetic model's AGPL-3.0 licence is stated beside its download.
+    let agpl = model_assets::Id::Aesthetic.asset().download_note.unwrap();
+    assert_eq!(count(&|l| l == agpl), usize::from(downloads));
     // Every model links its upstream page; links open only when clicked.
     let links = nodes
         .iter()
