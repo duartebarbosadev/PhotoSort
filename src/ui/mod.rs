@@ -5,4 +5,4 @@ mod workspace;
 pub use workspace::PhotoSortApp;
 
 mod platform;
-pub use platform::initialize_native_application;
+pub use platform::{app_icon, initialize_native_application};

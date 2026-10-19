@@ -27,6 +27,7 @@ ONNX Runtime itself is never downloaded by the app; see [ONNX Runtime](#onnx-run
 | `runtime/libonnxruntime.dylib` | ONNX Runtime 1.29.0 shared library (see below) | MIT; `licenses/ONNXRUNTIME-MIT.txt` |
 | `locations.tsv` | 155,210 latitude/longitude/country/region/city records converted from reverse_geocode 1.6.6's GeoNames dataset | GeoNames CC BY 4.0, `licenses/GEONAMES-CC-BY-4.0.txt`; reverse_geocode package LGPL |
 | `fonts/Inter-*.ttf` | Inter 4.001 (Regular, Medium, SemiBold) | SIL OFL 1.1; `licenses/INTER-OFL-1.1.txt` |
+| `icons/app_icon.png` | PhotoSort's app icon, 1024×1024 RGBA; unchanged from the Python app's `assets/app_icon.png` (tag `python-final`). The app sets it as the window and Dock icon, and the macOS packager derives `AppIcon.icns` from it with `sips` and `iconutil` | Project artwork, Apache-2.0 with the source |
 
 Links: [DINOv2 export](https://huggingface.co/onnx-community/dinov2-small/tree/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d),
 [BEiT aesthetic model](https://huggingface.co/cafeai/cafe_aesthetic/tree/48a343764f786abc1ca8aaddfcd60a688a70da9b),
