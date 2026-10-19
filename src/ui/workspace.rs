@@ -14,6 +14,8 @@ mod events;
 mod grouping;
 #[path = "inspector.rs"]
 mod inspector;
+#[path = "intro.rs"]
+mod intro;
 #[path = "library.rs"]
 mod library;
 #[path = "models.rs"]
@@ -130,6 +132,8 @@ pub struct PhotoSortApp {
     /// previous session (true) or a background panic in this one (false).
     crash_notice: Option<(PathBuf, bool)>,
     crash_notice_shown: bool,
+    /// The first-run intro, due at startup or replayed from Menu.
+    intro: intro::Intro,
     preferences_path: Option<PathBuf>,
     preferences_draft: Option<crate::core::preferences::Preferences>,
     preferences_section: Option<preferences::Section>,
@@ -328,6 +332,7 @@ impl PhotoSortApp {
         match crate::core::preferences::Preferences::load(&path) {
             Ok(preferences) => {
                 app.companions = preferences.keep_companions;
+                app.intro = intro::Intro::at_startup(&preferences, intro::AUTOPLAY);
                 app.preferences = preferences;
             }
             Err(e) => app.error = Some(format!("Preferences could not be loaded: {e}")),
@@ -370,6 +375,7 @@ impl PhotoSortApp {
             reduce_motion_pending: None,
             crash_notice: None,
             crash_notice_shown: false,
+            intro: intro::Intro::Off,
             preferences_path: None,
             preferences_draft: None,
             preferences_section: None,
@@ -1434,6 +1440,7 @@ impl PhotoSortApp {
             || self.busy
             || self.review_notice.is_some()
             || self.departure.is_some()
+            || self.intro.playing()
     }
 }
 /// Thumbnail decodes queued at once; see [`PhotoSortApp::texture`].
@@ -1518,6 +1525,7 @@ impl PhotoSortApp {
         self.check_board();
         self.refilter();
         self.restore_bookmark();
+        self.intro_keys(ctx);
         self.keyboard(ctx);
         // Pick Best is always a side-by-side review: it has no grid view, and
         // its choices and Confirm live under the photos. Older saved views
@@ -1645,6 +1653,7 @@ impl PhotoSortApp {
         let smoke_requested = self.smoke_close_requested(ctx);
         self.handle_close_request(ctx, native_requested || smoke_requested);
         self.dialogs(ctx);
+        self.intro_overlay(ctx);
         // Include detail requested by the folder editor's shared preview canvas.
         self.runtime.inspect(self.inspection_wanted.clone());
         self.inspection_frames.retain(|slot, _| {
@@ -1765,6 +1774,14 @@ impl PhotoSortApp {
     }
     pub fn gallery_about(&mut self) {
         self.about = true;
+    }
+    /// Plays the intro, as Menu → Watch the intro does.
+    pub fn gallery_intro(&mut self) {
+        self.watch_intro();
+    }
+    /// True once the intro's card shows a frame of the film.
+    pub fn gallery_intro_ready(&self) -> bool {
+        matches!(&self.intro, intro::Intro::Playing(film) if film.ready())
     }
     /// Opens Menu → AI models.
     pub fn gallery_models(&mut self) {

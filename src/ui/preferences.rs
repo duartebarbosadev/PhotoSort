@@ -68,6 +68,7 @@ impl PhotoSortApp {
         next.recent_folders = self.preferences.recent_folders.clone();
         next.updates.last_attempt = self.preferences.updates.last_attempt;
         next.updates.repository = self.preferences.updates.repository.clone();
+        next.intro_shown = self.preferences.intro_shown;
         next.normalize();
         self.runtime.cache.configure(next.cache);
         self.runtime.processing.configure(next.processing);
@@ -161,6 +162,10 @@ impl PhotoSortApp {
                 }
                 if ui.button("Keyboard guide").clicked() {
                     self.help = true;
+                    ui.close();
+                }
+                if crate::core::playback::supported() && ui.button("Watch the intro").clicked() {
+                    self.watch_intro();
                     ui.close();
                 }
                 if ui.button("About PhotoSort").clicked() {

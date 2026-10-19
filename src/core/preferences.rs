@@ -31,6 +31,8 @@ pub struct Preferences {
     pub cull_strip: StripPosition,
     /// Cull only: file names under thumbnails in its grid and photo strips.
     pub show_filenames: bool,
+    /// The first-run intro has played. Menu → Watch the intro replays it.
+    pub intro_shown: bool,
 }
 /// The side of the Review canvas that holds the photo strip.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +61,7 @@ impl Default for Preferences {
             reduce_motion: false,
             cull_strip: StripPosition::Bottom,
             show_filenames: true,
+            intro_shown: false,
         }
     }
 }

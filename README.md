@@ -22,6 +22,7 @@ the exact moves, renames and edits; try it on a copy of a folder first.
 
 The steps sit in a bar at the bottom center of the window. Each one is optional and can be
 revisited, Settings can hide the three middle steps, and decisions are saved per folder.
+The first launch plays a 30-second intro to the steps; Menu → Watch the intro plays it again.
 
 | Step | What it does |
 | --- | --- |
