@@ -5,12 +5,27 @@ import io
 from pathlib import Path
 import sys
 import os
+import plistlib
 import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import package_macos
+
+
+def png_header(width, height):
+    """The signature and IHDR chunk the packager reads; enough to stand in for an image."""
+    ihdr = width.to_bytes(4, 'big') + height.to_bytes(4, 'big') + bytes((8, 6, 0, 0, 0))
+    return b'\x89PNG\r\n\x1a\n' + len(ihdr).to_bytes(4, 'big') + b'IHDR' + ihdr + bytes(4)
+
+
+def icon_tools(command, **kwargs):
+    """Stand-ins for sips and iconutil that write their outputs."""
+    if command[0] == 'sips':
+        Path(command[command.index('--out')+1]).write_bytes(png_header(*map(int, command[2:4])))
+    elif command[0] == 'iconutil':
+        Path(command[command.index('--output')+1]).write_bytes(b'icns')
 
 
 class BundleIntegrityTests(unittest.TestCase):
@@ -77,6 +92,53 @@ class BundleIntegrityTests(unittest.TestCase):
             resource.write_bytes(b"damaged model")
             self.assertNotEqual(package_macos.bundle_manifest(contents), before)
 
+    def test_app_icon_renders_every_iconset_size_from_the_full_size_artwork(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root/'app_icon.png'
+            source.write_bytes(png_header(1024, 1024))
+            resources = root/'Resources'
+            resources.mkdir()
+            iconsets = []
+            def tools(command, **kwargs):
+                if command[0] == 'iconutil':
+                    iconset = Path(command[-1])
+                    iconsets.append({p.name: package_macos.png_size(p) for p in iconset.iterdir()})
+                icon_tools(command, **kwargs)
+            with patch.object(package_macos.subprocess, 'run', side_effect=tools) as run:
+                output = package_macos.write_app_icon(source, resources)
+            self.assertEqual(output, resources/'AppIcon.icns')
+            self.assertEqual(output.read_bytes(), b'icns')
+            self.assertEqual(iconsets, [{
+                'icon_16x16.png': (16, 16), 'icon_16x16@2x.png': (32, 32),
+                'icon_32x32.png': (32, 32), 'icon_32x32@2x.png': (64, 64),
+                'icon_128x128.png': (128, 128), 'icon_128x128@2x.png': (256, 256),
+                'icon_256x256.png': (256, 256), 'icon_256x256@2x.png': (512, 512),
+                'icon_512x512.png': (512, 512), 'icon_512x512@2x.png': (1024, 1024),
+            }])
+            iconutil = run.call_args_list[-1].args[0]
+            self.assertEqual(iconutil[:5], ['iconutil', '--convert', 'icns', '--output', str(output)])
+            self.assertTrue(all(c.args[0][0] == 'sips' and c.kwargs['check'] for c in run.call_args_list[:-1]))
+            # The temporary iconset never lands in the bundle.
+            self.assertEqual([p.name for p in resources.iterdir()], ['AppIcon.icns'])
+            self.assertFalse(Path(iconutil[-1]).exists())
+
+    def test_app_icon_refuses_small_or_invalid_artwork_and_a_missing_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root/'app_icon.png'
+            for payload in (png_header(512, 512), b'GIF89a not a png image at all'):
+                with self.subTest(payload=payload[:8]):
+                    source.write_bytes(payload)
+                    with patch.object(package_macos.subprocess, 'run') as run:
+                        with self.assertRaises(RuntimeError):
+                            package_macos.write_app_icon(source, root)
+                    run.assert_not_called()
+            source.write_bytes(png_header(1024, 1024))
+            with patch.object(package_macos.subprocess, 'run'):
+                with self.assertRaises(RuntimeError):
+                    package_macos.write_app_icon(source, root)
+
     def test_signing_seals_final_nested_code_and_never_falls_back(self):
         for identity in ('-', 'Apple Development: Explicit Name (TEAMID)'):
             with self.subTest(identity=identity), tempfile.TemporaryDirectory() as directory:
@@ -135,8 +197,9 @@ class BundleIntegrityTests(unittest.TestCase):
         for flag in ([], ['--sign-identity', 'Apple Development: Explicit Name (TEAMID)']):
             with self.subTest(flag=flag), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                (root/'resources').mkdir()
+                (root/'resources/icons').mkdir(parents=True)
                 (root/'resources/model.onnx').write_bytes(b'model')
+                (root/'resources/icons/app_icon.png').write_bytes(png_header(1024, 1024))
                 (root/'LICENSE').write_text('license')
                 target = root/'build'
                 (target/'release').mkdir(parents=True)
@@ -147,15 +210,23 @@ class BundleIntegrityTests(unittest.TestCase):
                 def otool(command, **kwargs):
                     return str(command[-1]) + ':\n'
                 failure = subprocess.CalledProcessError(1, 'codesign')
+                staged = {}
+                def sign_bundle(app, binaries, identity):
+                    # The icon is in place, and named by the plist, before anything is sealed.
+                    staged['plist'] = plistlib.loads((app/'Contents/Info.plist').read_bytes())
+                    staged['icon'] = (app/'Contents/Resources/AppIcon.icns').read_bytes()
+                    raise failure
                 with patch.object(package_macos, 'ROOT', root), \
                         patch.dict(os.environ, {'CARGO_TARGET_DIR': str(target)}), \
                         patch.object(sys, 'argv', ['package_macos.py', '--output', str(output), *flag]), \
-                        patch.object(package_macos.subprocess, 'run'), \
+                        patch.object(package_macos.subprocess, 'run', side_effect=icon_tools), \
                         patch.object(package_macos.subprocess, 'check_output', side_effect=otool), \
-                        patch.object(package_macos, 'sign_bundle', side_effect=failure) as sign:
+                        patch.object(package_macos, 'sign_bundle', side_effect=sign_bundle) as sign:
                     with self.assertRaises(subprocess.CalledProcessError):
                         package_macos.main()
                 self.assertEqual(sign.call_args.args[2], flag[-1] if flag else '-')
+                self.assertEqual(staged['plist']['CFBundleIconFile'], 'AppIcon')
+                self.assertEqual(staged['icon'], b'icns')
                 self.assertEqual((output/'Contents/Info.plist').read_bytes(), b'old bundle sentinel')
                 self.assertEqual((target/'release/photosort').read_bytes(), b'fixture executable')
                 self.assertEqual((root/'resources/model.onnx').read_bytes(), b'model')

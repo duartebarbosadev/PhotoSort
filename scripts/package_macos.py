@@ -101,6 +101,39 @@ def resolve_dependency(source, binary, executable, rpaths):
     raise RuntimeError(f'Cannot resolve dependency in {binary}: {source}')
 
 
+def png_size(path):
+    """Pixel width and height from a PNG header, without decoding the image."""
+    with path.open('rb') as stream:
+        header = stream.read(24)
+    if len(header) < 24 or header[:8] != b'\x89PNG\r\n\x1a\n' or header[12:16] != b'IHDR':
+        raise RuntimeError(f'Not a PNG image: {path}')
+    return int.from_bytes(header[16:20], 'big'), int.from_bytes(header[20:24], 'big')
+
+
+# Point sizes of a macOS app icon; each is also rendered at twice its size.
+ICON_SIZES = (16, 32, 128, 256, 512)
+
+
+def write_app_icon(source, resources):
+    """Render AppIcon.icns from the 1024-pixel artwork with the system's sips and iconutil."""
+    if png_size(source) != (1024, 1024):
+        raise RuntimeError(f'App icon must be a 1024x1024 PNG: {source}')
+    output = resources/'AppIcon.icns'
+    with tempfile.TemporaryDirectory(prefix='photosort-icon-') as directory:
+        iconset = Path(directory)/'AppIcon.iconset'
+        iconset.mkdir()
+        for size in ICON_SIZES:
+            for scale, suffix in ((1, ''), (2, '@2x')):
+                pixels = str(size*scale)
+                subprocess.run(['sips', '-z', pixels, pixels, str(source), '--out',
+                                str(iconset/f'icon_{size}x{size}{suffix}.png')],
+                               check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(['iconutil', '--convert', 'icns', '--output', str(output), str(iconset)], check=True)
+    if not output.is_file() or output.stat().st_size == 0:
+        raise RuntimeError('iconutil did not write AppIcon.icns')
+    return output
+
+
 def sign_bundle(app, binaries, identity):
     """Sign nested code and seal finalized resources with one explicit identity."""
     contents = app/'Contents'
@@ -154,8 +187,9 @@ def main():
         shutil.copy2(target/'release/photosort', exe)
         shutil.copytree(ROOT/'resources', contents/'Resources', dirs_exist_ok=True)
         shutil.copy2(ROOT/'LICENSE', contents/'Resources/LICENSE')
+        icon = write_app_icon(ROOT/'resources/icons/app_icon.png', contents/'Resources')
         plist = dict(CFBundleExecutable='photosort', CFBundleIdentifier='dev.duartebarbosa.photosort.rust',
-                     CFBundleName='PhotoSort', CFBundleDisplayName='PhotoSort',
+                     CFBundleName='PhotoSort', CFBundleDisplayName='PhotoSort', CFBundleIconFile=icon.stem,
                      CFBundleVersion='1', CFBundleShortVersionString=VERSION, CFBundlePackageType='APPL',
                      NSHighResolutionCapable=True, LSMinimumSystemVersion='13.0')
         (contents/'Info.plist').write_bytes(plistlib.dumps(plist))

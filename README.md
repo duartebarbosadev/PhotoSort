@@ -208,7 +208,8 @@ open target/PhotoSort.app
 
 The packager builds a release binary and copies it, `resources/` (including any models and
 ONNX Runtime there) and the linked native libraries with their license notices into a
-relocatable bundle, then verifies its signature and resource manifest.
+relocatable bundle, renders `AppIcon.icns` from `resources/icons/app_icon.png` with `sips`
+and `iconutil`, then verifies its signature and resource manifest.
 `--output /path/to/PhotoSort.app` chooses another destination, and `CARGO_TARGET_DIR` is
 honored (see [CONTRIBUTING.md](CONTRIBUTING.md#build-storage) for a temporary build
 directory).
