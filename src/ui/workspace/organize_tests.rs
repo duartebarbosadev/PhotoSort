@@ -537,3 +537,28 @@ fn current_folders_default_to_in_place_and_do_not_invent_root_moves() {
         "Current folders must not stage moves without edits"
     );
 }
+#[test]
+fn a_failure_from_a_superseded_run_does_not_stop_the_current_run() {
+    let (_dir, mut app) = visual_fixture();
+    app.analysis_run = None;
+    app.organize_run = None;
+    app.organize();
+    let run = app.analysis_run.expect("Preview starts analysis");
+    let stale = Event::RunError {
+        run: run.wrapping_sub(1),
+        error: "Similarity grouping failed: stale".into(),
+    };
+    deliver(&mut app, vec![stale]);
+    assert_eq!(app.analysis_run, Some(run));
+    assert!(app.organize_preview_requested && app.error.is_none());
+    let current = Event::RunError {
+        run,
+        error: "Similarity grouping failed: current".into(),
+    };
+    deliver(&mut app, vec![current]);
+    assert!(app.analysis_run.is_none() && !app.organize_preview_requested);
+    assert_eq!(
+        app.error.as_deref(),
+        Some("Similarity grouping failed: current")
+    );
+}

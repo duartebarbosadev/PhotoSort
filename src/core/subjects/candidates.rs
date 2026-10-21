@@ -230,7 +230,9 @@ mod tests {
                     );
                 }
                 Event::AnalysisDone { run: completed, .. } if completed == run => break,
-                Event::AnalysisError { error, .. } | Event::Error(error) => panic!("{error}"),
+                Event::AnalysisError { error, .. }
+                | Event::RunError { error, .. }
+                | Event::Error(error) => panic!("{error}"),
                 Event::ModelsNeeded { .. } => panic!("sample model resources missing"),
                 _ => {}
             }
