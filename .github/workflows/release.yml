@@ -1,0 +1,289 @@
+name: Release
+# Pushing a v* tag builds the macOS app and creates a draft GitHub release for review.
+# A manual run (workflow_dispatch) builds and checks the same app but keeps it as a
+# workflow artifact only; it never creates a tag or a release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+jobs:
+  macos:
+    name: macOS app (Apple Silicon)
+    # Bundled Homebrew libraries require the macOS version their bottles were built
+    # for, so this image sets the app's minimum macOS (the packager records it in
+    # Info.plist and the release notes repeat it). Change it deliberately.
+    runs-on: macos-15
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      # Read by option_env! when the packager builds; enables update checks.
+      PHOTOSORT_RELEASE_REPOSITORY: duartebarbosadev/PhotoSort
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      ORT_VERSION: 1.29.0
+      # onnxruntime-osx-arm64-1.29.0.tgz; resources/SHA256SUMS pins the library inside.
+      ORT_ARCHIVE_SHA256: d0706fc34f315d8c88639d0a8c81f2e09e815f282cabed3493c06a054352cf92
+      # Prerelease holding the converted models (CONTRIBUTING.md#converted-models).
+      MODELS_RELEASE: models-1
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check the version
+        id: version
+        run: |
+          version="$(python3 -I -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match the Cargo.toml version $version"
+            exit 1
+          fi
+          {
+            echo "VERSION=$version"
+            echo "ASSET=PhotoSort-$version-macos-arm64.zip"
+            echo "CHECKSUMS=PhotoSort-$version-SHA256SUMS.txt"
+          } >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Choose signing
+        id: signing
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          count() {
+            local set=0 value
+            for value in "$@"; do
+              if [[ -n "$value" ]]; then set=$((set + 1)); fi
+            done
+            echo "$set"
+          }
+          certificate="$(count "$MACOS_CERTIFICATE" "$MACOS_CERTIFICATE_PASSWORD")"
+          notary="$(count "$APPLE_ID" "$APPLE_TEAM_ID" "$APPLE_APP_PASSWORD")"
+          # A partial configuration is a mistake, not a request for a weaker build.
+          if [[ "$certificate" == 1 ]]; then
+            echo "::error::Set both MACOS_CERTIFICATE and MACOS_CERTIFICATE_PASSWORD, or neither"
+            exit 1
+          fi
+          if [[ "$notary" != 0 && "$notary" != 3 ]]; then
+            echo "::error::Set all of APPLE_ID, APPLE_TEAM_ID and APPLE_APP_PASSWORD, or none"
+            exit 1
+          fi
+          if [[ "$notary" == 3 && "$certificate" == 0 ]]; then
+            echo "::error::Notarization needs the Developer ID certificate secrets as well"
+            exit 1
+          fi
+          if [[ "$notary" == 3 ]]; then
+            mode=notarized
+          elif [[ "$certificate" == 2 ]]; then
+            mode=signed
+          else
+            mode=adhoc
+            echo "::notice::No signing secrets; the app keeps its ad-hoc signature and is not notarized"
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native dependencies
+        run: brew install libraw exiv2 pkg-config glib jpeg-turbo libpng libtiff little-cms2 highway
+      - name: Build the private libvips engine
+        run: |
+          python3 -B scripts/build_vips.py
+          # setup-python exports its own PKG_CONFIG_PATH, which would hide
+          # the private engine from the build scripts that follow.
+          echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/.tools/vips/lib/pkgconfig" >> "$GITHUB_ENV"
+      - name: Test the packaging scripts
+        run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
+      - name: Fetch ONNX Runtime
+        run: |
+          archive="$RUNNER_TEMP/onnxruntime.tgz"
+          extracted="$RUNNER_TEMP/onnxruntime"
+          curl --fail --location --proto '=https' --retry 3 --output "$archive" \
+            "https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION/onnxruntime-osx-arm64-$ORT_VERSION.tgz"
+          echo "$ORT_ARCHIVE_SHA256  $archive" | shasum -a 256 --check
+          mkdir "$extracted"
+          tar -xzf "$archive" -C "$extracted" "onnxruntime-osx-arm64-$ORT_VERSION/lib/libonnxruntime.dylib"
+          mkdir -p resources/runtime
+          cp "$extracted/onnxruntime-osx-arm64-$ORT_VERSION/lib/libonnxruntime.dylib" resources/runtime/
+      - name: Fetch the downloadable models
+        # The pinned files that Menu → AI models downloads (src/core/model_assets.rs).
+        run: |
+          fetch() {
+            curl --fail --location --proto '=https' --retry 3 --output "resources/models/$1" "$2"
+          }
+          fetch dinov2-small.onnx \
+            https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/model.onnx
+          fetch face_recognition_sface.onnx \
+            https://media.githubusercontent.com/media/opencv/opencv_zoo/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+          fetch orientation.onnx \
+            https://github.com/duartebarbosadev/deep-image-orientation-detection/releases/download/v2/orientation_model_v2_0.9882.onnx
+      - name: Fetch the converted models
+        # The aesthetic and MediaPipe exports have no upstream download, so they are
+        # assets of a prerelease in this repository. The next step checks their pins,
+        # so a replaced asset fails the build.
+        run: |
+          for name in aesthetic.onnx face_detector.onnx face_landmarks_detector.onnx face_blendshapes.onnx; do
+            curl --fail --location --proto '=https' --retry 3 --output "resources/models/$name" \
+              "https://github.com/duartebarbosadev/PhotoSort/releases/download/$MODELS_RELEASE/$name"
+          done
+      - name: Verify resources against SHA256SUMS
+        working-directory: resources
+        # Every pinned file, including each downloaded model and the runtime.
+        run: shasum -a 256 --check --strict SHA256SUMS
+      - name: Import the Developer ID certificate
+        id: certificate
+        if: steps.signing.outputs.mode != 'adhoc'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/photosort-signing.keychain-db"
+          certificate="$RUNNER_TEMP/photosort-signing.p12"
+          password="$(openssl rand -base64 24)"
+          trap 'rm -f "$certificate"' EXIT
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$certificate"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$certificate" -k "$keychain" -f pkcs12 -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk '/"Developer ID Application: / { print $2; exit }')"
+          if [[ -z "$identity" ]]; then
+            echo "::error::MACOS_CERTIFICATE has no valid Developer ID Application identity"
+            exit 1
+          fi
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+      - name: Package the app
+        env:
+          SIGN_IDENTITY: ${{ steps.certificate.outputs.identity || '-' }}
+        run: python3 -B scripts/package_macos.py --native-imaging --sign-identity "$SIGN_IDENTITY"
+      - name: Check the app
+        id: app
+        # Outside the checkout, so the app cannot pick up ./resources instead of its own.
+        working-directory: ${{ runner.temp }}
+        run: |
+          app="$GITHUB_WORKSPACE/target/PhotoSort.app"
+          plist="$app/Contents/Info.plist"
+          bundled="$(plutil -extract CFBundleShortVersionString raw "$plist")"
+          if [[ "$bundled" != "$VERSION" ]]; then
+            echo "::error::The bundle says $bundled, expected $VERSION"
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "$app"
+          mkdir -p check-data check-cache
+          PHOTOSORT_DATA_ROOT="$PWD/check-data" PHOTOSORT_CACHE_ROOT="$PWD/check-cache" \
+            "$app/Contents/MacOS/photosort" --check-runtime > check-runtime.json
+          # Every model and the runtime must come from the bundle itself.
+          python3 -I - check-runtime.json "$app/Contents/Resources" <<'EOF'
+          import json, os, sys
+          report = json.load(open(sys.argv[1]))["diagnostics"]
+          resources = os.path.realpath(sys.argv[2]) + os.sep
+          paths = [report["runtime"]["path"]] + [model["path"] for model in report["models"]]
+          outside = [path for path in paths if not os.path.realpath(path).startswith(resources)]
+          sys.exit(f"Loaded from outside the bundle: {outside}" if outside else None)
+          EOF
+          echo "minimum-macos=$(plutil -extract LSMinimumSystemVersion raw "$plist")" >> "$GITHUB_OUTPUT"
+      - name: Zip the app
+        run: |
+          mkdir dist
+          ditto -c -k --keepParent target/PhotoSort.app "dist/$ASSET"
+      - name: Notarize and staple
+        if: steps.signing.outputs.mode == 'notarized'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          credentials=(--apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD")
+          result="$RUNNER_TEMP/notarization.json"
+          xcrun notarytool submit "dist/$ASSET" "${credentials[@]}" --wait --timeout 1h --output-format json > "$result" || true
+          cat "$result"
+          status="$(plutil -extract status raw "$result")"
+          if [[ "$status" != Accepted ]]; then
+            xcrun notarytool log "$(plutil -extract id raw "$result")" "${credentials[@]}" || true
+            echo "::error::Notarization finished with status $status"
+            exit 1
+          fi
+          xcrun stapler staple target/PhotoSort.app
+          xcrun stapler validate target/PhotoSort.app
+          spctl --assess --type execute --verbose=4 target/PhotoSort.app
+          # Ship the stapled app, so first launch works offline.
+          rm "dist/$ASSET"
+          ditto -c -k --keepParent target/PhotoSort.app "dist/$ASSET"
+      - name: Write checksums and release notes
+        env:
+          SIGNING: ${{ steps.signing.outputs.mode }}
+          MINIMUM_MACOS: ${{ steps.app.outputs.minimum-macos }}
+        run: |
+          (cd dist && shasum -a 256 "$ASSET" > "$CHECKSUMS")
+          python3 -I - .github/release-notes.md dist/release-notes.md <<'EOF'
+          import os, re, string, sys
+          source, output = sys.argv[1:]
+          text = open(source).read()
+          # Keep the first-launch section that matches how this build was signed.
+          keep = "notarized" if os.environ["SIGNING"] == "notarized" else "not-notarized"
+          text = re.sub(r"<!-- (notarized|not-notarized) -->\n(.*?)<!-- /\1 -->\n",
+                        lambda m: m.group(2) if m.group(1) == keep else "", text, flags=re.S)
+          # The app's update dialog shows notes as plain text, comments included.
+          text = re.sub(r"<!--.*?-->\n?", "", text, flags=re.S)
+          checksums = os.environ["CHECKSUMS"]
+          values = dict(version=os.environ["VERSION"], asset=os.environ["ASSET"], checksums=checksums,
+                        sha256=open(f"dist/{checksums}").read().split()[0],
+                        minimum_macos=os.environ["MINIMUM_MACOS"], onnxruntime=os.environ["ORT_VERSION"],
+                        repository=os.environ["GITHUB_REPOSITORY"])
+          open(output, "w").write(string.Template(text).substitute(values))
+          EOF
+          cat dist/release-notes.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photosort-macos-arm64
+          path: dist/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Remove the signing keychain
+        if: always() && steps.signing.outputs.mode != 'adhoc'
+        run: security delete-keychain "$RUNNER_TEMP/photosort-signing.keychain-db" || true
+
+  release:
+    name: Draft GitHub release
+    needs: macos
+    # Tag pushes only; a manual run stops at the workflow artifact.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: photosort-macos-arm64
+          path: dist
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.macos.outputs.version }}
+        run: |
+          # Drafts do not own their tag, so a re-run would add a second draft.
+          existing="$(gh api --paginate "repos/$GH_REPO/releases" --jq '.[] | select(.tag_name == env.GITHUB_REF_NAME) | .html_url')"
+          if [[ -n "$existing" ]]; then
+            echo "::error::A release for $GITHUB_REF_NAME already exists ($existing); delete it before re-running"
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "PhotoSort $VERSION" \
+            --notes-file dist/release-notes.md \
+            "dist/PhotoSort-$VERSION-macos-arm64.zip" "dist/PhotoSort-$VERSION-SHA256SUMS.txt"

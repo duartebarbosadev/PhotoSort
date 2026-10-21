@@ -5,13 +5,17 @@ prepared, and the terms it is distributed under. `SHA256SUMS` pins the exact con
 each file; the app and the macOS packager verify against it.
 
 Large ONNX weights and native runtime libraries are not stored in Git (see `.gitignore`).
-A fresh clone gets them in one of three ways:
+A fresh clone gets them in one of four ways:
 
 - **In the app.** Menu → AI models downloads the pinned DINOv2, SFace and orientation files.
   Downloads stream into private temporary files and are installed only after their exact
   size and SHA-256 match. Nothing is downloaded automatically.
 - **Import.** The same panel imports a prepared ONNX file and verifies it against
   `SHA256SUMS` (for example, from another copy of a full app bundle).
+- **Download the converted exports.** The aesthetic and MediaPipe files that release
+  builds ship are assets of the
+  [`models-1` prerelease](https://github.com/duartebarbosadev/PhotoSort/releases/tag/models-1);
+  check them with `shasum -a 256 -c --ignore-missing SHA256SUMS` from `resources/`.
 - **Recreate.** The aesthetic and MediaPipe exports can be rebuilt with the recipes below.
 
 ONNX Runtime itself is never downloaded by the app; see [ONNX Runtime](#onnx-runtime).
@@ -24,7 +28,7 @@ ONNX Runtime itself is never downloaded by the app; see [ONNX Runtime](#onnx-run
 | `models/face_detector.onnx`, `models/face_landmarks_detector.onnx` | MediaPipe face detector and Face Mesh V2 from `face_landmarker.task` (see below); `scripts/normalize_faces.py` folds float16 constants, then tflite2onnx 0.4.1 exports opset 11 | Apache-2.0 (MediaPipe) |
 | `models/face_blendshapes.onnx` | MediaPipe `face_blendshapes.tflite` from the same `face_landmarker.task` (52 expression scores from 146 Face Mesh points); `scripts/convert_blendshapes.py` with TensorFlow 2.16.2 and tf2onnx 1.16.1, opset 17, explicit convolution pads; verified against TFLite within 3e-6 | Apache-2.0 (MediaPipe) |
 | `models/face_recognition_sface.onnx` | OpenCV Zoo `face_recognition_sface_2021dec.onnx`, unmodified (see below) | Apache-2.0; `licenses/APACHE-2.0.txt` |
-| `runtime/libonnxruntime.dylib` | ONNX Runtime 1.29.0 shared library (see below) | MIT; `licenses/ONNXRUNTIME-MIT.txt` |
+| `runtime/libonnxruntime.dylib` | ONNX Runtime 1.29.0 shared library, unmodified from the official macOS arm64 release archive (see below) | MIT; `licenses/ONNXRUNTIME-MIT.txt` |
 | `locations.tsv` | 155,210 latitude/longitude/country/region/city records converted from reverse_geocode 1.6.6's GeoNames dataset | GeoNames CC BY 4.0, `licenses/GEONAMES-CC-BY-4.0.txt`; reverse_geocode package LGPL |
 | `fonts/Inter-*.ttf` | Inter 4.001 (Regular, Medium, SemiBold) | SIL OFL 1.1; `licenses/INTER-OFL-1.1.txt` |
 
@@ -102,6 +106,12 @@ locations `/opt/homebrew/lib/libonnxruntime.dylib` (macOS) and
 `resources/runtime/` or point `ORT_DYLIB_PATH` at it. Official builds are published at
 https://github.com/microsoft/onnxruntime/releases/tag/v1.29.0. Builds without the `onnx`
 feature need no runtime and keep manual review only.
+
+The pinned macOS library is `lib/libonnxruntime.dylib` from the official
+`onnxruntime-osx-arm64-1.29.0.tgz` (41,578,864 bytes, SHA-256
+`d0706fc34f315d8c88639d0a8c81f2e09e815f282cabed3493c06a054352cf92`, matching the digest
+GitHub publishes for the asset). The release workflow downloads that archive and checks
+both hashes; locally, extract the same file into `resources/runtime/`.
 
 ## Native metadata library
 

@@ -11,6 +11,8 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = tomllib.loads((ROOT/'Cargo.toml').read_text())['package']['version']
+# The app's own floor; bundled libraries can raise it (see minimum_macos).
+MINIMUM_MACOS = '13.0'
 def bundle_manifest(contents):
     """Hash finalized resources with bounded memory; codesign verifies executable code."""
     checksums = []
@@ -101,15 +103,35 @@ def resolve_dependency(source, binary, executable, rpaths):
     raise RuntimeError(f'Cannot resolve dependency in {binary}: {source}')
 
 
+def minimum_macos(binaries):
+    """Highest macOS minimum among bundled code; Homebrew bottles require their build host's macOS."""
+    versions = [tuple(int(part) for part in MINIMUM_MACOS.split('.'))]
+    for binary in binaries:
+        lines = [line.strip() for line in subprocess.check_output(['otool', '-l', str(binary)], text=True).splitlines()]
+        for index, line in enumerate(lines):
+            key = {'cmd LC_BUILD_VERSION': 'minos ', 'cmd LC_VERSION_MIN_MACOSX': 'version '}.get(line)
+            if key is None:
+                continue
+            value = next((entry[len(key):] for entry in lines[index+1:index+6] if entry.startswith(key)), None)
+            if value is None:
+                raise RuntimeError(f'Invalid {line[4:]} in {binary}')
+            versions.append(tuple(int(part) for part in value.split('.')))
+    return '.'.join(map(str, max(versions)))
+
+
 def sign_bundle(app, binaries, identity):
     """Sign nested code and seal finalized resources with one explicit identity."""
     contents = app/'Contents'
     executable = contents/'MacOS/photosort'
+    # Notarization requires a secure timestamp on all code and the hardened runtime
+    # on the executable. Ad-hoc signatures can carry neither.
+    sign = ['codesign', '--force', '--sign', identity] + (['--timestamp'] if identity != '-' else [])
+    hardened = ['--options', 'runtime'] if identity != '-' else []
     for binary in sorted(binaries, key=lambda p: p == executable):
-        subprocess.run(['codesign', '--force', '--sign', identity, str(binary)], check=True)
+        subprocess.run([*sign, *(hardened if binary == executable else []), str(binary)], check=True)
     checksums = bundle_manifest(contents)
     (contents/'Resources'/'BUNDLE-SHA256SUMS').write_text(checksums)
-    subprocess.run(['codesign', '--force', '--sign', identity, str(app)], check=True)
+    subprocess.run([*sign, *hardened, str(app)], check=True)
     subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
     if bundle_manifest(contents) != checksums:
         raise RuntimeError('Bundle resources changed while signing')
@@ -120,7 +142,7 @@ def main():
     parser.add_argument('--output', type=Path, help='Destination .app bundle (default: target/PhotoSort.app)')
     parser.add_argument('--native-imaging', action='store_true', help='Include the opt-in libvips backend built by scripts/build_vips.py')
     parser.add_argument('--native-prefix', type=Path, help='Private libvips prefix to bundle with --native-imaging (default: .tools/vips)')
-    parser.add_argument('--sign-identity', default='-', help='Existing codesign identity name or SHA-1; default: ad-hoc (-). No notarization is performed.')
+    parser.add_argument('--sign-identity', default='-', help='Existing codesign identity name or SHA-1; default: ad-hoc (-). Named identities also get a secure timestamp and the hardened runtime. No notarization is performed.')
     args = parser.parse_args()
     if not args.sign_identity.strip():
         parser.error('--sign-identity must name an existing identity, or - for ad-hoc signing')
@@ -154,11 +176,6 @@ def main():
         shutil.copy2(target/'release/photosort', exe)
         shutil.copytree(ROOT/'resources', contents/'Resources', dirs_exist_ok=True)
         shutil.copy2(ROOT/'LICENSE', contents/'Resources/LICENSE')
-        plist = dict(CFBundleExecutable='photosort', CFBundleIdentifier='dev.duartebarbosa.photosort.rust',
-                     CFBundleName='PhotoSort', CFBundleDisplayName='PhotoSort',
-                     CFBundleVersion='1', CFBundleShortVersionString=VERSION, CFBundlePackageType='APPL',
-                     NSHighResolutionCapable=True, LSMinimumSystemVersion='13.0')
-        (contents/'Info.plist').write_bytes(plistlib.dumps(plist))
         visited = set()
         library_sources = {}
         executable_source = target/'release/photosort'
@@ -204,6 +221,11 @@ def main():
                 resolved = resolve_dependency(dependency, binary, exe, loader_paths(binary, exe))
                 if not resolved.is_relative_to(contents.resolve()) or not resolved.is_file():
                     raise RuntimeError(f'Bundle still depends on host or missing file: {dependency}')
+        plist = dict(CFBundleExecutable='photosort', CFBundleIdentifier='dev.duartebarbosa.photosort.rust',
+                     CFBundleName='PhotoSort', CFBundleDisplayName='PhotoSort',
+                     CFBundleVersion='1', CFBundleShortVersionString=VERSION, CFBundlePackageType='APPL',
+                     NSHighResolutionCapable=True, LSMinimumSystemVersion=minimum_macos(visited))
+        (contents/'Info.plist').write_bytes(plistlib.dumps(plist))
         sign_bundle(app, visited, args.sign_identity)
         if destination.exists():
             shutil.rmtree(destination)
