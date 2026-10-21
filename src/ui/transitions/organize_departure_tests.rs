@@ -1440,6 +1440,34 @@ fn native_quit_in_a_hidden_window_closes_or_brings_the_prompt_forward() {
     assert!(!commands.contains(&egui::ViewportCommand::Focus));
 }
 #[test]
+fn window_close_of_a_minimized_window_with_staged_changes_restores_the_prompt() {
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    let (_dir, mut app) = fixture();
+    let id = app.media[0].id;
+    app.decisions.insert(
+        id,
+        Decision {
+            rating: Some(4),
+            ..Default::default()
+        },
+    );
+    let mut input = hidden_input(true);
+    input
+        .viewports
+        .get_mut(&egui::ViewportId::ROOT)
+        .unwrap()
+        .events
+        .push(egui::ViewportEvent::Close);
+    let commands = logic_frame(&ctx, &input, |ctx| app.update_hidden(ctx, false));
+    assert!(matches!(app.departure, Some(Destination::Close)) && !app.close_authorized);
+    assert!(commands.contains(&egui::ViewportCommand::CancelClose));
+    assert!(!commands.contains(&egui::ViewportCommand::Close));
+    assert!(commands.contains(&egui::ViewportCommand::Minimized(false)));
+    assert!(commands.contains(&egui::ViewportCommand::Focus));
+    assert_eq!(app.decisions[&id].rating, Some(4));
+}
+#[test]
 fn hidden_window_keeps_receiving_worker_results() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap().join("Library");

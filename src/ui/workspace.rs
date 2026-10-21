@@ -1824,9 +1824,11 @@ impl PhotoSortApp {
     /// deadline and Quit. Without it, Quit waits until the window is shown.
     fn update_hidden(&mut self, ctx: &egui::Context, native_requested: bool) {
         self.poll(ctx);
-        let quit = self.smoke_close_requested(ctx) || native_requested;
-        self.handle_close_request(ctx, quit);
-        if quit && !self.close_authorized {
+        let requested = self.smoke_close_requested(ctx) || native_requested;
+        // A minimized window can still be closed, e.g. from the Windows taskbar.
+        let window_requested = ctx.input(|i| i.viewport().close_requested());
+        self.handle_close_request(ctx, requested);
+        if (requested || window_requested) && !self.close_authorized {
             // A departure prompt or busy state cannot be seen in a hidden window.
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
