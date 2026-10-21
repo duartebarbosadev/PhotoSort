@@ -490,15 +490,13 @@ impl Pipeline {
                     image::imageops::FilterType::Lanczos3,
                 )
             } else if oriented.width() > edge || oriented.height() > edge {
-                oriented.resize(
-                    edge,
-                    edge,
-                    if analysis {
-                        image::imageops::FilterType::Lanczos3
-                    } else {
-                        image::imageops::FilterType::Triangle
-                    },
-                )
+                if analysis {
+                    oriented.resize(edge, edge, image::imageops::FilterType::Lanczos3)
+                } else {
+                    // The same pixels as resize(.., Triangle), without its
+                    // full-size float buffer.
+                    super::resample::fit_triangle(&oriented, edge)
+                }
             } else {
                 (*oriented).clone()
             };

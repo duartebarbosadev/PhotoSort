@@ -31,8 +31,10 @@ uploaded.
 
 ## Download
 
-Releases are published on the [Releases page](https://github.com/duartebarbosadev/PhotoSort/releases).
-The first native release (3.0) is on its way; until then, [build from source](#build-from-source).
+Download PhotoSort for Apple Silicon Macs from the
+[Releases page](https://github.com/duartebarbosadev/PhotoSort/releases); each release's notes
+state the minimum macOS version. The first native release (3.0) is on its way; until then,
+[build from source](#build-from-source).
 
 PhotoSort opens JPEG, PNG, TIFF, WebP, HEIC and the RAW formats of most cameras, and plays
 common video formats. Star ratings and rotations are saved into the photo's own metadata, or

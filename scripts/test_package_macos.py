@@ -165,9 +165,16 @@ class BundleIntegrityTests(unittest.TestCase):
                             path.write_bytes(b'signed')
                 with patch.object(package_macos.subprocess, 'run', side_effect=signing) as run:
                     package_macos.sign_bundle(app, binaries, identity)
-                signed = [Path(c.args[0][-1]) for c in run.call_args_list if '--sign' in c.args[0]]
+                commands = [c.args[0] for c in run.call_args_list if '--sign' in c.args[0]]
+                signed = [Path(c[-1]) for c in commands]
                 self.assertEqual(set(signed[:-2]), {runtime, dependency})
                 self.assertEqual(signed[-2:], [executable, app])
+                # Notarization needs timestamps everywhere and the hardened runtime
+                # on the executable; ad-hoc signatures support neither.
+                named = identity != '-'
+                for command, path in zip(commands, signed):
+                    self.assertEqual('--timestamp' in command, named)
+                    self.assertEqual('runtime' in command, named and path in (executable, app))
                 self.assertEqual(run.call_args_list[-1].args[0],
                                  ['codesign', '--verify', '--deep', '--strict', str(app)])
                 failure = subprocess.CalledProcessError(1, 'codesign')
@@ -175,6 +182,22 @@ class BundleIntegrityTests(unittest.TestCase):
                     with self.assertRaises(subprocess.CalledProcessError):
                         package_macos.sign_bundle(app, binaries, identity)
                 self.assertEqual(run.call_count, 1)
+
+    def test_minimum_macos_is_the_highest_bundled_requirement(self):
+        build = ('Load command 9\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n'
+                 '    minos {}\n      sdk 15.0\n   ntools 1\n     tool 3\n  version 1115.7.3\n')
+        legacy = 'Load command 8\n      cmd LC_VERSION_MIN_MACOSX\n  cmdsize 16\n  version 10.13\n      sdk 10.14\n'
+        cases = (({'a': build.format('11.0'), 'b': legacy}, '13.0'),
+                 ({'a': build.format('14.0'), 'b': build.format('15.4'), 'c': legacy}, '15.4'),
+                 ({'a': 'a:\n'}, '13.0'))
+        for outputs, expected in cases:
+            with self.subTest(expected=expected), patch.object(
+                    package_macos.subprocess, 'check_output', side_effect=lambda c, **k: outputs[c[-1]]):
+                self.assertEqual(package_macos.minimum_macos(outputs), expected)
+        with patch.object(package_macos.subprocess, 'check_output',
+                          return_value='      cmd LC_BUILD_VERSION\n  cmdsize 32\n'):
+            with self.assertRaises(RuntimeError):
+                package_macos.minimum_macos(['broken'])
 
     def test_final_verification_or_resource_change_stops_packaging(self):
         for mode in ('verification-failure', 'resource-change'):

@@ -134,13 +134,97 @@ resource manifest. `--output /path/to/PhotoSort.app` chooses another destination
 
 Bundles are ad-hoc signed and not notarized by default, so macOS may ask again for folder
 access after a rebuild. `--sign-identity` takes an existing codesign identity name or SHA-1
-for a consistent signature.
+for a consistent signature; named identities also get a secure timestamp and the hardened
+runtime, which notarization requires. The bundle's minimum macOS is the highest required by
+any binary in it, and Homebrew libraries require the macOS version they were built for.
 
 Update checks read the GitHub releases of the repository set with
-`PHOTOSORT_RELEASE_REPOSITORY=owner/repository` at build time; builds without it make no
-update requests. Release tags must be semantic versions such as `3.0.1` or `v3.0.1`, and
+`PHOTOSORT_RELEASE_REPOSITORY=owner/repository` at build time (the release workflow sets
+`duartebarbosadev/PhotoSort`); builds without it make no update requests. Release tags must be semantic versions such as `3.0.1` or `v3.0.1`, and
 drafts, prereleases and downgrades are ignored. The app links to the release page and never
 downloads or installs an update.
+
+## Releases
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) builds the macOS app for
+Apple Silicon and drafts a GitHub release. To release:
+
+1. Set the version in `Cargo.toml` (and `Cargo.lock`, with `cargo check`), merge to `main`
+   and wait for the checks to pass.
+2. Tag that commit `v` plus the version, for example `v3.0.0`, and push the tag. The
+   workflow stops if the tag and `Cargo.toml` disagree.
+3. Review the draft release, replace the summary placeholder in its notes, and publish it.
+
+The workflow runs on a pinned `macos-15` runner. It installs the Homebrew libraries, builds
+the private libvips copy, downloads ONNX Runtime 1.29.0 from the official release archive,
+fetches DINOv2, SFace and the orientation model from their pinned upstream URLs and the
+four converted models from the `models-1` prerelease (see
+[Converted models](#converted-models)), checks every file against `resources/SHA256SUMS`,
+and packages the app with `--native-imaging` and
+`PHOTOSORT_RELEASE_REPOSITORY=duartebarbosadev/PhotoSort`. It then runs `photosort --check-runtime` from the finished bundle and uploads
+`PhotoSort-<version>-macos-arm64.zip`, its SHA-256 checksum file and notes filled in from
+[`.github/release-notes.md`](.github/release-notes.md). The app's update dialog shows release
+notes as plain text, so keep them readable without Markdown rendering. Bundled Homebrew
+libraries require the macOS version they were built for, so the runner image sets the
+app's minimum macOS; the packager writes it to `Info.plist` and the notes repeat it.
+
+Drafts are not "latest", so neither PhotoSort 3 nor PhotoSort 2.x sees a release until it
+is published. PhotoSort 2.x announces any newer published release on every platform and
+opens its page, even without a build for that platform; the notes template says so.
+
+**Dry run.** Once the workflow is on `main` (GitHub only offers manual runs for workflows
+on the default branch), run it by hand from the Actions tab (Release → Run workflow, then
+pick a branch) or with `gh workflow run release.yml --ref <branch>`. A manual run builds
+and checks everything, including signing and notarization when the secrets are set, and
+keeps the zip, checksums and notes as the `photosort-macos-arm64` workflow artifact for
+14 days. It never creates a tag or a release; only a pushed `v*` tag reaches the release
+job.
+
+### Converted models
+
+`aesthetic.onnx`, `face_detector.onnx`, `face_landmarks_detector.onnx` and
+`face_blendshapes.onnx` are converted exports with no upstream download (see
+[resources/ASSETS.md](resources/ASSETS.md)). Release builds download them from the assets
+of this repository's `models-1` prerelease and then check them against
+`resources/SHA256SUMS`, so a changed asset fails the build instead of shipping. Create
+the prerelease once, from a folder of files that match those pins:
+
+```sh
+gh release create models-1 --repo duartebarbosadev/PhotoSort --target main --prerelease \
+  --title "Converted models 1" \
+  --notes "Converted ONNX models for release builds; provenance and licenses in resources/ASSETS.md. aesthetic.onnx is AGPL-3.0." \
+  aesthetic.onnx face_detector.onnx face_landmarks_detector.onnx face_blendshapes.onnx
+```
+
+Keep it a prerelease: PhotoSort 3 and 2.x both read the latest release, and its tag is not
+a version. Its tag must not start with `v`, or it would start this workflow. To change a
+converted model, publish a new prerelease (`models-2`), update its pin in
+`resources/SHA256SUMS` and `MODELS_RELEASE` in the workflow, and leave older ones in place so
+earlier tags still build.
+
+### Signing and notarization
+
+Without secrets, releases keep the packager's ad-hoc signature and are not notarized, so
+macOS asks users to approve the first launch; the notes explain how. Set these repository
+secrets (Settings → Secrets and variables → Actions) to sign and notarize instead:
+
+| Secret | Value |
+| --- | --- |
+| `MACOS_CERTIFICATE` | Base64 of a `.p12` export of the Developer ID Application certificate with its private key (`base64 -i certificate.p12`) |
+| `MACOS_CERTIFICATE_PASSWORD` | The password chosen for that export |
+| `APPLE_ID` | Apple Account email of a member of the developer team |
+| `APPLE_TEAM_ID` | The ten-character team ID |
+| `APPLE_APP_PASSWORD` | An app-specific password for that Apple Account |
+
+The two certificate secrets alone give a Developer ID signature with a secure timestamp
+and the hardened runtime, but no notarization. All five also notarize the zip with
+`notarytool`, staple the ticket to the app and zip it again. A partial set of either group
+stops the workflow instead of silently producing a weaker build. The certificate goes into
+a temporary keychain that is deleted at the end of the job.
+
+The hardened runtime enables library validation, so a Developer ID build loads only code
+signed by the same team: its bundled ONNX Runtime works, but `ORT_DYLIB_PATH` or a Homebrew
+copy of the library is refused. Ad-hoc builds are unaffected.
 
 ## Minimal build
 
@@ -170,7 +254,8 @@ CI ([`.github/workflows/check.yml`](.github/workflows/check.yml)) runs the minim
 Ubuntu and Windows, the full build on macOS (with and without libvips), and the full libvips
 build in a Debian container. Formatting is checked once. Changes that only touch Markdown
 files skip CI, and Rust build caches are saved from `main`, so pull requests reuse them.
-Run the same checks before opening a pull request:
+Release builds are separate (see [Releases](#releases)). Run the same checks before opening
+a pull request:
 
 ```sh
 cargo fmt --all --check
