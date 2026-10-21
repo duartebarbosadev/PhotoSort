@@ -1,0 +1,121 @@
+name: Rust checks
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'LICENSE', '.github/FUNDING.yml']
+  pull_request:
+    paths-ignore: ['**.md', 'LICENSE', '.github/FUNDING.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  # Builds without the optional native libraries. Windows has no full native
+  # toolchain in CI yet, so this is its only coverage; Linux keeps it compiling.
+  minimal:
+    name: Minimal build (${{ matrix.os }})
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Formatting does not depend on the platform; check it once.
+      - if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --all --check
+      - run: cargo test --locked --no-default-features --no-fail-fast
+      - run: cargo clippy --locked --no-default-features --all-targets -- -D warnings
+      - run: cargo check --locked --no-default-features --features onnx --all-targets
+  macos:
+    name: ${{ matrix.name }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            flags: ''
+          # The configuration the release workflow ships.
+          - name: macOS + libvips
+            flags: '--features native-imaging'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.flags }}
+          workspaces: |
+            . -> target
+            crates/imaging-vips -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: brew install libraw exiv2 pkg-config
+      - if: matrix.flags != ''
+        run: |
+          brew install glib jpeg-turbo libpng libtiff little-cms2 highway
+          python3 -B scripts/build_vips.py
+          # setup-python exports its own PKG_CONFIG_PATH, which would hide
+          # the private engine from the build scripts that follow.
+          echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/.tools/vips/lib/pkgconfig" >> "$GITHUB_ENV"
+      - run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
+      - run: cargo test --locked --no-fail-fast ${{ matrix.flags }}
+      - run: cargo clippy --locked ${{ matrix.flags }} --all-targets -- -D warnings
+      - if: matrix.flags != ''
+        run: cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
+  linux:
+    name: Linux + libvips
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    container:
+      # Debian's security repository supplies libheif >= 1.23, required by the Rust binding.
+      image: rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581
+    env:
+      CARGO_HOME: /tmp/photosort-cargo
+      CARGO_BUILD_JOBS: '4'
+      PKG_CONFIG_PATH: /tmp/photosort-vips/lib/pkgconfig
+      LD_LIBRARY_PATH: /tmp/photosort-vips/lib
+    steps:
+      - uses: actions/checkout@v4
+      # Restored as root before the ownership change below, so the unprivileged
+      # build user can reuse and extend it.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            crates/imaging-vips -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install native development dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config python3 python3-venv curl ca-certificates cmake ninja-build \
+            libglib2.0-dev libexpat1-dev libjpeg-dev libpng-dev libtiff-dev liblcms2-dev libhwy-dev zlib1g-dev \
+            libraw-dev libexiv2-dev libheif-dev libheif-plugin-libde265 \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav \
+            libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libegl1-mesa-dev
+          rustup component add clippy
+          useradd --create-home photosort
+          mkdir -p "$CARGO_HOME"
+          chown -R photosort:photosort "$GITHUB_WORKSPACE" "$CARGO_HOME"
+      - name: Build and verify the private image engine without root privileges
+        run: |
+          runuser -u photosort -- python3 -B -m unittest discover -s scripts -p 'test_*.py'
+          runuser -u photosort -- python3 -B scripts/build_vips.py --prefix /tmp/photosort-vips
+      - run: runuser -u photosort -- cargo test --locked --no-fail-fast --features native-imaging
+      - run: runuser -u photosort -- cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
+      - run: runuser -u photosort -- cargo clippy --locked --features native-imaging --all-targets -- -D warnings

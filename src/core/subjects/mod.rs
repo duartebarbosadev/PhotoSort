@@ -1,0 +1,128 @@
+//! Shared same-subject evidence and decisions. Model ownership stays in Models;
+//! persistence is isolated in store and pure decisions in policy/geometry.
+mod candidates;
+pub use candidates::candidates;
+mod extraction;
+mod geometry;
+pub mod grouping;
+mod policy;
+pub mod store;
+pub use extraction::DenseEmbedding;
+pub use geometry::verify_geometry;
+pub use policy::{Pair, Strictness, verify_pair};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Evidence {
+    pub descriptor: Vec<f32>,
+    pub bbox: [f32; 4],
+    pub area: f32,
+    pub kind: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Artifact {
+    pub global: Vec<f32>,
+    pub subjects: Vec<Evidence>,
+    pub faces: Vec<Evidence>,
+}
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct Geometry {
+    pub inlier_count: usize,
+    pub inlier_ratio: f64,
+    pub coverage_a: f64,
+    pub coverage_b: f64,
+    pub evaluated: bool,
+}
+impl Geometry {
+    pub fn strong(self) -> bool {
+        self.inlier_count >= 8
+            && self.inlier_ratio >= 0.50
+            && self.coverage_a.min(self.coverage_b) >= 0.12
+    }
+}
+pub(super) fn cosine(a: &[f32], b: &[f32]) -> Option<f64> {
+    if a.len() != b.len() || a.is_empty() || a.iter().chain(b).any(|v| !v.is_finite()) {
+        return None;
+    }
+    let denominator = length(a) * length(b);
+    if denominator == 0.0 || !denominator.is_finite() {
+        return None;
+    }
+    let similarity = dot(a, b) / denominator;
+    similarity
+        .is_finite()
+        .then(|| f64::from(similarity.clamp(-1.0, 1.0)))
+}
+fn length(values: &[f32]) -> f32 {
+    values.iter().map(|v| v * v).sum::<f32>().sqrt()
+}
+pub(crate) fn normalized(values: &[f32]) -> Vec<f32> {
+    let norm = length(values).max(f32::EPSILON);
+    values.iter().map(|v| v / norm).collect()
+}
+pub(super) fn dot(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() {
+        return 0.0;
+    }
+    a.iter().zip(b).map(|(a, b)| a * b).sum()
+}
+
+/// Every cross-pair must be accepted; missing evidence never permits chaining.
+/// Indices and edge ties follow the caller's stable path order.
+pub fn clusters(
+    count: usize,
+    pairs: &BTreeMap<(usize, usize), Pair>,
+    cancelled: impl Fn() -> bool,
+) -> Option<Vec<usize>> {
+    if cancelled() {
+        return None;
+    }
+    let mut owners: Vec<_> = (0..count).collect();
+    let mut members: Vec<_> = (0..count).map(|i| vec![i]).collect();
+    let mut edges: Vec<_> = pairs
+        .iter()
+        .filter(|((a, b), p)| p.accepted && *a < count && *b < count && p.confidence.is_finite())
+        .map(|(&key, p)| (key, p.confidence))
+        .collect();
+    edges.sort_by(|(a, ac), (b, bc)| bc.total_cmp(ac).then_with(|| a.cmp(b)));
+    for ((a, b), _) in edges {
+        if cancelled() {
+            return None;
+        }
+        let (a, b) = (owners[a], owners[b]);
+        if a == b {
+            continue;
+        }
+        let mut accepted = true;
+        for &left in &members[a] {
+            if cancelled() {
+                return None;
+            }
+            if members[b].iter().any(|&right| {
+                !pairs
+                    .get(&(left.min(right), left.max(right)))
+                    .is_some_and(|p| p.accepted)
+            }) {
+                accepted = false;
+                break;
+            }
+        }
+        if accepted {
+            let moved = std::mem::take(&mut members[b]);
+            for &id in &moved {
+                owners[id] = a;
+            }
+            members[a].extend(moved);
+        }
+    }
+    let mut nonempty: Vec<_> = members.into_iter().filter(|m| !m.is_empty()).collect();
+    nonempty.sort_by_key(|m| *m.iter().min().unwrap());
+    let mut result = vec![0; count];
+    for (n, group) in nonempty.into_iter().enumerate() {
+        for id in group {
+            result[id] = n + 1;
+        }
+    }
+    (!cancelled()).then_some(result)
+}

@@ -1,0 +1,8 @@
+/* Synthetic test input only: straight alpha, asymmetric colors and non-even geometry. */
+#include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CoreGraphics.h>
+#include <ImageIO/ImageIO.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+int main(int argc,char **argv){if(argc!=2)return 2;size_t w=3073,h=2051;unsigned char*p=malloc(w*h*4);for(size_t y=0;y<h;y++)for(size_t x=0;x<w;x++){size_t i=(y*w+x)*4;unsigned char a[]={255,128,64,0};p[i]=(unsigned char)(30+x*190/w);p[i+1]=(unsigned char)(35+y*165/h);p[i+2]=((x/96+y/96)%2)?160:60;p[i+3]=a[x*4/w];}CFDataRef d=CFDataCreate(NULL,p,w*h*4);free(p);CGDataProviderRef provider=CGDataProviderCreateWithCFData(d);CFRelease(d);CGColorSpaceRef space=CGColorSpaceCreateWithName(kCGColorSpaceSRGB);CGImageRef image=CGImageCreate(w,h,8,32,w*4,space,kCGImageAlphaLast|kCGBitmapByteOrder32Big,provider,NULL,false,kCGRenderingIntentDefault);CGDataProviderRelease(provider);CGColorSpaceRelease(space);CFURLRef url=CFURLCreateFromFileSystemRepresentation(NULL,(unsigned char*)argv[1],strlen(argv[1]),false);CGImageDestinationRef dest=CGImageDestinationCreateWithURL(url,CFSTR("public.heic"),1,NULL);CFRelease(url);if(!dest)return 3;double quality=1.;CFNumberRef q=CFNumberCreate(NULL,kCFNumberDoubleType,&quality);const void*k[]={kCGImageDestinationLossyCompressionQuality};const void*v[]={q};CFDictionaryRef opts=CFDictionaryCreate(NULL,k,v,1,&kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);CGImageDestinationAddImage(dest,image,opts);int ok=CGImageDestinationFinalize(dest);CFRelease(opts);CFRelease(q);CFRelease(dest);CGImageRelease(image);return ok?0:4;}
