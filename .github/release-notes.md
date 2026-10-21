@@ -42,8 +42,12 @@ PhotoSort 3 is a native rewrite; the Python app ends at
 
 ## Licenses
 
-PhotoSort is licensed under Apache-2.0. The app bundles third-party components under their
-own terms, listed in `PhotoSort.app/Contents/Resources/licenses/` and `DependencyNotices/`:
+PhotoSort's source code is licensed under Apache-2.0. Because this app links Exiv2
+(GPL-2.0-or-later), the app itself is distributed under the GNU General Public License,
+version 3; its complete source is this release's tag,
+[v${version}](https://github.com/${repository}/tree/v${version}). The app bundles third-party
+components under their own terms, listed in `PhotoSort.app/Contents/Resources/licenses/`
+and `DependencyNotices/`:
 Exiv2 (GPL-2.0-or-later), LibRaw, libvips and ONNX Runtime among them. The aesthetic model
 `aesthetic.onnx` is distributed under AGPL-3.0 per its model card. Its corresponding source
 is the pinned upstream revision with
