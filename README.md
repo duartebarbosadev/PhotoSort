@@ -134,8 +134,8 @@ is needed. You can also use every step by hand, without AI.
   spots sideways and upside-down photos.
 - Blur, exposure and exact-duplicate checks use plain image measurements, not AI.
 
-**Menu → AI models** shows which models are installed and downloads or imports the missing
-ones, verifying every file. Nothing is downloaded automatically. On a Mac, models run with
+**Menu → AI models** shows which models are installed and downloads any that are missing,
+verifying every file. Nothing is downloaded automatically. On a Mac, models run with
 Apple's Core ML acceleration and fall back to the CPU for any model that cannot use it; the
 first analysis takes a few extra minutes while the models are prepared. On Windows and Linux
 they run on the CPU by default, and **Settings → AI execution → Automatic** tries NVIDIA CUDA

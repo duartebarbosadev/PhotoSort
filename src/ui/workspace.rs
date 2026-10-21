@@ -119,6 +119,8 @@ struct Texture {
 
 pub struct PhotoSortApp {
     native_quit: Option<super::platform::QuitHandler>,
+    /// Whether eframe last reported the window occluded or minimized.
+    hidden: bool,
     smoke_exit: Option<transitions::SmokeExit>,
     video_texture: Option<(MediaId, u64, TextureHandle)>,
     video_context: Option<(Step, MediaId)>,
@@ -360,6 +362,7 @@ impl PhotoSortApp {
     fn with_runtime(runtime: Runtime, folder: Option<PathBuf>) -> Self {
         let mut app = Self {
             native_quit: None,
+            hidden: false,
             smoke_exit: None,
             video_texture: None,
             video_context: None,
@@ -1821,12 +1824,54 @@ impl PhotoSortApp {
     }
 }
 
-impl eframe::App for PhotoSortApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let native_requested = self
-            .native_quit
+impl PhotoSortApp {
+    fn take_native_quit(&self) -> bool {
+        self.native_quit
             .as_ref()
-            .is_some_and(|handler| handler.take_requested());
+            .is_some_and(|handler| handler.take_requested())
+    }
+    /// The frame work that must continue while eframe skips `ui` because the
+    /// window is occluded or minimized: worker results, the smoke-test
+    /// deadline and Quit. Without it, Quit waits until the window is shown.
+    fn update_hidden(&mut self, ctx: &egui::Context, native_requested: bool) {
+        self.poll(ctx);
+        let requested = self.smoke_close_requested(ctx) || native_requested;
+        // A minimized window can still be closed, e.g. from the Windows taskbar.
+        let window_requested = ctx.input(|i| i.viewport().close_requested());
+        self.handle_close_request(ctx, requested);
+        if (requested || window_requested) && !self.close_authorized {
+            // A departure prompt or busy state cannot be seen in a hidden window.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+                egui::UserAttentionType::Critical,
+            ));
+        }
+        ctx.request_repaint_after(Duration::from_secs(1));
+    }
+}
+
+/// eframe runs no egui pass for an occluded or minimized window; it calls
+/// only [`eframe::App::logic`], so `ui` work stops until the window is shown.
+fn window_hidden(ctx: &egui::Context) -> bool {
+    ctx.input(|input| input.viewport().visible()) == Some(false)
+}
+
+impl eframe::App for PhotoSortApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let hidden = window_hidden(ctx);
+        if hidden != self.hidden {
+            self.hidden = hidden;
+            tracing::debug!(hidden, "window visibility changed");
+        }
+        // A shown window does all of this in `ui`, after the frame's input.
+        if hidden {
+            let native_requested = self.take_native_quit();
+            self.update_hidden(ctx, native_requested);
+        }
+    }
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let native_requested = self.take_native_quit();
         self.update_workspace(ui, native_requested);
     }
     fn on_exit(&mut self) {

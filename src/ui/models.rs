@@ -341,7 +341,7 @@ impl PhotoSortApp {
         }
     }
     /// Messages that apply to the whole panel: the build, the paused
-    /// analysis, the runtime and the bundled-only models, each said once.
+    /// analysis, the runtime and a build without downloads, each said once.
     fn model_notices(&mut self, ui: &mut egui::Ui, state: &model_assets::State) {
         if !cfg!(feature = "onnx") {
             notice(
@@ -391,16 +391,19 @@ impl PhotoSortApp {
                 }
             });
         }
-        let bundled_only = state.snapshot.as_ref().is_some_and(|snapshot| {
-            snapshot.rows.iter().any(|row| {
-                !matches!(row.health, Health::Verified(_)) && row.id.asset().url.is_none()
-            })
-        });
-        if bundled_only {
+        let import_only = cfg!(feature = "onnx")
+            && !cfg!(feature = "model-downloads")
+            && state.snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot
+                    .rows
+                    .iter()
+                    .any(|row| !matches!(row.health, Health::Verified(_)) && row.bundled.is_none())
+            });
+        if import_only {
             notice(
                 ui,
                 MUTED,
-                "Some models have no public download and ship only inside the full app bundle. Restore the bundled copy, or import the prepared .onnx file from another copy of this build.",
+                "This build cannot download models. Import the prepared .onnx file from another copy of this build.",
             );
         }
     }
@@ -449,13 +452,13 @@ impl PhotoSortApp {
                                     if ui.add(primary("Restore bundled copy")).clicked() {
                                         self.start_model_operation(Work::Restore(row.id));
                                     }
-                                } else if asset.url.is_some() && cfg!(feature = "model-downloads") {
+                                } else if cfg!(feature = "model-downloads") {
                                     if ui
                                         .add(primary(format!(
                                             "Download {:.1} MB",
                                             asset.bytes as f64 / 1e6
                                         )))
-                                        .on_hover_text(asset.url.unwrap_or_default())
+                                        .on_hover_text(asset.url)
                                         .clicked()
                                     {
                                         self.start_model_operation(Work::Download(row.id));
@@ -504,6 +507,13 @@ impl PhotoSortApp {
                     )
                     .wrap(),
                 );
+                // Terms worth reading before choosing to download.
+                if let Some(note) = asset.download_note
+                    && !ready
+                    && cfg!(feature = "model-downloads")
+                {
+                    ui.add(egui::Label::new(RichText::new(note).small().color(ACCENT)).wrap());
+                }
                 egui::CollapsingHeader::new(RichText::new("Details").small().color(MUTED))
                     .id_salt(("model-details", asset.name))
                     .show(ui, |ui| self.model_details(ui, state, row, editable));
@@ -527,20 +537,16 @@ impl PhotoSortApp {
         line(ui, "Origin", asset.origin);
         line(ui, "File", asset.name);
         line(ui, "SHA-256", asset.checksum());
-        let downloadable = asset.url.is_some() && cfg!(feature = "model-downloads");
-        if downloadable {
-            line(
-                ui,
-                "Download",
-                "Public pinned file, verified after download",
-            );
-        } else if asset.url.is_none() {
-            line(
-                ui,
-                "Download",
-                "No public download · supplied in the full app bundle",
-            );
-        }
+        let downloadable = cfg!(feature = "model-downloads");
+        line(
+            ui,
+            "Download",
+            if downloadable {
+                "Public pinned file, verified after download"
+            } else {
+                "Not included in this build · import a prepared copy"
+            },
+        );
         if let Health::Invalid(_, why) = &row.health {
             line(ui, "Problem", why);
         }

@@ -8,7 +8,7 @@ pub(super) enum Destination {
 }
 pub(super) struct SmokeExit {
     delay: Duration,
-    deadline: Option<f64>,
+    deadline: Option<Instant>,
 }
 impl PhotoSortApp {
     /// Request quit once after the first UI frame and the configured delay.
@@ -23,17 +23,23 @@ impl PhotoSortApp {
         self
     }
     pub(super) fn smoke_close_requested(&mut self, ctx: &egui::Context) -> bool {
+        self.smoke_close_requested_at(ctx, Instant::now())
+    }
+    /// Uses the monotonic clock, not egui's input time: while the window is
+    /// hidden, eframe runs no egui pass and input time stays at the last shown frame.
+    pub(super) fn smoke_close_requested_at(&mut self, ctx: &egui::Context, now: Instant) -> bool {
         let Some(smoke) = &mut self.smoke_exit else {
             return false;
         };
-        let now = ctx.input(|input| input.time);
-        let deadline = *smoke
-            .deadline
-            .get_or_insert(now + smoke.delay.as_secs_f64());
+        let deadline = *smoke.deadline.get_or_insert(now + smoke.delay);
         if now < deadline {
-            ctx.request_repaint_after(Duration::from_secs_f64(deadline - now));
+            ctx.request_repaint_after(deadline - now);
             return false;
         }
+        tracing::info!(
+            late_ms = (now - deadline).as_millis() as u64,
+            "smoke test requesting quit"
+        );
         // One request only: cancelling a departure dialog must not reopen it.
         self.smoke_exit = None;
         true
