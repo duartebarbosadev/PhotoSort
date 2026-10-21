@@ -66,8 +66,10 @@ cargo run --release --no-default-features --features portable-video
 ## Checks
 
 CI ([`.github/workflows/check.yml`](.github/workflows/check.yml)) runs the minimal build on
-Ubuntu, macOS and Windows, the default build on macOS (with and without libvips), and the
-libvips build in a Debian container. Run the same checks before opening a pull request:
+Ubuntu and Windows, the full build on macOS (with and without libvips), and the full libvips
+build in a Debian container. Formatting is checked once. Changes that only touch Markdown
+files skip CI, and Rust build caches are saved from `main`, so pull requests reuse them.
+Run the same checks before opening a pull request:
 
 ```sh
 cargo fmt --all --check
