@@ -1,21 +1,91 @@
 name: Release
-# Pushing a v* tag builds the macOS app and creates a draft GitHub release for review.
-# A manual run (workflow_dispatch) builds and checks the same app but keeps it as a
-# workflow artifact only; it never creates a tag or a release.
+# Run it from the Actions tab with a version (for example 3.0.1): it sets that version in
+# Cargo.toml and Cargo.lock, commits and tags it on main, builds the macOS app and creates a
+# draft GitHub release for review. Leave the version empty for a test build, which keeps
+# the app as a workflow artifact and creates no commit, tag or release. Pushing a v* tag
+# by hand still works; the tag must then match Cargo.toml.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, for example 3.0.1. Leave empty for a test build.
+        required: false
+        type: string
 permissions: {}
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.version || github.ref }}
   cancel-in-progress: false
 defaults:
   run:
     shell: bash
 jobs:
+  prepare:
+    name: Set the version and tag
+    if: github.event_name == 'workflow_dispatch' && inputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Set the version, commit and tag
+        id: tag
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          version="${REQUESTED#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must look like 3.0.1, not '$REQUESTED'"
+            exit 1
+          fi
+          tag="v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "::error::Tag $tag already exists"
+            exit 1
+          fi
+          current="$(python3 -I -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
+          # The update checker never offers a downgrade, so neither may a release.
+          python3 -I - "$current" "$version" <<'EOF'
+          import sys
+          current, wanted = (tuple(map(int, v.split("."))) for v in sys.argv[1:])
+          if wanted < current:
+              print(f"::error::Version {sys.argv[2]} is older than the current {sys.argv[1]}")
+              sys.exit(1)
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [[ "$version" != "$current" ]]; then
+            # The first version line in Cargo.toml belongs to [package].
+            python3 -I - "$version" <<'EOF'
+          import re, sys
+          from pathlib import Path
+          path = Path("Cargo.toml")
+          text, count = re.subn(r'(?m)^version = "[^"]*"', f'version = "{sys.argv[1]}"', path.read_text(), count=1)
+          assert count == 1, "no package version in Cargo.toml"
+          path.write_text(text)
+          EOF
+            cargo update --workspace
+            git commit --all --message "Release $version"
+          fi
+          git tag --annotate "$tag" --message "PhotoSort $version"
+          # The commit and the tag land together or not at all. Tags pushed with this
+          # token start no other workflow, so this run builds the release itself.
+          git push --atomic origin HEAD:main "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
   macos:
     name: macOS app (Apple Silicon)
+    needs: prepare
+    # Runs after a successful prepare, or without it for test builds and pushed tags.
+    if: always() && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped')
     # Bundled Homebrew libraries require the macOS version their bottles were built
     # for, so this image sets the app's minimum macOS (the packager records it in
     # Info.plist and the release notes repeat it). Change it deliberately.
@@ -32,11 +102,16 @@ jobs:
       ORT_ARCHIVE_SHA256: d0706fc34f315d8c88639d0a8c81f2e09e815f282cabed3493c06a054352cf92
       # Prerelease holding the converted models (CONTRIBUTING.md#converted-models).
       MODELS_RELEASE: models-1
+      # The tag this run releases: the one prepare created, or a pushed tag. Empty for a
+      # test build.
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag || (github.ref_type == 'tag' && github.ref_name || '') }}
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ env.RELEASE_TAG }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.prepare.outputs.tag || github.ref }}
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -45,8 +120,8 @@ jobs:
         id: version
         run: |
           version="$(python3 -I -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
-          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match the Cargo.toml version $version"
+          if [[ -n "$RELEASE_TAG" && "$RELEASE_TAG" != "v$version" ]]; then
+            echo "::error::Tag $RELEASE_TAG does not match the Cargo.toml version $version"
             exit 1
           fi
           {
@@ -261,8 +336,8 @@ jobs:
   release:
     name: Draft GitHub release
     needs: macos
-    # Tag pushes only; a manual run stops at the workflow artifact.
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    # Releases only; a test build stops at the workflow artifact.
+    if: always() && needs.macos.result == 'success' && needs.macos.outputs.tag != ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -277,13 +352,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.macos.outputs.version }}
+          TAG: ${{ needs.macos.outputs.tag }}
         run: |
           # Drafts do not own their tag, so a re-run would add a second draft.
-          existing="$(gh api --paginate "repos/$GH_REPO/releases" --jq '.[] | select(.tag_name == env.GITHUB_REF_NAME) | .html_url')"
+          existing="$(gh api --paginate "repos/$GH_REPO/releases" --jq '.[] | select(.tag_name == env.TAG) | .html_url')"
           if [[ -n "$existing" ]]; then
-            echo "::error::A release for $GITHUB_REF_NAME already exists ($existing); delete it before re-running"
+            echo "::error::A release for $TAG already exists ($existing); delete it before re-running"
             exit 1
           fi
-          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "PhotoSort $VERSION" \
+          gh release create "$TAG" --draft --verify-tag --title "PhotoSort $VERSION" \
             --notes-file dist/release-notes.md \
             "dist/PhotoSort-$VERSION-macos-arm64.zip" "dist/PhotoSort-$VERSION-SHA256SUMS.txt"

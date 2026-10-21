@@ -153,11 +153,16 @@ downloads or installs an update.
 [`.github/workflows/release.yml`](.github/workflows/release.yml) builds the macOS app for
 Apple Silicon and drafts a GitHub release. To release:
 
-1. Set the version in `Cargo.toml` (and `Cargo.lock`, with `cargo check`), merge to `main`
-   and wait for the checks to pass.
-2. Tag that commit `v` plus the version, for example `v3.0.0`, and push the tag. The
-   workflow stops if the tag and `Cargo.toml` disagree.
+1. Make sure `main` has what you want to ship and its checks pass.
+2. Open **Actions → Release → Run workflow** and enter the version, for example `3.0.1`.
+   The workflow sets it in `Cargo.toml` and `Cargo.lock`, commits "Release 3.0.1" to
+   `main`, tags it `v3.0.1`, builds the app and creates a draft release. It refuses an
+   existing tag or a version older than the current one.
 3. Review the draft release, replace the summary placeholder in its notes, and publish it.
+
+Leave the version empty for a test build: it builds and checks the same app and keeps it
+as a workflow artifact, without a commit, tag or release. Pushing a `v*` tag by hand also
+starts a release; the tag must then match the version already in `Cargo.toml`.
 
 The workflow runs on a pinned `macos-15` runner. It installs the Homebrew libraries, builds
 the private libvips copy, downloads ONNX Runtime 1.29.0 from the official release archive,
@@ -176,13 +181,12 @@ Drafts are not "latest", so neither PhotoSort 3 nor PhotoSort 2.x sees a release
 is published. PhotoSort 2.x announces any newer published release on every platform and
 opens its page, even without a build for that platform; the notes template says so.
 
-**Dry run.** Once the workflow is on `main` (GitHub only offers manual runs for workflows
-on the default branch), run it by hand from the Actions tab (Release → Run workflow, then
-pick a branch) or with `gh workflow run release.yml --ref <branch>`. A manual run builds
-and checks everything, including signing and notarization when the secrets are set, and
-keeps the zip, checksums and notes as the `photosort-macos-arm64` workflow artifact for
-14 days. It never creates a tag or a release; only a pushed `v*` tag reaches the release
-job.
+**Test build.** Run the workflow with an empty version (Release → Run workflow, then pick a
+branch) or with `gh workflow run release.yml --ref <branch>`. It builds and checks
+everything, including signing and notarization when the secrets are set, and keeps the zip,
+checksums and notes as the `photosort-macos-arm64` workflow artifact for 14 days. It never
+creates a commit, tag or release. To release from the command line instead, use
+`gh workflow run release.yml -f version=3.0.1`.
 
 ### Converted models
 
