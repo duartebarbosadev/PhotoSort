@@ -66,7 +66,7 @@ so codec support follows the system.
 | --- | --- |
 | macOS 13+ | Full build, CI-tested with both image backends |
 | Linux | Full build and tests CI-tested in a Debian container; desktop use not yet verified |
-| Windows | Minimal build CI-tested; full native build not verified |
+| Windows | Compiles and passes tests in CI; the full native build and desktop use are not yet verified |
 
 Releases of the native app are not yet published; build from source or package a macOS app.
 
@@ -96,26 +96,12 @@ sudo apt-get install build-essential pkg-config \
 
 **Windows** (untested): install Exiv2 0.28+, LibRaw, libheif 1.23+ with an HEVC decoder
 plugin, and the official GStreamer MSVC runtime and development packages, all
-discoverable through pkg-config. The minimal build needs none of them.
+discoverable through pkg-config.
 
 Build and open a folder:
 
 ```sh
 cargo run --release -- --folder /path/to/photos
-```
-
-The minimal build supports standard photo formats and manual review, without RAW, HEIF,
-native metadata or AI:
-
-```sh
-cargo run --release --no-default-features
-```
-
-On Linux and Windows, `portable-video` adds in-app playback to the minimal build; without
-it, video posters need `ffmpeg` on the PATH. macOS always uses AVFoundation.
-
-```sh
-cargo run --release --no-default-features --features portable-video
 ```
 
 ## AI models and ONNX Runtime
@@ -281,10 +267,8 @@ Third-party components keep their own terms:
   package (LGPL).
 - The Inter font is licensed under the SIL Open Font License 1.1.
 
-Because default builds link Exiv2, released app binaries are distributed under the terms of
-the GNU General Public License, version 3. The source code itself remains Apache-2.0, and
-builds without the `metadata-native` feature (for example `--no-default-features`) contain
-no GPL code.
+Because PhotoSort links Exiv2, released app binaries are distributed under the terms of the
+GNU General Public License, version 3. The source code itself remains Apache-2.0.
 
 See [resources/ASSETS.md](resources/ASSETS.md) for provenance and
 [resources/licenses/](resources/licenses/) for license texts. The macOS packager also

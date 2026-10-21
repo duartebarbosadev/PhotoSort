@@ -41,6 +41,28 @@ find models in `resources/models/`, not in the app's data folder, unless
 | `PHOTOSORT_SAMPLE_DIR` | Sample folder for the opt-in reference tests |
 | `PHOTOSORT_RELEASE_REPOSITORY` | Build time only: GitHub `owner/repository` for update checks |
 
+## Minimal build
+
+`--no-default-features` builds PhotoSort without its optional native dependencies: LibRaw,
+libheif, ONNX Runtime, Exiv2, GStreamer and the network features. It opens JPEG, PNG, TIFF,
+GIF, WebP and BMP, keeps every step's manual review, and writes ratings and rotation to XMP
+sidecars only. It is not a release configuration. It exists so that:
+
+- CI can build and test on Windows, where the full native stack is not set up yet;
+- you can work on the UI and core logic with only Rust installed, and compile faster;
+- a binary without GPL code (Exiv2) can be built if one is ever needed.
+
+```sh
+cargo run --release --no-default-features
+```
+
+On Linux and Windows, `portable-video` adds in-app video playback to it; without it, video
+posters need `ffmpeg` on the PATH. macOS always uses AVFoundation.
+
+```sh
+cargo run --release --no-default-features --features portable-video
+```
+
 ## Checks
 
 CI ([`.github/workflows/check.yml`](.github/workflows/check.yml)) runs the minimal build on
