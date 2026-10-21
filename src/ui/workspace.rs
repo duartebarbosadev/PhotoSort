@@ -1677,53 +1677,66 @@ impl PhotoSortApp {
     /// suggestions from the scanned photos, so screenshots need no models.
     pub fn gallery_seed_reviews(&mut self) {
         use crate::core::delete_review::{Category, Entry};
-        let ids: Vec<MediaId> = self.media.iter().map(|m| m.id).collect();
-        if ids.len() < 10 {
-            return;
-        }
-        let entries = vec![
-            Entry {
-                subject: ids[1],
-                companion: Some(ids[2]),
+        // Scenes use the demo photos the ui_gallery example derives from
+        // tests/samples, so each shows what it claims: a softened copy is the near
+        // duplicate, a blurred copy the blurry photo, a sideways copy needs
+        // rotating, and three frames of one scene form the Pick Best burst.
+        // Folders without these files get no scenes.
+        let names: HashMap<String, MediaId> = self.media.iter().map(|m| (m.name(), m.id)).collect();
+        let id = |name: &str| names.get(name).copied();
+        let mut entries = Vec::new();
+        if let (Some(copy), Some(original)) = (id("GAB00915 (2).jpg"), id("GAB00915.jpg")) {
+            entries.push(Entry {
+                subject: copy,
+                companion: Some(original),
                 category: Category::Near,
                 reason: "Near-duplicate of the photo beside it · slightly softer".into(),
-            },
-            Entry {
-                subject: ids[4],
+            });
+        }
+        if let Some(blurry) = id("GAB02000-2.jpg") {
+            entries.push(Entry {
+                subject: blurry,
                 companion: None,
                 category: Category::Blur,
-                reason: "Blurry · motion blur across the frame".into(),
-            },
-        ];
-        self.delete_review.replace(entries);
-        self.view_data_ready.insert(Step::EasyDelete);
-        self.delete_categories = Category::ALL.into_iter().collect();
-        for (n, id) in ids.iter().take(3).enumerate() {
+                reason: "Blurry · out of focus across the frame".into(),
+            });
+        }
+        if !entries.is_empty() {
+            self.delete_review.replace(entries);
+            self.view_data_ready.insert(Step::EasyDelete);
+            self.delete_categories = Category::ALL.into_iter().collect();
+        }
+        if let Some(sideways) = id("DSC01180.jpg") {
             self.rotations.insert(
-                *id,
+                sideways,
                 crate::core::models::RotationSuggestion {
                     turns: 1,
-                    confidence: 0.9,
-                    uncertain: n == 2,
+                    confidence: 0.94,
+                    uncertain: false,
                     views: 3,
                 },
             );
+            self.finish_rotation_detection();
         }
-        self.finish_rotation_detection();
-        let cluster = |key: usize, members: &[MediaId]| crate::core::pick_review::Cluster {
-            key,
-            ordered: members.to_vec(),
-            scores: members
-                .iter()
-                .enumerate()
-                .map(|(i, id)| (*id, 5.0 + ((i * 7) % 5) as f64 * 0.6))
-                .collect(),
-        };
-        self.pick_review.replace(
-            vec![cluster(1, &ids[0..5]), cluster(2, &ids[7..10])],
-            &mut self.decisions,
-        );
-        self.view_data_ready.insert(Step::PickBest);
+        // DSC01231 is the sharp frame; the first round compares it with the
+        // slightly soft DSC01232.
+        let burst: Vec<(MediaId, f64)> = [
+            ("DSC01232.jpg", 6.1),
+            ("DSC01231.jpg", 8.4),
+            ("DSC01233.jpg", 5.2),
+        ]
+        .into_iter()
+        .filter_map(|(name, score)| id(name).map(|id| (id, score)))
+        .collect();
+        if burst.len() >= 2 {
+            let cluster = crate::core::pick_review::Cluster {
+                key: 1,
+                ordered: burst.iter().map(|(id, _)| *id).collect(),
+                scores: burst.into_iter().collect(),
+            };
+            self.pick_review.replace(vec![cluster], &mut self.decisions);
+            self.view_data_ready.insert(Step::PickBest);
+        }
         self.filter_dirty = true;
     }
     /// Closes the Local AI models dialog. Builds without the native runtime

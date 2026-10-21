@@ -60,7 +60,7 @@ fn inspect_rotation_view_evidence_without_mutating_samples() -> Result<()> {
         let analysis = pipeline.analysis(media, || false)?;
         let analysis_views = views(&mut models, &model, &analysis)?;
         let decodes = pipeline.stats.decodes;
-        let display = pipeline.load(media)?;
+        let display = pipeline.load_neutral_cancellable(media, || false)?;
         let display_views = views(&mut models, &model, &display)?;
         assert_eq!(
             pipeline.stats.decodes, decodes,

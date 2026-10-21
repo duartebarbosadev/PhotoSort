@@ -201,7 +201,10 @@ impl Similarity<'_> {
             Err(error) => {
                 self.send(
                     job,
-                    Event::Error(format!("Similarity grouping failed: {error:#}")),
+                    Event::RunError {
+                        run: job.run,
+                        error: format!("Similarity grouping failed: {error:#}"),
+                    },
                 );
                 return None;
             }
@@ -215,7 +218,10 @@ impl Similarity<'_> {
         if !valid {
             self.send(
                 job,
-                Event::Error("Photos changed during similarity grouping; analyze again".into()),
+                Event::RunError {
+                    run: job.run,
+                    error: "Photos changed during similarity grouping; analyze again".into(),
+                },
             );
             return None;
         }
@@ -239,7 +245,10 @@ impl Similarity<'_> {
             Err(error) => {
                 self.send(
                     job,
-                    Event::Error(format!("Scene corrections failed: {error:#}")),
+                    Event::RunError {
+                        run: job.run,
+                        error: format!("Scene corrections failed: {error:#}"),
+                    },
                 );
                 None
             }
@@ -328,11 +337,17 @@ impl Similarity<'_> {
             }
             Err(error) => self.send(
                 job,
-                Event::Error(format!("Duplicate review failed: {error:#}")),
+                Event::RunError {
+                    run: job.run,
+                    error: format!("Duplicate review failed: {error:#}"),
+                },
             ),
             Ok(_) if !valid => self.send(
                 job,
-                Event::Error("Photos changed during duplicate review; analyze again".into()),
+                Event::RunError {
+                    run: job.run,
+                    error: "Photos changed during duplicate review; analyze again".into(),
+                },
             ),
             _ => {}
         }

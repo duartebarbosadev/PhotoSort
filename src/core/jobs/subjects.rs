@@ -69,7 +69,10 @@ fn group(
         }
         Err(error) if !cancelled() => publisher.send_checked(
             job.epoch,
-            Event::Error(format!("Same-subject grouping failed: {error:#}")),
+            Event::RunError {
+                run: job.run,
+                error: format!("Same-subject grouping failed: {error:#}"),
+            },
             cancelled,
         ),
         _ => {}
