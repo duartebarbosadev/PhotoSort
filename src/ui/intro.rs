@@ -120,7 +120,11 @@ impl PhotoSortApp {
             // Remembered as it opens: quitting part-way through, or a film
             // that cannot play, must not bring it back on every launch.
             self.preferences.intro_shown = true;
-            self.save_preferences();
+            // Never replace an unreadable file with defaults behind the
+            // user's back; only an explicit Settings change does that.
+            if !self.preferences_unreadable {
+                self.save_preferences();
+            }
         }
         let fingerprint = match Fingerprint::read(&path) {
             Ok(fingerprint) => fingerprint,
@@ -145,19 +149,29 @@ impl PhotoSortApp {
             texture: None,
         }));
     }
+    /// A quit, step or folder change waiting on an answer, in whichever
+    /// prompt `request_departure` asked it.
+    fn departure_pending(&self) -> bool {
+        self.departure.is_some()
+            || self.review_notice.is_some()
+            || self.organize_departure.is_some()
+            || self.after_apply.is_some()
+    }
     /// Starts a due intro once nothing else asks for attention, then draws
     /// it over everything, including other dialogs.
     pub(super) fn intro_overlay(&mut self, ctx: &egui::Context) {
         if matches!(self.intro, Intro::Due(_))
             && !self.other_modal_active()
+            && !self.departure_pending()
             && self.organize_editor.is_none()
             && self.crash_notice.is_none()
+            && self.error.is_none()
             && let Intro::Due(path) = std::mem::replace(&mut self.intro, Intro::Off)
         {
             self.start_intro(ctx, path);
         }
-        // A quit or folder change waits for an answer under the film.
-        if self.departure.is_some() {
+        // That answer must not wait under the film.
+        if self.departure_pending() {
             self.intro = Intro::Off;
         }
         let Intro::Playing(film) = &mut self.intro else {
@@ -490,5 +504,164 @@ mod playback_tests {
         app.intro_overlay(&ctx);
         assert!(matches!(app.intro, Intro::Off));
         app.runtime.shutdown();
+    }
+
+    /// One frame of an intro with nothing else drawn.
+    fn overlay(app: &mut PhotoSortApp, ctx: &egui::Context) {
+        let _ = ctx.run_test(input(vec![]), |ui| app.intro_overlay(&ui.ctx().clone()));
+    }
+    /// One frame of the native Quit path: the shared departure guard, then the intro.
+    fn native_quit(app: &mut PhotoSortApp, ctx: &egui::Context) {
+        let _ = ctx.run_test(input(vec![]), |ui| {
+            let ctx = ui.ctx().clone();
+            app.handle_close_request(&ctx, true);
+            app.intro_overlay(&ctx);
+        });
+    }
+
+    #[test]
+    fn a_replayed_intro_never_saves_over_an_unreadable_preferences_file() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("preferences.json");
+        let unreadable = b"[99, {\"show_shortcuts\": false}]";
+        std::fs::write(&path, unreadable).unwrap();
+        let mut app =
+            PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, root.path().join("cache")), None);
+        app.load_preferences(path.clone());
+        assert!(app.preferences_unreadable && app.error.is_some());
+        assert!(matches!(app.intro, Intro::Off), "no autoplay on defaults");
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        // The warning is dismissed, then Menu → Watch the intro.
+        app.error = None;
+        app.watch_intro();
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.intro.playing());
+        // Shutdown finishes every queued write.
+        app.runtime.shutdown();
+        assert_eq!(std::fs::read(&path).unwrap(), unreadable);
+    }
+
+    #[test]
+    fn a_due_intro_waits_for_the_error_window_to_be_dismissed() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = first_launch(root.path());
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        app.error = Some("Folder is no longer available".into());
+        for _ in 0..2 {
+            frame(&mut app, &ctx, vec![]);
+            assert!(matches!(app.intro, Intro::Due(_)));
+            assert!(app.error.is_some() && !app.preferences.intro_shown);
+        }
+        app.error = None;
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.intro.playing());
+        app.runtime.shutdown();
+    }
+
+    /// Staged Easy Delete choices that are neither confirmed nor reset.
+    fn unfinished_easy_delete(app: &mut PhotoSortApp, _: &std::path::Path) {
+        use crate::core::delete_review::{Category, Entry};
+        app.media = (1..=3)
+            .map(|n| Media {
+                id: MediaId(n),
+                path: format!("/{n}.jpg").into(),
+                kind: MediaKind::Photo,
+                fingerprint: Fingerprint::default(),
+            })
+            .collect();
+        app.index = app
+            .media
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
+        app.delete_review.replace(vec![Entry {
+            subject: MediaId(1),
+            companion: Some(MediaId(2)),
+            category: Category::Exact,
+            reason: "copy".into(),
+        }]);
+        app.set_step(Step::EasyDelete);
+        app.refilter();
+        app.toggle_delete_candidate(1);
+        assert!(app.delete_review.unfinished(app.delete_current));
+    }
+    /// A folder renamed on the Organize board but not applied.
+    fn unapplied_folder_edit(app: &mut PhotoSortApp, dir: &std::path::Path) {
+        let root = dir.canonicalize().unwrap();
+        std::fs::create_dir(root.join("Before")).unwrap();
+        std::fs::write(root.join("Before/a.jpg"), b"original bytes").unwrap();
+        let catalog = Catalog::scan(&root, || false, |_| {}).unwrap();
+        app.root = Some(root.clone());
+        app.output = root.display().to_string();
+        app.media = catalog.media.clone();
+        app.index = app
+            .media
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
+        app.catalog = Some(Arc::new(catalog));
+        let mut draft = crate::core::organize::Draft::from_catalog(
+            app.catalog.as_ref().unwrap(),
+            app.organize_labels(),
+        );
+        draft.rename_folder("Before", "After").unwrap();
+        app.organize_drafts.insert(app.group_mode, draft);
+    }
+
+    #[test]
+    fn every_quit_prompt_stops_the_intro_instead_of_waiting_under_it() {
+        type Setup = fn(&mut PhotoSortApp, &std::path::Path);
+        type Asked = fn(&PhotoSortApp) -> bool;
+        let cases: [(&str, Setup, Asked); 4] = [
+            (
+                "staged choices",
+                |app, _| {
+                    app.decisions.insert(
+                        MediaId(1),
+                        Decision {
+                            rejected: true,
+                            ..Default::default()
+                        },
+                    );
+                },
+                |app| app.departure.is_some(),
+            ),
+            (
+                "saved operations",
+                |app, _| app.retry_plan = Some(Plan::default()),
+                |app| app.after_apply.is_some() && app.plan_open,
+            ),
+            ("unfinished review", unfinished_easy_delete, |app| {
+                app.review_notice == Some(Step::EasyDelete)
+            }),
+            ("folder edits", unapplied_folder_edit, |app| {
+                app.organize_departure.is_some()
+            }),
+        ];
+        for (name, setup, asked) in cases {
+            let root = tempfile::tempdir().unwrap();
+            let mut app = first_launch(root.path());
+            setup(&mut app, root.path());
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            overlay(&mut app, &ctx);
+            assert!(app.intro.playing(), "{name}: plays until Quit");
+            native_quit(&mut app, &ctx);
+            assert!(asked(&app), "{name}: Quit asks in its own prompt");
+            assert!(
+                matches!(app.intro, Intro::Off),
+                "{name}: not under the film"
+            );
+            assert!(!app.close_authorized, "{name}");
+            // A prompt still waiting holds back a replay as well.
+            app.watch_intro();
+            overlay(&mut app, &ctx);
+            assert!(!app.intro.playing(), "{name}: no replay over the prompt");
+            app.runtime.shutdown();
+        }
     }
 }

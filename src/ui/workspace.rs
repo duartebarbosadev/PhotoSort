@@ -135,6 +135,8 @@ pub struct PhotoSortApp {
     /// The first-run intro, due at startup or replayed from Menu.
     intro: intro::Intro,
     preferences_path: Option<PathBuf>,
+    /// The preferences file exists but could not be read; defaults stand in.
+    preferences_unreadable: bool,
     preferences_draft: Option<crate::core::preferences::Preferences>,
     preferences_section: Option<preferences::Section>,
     browse_filters_open: bool,
@@ -328,15 +330,7 @@ impl PhotoSortApp {
         let ctx = cc.egui_ctx.clone();
         let runtime = Runtime::new(move || ctx.request_repaint());
         let mut app = Self::with_runtime(runtime, None);
-        let path = crate::core::preferences::Preferences::path();
-        match crate::core::preferences::Preferences::load(&path) {
-            Ok(preferences) => {
-                app.companions = preferences.keep_companions;
-                app.intro = intro::Intro::at_startup(&preferences, intro::AUTOPLAY);
-                app.preferences = preferences;
-            }
-            Err(e) => app.error = Some(format!("Preferences could not be loaded: {e}")),
-        }
+        app.load_preferences(crate::core::preferences::Preferences::path());
         app.crash_notice = crate::core::crash::unseen_report(&crate::core::crash::directory())
             .map(|path| (path, true));
         app.crash_notice_shown = app.crash_notice.is_some();
@@ -352,7 +346,6 @@ impl PhotoSortApp {
         app.runtime.raw_look.set(app.preferences.raw_look);
         set_reduce_motion(&cc.egui_ctx, app.preferences.reduce_motion);
         app.runtime.cache.request(false);
-        app.preferences_path = Some(path);
         if let Some(folder) = folder {
             app.open(folder);
         }
@@ -377,6 +370,7 @@ impl PhotoSortApp {
             crash_notice_shown: false,
             intro: intro::Intro::Off,
             preferences_path: None,
+            preferences_unreadable: false,
             preferences_draft: None,
             preferences_section: None,
             browse_filters_open: false,
