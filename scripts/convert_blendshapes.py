@@ -23,7 +23,9 @@ from explicit_pads import rewrite as explicit_pads
 
 
 def main(task: str, target: str) -> None:
-    with tempfile.TemporaryDirectory() as work:
+    # Stage beside the target so the final os.replace stays on one filesystem.
+    folder = os.path.dirname(os.path.abspath(target))
+    with tempfile.TemporaryDirectory(dir=folder, prefix=".face_blendshapes-") as work:
         tflite = os.path.join(work, "face_blendshapes.tflite")
         with zipfile.ZipFile(task) as archive, open(tflite, "wb") as out:
             out.write(archive.read("face_blendshapes.tflite"))

@@ -56,11 +56,12 @@ impl Detector {
         let result = if let Some(value) = cached {
             value
         } else {
-            // Use the same neutral, bounded working image as browsing. Rotation
-            // already resizes to its trained 416-square input; an intermediate
-            // 1024-edge analysis resize changes fine detail and can flip a vote.
-            // This reuses shared decoding, source orientation and cached pixels.
-            let asset = pipeline.load_cancellable(media, cancelled)?;
+            // Use browsing's bounded 2048-edge working image, without the RAW
+            // display look, so suggestions never depend on that preference.
+            // Rotation already resizes to its trained 416-square input; an
+            // intermediate 1024-edge analysis resize changes fine detail and can
+            // flip a vote. This reuses shared decoding, orientation and pixels.
+            let asset = pipeline.load_neutral_cancellable(media, cancelled)?;
             models.rotation_cancellable(&self.path, &asset, cancelled)?
         };
         ensure!(!cancelled(), "Rotation cancelled");
