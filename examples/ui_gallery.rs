@@ -56,6 +56,8 @@ fn main() -> anyhow::Result<()> {
         std::fs::copy(photo, target)?;
     }
 
+    write_demo_photos(&root)?;
+
     let shots: &[(&str, Option<Step>, bool, [f32; 2])] = &[
         (
             "01-cull-grid-wide",
@@ -180,11 +182,12 @@ fn main() -> anyhow::Result<()> {
     // Dialogs over the Cull grid.
     for (name, open) in [
         ("11-settings", Dialog::Settings),
-        ("12-plan-review", Dialog::PlanReview),
         ("15-about", Dialog::About),
         ("16-organize-editor", Dialog::OrganizeEditor),
         ("17-cull-compare", Dialog::Compare),
         ("18-ai-models", Dialog::Models),
+        // Last: it stages Trash marks, which the folder's saved session keeps.
+        ("12-plan-review", Dialog::PlanReview),
     ] {
         let folder = root.clone();
         let mut harness = Harness::builder()
@@ -268,6 +271,55 @@ enum Dialog {
     OrganizeEditor,
     Compare,
     Models,
+}
+
+/// Demo photos for the review scenes, derived from tests/samples and named as a
+/// camera would name them (see `PhotoSortApp::gallery_seed_reviews`): a softer,
+/// slightly shifted copy of the island for Easy Delete's near duplicate, an
+/// out-of-focus desert, a sideways Chrysler Building for Fix Rotation, and a
+/// three-frame burst of the street where only the first frame is sharp.
+fn write_demo_photos(root: &std::path::Path) -> anyhow::Result<()> {
+    use image::{DynamicImage, imageops::FilterType};
+    let open = |name: &str| -> anyhow::Result<DynamicImage> {
+        let image = image::open(root.join(name))?;
+        // Demo copies need no more than 3000 pixels, and blurring stays fast.
+        Ok(image.resize(3000, 3000, FilterType::Triangle))
+    };
+    let save = |image: &DynamicImage, name: &str| -> anyhow::Result<()> {
+        let file = std::fs::File::create(root.join(name))?;
+        let mut writer = std::io::BufWriter::new(file);
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 90)
+            .encode_image(&image.to_rgb8())?;
+        Ok(())
+    };
+    let crop = |image: &DynamicImage, x: f32, y: f32| {
+        let (w, h) = (image.width() as f32, image.height() as f32);
+        image.crop_imm(
+            (w * x) as u32,
+            (h * y) as u32,
+            (w * 0.96) as u32,
+            (h * 0.96) as u32,
+        )
+    };
+    if root.join("GAB00915.jpg").is_file() {
+        let island = open("GAB00915.jpg")?;
+        save(&crop(&island, 0.03, 0.02).blur(4.0), "GAB00915 (2).jpg")?;
+    }
+    if root.join("GAB02000-min.png").is_file() {
+        save(&open("GAB02000-min.png")?.blur(9.0), "GAB02000-2.jpg")?;
+    }
+    if root.join("20230428_034640_IMG_4658.JPG").is_file() {
+        // A quarter turn counterclockwise; the seeded suggestion turns it back.
+        let tower = open("20230428_034640_IMG_4658.JPG")?.rotate270();
+        save(&tower, "DSC01180.jpg")?;
+    }
+    if root.join("jpg_sample.jpg").is_file() {
+        let street = open("jpg_sample.jpg")?;
+        save(&crop(&street, 0.02, 0.02), "DSC01231.jpg")?;
+        save(&crop(&street, 0.03, 0.025).blur(6.0), "DSC01232.jpg")?;
+        save(&crop(&street, 0.035, 0.03).blur(10.0), "DSC01233.jpg")?;
+    }
+    Ok(())
 }
 
 /// Step frames until background work settles (or ~20 s pass).
