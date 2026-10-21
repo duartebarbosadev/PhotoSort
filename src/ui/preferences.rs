@@ -330,7 +330,7 @@ impl PhotoSortApp {
                                 ui.selectable_value(&mut draft.processing.backend, backend, backend.label());
                             }
                         });
-                    settings_note(ui, "Applies to the next analysis in every workflow. Automatic chooses a platform provider. Missing or failing providers fall back to CPU per model.");
+                    settings_note(ui, "Applies to the next analysis in every workflow. Automatic chooses a platform provider and is the default on Mac. Missing or failing providers fall back to CPU per model.");
                     settings_note(ui, "Acceleration requires a compatible ONNX Runtime and driver. First model preparation can take minutes and extra memory. Native compilation finishes before cancellation can release it; cached photo results remain reusable.");
                     for status in self.runtime.processing.status() {
                         ui.label(format!("{} · {} · {}", status.model, status.backend.label(), status.detail));
