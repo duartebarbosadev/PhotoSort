@@ -41,6 +41,9 @@ impl Event {
             Self::AnalysisError { run, id, error } => {
                 tracing::warn!(epoch, run, ?id, %error, "photo analysis failed");
             }
+            Self::RunError { run, error } => {
+                tracing::error!(epoch, run, %error, "analysis run failed");
+            }
             Self::AssetError { id, preview, error } => {
                 tracing::warn!(epoch, ?id, preview, %error, "image request failed");
             }

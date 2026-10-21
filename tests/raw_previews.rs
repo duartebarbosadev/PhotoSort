@@ -209,3 +209,32 @@ fn raw_analysis_only_geometry_survives_metadata_only_restart() -> anyhow::Result
     );
     Ok(())
 }
+
+#[test]
+fn rotation_input_ignores_the_raw_display_look() -> anyhow::Result<()> {
+    use photosort::core::raw_look::RawLook;
+    let temp = tempfile::tempdir()?;
+    let library = temp.path().join("library");
+    std::fs::create_dir(&library)?;
+    std::fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/samples/arw_sample.ARW"),
+        library.join("photo.ARW"),
+    )?;
+    let catalog = Catalog::scan(&library, || false, |_| {})?;
+    let media = catalog.media.first().expect("one RAW photo");
+    let mut neutral = Pipeline::new(256 * 1024 * 1024, temp.path().join("neutral-cache"));
+    let expected = neutral.load(media)?.pixels;
+    let mut enhanced = Pipeline::new(256 * 1024 * 1024, temp.path().join("enhanced-cache"));
+    enhanced.set_raw_look(RawLook::Enhanced);
+    // Both orders: the neutral entry must never be the enhanced display asset.
+    let before = enhanced.load_neutral_cancellable(media, || false)?.pixels;
+    let display = enhanced.load(media)?.pixels;
+    let after = enhanced.load_neutral_cancellable(media, || false)?.pixels;
+    assert_eq!(*before, *expected);
+    assert_eq!(*after, *expected);
+    assert_ne!(
+        *display, *expected,
+        "the Enhanced look should change display pixels"
+    );
+    Ok(())
+}

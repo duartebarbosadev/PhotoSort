@@ -33,14 +33,27 @@ fn main() -> anyhow::Result<()> {
                 && e.path()
                     .extension()
                     .and_then(|x| x.to_str())
-                    .is_some_and(|x| matches!(x.to_ascii_lowercase().as_str(), "jpg" | "jpeg"))
+                    .is_some_and(|x| {
+                        matches!(
+                            x.to_ascii_lowercase().as_str(),
+                            "jpg" | "jpeg" | "png" | "arw"
+                        )
+                    })
         })
         .map(|e| e.into_path())
         .collect();
     photos.sort();
+    // A plain folder name for the title bar; photos keep their own names unless
+    // two sources share one.
+    let root = library.path().join("Photos");
+    std::fs::create_dir(&root)?;
     for (i, photo) in photos.iter().take(limit).enumerate() {
-        let name = format!("{i:03}-{}", photo.file_name().unwrap().to_string_lossy());
-        std::fs::copy(photo, library.path().join(name))?;
+        let name = photo.file_name().unwrap().to_string_lossy();
+        let mut target = root.join(name.as_ref());
+        if target.exists() {
+            target = root.join(format!("{i:03}-{name}"));
+        }
+        std::fs::copy(photo, target)?;
     }
 
     let shots: &[(&str, Option<Step>, bool, [f32; 2])] = &[
@@ -58,12 +71,6 @@ fn main() -> anyhow::Result<()> {
         ),
         (
             "03-organize-wide",
-            Some(Step::Organize),
-            false,
-            [1440.0, 900.0],
-        ),
-        (
-            "03b-organize-by-date-wide",
             Some(Step::Organize),
             false,
             [1440.0, 900.0],
@@ -129,8 +136,15 @@ fn main() -> anyhow::Result<()> {
             [900.0, 700.0],
         ),
     ];
-    for (name, step, review, size) in shots {
-        let folder = library.path().to_path_buf();
+    // Each scene reopens the same folder, which restores its saved session, so a
+    // scene that leaves staged folder changes must run last (see the end).
+    let shoot = |folder: &std::path::Path,
+                 name: &str,
+                 step: Option<Step>,
+                 review: bool,
+                 size: [f32; 2]|
+     -> anyhow::Result<()> {
+        let folder = folder.to_path_buf();
         let mut harness = Harness::builder()
             .with_size(egui::vec2(size[0], size[1]))
             .with_pixels_per_point(2.0)
@@ -144,13 +158,13 @@ fn main() -> anyhow::Result<()> {
             .state_mut()
             .gallery_show_filenames(!name.contains("no-names"));
         if let Some(step) = step {
-            harness.state_mut().gallery_step(*step);
+            harness.state_mut().gallery_step(step);
             settle(&mut harness);
             if name.contains("by-date") {
                 harness.state_mut().gallery_organize_by_date();
                 settle(&mut harness);
             }
-            harness.state_mut().gallery_review(*review);
+            harness.state_mut().gallery_review(review);
             settle(&mut harness);
             harness.state_mut().gallery_close_model_dialog();
             settle(&mut harness);
@@ -158,6 +172,10 @@ fn main() -> anyhow::Result<()> {
         let image = harness.render().map_err(|e| anyhow::anyhow!("{e}"))?;
         image.save(out.join(format!("{name}.png")))?;
         eprintln!("{name}");
+        Ok(())
+    };
+    for (name, step, review, size) in shots {
+        shoot(&root, name, *step, *review, *size)?;
     }
     // Dialogs over the Cull grid.
     for (name, open) in [
@@ -168,7 +186,7 @@ fn main() -> anyhow::Result<()> {
         ("17-cull-compare", Dialog::Compare),
         ("18-ai-models", Dialog::Models),
     ] {
-        let folder = library.path().to_path_buf();
+        let folder = root.clone();
         let mut harness = Harness::builder()
             .with_size(egui::vec2(1440.0, 900.0))
             .with_pixels_per_point(2.0)
@@ -222,6 +240,24 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .save(out.join("19-intro.png"))?;
     eprintln!("19-intro");
+    // Grouping by date stages folder changes, and the scenes above stage Trash
+    // marks. Each folder restores its own session, so use a separate copy.
+    let dated = tempfile::tempdir()?;
+    let dated_root = dated.path().join("Photos");
+    std::fs::create_dir(&dated_root)?;
+    for entry in std::fs::read_dir(&root)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            std::fs::copy(entry.path(), dated_root.join(entry.file_name()))?;
+        }
+    }
+    shoot(
+        &dated_root,
+        "03b-organize-by-date-wide",
+        Some(Step::Organize),
+        false,
+        [1440.0, 900.0],
+    )?;
     // The notice after a crash in the previous session.
     photosort::core::crash::write_report(
         &photosort::core::crash::directory(),
@@ -230,7 +266,7 @@ fn main() -> anyhow::Result<()> {
         "examples/ui_gallery.rs",
         "",
     )?;
-    let folder = library.path().to_path_buf();
+    let folder = root.clone();
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
         .with_pixels_per_point(2.0)
