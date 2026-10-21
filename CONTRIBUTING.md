@@ -47,10 +47,10 @@ cargo run --release -- --folder ~/photosort-scratch
 ```
 
 The AI models and ONNX Runtime are not in git. For the AI steps, put the runtime library
-in `resources/runtime/` (or set `ORT_DYLIB_PATH`) and the models in `resources/models/`.
-You can copy them from an existing `PhotoSort.app/Contents/Resources`, download DINOv2,
-SFace and the orientation model from Menu → AI models, or prepare the others with the
-recipes in [resources/ASSETS.md](resources/ASSETS.md); the face recipes start from
+in `resources/runtime/` (or set `ORT_DYLIB_PATH`). Menu → AI models downloads all seven
+models into the app's data folder. Alternatively, put them in `resources/models/`: copy
+them from an existing `PhotoSort.app/Contents/Resources`, or recreate the converted ones
+with the recipes in [resources/ASSETS.md](resources/ASSETS.md); the face recipes start from
 `assets/models/face_landmarker.task` in the `python-final` tag. `cargo run -- --diagnostics`
 reports what was found.
 
@@ -81,8 +81,12 @@ find models in `resources/models/`, not in the app's data folder, unless
 | `orientation.onnx` (deep-image-orientation-detection v2) | Sideways and upside-down photos | Fix Rotation |
 
 `resources/SHA256SUMS` pins the exact content of every model. **Menu → AI models** checks
-the installed copies, downloads the ones with a pinned public source and imports prepared
-files; [resources/ASSETS.md](resources/ASSETS.md) has the provenance and export recipes.
+the installed copies and downloads any of the seven: DINOv2, SFace and the orientation model
+from pinned upstream files, and the four converted exports from this repository's
+[`models-1` prerelease](https://github.com/duartebarbosadev/PhotoSort/releases/tag/models-1).
+Every download is verified by size and SHA-256 before it is installed, and nothing downloads
+unless you ask. The same panel restores a bundled copy or imports a prepared ONNX file;
+[resources/ASSETS.md](resources/ASSETS.md) has the provenance and export recipes.
 
 ONNX Runtime is loaded at run time and is never downloaded by the app. PhotoSort looks for
 it in this order:

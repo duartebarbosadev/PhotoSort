@@ -29,9 +29,11 @@ pub struct Asset {
     pub title: &'static str,
     pub purpose: &'static str,
     pub bytes: u64,
-    /// Direct download, when there is a public pinned file.
-    pub url: Option<&'static str>,
+    /// Direct download of the pinned file.
+    pub url: &'static str,
     pub license: &'static str,
+    /// Terms to read before downloading, shown beside the Download action.
+    pub download_note: Option<&'static str>,
     /// The upstream model or project page (resources/ASSETS.md).
     pub page: &'static str,
     /// Where the file comes from and what kind of model it is.
@@ -49,10 +51,9 @@ pub const ALL: [Asset; 7] = [
         title: "Scene and subject similarity",
         purpose: "Visual/Mixed Organize, Easy Delete, Pick Best and Cull",
         bytes: 88_532_934,
-        url: Some(
-            "https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/model.onnx",
-        ),
+        url: "https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/model.onnx",
         license: "Apache-2.0",
+        download_note: None,
         page: "https://huggingface.co/onnx-community/dinov2-small/tree/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d",
         origin: "Meta DINOv2 small (ViT-S/14), ONNX export by onnx-community, pinned revision",
         about: "Recognises what each photo shows, so similar shots and bursts can be grouped.",
@@ -65,8 +66,11 @@ pub const ALL: [Asset; 7] = [
         purpose: "Pick Best",
         // Basic-level ORT folding of the pinned export (examples/fold_model.rs).
         bytes: 534_515_358,
-        url: None,
+        url: "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-1/aesthetic.onnx",
         license: "AGPL-3.0 model card",
+        download_note: Some(
+            "This model is licensed under AGPL-3.0, unlike the others. Its licence and model card are on its Source page.",
+        ),
         page: "https://huggingface.co/cafeai/cafe_aesthetic/tree/48a343764f786abc1ca8aaddfcd60a688a70da9b",
         origin: "cafe_aesthetic (BEiT image classifier), exported to ONNX and folded for this app",
         about: "Rates how appealing a photo looks, to rank the candidates in Pick Best.",
@@ -78,8 +82,9 @@ pub const ALL: [Asset; 7] = [
         title: "Face detection",
         purpose: "People Organize, Easy Delete, Pick Best and Cull",
         bytes: 425_659,
-        url: None,
+        url: "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-1/face_detector.onnx",
         license: "MediaPipe / Apache-2.0",
+        download_note: None,
         page: "https://github.com/google-ai-edge/mediapipe",
         origin: "Google MediaPipe face detector from face_landmarker.task, converted to ONNX",
         about: "Finds the faces in each photo.",
@@ -92,8 +97,9 @@ pub const ALL: [Asset; 7] = [
         purpose: "People Organize, Easy Delete, Pick Best and Cull",
         // Pooling pads made explicit for Core ML (scripts/explicit_pads.py).
         bytes: 4_996_107,
-        url: None,
+        url: "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-1/face_landmarks_detector.onnx",
         license: "MediaPipe / Apache-2.0",
+        download_note: None,
         page: "https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf",
         origin: "Google MediaPipe Face Mesh V2, converted to ONNX",
         about: "Maps the points of each face, used for eyes and alignment.",
@@ -106,8 +112,9 @@ pub const ALL: [Asset; 7] = [
         purpose: "Closed-eye checks in Easy Delete, Pick Best and Cull",
         // MediaPipe face_blendshapes.tflite via scripts/convert_blendshapes.py.
         bytes: 1_884_171,
-        url: None,
+        url: "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-1/face_blendshapes.onnx",
         license: "MediaPipe / Apache-2.0",
+        download_note: None,
         page: "https://github.com/google-ai-edge/mediapipe",
         origin: "Google MediaPipe face blendshapes (52 expression scores), converted to ONNX",
         about: "Tells whether eyes are open or closed.",
@@ -119,10 +126,9 @@ pub const ALL: [Asset; 7] = [
         title: "Person recognition",
         purpose: "People Organize",
         bytes: 38_696_353,
-        url: Some(
-            "https://media.githubusercontent.com/media/opencv/opencv_zoo/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
-        ),
+        url: "https://media.githubusercontent.com/media/opencv/opencv_zoo/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
         license: "Apache-2.0",
+        download_note: None,
         page: "https://github.com/opencv/opencv_zoo/tree/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface",
         origin: "OpenCV Zoo SFace (MobileFaceNet), unmodified, pinned revision",
         about: "Recognises the same person across photos, for People folders in Organize.",
@@ -134,10 +140,9 @@ pub const ALL: [Asset; 7] = [
         title: "Orientation detection",
         purpose: "Fix Rotation suggestions",
         bytes: 80_578_424,
-        url: Some(
-            "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases/download/v2/orientation_model_v2_0.9882.onnx",
-        ),
+        url: "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases/download/v2/orientation_model_v2_0.9882.onnx",
         license: "MIT (upstream repository)",
+        download_note: None,
         page: "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases/tag/v2",
         origin: "deep-image-orientation-detection v2 release asset, unmodified",
         about: "Spots photos that are sideways or upside down.",
@@ -688,10 +693,27 @@ mod tests {
             assert!(names.insert(a.name));
             assert_eq!(a.checksum().len(), 64);
             assert!(!a.name.contains('/'));
-            if let Some(url) = a.url {
-                assert!(url.starts_with("https://"));
-            }
+            assert!(a.url.starts_with("https://"));
         }
+        // The converted exports have no upstream file; they are this
+        // repository's release assets, published under their own names.
+        for id in [Id::Aesthetic, Id::Detector, Id::Landmarks, Id::Blendshapes] {
+            let asset = id.asset();
+            assert_eq!(
+                asset.url,
+                format!(
+                    "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-1/{}",
+                    asset.name
+                )
+            );
+        }
+        assert!(
+            Id::Aesthetic
+                .asset()
+                .download_note
+                .unwrap()
+                .contains("AGPL-3.0")
+        );
         use super::super::jobs::AnalysisProfile::*;
         assert!(required(Technical).is_empty());
         assert_eq!(required(Visual), required(Mixed));

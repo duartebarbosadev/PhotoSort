@@ -7,9 +7,11 @@ each file; the app and the macOS packager verify against it.
 Large ONNX weights and native runtime libraries are not stored in Git (see `.gitignore`).
 A fresh clone gets them in one of four ways:
 
-- **In the app.** Menu → AI models downloads the pinned DINOv2, SFace and orientation files.
-  Downloads stream into private temporary files and are installed only after their exact
-  size and SHA-256 match. Nothing is downloaded automatically.
+- **In the app.** Menu → AI models downloads all seven models: DINOv2, SFace and orientation
+  from their pinned upstream files, and the aesthetic and MediaPipe exports from this
+  repository's `models-1` prerelease. Downloads stream into private temporary files and are
+  installed only after their exact size and SHA-256 match. Nothing is downloaded
+  automatically.
 - **Import.** The same panel imports a prepared ONNX file and verifies it against
   `SHA256SUMS` (for example, from another copy of a full app bundle).
 - **Download the converted exports.** The aesthetic and MediaPipe files that release
@@ -50,7 +52,9 @@ the aesthetic model. AGPL-3.0 then applies to that model file: ship its licence 
 card (both in `licenses/`) and offer the corresponding source of the shipped file, which
 is the pinned upstream revision plus `scripts/export_aesthetic.py` and
 `examples/fold_model.rs`. A release that cannot meet those terms should leave the model
-out; Pick Best then ranks without aesthetic scores.
+out; Pick Best then ranks without aesthetic scores. The same terms cover the copy that the
+app downloads from the `models-1` prerelease, whose notes name the licence; the model panel
+states it beside the download.
 
 Default builds link Exiv2, which is GPL-2.0-or-later (see
 [Native metadata library](#native-metadata-library)). Distributors should review the

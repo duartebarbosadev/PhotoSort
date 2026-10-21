@@ -8,7 +8,10 @@ use std::{
     time::{Duration, Instant},
 };
 fn wait(worker: &Worker) -> model_assets::State {
-    let until = Instant::now() + Duration::from_secs(240);
+    wait_within(worker, Duration::from_secs(240))
+}
+fn wait_within(worker: &Worker, limit: Duration) -> model_assets::State {
+    let until = Instant::now() + limit;
     loop {
         let state = worker.state();
         if !state.running {
@@ -102,6 +105,22 @@ fn pinned_orientation_download_installs_without_a_bundle_and_reuses_verification
     pinned_download(Id::Rotation);
 }
 
+#[test]
+#[cfg(feature = "model-downloads")]
+#[ignore = "Downloads the three pinned MediaPipe models (7.3 MB) from the models-1 release"]
+fn pinned_converted_face_model_downloads_install_without_a_bundle() {
+    for id in [Id::Detector, Id::Landmarks, Id::Blendshapes] {
+        pinned_download(id);
+    }
+}
+
+#[test]
+#[cfg(feature = "model-downloads")]
+#[ignore = "Downloads the pinned 534.5 MB aesthetic model from the models-1 release"]
+fn pinned_aesthetic_download_installs_without_a_bundle() {
+    pinned_download(Id::Aesthetic);
+}
+
 #[cfg(feature = "model-downloads")]
 fn pinned_download(id: Id) {
     let dir = tempfile::tempdir().unwrap();
@@ -121,7 +140,7 @@ fn pinned_download(id: Id) {
         Health::Missing
     ));
     worker.start(Work::Download(id)).unwrap();
-    let state = wait(&worker);
+    let state = wait_within(&worker, Duration::from_secs(1800));
     assert!(state.error.is_none(), "{:?}", state.error);
     let snapshot = state.snapshot.unwrap();
     let destination = dir.path().join("models").join(id.asset().name);

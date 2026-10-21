@@ -12,7 +12,9 @@ async fn transfer(
         .https_only(https_only)
         .connect_timeout(Duration::from_secs(15))
         .read_timeout(Duration::from_secs(30))
-        .timeout(Duration::from_secs(1800))
+        // At least 50 KB/s on average, so a slow but working connection can
+        // still finish the 535 MB aesthetic model.
+        .timeout(Duration::from_secs(1800).max(Duration::from_secs(asset.bytes / 50_000)))
         .build()?;
     let mut response = client.get(url).send().await?.error_for_status()?;
     ensure!(
@@ -32,10 +34,7 @@ pub(super) fn run(
     cancelled: &impl Fn() -> bool,
     progress: &impl Fn(u64),
 ) -> Result<Installed> {
-    let url = asset
-        .url
-        .context("This model is supplied in the app bundle; import a prepared copy")?;
-    run_url(asset, url, true, root, cancelled, progress)
+    run_url(asset, asset.url, true, root, cancelled, progress)
 }
 fn run_url(
     asset: &Asset,
