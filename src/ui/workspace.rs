@@ -1675,7 +1675,7 @@ impl PhotoSortApp {
     pub fn gallery_seed_reviews(&mut self) {
         use crate::core::delete_review::{Category, Entry};
         let ids: Vec<MediaId> = self.media.iter().map(|m| m.id).collect();
-        if ids.len() < 10 {
+        if ids.len() < 5 {
             return;
         }
         let entries = vec![
@@ -1716,10 +1716,11 @@ impl PhotoSortApp {
                 .map(|(i, id)| (*id, 5.0 + ((i * 7) % 5) as f64 * 0.6))
                 .collect(),
         };
-        self.pick_review.replace(
-            vec![cluster(1, &ids[0..5]), cluster(2, &ids[7..10])],
-            &mut self.decisions,
-        );
+        let mut clusters = vec![cluster(1, &ids[0..5])];
+        if ids.len() >= 10 {
+            clusters.push(cluster(2, &ids[7..10]));
+        }
+        self.pick_review.replace(clusters, &mut self.decisions);
         self.view_data_ready.insert(Step::PickBest);
         self.filter_dirty = true;
     }
