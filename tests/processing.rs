@@ -138,7 +138,7 @@ fn accepted_jobs_keep_their_thread_snapshot_and_reuse_measurements_after_a_chang
 fn backend_and_thread_snapshots_are_coherent_and_changes_remain_lazy() {
     use processing::Backend;
     let control = Control::default();
-    assert_eq!(control.snapshot_run().backend, Backend::Cpu);
+    assert_eq!(control.snapshot_run().backend, Backend::platform_default());
     control.configure(Preferences {
         backend: Backend::CoreMl,
         mode: Mode::Custom,
@@ -169,6 +169,15 @@ fn backend_choice_persists_and_old_preferences_preserve_cpu_execution() {
     use processing::Backend;
     let old: Preferences = serde_json::from_str(r#"{"mode":"Custom","custom_threads":1}"#).unwrap();
     assert_eq!(old.backend, Backend::Cpu);
+    // New installs use Automatic only where it has been verified.
+    assert_eq!(
+        Preferences::default().backend,
+        if cfg!(target_os = "macos") {
+            Backend::Auto
+        } else {
+            Backend::Cpu
+        }
+    );
     for backend in Backend::ALL {
         let preferences = Preferences {
             backend,

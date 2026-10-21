@@ -95,10 +95,11 @@ it in this order:
 The bundled runtime is ONNX Runtime 1.29.0. `photosort --diagnostics` shows which files
 were found, and `photosort --check-runtime` loads the runtime and runs every model.
 
-Settings selects the inference backend: CPU (the default), Automatic, Apple Core ML, NVIDIA
-CUDA or Windows DirectML. A backend that fails falls back to CPU with an explanation. Core
-ML can take minutes to prepare on first use; CUDA and DirectML are not verified on real
-hardware.
+Settings selects the inference backend: CPU, Automatic, Apple Core ML, NVIDIA CUDA or
+Windows DirectML. New installs default to Automatic on macOS (Core ML) and to CPU on Windows
+and Linux, where CUDA and DirectML are not yet verified on real hardware; saved preferences
+keep their choice. A backend that fails falls back to CPU with an explanation, per model.
+Core ML can take minutes to prepare on first use; prepared models are cached afterwards.
 
 ## Command-line options
 
