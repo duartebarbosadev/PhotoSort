@@ -36,6 +36,11 @@ impl PhotoSortApp {
                 stats,
             } => self.on_inspected(ctx, request, result, decoder_warning, stats),
             Event::AnalysisError { run, id, error } => self.on_analysis_error(run, id, error),
+            Event::RunError { run, error } => {
+                if self.analysis_run == Some(run) {
+                    self.on_error(error);
+                }
+            }
             Event::AssetError { id, preview, error } => self.on_asset_error(id, preview, error),
             Event::Analyzed {
                 run,

@@ -148,7 +148,7 @@ impl Store {
     pub fn rotation_key(source: &str, model: &str) -> String {
         blake3::hash(
             format!(
-                "rotation-v2-working2048-triangle416-crop384-imagenet-consensus021:{source}:{model}"
+                "rotation-v3-neutral2048-triangle416-crop384-imagenet-consensus021:{source}:{model}"
             )
             .as_bytes(),
         )

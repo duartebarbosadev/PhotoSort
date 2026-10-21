@@ -4,8 +4,9 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
 };
-/// CPU preserves low initialization cost. Acceleration is an explicit choice;
-/// Auto selects a provider for this platform and falls back per model.
+/// Auto selects a provider for this platform and falls back to CPU per model.
+/// `Default` stays CPU, the value preference files written before the backend
+/// setting existed must keep; new installs use [`Backend::platform_default`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Backend {
     #[default]
@@ -16,6 +17,16 @@ pub enum Backend {
     DirectMl,
 }
 impl Backend {
+    /// The backend for new installs: Automatic where it has been verified on
+    /// real hardware (macOS, Core ML with CPU fallback), CPU elsewhere until the
+    /// CUDA and DirectML paths are tested.
+    pub fn platform_default() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::Auto
+        } else {
+            Self::Cpu
+        }
+    }
     pub const ALL: [Self; 5] = [
         Self::Cpu,
         Self::Auto,
@@ -67,6 +78,8 @@ pub enum Mode {
 pub struct Preferences {
     pub mode: Mode,
     pub custom_threads: usize,
+    /// Missing from preference files that predate this setting; those keep CPU.
+    #[serde(default)]
     pub backend: Backend,
 }
 impl Default for Preferences {
@@ -74,7 +87,7 @@ impl Default for Preferences {
         Self {
             mode: Mode::Balanced,
             custom_threads: 2,
-            backend: Backend::default(),
+            backend: Backend::platform_default(),
         }
     }
 }
@@ -109,10 +122,11 @@ pub struct Control {
 impl Default for Control {
     fn default() -> Self {
         let available = available();
+        let preferences = Preferences::default();
         Self {
             requested: Arc::new(Mutex::new(RunConfig {
-                threads: Preferences::default().threads(available),
-                backend: Backend::default(),
+                threads: preferences.threads(available),
+                backend: preferences.backend,
             })),
             status: Default::default(),
             available,

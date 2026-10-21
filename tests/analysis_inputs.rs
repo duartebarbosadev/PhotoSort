@@ -331,7 +331,9 @@ fn cancelled_analysis_retires_without_errors_and_serves_display_from_shared_deco
             .event
         {
             Event::Analyzed { run: found, .. } if found == run => break,
-            Event::AnalysisError { error, .. } | Event::Error(error) => panic!("{error}"),
+            Event::AnalysisError { error, .. }
+            | Event::RunError { error, .. }
+            | Event::Error(error) => panic!("{error}"),
             _ => {}
         }
     }

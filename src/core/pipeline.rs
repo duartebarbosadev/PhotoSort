@@ -395,7 +395,17 @@ impl Pipeline {
         media: &Media,
         cancelled: impl Fn() -> bool + Sync,
     ) -> Result<Asset> {
-        self.load_image(media, false, &cancelled)
+        self.load_image(media, false, true, &cancelled)
+    }
+    /// The display-sized working image without the RAW display look. Model input
+    /// that must not depend on the display preference (rotation) uses this; it
+    /// shares the neutral disk proxy and memory entry with the Neutral look.
+    pub fn load_neutral_cancellable(
+        &mut self,
+        media: &Media,
+        cancelled: impl Fn() -> bool + Sync,
+    ) -> Result<Asset> {
+        self.load_image(media, false, false, &cancelled)
     }
     /// Neutral, bounded input shared by measurements and every model workflow.
     /// Display and analysis derive separate proxies from shared prepared pixels;
@@ -406,14 +416,17 @@ impl Pipeline {
         media: &Media,
         cancelled: impl Fn() -> bool + Sync,
     ) -> Result<Asset> {
-        self.load_image(media, true, &cancelled)
+        self.load_image(media, true, false, &cancelled)
     }
     fn load_image(
         &mut self,
         media: &Media,
         analysis: bool,
+        look: bool,
         cancelled: &(impl Fn() -> bool + Sync),
     ) -> Result<Asset> {
+        // Only display assets take the RAW look; analysis is always neutral.
+        let look = look && !analysis && self.enhanced(media);
         anyhow::ensure!(!cancelled(), "Image preparation cancelled");
         let source_key = Self::key(media)?;
         let key = if analysis {
@@ -422,10 +435,10 @@ impl Pipeline {
             source_key.clone()
         };
         // The disk proxy is always the neutral render; the look applies after.
-        let memory_key = if analysis {
-            key.clone()
-        } else {
+        let memory_key = if look {
             self.look_key(media, &key)
+        } else {
+            key.clone()
         };
         self.tick += 1;
         if let Some(entry) = self.cache.get_mut(&memory_key) {
@@ -520,7 +533,7 @@ impl Pipeline {
             !cancelled() && Self::key(media)? == source_key,
             "Photo changed or preparation cancelled"
         );
-        let decoded = if !analysis && self.enhanced(media) {
+        let decoded = if look {
             let mut rgba = decoded.to_rgba8();
             let levels = super::raw_look::Levels::measure(&rgba);
             self.raw_levels.insert(source_key.clone(), levels);
@@ -537,7 +550,11 @@ impl Pipeline {
             ))
         };
         if let Some(thumbnail) = &thumbnail {
-            let display_key = self.look_key(media, &source_key);
+            let display_key = if look {
+                self.look_key(media, &source_key)
+            } else {
+                source_key.clone()
+            };
             self.save_thumbnail(&display_key, thumbnail);
         }
         let pixels = Arc::new(decoded.to_rgba8());

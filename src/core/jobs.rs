@@ -74,6 +74,12 @@ pub enum Event {
         id: MediaId,
         error: String,
     },
+    /// A whole analysis run failed. Unlike `Error`, it names its run, so a
+    /// failure from a superseded run can never stop the run that replaced it.
+    RunError {
+        run: u64,
+        error: String,
+    },
     AssetError {
         id: MediaId,
         preview: bool,
