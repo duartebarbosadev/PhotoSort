@@ -53,6 +53,22 @@ impl PhotoSortApp {
         self.requested.retain(|(id, _)| !raw.contains(id));
         self.inspection_frames.clear();
     }
+    /// Loads the saved preferences. A file that cannot be read keeps the
+    /// defaults, says why, and is remembered as unreadable.
+    pub(super) fn load_preferences(&mut self, path: PathBuf) {
+        match Preferences::load(&path) {
+            Ok(preferences) => {
+                self.companions = preferences.keep_companions;
+                self.intro = super::intro::Intro::at_startup(&preferences, super::intro::AUTOPLAY);
+                self.preferences = preferences;
+            }
+            Err(e) => {
+                self.preferences_unreadable = true;
+                self.error = Some(format!("Preferences could not be loaded: {e}"));
+            }
+        }
+        self.preferences_path = Some(path);
+    }
     pub(super) fn save_preferences(&mut self) {
         if let Some(path) = &self.preferences_path
             && let Err(error) = self.runtime.io(IoWork::SavePreferences {
@@ -68,6 +84,7 @@ impl PhotoSortApp {
         next.recent_folders = self.preferences.recent_folders.clone();
         next.updates.last_attempt = self.preferences.updates.last_attempt;
         next.updates.repository = self.preferences.updates.repository.clone();
+        next.intro_shown = self.preferences.intro_shown;
         next.normalize();
         self.runtime.cache.configure(next.cache);
         self.runtime.processing.configure(next.processing);
@@ -161,6 +178,10 @@ impl PhotoSortApp {
                 }
                 if ui.button("Keyboard guide").clicked() {
                     self.help = true;
+                    ui.close();
+                }
+                if crate::core::playback::supported() && ui.button("Watch the intro").clicked() {
+                    self.watch_intro();
                     ui.close();
                 }
                 if ui.button("About PhotoSort").clicked() {

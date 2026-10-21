@@ -14,6 +14,8 @@ impl PhotoSortApp {
     /// Request quit once after the first UI frame and the configured delay.
     /// Reuses all departure guards and normal worker shutdown; never forces exit.
     pub fn with_smoke_test(mut self, delay: Duration) -> Self {
+        // Smoke runs must stay short and must not use up the first launch.
+        self.intro = super::intro::Intro::Off;
         self.smoke_exit = Some(SmokeExit {
             delay,
             deadline: None,

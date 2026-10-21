@@ -43,7 +43,8 @@ into XMP sidecars, so they carry over to Lightroom and other editors.
 ## Five steps
 
 The steps sit along the bottom of the window. Use only the ones you need, in any order.
-PhotoSort remembers where you left off in each folder.
+PhotoSort remembers where you left off in each folder. The first launch plays a 30-second
+intro to the steps; **Menu → Watch the intro** plays it again.
 
 | Step | What it's for |
 | --- | --- |

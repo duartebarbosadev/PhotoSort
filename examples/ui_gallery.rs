@@ -224,6 +224,25 @@ fn main() -> anyhow::Result<()> {
         .render()
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .save(out.join("00-welcome.png"))?;
+    // The first-run intro over the welcome screen, once the film shows a frame
+    // and the card has faded in.
+    harness.state_mut().gallery_intro();
+    for _ in 0..400 {
+        harness.step();
+        if harness.state().gallery_intro_ready() {
+            break;
+        }
+        pump_main();
+    }
+    for _ in 0..40 {
+        harness.step();
+        pump_main();
+    }
+    harness
+        .render()
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .save(out.join("19-intro.png"))?;
+    eprintln!("19-intro");
     // Grouping by date stages folder changes, and the scenes above stage Trash
     // marks. Each folder restores its own session, so use a separate copy.
     let dated = tempfile::tempdir()?;
@@ -271,6 +290,30 @@ enum Dialog {
     OrganizeEditor,
     Compare,
     Models,
+}
+
+/// AVFoundation finishes loading on the main run loop, which a headless
+/// harness never runs by itself (as in `video_probe`).
+fn pump_main() {
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::c_void;
+        #[link(name = "CoreFoundation", kind = "framework")]
+        unsafe extern "C" {
+            static kCFRunLoopDefaultMode: *const c_void;
+            fn CFRunLoopRunInMode(
+                mode: *const c_void,
+                seconds: f64,
+                return_after_source: u8,
+            ) -> i32;
+        }
+        // SAFETY: called on the main thread with the system's default mode.
+        unsafe {
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.025, 0);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    std::thread::sleep(Duration::from_millis(25));
 }
 
 /// Demo photos for the review scenes, derived from tests/samples and named as a

@@ -130,7 +130,8 @@ source, pass options after `--`, for example `cargo run --release -- --diagnosti
 
 `python3 scripts/package_macos.py` builds a release binary and copies it, `resources/`
 (including any models and ONNX Runtime there) and the linked native libraries with their
-license notices into a relocatable `target/PhotoSort.app`, then verifies its signature and
+license notices into a relocatable `target/PhotoSort.app`, renders `AppIcon.icns` from
+`resources/icons/app_icon.png` with `sips` and `iconutil`, then verifies its signature and
 resource manifest. `--output /path/to/PhotoSort.app` chooses another destination,
 `--native-imaging` bundles the libvips backend (see [libvips backend](#libvips-backend)), and
 `CARGO_TARGET_DIR` is honored (see [Build storage](#build-storage)).

@@ -67,6 +67,24 @@ fn preferences_report_corruption_and_unknown_versions_without_replacing_them() {
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
     }
 }
+#[test]
+fn the_intro_is_remembered_once_shown_and_older_files_have_not_seen_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("preferences.json");
+    // Written before the intro existed: the field is missing.
+    std::fs::write(&path, br#"[1, {"show_shortcuts": false}]"#).unwrap();
+    let older = Preferences::load(&path).unwrap();
+    assert!(!older.intro_shown && !older.show_shortcuts);
+    assert!(!Preferences::default().intro_shown);
+    Preferences {
+        intro_shown: true,
+        ..older
+    }
+    .save(&path)
+    .unwrap();
+    let saved = Preferences::load(&path).unwrap();
+    assert!(saved.intro_shown && !saved.show_shortcuts);
+}
 fn parse(args: &[&str]) -> Result<Options, String> {
     Options::parse(args.iter().map(OsString::from))
 }

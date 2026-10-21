@@ -14,6 +14,20 @@ pub fn initialize_native_application() -> Result<(), std::io::Error> {
     }
     Ok(())
 }
+/// The window and Dock icon. eframe gives it to the window system and, on
+/// macOS, to the application itself, so an unbundled binary shows it too.
+pub fn app_icon() -> Result<egui::IconData, image::ImageError> {
+    let image = image::load_from_memory_with_format(
+        include_bytes!("../../resources/icons/app_icon.png"),
+        image::ImageFormat::Png,
+    )?
+    .into_rgba8();
+    Ok(egui::IconData {
+        width: image.width(),
+        height: image.height(),
+        rgba: image.into_raw(),
+    })
+}
 struct Pending {
     requested: AtomicBool,
     #[cfg(any(target_os = "macos", test))]
@@ -98,6 +112,21 @@ impl Drop for QuitHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn app_icon_is_the_full_size_transparent_artwork() {
+        let icon = app_icon().unwrap();
+        assert_eq!((icon.width, icon.height), (1024, 1024));
+        assert_eq!(icon.rgba.len(), 1024 * 1024 * 4);
+        // Transparent corners: the Dock draws no square behind the artwork.
+        assert_eq!(icon.rgba[3], 0);
+        assert!(
+            icon.rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[3] == 255)
+        );
+    }
     #[test]
     fn repeated_native_requests_coalesce_and_can_be_requested_again_after_cancel() {
         let pending = Pending {
