@@ -281,6 +281,11 @@ Third-party components keep their own terms:
   package (LGPL).
 - The Inter font is licensed under the SIL Open Font License 1.1.
 
+Because default builds link Exiv2, released app binaries are distributed under the terms of
+the GNU General Public License, version 3. The source code itself remains Apache-2.0, and
+builds without the `metadata-native` feature (for example `--no-default-features`) contain
+no GPL code.
+
 See [resources/ASSETS.md](resources/ASSETS.md) for provenance and
 [resources/licenses/](resources/licenses/) for license texts. The macOS packager also
 copies the notices of bundled native libraries into the app.
