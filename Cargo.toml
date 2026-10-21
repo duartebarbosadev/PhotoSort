@@ -93,6 +93,8 @@ gst_video = { package = "gstreamer-video", version = "0.24", optional = true }
 libheif-rs = { version = "3.0", default-features = false, features = ["v1_23"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# mmap/munmap for image-sized buffers (see src/allocator.rs).
+libc = "0.2"
 wgpu = { version = "30", default-features = false, features = ["metal", "wgsl"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
