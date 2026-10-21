@@ -133,7 +133,9 @@ is needed. You can also use every step by hand, without AI.
 
 **Menu → AI models** shows which models are installed and downloads any that are missing,
 verifying every file. Nothing is downloaded automatically. Models run on the CPU by
-default; on a Mac, Settings can switch them to Apple's Core ML acceleration.
+default. **Settings → AI execution → Automatic** uses Apple's Core ML on a Mac, or NVIDIA
+CUDA and then DirectML on Windows (CUDA on Linux), whenever they are available, and falls
+back to the CPU otherwise. You can also pick one of them directly.
 
 ## Build from source
 
