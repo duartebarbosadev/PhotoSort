@@ -101,20 +101,14 @@ fn embedded_rotation_plan_keeps_its_destination_and_unapplied_rating_after_reloa
     assert!(!crate::core::metadata::sidecar(&path).exists());
     assert_eq!(app.rotation_review.pending_count(), 0);
 }
-fn smoke_frame(app: &mut PhotoSortApp, ctx: &egui::Context, time: f64) -> egui::FullOutput {
-    ctx.run_test(
-        egui::RawInput {
-            time: Some(time),
-            ..Default::default()
-        },
-        |ui| {
-            let ctx = &ui.ctx().clone();
-            {
-                let requested = app.smoke_close_requested(ctx);
-                app.handle_close_request(ctx, requested);
-            }
-        },
-    )
+fn smoke_frame(app: &mut PhotoSortApp, ctx: &egui::Context, now: Instant) -> egui::FullOutput {
+    ctx.run_test(egui::RawInput::default(), |ui| {
+        let ctx = &ui.ctx().clone();
+        {
+            let requested = app.smoke_close_requested_at(ctx, now);
+            app.handle_close_request(ctx, requested);
+        }
+    })
 }
 #[test]
 fn smoke_exit_starts_on_first_frame_and_requests_normal_close_once() {
@@ -124,32 +118,20 @@ fn smoke_exit_starts_on_first_frame_and_requests_normal_close_once() {
             .with_smoke_test(Duration::from_millis(200));
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    let first = ctx.run_test(
-        egui::RawInput {
-            time: Some(100.0),
-            ..Default::default()
-        },
-        |ui| app.update_workspace(ui, false),
-    );
+    let first = ctx.run_test(egui::RawInput::default(), |ui| {
+        app.update_workspace(ui, false)
+    });
     assert!(!app.close_authorized);
     assert!(
         first.viewport_output[&egui::ViewportId::ROOT].repaint_delay <= Duration::from_millis(200)
     );
-    let _ = ctx.run_test(
-        egui::RawInput {
-            time: Some(100.1),
-            ..Default::default()
-        },
-        |ui| app.update_workspace(ui, false),
-    );
+    let deadline = app.smoke_exit.as_ref().and_then(|s| s.deadline).unwrap();
+    assert!(!app.smoke_close_requested_at(&ctx, deadline - Duration::from_millis(100)));
     assert!(!app.close_authorized);
-    let last = ctx.run_test(
-        egui::RawInput {
-            time: Some(100.3),
-            ..Default::default()
-        },
-        |ui| app.update_workspace(ui, false),
-    );
+    std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+    let last = ctx.run_test(egui::RawInput::default(), |ui| {
+        app.update_workspace(ui, false)
+    });
     assert!(app.close_authorized && app.smoke_exit.is_none());
     assert!(
         last.viewport_output[&egui::ViewportId::ROOT]
@@ -177,13 +159,14 @@ fn smoke_exit_preserves_staged_changes_in_every_workflow_and_cancel_is_final() {
         );
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        smoke_frame(&mut app, &ctx, 0.0);
-        smoke_frame(&mut app, &ctx, 0.3);
+        let start = Instant::now();
+        smoke_frame(&mut app, &ctx, start);
+        smoke_frame(&mut app, &ctx, start + Duration::from_millis(300));
         assert!(!app.close_authorized);
         assert!(matches!(app.departure, Some(Destination::Close)));
         assert_eq!(app.decisions[&id].rating, Some(4));
         app.departure = None; // The existing dialog's Cancel action.
-        smoke_frame(&mut app, &ctx, 10.0);
+        smoke_frame(&mut app, &ctx, start + Duration::from_secs(10));
         assert!(!app.close_authorized && app.departure.is_none());
         assert_eq!(
             std::fs::read(dir.path().join("Before/a.jpg")).unwrap(),
@@ -202,8 +185,9 @@ fn smoke_exit_does_not_interrupt_active_file_work_or_apply_a_retry_plan() {
         }
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        smoke_frame(&mut app, &ctx, 0.0);
-        smoke_frame(&mut app, &ctx, 0.3);
+        let start = Instant::now();
+        smoke_frame(&mut app, &ctx, start);
+        smoke_frame(&mut app, &ctx, start + Duration::from_millis(300));
         assert!(!app.close_authorized);
         assert!(app.applying_plan.is_none());
         assert_eq!(app.busy, busy);
@@ -1351,4 +1335,156 @@ fn every_workflow_finishes_staged_moves_on_the_shared_worker_without_decoding() 
         assert_eq!(app.decisions[&MediaId::for_path(&to)].rating, Some(5));
         assert_eq!(app.stats.decodes, 0);
     }
+}
+/// Window state for a frame in which eframe runs only `App::logic`.
+fn hidden_input(minimized: bool) -> egui::RawInput {
+    let mut input = egui::RawInput::default();
+    let viewport = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+    viewport.minimized = Some(minimized);
+    viewport.occluded = Some(!minimized);
+    input
+}
+fn logic_frame(
+    ctx: &egui::Context,
+    input: &egui::RawInput,
+    logic: impl FnOnce(&egui::Context),
+) -> Vec<egui::ViewportCommand> {
+    let mut output = ctx.run_logic(input, logic);
+    output
+        .viewport_commands
+        .remove(&egui::ViewportId::ROOT)
+        .unwrap_or_default()
+}
+fn app_logic(
+    app: &mut PhotoSortApp,
+    ctx: &egui::Context,
+    input: &egui::RawInput,
+) -> Vec<egui::ViewportCommand> {
+    let mut frame = eframe::Frame::_new_kittest();
+    logic_frame(ctx, input, |ctx| eframe::App::logic(app, ctx, &mut frame))
+}
+#[test]
+fn smoke_exit_closes_an_occluded_or_minimized_window() {
+    // eframe skips `ui` for a hidden window, and egui's input time stays at
+    // the last shown frame. A smoke run started behind another app used to
+    // wait until its window was shown again.
+    for minimized in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app =
+            PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None)
+                .with_smoke_test(Duration::from_millis(50));
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        let input = hidden_input(minimized);
+        let commands = app_logic(&mut app, &ctx, &input);
+        assert!(!app.close_authorized && commands.is_empty());
+        std::thread::sleep(Duration::from_millis(60));
+        let commands = app_logic(&mut app, &ctx, &input);
+        assert!(app.close_authorized && app.smoke_exit.is_none());
+        assert!(commands.contains(&egui::ViewportCommand::Close));
+        // eframe ends the app on the next logic-only pass unless it is cancelled.
+        let mut closing = input.clone();
+        closing
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .events
+            .push(egui::ViewportEvent::Close);
+        let commands = app_logic(&mut app, &ctx, &closing);
+        assert!(!commands.contains(&egui::ViewportCommand::CancelClose));
+    }
+}
+#[test]
+fn shown_window_leaves_quit_to_the_frame_after_its_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app =
+        PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None)
+            .with_smoke_test(Duration::ZERO);
+    let ctx = egui::Context::default();
+    let mut input = hidden_input(false);
+    input
+        .viewports
+        .get_mut(&egui::ViewportId::ROOT)
+        .unwrap()
+        .occluded = Some(false);
+    let commands = app_logic(&mut app, &ctx, &input);
+    assert!(commands.is_empty() && !app.close_authorized && app.smoke_exit.is_some());
+}
+#[test]
+fn native_quit_in_a_hidden_window_closes_or_brings_the_prompt_forward() {
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    let input = hidden_input(true);
+    let (_dir, mut app) = fixture();
+    let commands = logic_frame(&ctx, &input, |ctx| app.update_hidden(ctx, true));
+    assert!(app.close_authorized);
+    assert!(commands.contains(&egui::ViewportCommand::Close));
+
+    let (_dir, mut app) = fixture();
+    let id = app.media[0].id;
+    app.decisions.insert(
+        id,
+        Decision {
+            rating: Some(4),
+            ..Default::default()
+        },
+    );
+    let commands = logic_frame(&ctx, &input, |ctx| app.update_hidden(ctx, true));
+    assert!(matches!(app.departure, Some(Destination::Close)) && !app.close_authorized);
+    assert!(!commands.contains(&egui::ViewportCommand::Close));
+    assert!(commands.contains(&egui::ViewportCommand::Minimized(false)));
+    assert!(commands.contains(&egui::ViewportCommand::Focus));
+    assert_eq!(app.decisions[&id].rating, Some(4));
+    // Without a new request, a hidden window with an open prompt stays put.
+    let commands = logic_frame(&ctx, &input, |ctx| app.update_hidden(ctx, false));
+    assert!(!commands.contains(&egui::ViewportCommand::Focus));
+}
+#[test]
+fn window_close_of_a_minimized_window_with_staged_changes_restores_the_prompt() {
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    let (_dir, mut app) = fixture();
+    let id = app.media[0].id;
+    app.decisions.insert(
+        id,
+        Decision {
+            rating: Some(4),
+            ..Default::default()
+        },
+    );
+    let mut input = hidden_input(true);
+    input
+        .viewports
+        .get_mut(&egui::ViewportId::ROOT)
+        .unwrap()
+        .events
+        .push(egui::ViewportEvent::Close);
+    let commands = logic_frame(&ctx, &input, |ctx| app.update_hidden(ctx, false));
+    assert!(matches!(app.departure, Some(Destination::Close)) && !app.close_authorized);
+    assert!(commands.contains(&egui::ViewportCommand::CancelClose));
+    assert!(!commands.contains(&egui::ViewportCommand::Close));
+    assert!(commands.contains(&egui::ViewportCommand::Minimized(false)));
+    assert!(commands.contains(&egui::ViewportCommand::Focus));
+    assert_eq!(app.decisions[&id].rating, Some(4));
+}
+#[test]
+fn hidden_window_keeps_receiving_worker_results() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("Library");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("a.jpg"), b"original bytes").unwrap();
+    let mut app =
+        PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None);
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    app.open(root);
+    assert!(app.scanning);
+    let input = hidden_input(false);
+    let until = Instant::now() + Duration::from_secs(5);
+    while app.scanning || app.catalog.is_none() {
+        app_logic(&mut app, &ctx, &input);
+        assert!(Instant::now() < until, "results waited for the window");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(app.media.len(), 1);
 }

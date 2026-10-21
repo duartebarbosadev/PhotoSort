@@ -246,23 +246,16 @@ mod tests {
             theme_install(&ctx);
             if smoke {
                 app = app.with_smoke_test(Duration::from_millis(200));
-                let _ = ctx.run_test(
-                    egui::RawInput {
-                        time: Some(0.0),
-                        ..Default::default()
-                    },
-                    |ui| {
-                        let ctx = &ui.ctx().clone();
-                        {
-                            assert!(!app.smoke_close_requested(ctx));
-                        }
-                    },
-                );
+                // The smoke run started 300 ms ago, so this frame requests quit.
+                let started = Instant::now() - Duration::from_millis(300);
+                let _ = ctx.run_test(egui::RawInput::default(), |ui| {
+                    let ctx = &ui.ctx().clone();
+                    {
+                        assert!(!app.smoke_close_requested_at(ctx, started));
+                    }
+                });
             }
-            let mut input = egui::RawInput {
-                time: Some(0.3),
-                ..Default::default()
-            };
+            let mut input = egui::RawInput::default();
             input.events.push(egui::Event::Key {
                 key: egui::Key::Enter,
                 physical_key: None,
