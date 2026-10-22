@@ -562,3 +562,187 @@ fn a_failure_from_a_superseded_run_does_not_stop_the_current_run() {
         Some("Similarity grouping failed: current")
     );
 }
+fn face_groups(labels: &[(MediaId, usize, &str)]) -> crate::core::regional::grouping::Output {
+    crate::core::regional::grouping::Output {
+        groups: labels.iter().map(|(id, group, _)| (*id, *group)).collect(),
+        folders: labels
+            .iter()
+            .map(|(id, _, label)| (*id, (*label).to_owned()))
+            .collect(),
+    }
+}
+fn faces_done(run: u64, groups: crate::core::regional::grouping::Output) -> Vec<Event> {
+    vec![
+        Event::FaceGroups { run, groups },
+        Event::AnalysisDone {
+            run,
+            stats: Default::default(),
+        },
+    ]
+}
+#[test]
+fn choosing_faces_starts_finding_faces_with_progress_or_says_why_it_waits() {
+    // The reported bug: choosing Faces changed the mode and nothing else.
+    let (_dir, mut app) = visual_fixture();
+    app.group_mode = GroupMode::Current;
+    app.analysis_run = None;
+    app.organize_run = None;
+    app.set_group_mode(GroupMode::Faces);
+    let run = app
+        .analysis_run
+        .expect("choosing Faces starts finding faces");
+    assert_eq!(app.organize_run, Some((run, GroupMode::Faces)));
+    assert!(
+        !app.organize_preview_requested,
+        "choosing a mode only groups"
+    );
+    assert_eq!(app.workflow_status(), "Finding faces · 0 of 3");
+    deliver(
+        &mut app,
+        vec![Event::Progress {
+            run,
+            done: 2,
+            total: 3,
+        }],
+    );
+    assert_eq!(app.workflow_status(), "Finding faces · 2 of 3");
+    // Choosing it again while it runs does not restart it.
+    app.set_group_mode(GroupMode::Faces);
+    assert_eq!(app.analysis_run, Some(run));
+    app.cancel_analysis();
+    assert_eq!(app.organize_halted, Some(GroupMode::Faces));
+    // Entering Organize again does not restart a cancelled grouping...
+    app.set_step(Step::Organize);
+    assert!(app.analysis_run.is_none());
+    // ...but choosing it again does.
+    app.set_group_mode(GroupMode::Faces);
+    assert!(app.analysis_run.is_some());
+    app.cancel_analysis();
+
+    // Another analysis is running: Faces waits for it and then starts.
+    let (_dir, mut app) = visual_fixture();
+    app.group_mode = GroupMode::Current;
+    app.organize_run = None;
+    app.pick_run = Some(41);
+    app.set_group_mode(GroupMode::Faces);
+    assert_eq!(app.analysis_run, Some(41));
+    assert_eq!(
+        app.workflow_status(),
+        "Grouping by faces starts when the current analysis finishes"
+    );
+    app.pick_run = None;
+    deliver(
+        &mut app,
+        vec![Event::AnalysisDone {
+            run: 41,
+            stats: Default::default(),
+        }],
+    );
+    let run = app.analysis_run.expect("Faces starts after the other run");
+    assert_eq!(app.organize_run, Some((run, GroupMode::Faces)));
+    app.cancel_analysis();
+
+    // Missing models: say so and point to AI models instead of staying silent.
+    let (_dir, mut app) = visual_fixture();
+    app.group_mode = GroupMode::Current;
+    app.analysis_run = None;
+    app.organize_run = None;
+    app.model_issue = Some(crate::core::model_assets::Issue {
+        missing: vec![crate::core::model_assets::Id::People],
+        ..Default::default()
+    });
+    app.set_group_mode(GroupMode::Faces);
+    assert!(app.analysis_run.is_none());
+    assert_eq!(
+        app.workflow_status(),
+        "Grouping by faces needs AI models · open AI models to set them up"
+    );
+    // Models reported missing by the worker after the start.
+    let (_dir, mut app) = visual_fixture();
+    app.group_mode = GroupMode::Faces;
+    app.organize_run = Some((41, GroupMode::Faces));
+    app.models_needed(
+        41,
+        crate::core::model_assets::Issue {
+            missing: vec![crate::core::model_assets::Id::People],
+            ..Default::default()
+        },
+    );
+    assert!(app.model_dialog && app.analysis_run.is_none());
+    assert_eq!(
+        app.workflow_status(),
+        "Grouping by faces needs AI models · download them in AI models"
+    );
+    app.runtime.shutdown();
+}
+#[test]
+fn finished_face_grouping_says_when_nothing_or_nobody_repeats() {
+    let (_dir, mut app) = visual_fixture();
+    app.group_mode = GroupMode::Faces;
+    app.organize_run = Some((41, GroupMode::Faces));
+    app.organize_preview_requested = true;
+    let ids: Vec<MediaId> = app.media.iter().map(|m| m.id).collect();
+    let none = face_groups(&[(ids[0], 0, "Unassigned"), (ids[1], 0, "Unassigned")]);
+    deliver(&mut app, faces_done(41, none));
+    assert_eq!(app.workflow_status(), "No faces found in these photos");
+    assert!(
+        !app.busy && !app.plan_open,
+        "no preview that only moves every photo into Unassigned"
+    );
+    assert!(
+        app.analysis_run.is_none(),
+        "a finished grouping is not rerun"
+    );
+
+    app.face_groups = None;
+    app.analysis_run = Some(42);
+    app.organize_run = Some((42, GroupMode::Faces));
+    let once = face_groups(&[(ids[0], 1, "Person 001"), (ids[1], 2, "Person 002")]);
+    deliver(&mut app, faces_done(42, once));
+    assert_eq!(
+        app.workflow_status(),
+        "Faces found, but no person appears in more than one photo"
+    );
+
+    app.face_groups = None;
+    app.analysis_run = Some(43);
+    app.organize_run = Some((43, GroupMode::Faces));
+    let twice = face_groups(&[(ids[0], 1, "Person 001"), (ids[1], 3, "People 001 + 002")]);
+    deliver(&mut app, faces_done(43, twice));
+    assert_eq!(
+        app.workflow_status(),
+        "People groups ready · 1 person in more than one photo"
+    );
+    app.runtime.shutdown();
+}
+#[test]
+fn a_failed_face_grouping_shows_the_error_and_waits_to_be_chosen_again() {
+    let (_dir, mut app) = visual_fixture();
+    app.group_mode = GroupMode::Faces;
+    app.organize_run = Some((41, GroupMode::Faces));
+    deliver(
+        &mut app,
+        vec![Event::RunError {
+            run: 41,
+            error: "Similarity grouping failed: broken".into(),
+        }],
+    );
+    assert_eq!(
+        app.error.as_deref(),
+        Some("Similarity grouping failed: broken")
+    );
+    assert_eq!(
+        app.workflow_status(),
+        "Grouping by faces failed · choose it again to retry"
+    );
+    assert!(app.analysis_run.is_none() && app.organize_run.is_none());
+    // Returning to Organize does not repeat the failure on its own.
+    app.error = None;
+    app.set_step(Step::Organize);
+    assert!(app.analysis_run.is_none() && app.error.is_none());
+    app.set_group_mode(GroupMode::Faces);
+    let run = app.analysis_run.expect("choosing Faces again retries");
+    assert_eq!(app.organize_run, Some((run, GroupMode::Faces)));
+    app.cancel_analysis();
+    app.runtime.shutdown();
+}

@@ -253,6 +253,9 @@ pub struct PhotoSortApp {
     face_groups: Option<crate::core::regional::grouping::Output>,
     mixed_labels: Option<HashMap<MediaId, String>>,
     organize_run: Option<(u64, GroupMode)>,
+    /// The automatic grouping whose last run was cancelled or failed; it is not
+    /// restarted on its own until the mode is chosen again or Preview moves.
+    organize_halted: Option<GroupMode>,
     organize_preview_requested: bool,
     file_names: HashMap<MediaId, String>,
     status: String,
@@ -488,6 +491,7 @@ impl PhotoSortApp {
             face_groups: None,
             mixed_labels: None,
             organize_run: None,
+            organize_halted: None,
             organize_preview_requested: false,
             file_names: HashMap::new(),
             status_scope: None,
@@ -676,6 +680,7 @@ impl PhotoSortApp {
         self.organize_departure = None;
         self.mixed_labels = None;
         self.organize_run = None;
+        self.organize_halted = None;
         self.organize_preview_requested = false;
         self.file_names.clear();
         self.analysis_run = None;
@@ -1008,7 +1013,7 @@ impl PhotoSortApp {
         }
         self.delete_run = None; // A cancelled pass never publishes partial pair choices.
         self.pick_run = None;
-        self.organize_run = None;
+        self.halt_organize_run();
         self.organize_preview_requested = false;
         self.analysis_run = None;
         self.progress = None;
@@ -1233,6 +1238,7 @@ impl PhotoSortApp {
         if self.scanning || self.busy {
             return;
         }
+        self.organize_halted = None;
         if !self.organize_metadata_ready() {
             self.start_metadata_index();
             return;

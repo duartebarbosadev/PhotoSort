@@ -13,6 +13,7 @@ impl PhotoSortApp {
                 !self.view_data_ready.contains(&Step::Rotation)
                     && self.rotation_review.ids().is_empty()
             }
+            Step::Organize => self.organize_grouping_wanted(),
             _ => false,
         };
         if unanalysed

@@ -384,6 +384,42 @@ pub fn group(
     }
     Ok((!cancelled()).then_some(output))
 }
+/// What a people grouping found, for the message shown when it finishes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Summary {
+    /// Photos with at least one recognized main person.
+    pub photos: usize,
+    /// Distinct people recognized.
+    pub people: usize,
+    /// People recognized in more than one photo.
+    pub repeated: usize,
+}
+/// Counts people from the folder names `group` produces ("Person 003",
+/// "People 001 + 003"); group 0 is the unassigned folder.
+pub fn summarize(output: &regional::grouping::Output) -> Summary {
+    let mut photos = 0;
+    let mut appearances = HashMap::<&str, usize>::new();
+    for (id, group) in &output.groups {
+        let Some(label) = output.folders.get(id).filter(|_| *group != 0) else {
+            continue;
+        };
+        let Some(people) = label
+            .strip_prefix("Person ")
+            .or_else(|| label.strip_prefix("People "))
+        else {
+            continue;
+        };
+        photos += 1;
+        for person in people.split(" + ") {
+            *appearances.entry(person).or_default() += 1;
+        }
+    }
+    Summary {
+        photos,
+        people: appearances.len(),
+        repeated: appearances.values().filter(|n| **n > 1).count(),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,5 +513,59 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(models.inferences, 0);
+    }
+    #[test]
+    fn summary_tells_no_faces_from_people_seen_only_once_or_more_often() {
+        use crate::core::model::MediaId;
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::new(temp.path().join("store"), false).unwrap();
+        let axis = |i: usize| {
+            let mut v = vec![0.; 128];
+            v[i] = 1.;
+            v
+        };
+        let record = |n: u64, people: &[usize]| {
+            let key =
+                (!people.is_empty()).then(|| Store::recognition_key(&format!("photo-{n}"), "test"));
+            if let Some(key) = &key {
+                let vectors = people.iter().map(|&i| axis(i)).collect();
+                store
+                    .put_recognition(key, &Recognition { vectors })
+                    .unwrap();
+            }
+            regional::grouping::Record {
+                id: MediaId(n),
+                key,
+                portrait: false,
+                date: None,
+            }
+        };
+        let summary = |records: &[regional::grouping::Record]| {
+            summarize(&group(records, &store, || false).unwrap().unwrap())
+        };
+        // No recognized face at all: every photo is unassigned.
+        assert_eq!(
+            summary(&[record(1, &[]), record(2, &[])]),
+            Summary::default()
+        );
+        // Two different people, each in one photo.
+        assert_eq!(
+            summary(&[record(3, &[0]), record(4, &[1]), record(5, &[])]),
+            Summary {
+                photos: 2,
+                people: 2,
+                repeated: 0
+            }
+        );
+        // A person alone and again in a group portrait appears twice, even
+        // though each destination folder holds a single photo.
+        assert_eq!(
+            summary(&[record(6, &[0]), record(7, &[0, 1])]),
+            Summary {
+                photos: 2,
+                people: 2,
+                repeated: 1
+            }
+        );
     }
 }
