@@ -149,7 +149,8 @@ impl PhotoSortApp {
             return;
         }
         self.comparison = self.selection.ordered(&self.media, &self.filtered);
-        self.review = true;
+        // Organize compares in its preview panel and keeps the board.
+        self.review = self.step != Step::Organize;
         if let Some(id) = self
             .active
             .filter(|id| self.comparison.contains(id))
@@ -304,7 +305,12 @@ impl PhotoSortApp {
                     return true;
                 }
                 egui::Key::Escape => {
-                    self.clear_library_selection();
+                    // A comparison returns to the single preview first.
+                    if self.active.is_some() && self.comparison_ids().len() > 1 {
+                        self.end_board_comparison();
+                    } else {
+                        self.clear_library_selection();
+                    }
                     return true;
                 }
                 _ => return false,

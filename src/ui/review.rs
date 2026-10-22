@@ -30,7 +30,8 @@ impl PhotoSortApp {
                 .unwrap_or_default();
         }
         if self.comparison.is_empty() {
-            self.active.into_iter().collect()
+            self.board_selection_comparison()
+                .unwrap_or_else(|| self.active.into_iter().collect())
         } else {
             self.comparison.clone()
         }
