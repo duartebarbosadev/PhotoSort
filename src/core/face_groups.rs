@@ -395,7 +395,8 @@ pub struct Summary {
     pub repeated: usize,
 }
 /// Counts people from the folder names `group` produces ("Person 003",
-/// "People 001 + 003"); group 0 is the unassigned folder.
+/// "People 001 + 003"); group 0 holds photos without a recognized person,
+/// which Organize keeps in place.
 pub fn summarize(output: &regional::grouping::Output) -> Summary {
     let mut photos = 0;
     let mut appearances = HashMap::<&str, usize>::new();
