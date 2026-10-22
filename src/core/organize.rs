@@ -310,6 +310,10 @@ impl Draft {
     pub fn folders(&self) -> &BTreeSet<String> {
         &self.folders
     }
+    /// Folders created by hand, which stay even while empty.
+    pub fn created_folders(&self) -> &BTreeSet<String> {
+        &self.explicit
+    }
     pub fn create_folder(&mut self, parent: &str, name: &str) -> Result<String> {
         ensure!(
             self.folders.contains(parent),

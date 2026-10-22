@@ -816,6 +816,11 @@ impl PhotoSortApp {
             .comparison
             .iter()
             .position(|other| *other == id)
+            .or_else(|| {
+                self.board_selection_comparison()?
+                    .iter()
+                    .position(|other| *other == id)
+            })
             .unwrap_or(0) as u64;
         self.view_started = Instant::now();
     }
@@ -1169,11 +1174,14 @@ impl PhotoSortApp {
             GroupMode::Faces => self
                 .face_groups
                 .as_ref()
+                .filter(|groups| groups.groups.get(&media.id).is_some_and(|&g| g != 0))
                 .and_then(|groups| groups.folders.get(&media.id))
                 .cloned()
                 .unwrap_or_else(|| {
                     if media.kind == MediaKind::Video {
                         "Video · kept in place".into()
+                    } else if self.face_groups.is_some() {
+                        "No person found · kept in place".into()
                     } else {
                         "Analyze to group faces".into()
                     }
@@ -1787,6 +1795,18 @@ impl PhotoSortApp {
             self.set_active(first);
         }
         self.review = true;
+    }
+    /// Selects the first `count` shown photos, as Shift+arrows would.
+    pub fn gallery_select(&mut self, count: usize) {
+        let ids: Vec<_> = self
+            .filtered
+            .iter()
+            .take(count)
+            .map(|i| self.media[*i].id)
+            .collect();
+        for (n, id) in ids.into_iter().enumerate() {
+            self.select_library(id, false, n > 0);
+        }
     }
     pub fn gallery_about(&mut self) {
         self.about = true;

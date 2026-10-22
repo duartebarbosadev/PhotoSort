@@ -525,8 +525,8 @@ impl PhotoSortApp {
                     _ => "Visual groups ready · review destinations before applying".into(),
                 };
                 self.set_organize_status(completed, message + &self.failure_note());
-                // Without a single recognized face the preview would only move
-                // every photo into "Unassigned"; the message is the result.
+                // Without a single recognized face every photo stays in place, so
+                // a preview would move nothing; the message is the result.
                 let preview = std::mem::take(&mut self.organize_preview_requested)
                     && faces.is_none_or(|summary| summary.photos > 0);
                 if preview

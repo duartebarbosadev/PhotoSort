@@ -1393,11 +1393,13 @@ impl PhotoSortApp {
                             .visual_groups
                             .as_ref()
                             .is_some_and(|groups| groups.contains_key(&m.id)))
+                    // Photos without a recognized person (group 0) stay in place.
                     && (self.group_mode != GroupMode::Faces
                         || self
                             .face_groups
                             .as_ref()
-                            .is_some_and(|groups| groups.groups.contains_key(&m.id)))
+                            .and_then(|groups| groups.groups.get(&m.id))
+                            .is_some_and(|&group| group != 0))
                     && (self.group_mode != GroupMode::Mixed
                         || self
                             .mixed_labels

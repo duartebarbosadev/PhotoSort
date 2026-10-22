@@ -589,7 +589,7 @@ impl PhotoSortApp {
                 "Dates and similarity are analyzed when you choose this grouping. Your files stay unchanged until Apply."
             }),
             GroupMode::Faces => Some(
-                "Groups photos by the main people; finding faces starts when you choose Faces. Group portraits get one shared folder, such as People 001 + 003. Unclear matches stay unassigned. Apply moves the files.",
+                "Groups photos by the main people; finding faces starts when you choose Faces. Group portraits get one shared folder, such as People 001 + 003. Photos without a recognized person and videos stay in place. Apply moves the files.",
             ),
             GroupMode::Visual => Some(
                 "Select photos with Cmd/Ctrl-click or Shift-click, then use Scenes to correct groups. Analysis starts when you choose this grouping. Ungrouped photos and videos stay in place.",

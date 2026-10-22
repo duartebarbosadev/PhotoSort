@@ -681,13 +681,24 @@ fn finished_face_grouping_says_when_nothing_or_nobody_repeats() {
     app.group_mode = GroupMode::Faces;
     app.organize_run = Some((41, GroupMode::Faces));
     app.organize_preview_requested = true;
-    let ids: Vec<MediaId> = app.media.iter().map(|m| m.id).collect();
+    let photos: Vec<&Media> = app
+        .media
+        .iter()
+        .filter(|m| m.kind == MediaKind::Photo)
+        .collect();
+    let ids: Vec<MediaId> = photos.iter().map(|m| m.id).collect();
+    let first = photos[0].clone();
     let none = face_groups(&[(ids[0], 0, "Unassigned"), (ids[1], 0, "Unassigned")]);
     deliver(&mut app, faces_done(41, none));
     assert_eq!(app.workflow_status(), "No faces found in these photos");
     assert!(
+        app.organize_labels().is_empty(),
+        "photos without a recognized person stay in place"
+    );
+    assert_eq!(app.label_for(&first), "No person found · kept in place");
+    assert!(
         !app.busy && !app.plan_open,
-        "no preview that only moves every photo into Unassigned"
+        "no preview when nothing would move"
     );
     assert!(
         app.analysis_run.is_none(),
@@ -697,6 +708,15 @@ fn finished_face_grouping_says_when_nothing_or_nobody_repeats() {
     app.face_groups = None;
     app.analysis_run = Some(42);
     app.organize_run = Some((42, GroupMode::Faces));
+    let some = face_groups(&[(ids[0], 1, "Person 001"), (ids[1], 0, "Unassigned")]);
+    deliver(&mut app, faces_done(42, some));
+    let labels = app.organize_labels();
+    assert_eq!(labels.get(&ids[0]).map(String::as_str), Some("Person 001"));
+    assert!(!labels.contains_key(&ids[1]), "only recognized people move");
+
+    app.face_groups = None;
+    app.analysis_run = Some(44);
+    app.organize_run = Some((44, GroupMode::Faces));
     let once = face_groups(&[(ids[0], 1, "Person 001"), (ids[1], 2, "Person 002")]);
     deliver(&mut app, faces_done(42, once));
     assert_eq!(

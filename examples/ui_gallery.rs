@@ -78,6 +78,12 @@ fn main() -> anyhow::Result<()> {
             [1440.0, 900.0],
         ),
         (
+            "03c-organize-compare-wide",
+            Some(Step::Organize),
+            false,
+            [1440.0, 900.0],
+        ),
+        (
             "04-easy-delete-wide",
             Some(Step::EasyDelete),
             true,
@@ -170,6 +176,10 @@ fn main() -> anyhow::Result<()> {
             settle(&mut harness);
             harness.state_mut().gallery_close_model_dialog();
             settle(&mut harness);
+            if name.contains("compare") {
+                harness.state_mut().gallery_select(3);
+                settle(&mut harness);
+            }
         }
         let image = harness.render().map_err(|e| anyhow::anyhow!("{e}"))?;
         image.save(out.join(format!("{name}.png")))?;
