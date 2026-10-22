@@ -1,13 +1,15 @@
 use super::*;
 use crate::core::browsing::{Query, Seed, tree};
+use crate::test_support::worker_patience;
 fn settle(app: &mut PhotoSortApp) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + worker_patience();
     loop {
+        let expired = Instant::now() >= deadline;
         app.refilter_browse();
         if app.browse_run.is_none() {
             break;
         }
-        assert!(Instant::now() < deadline);
+        assert!(!expired);
         std::thread::sleep(Duration::from_millis(1));
     }
 }
@@ -477,14 +479,15 @@ fn empty_filtered_scope_keeps_navigation_available_and_other_workflows_stay_isol
         navigator: app.navigator.clone(),
         ..Default::default()
     });
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + worker_patience();
     loop {
+        let expired = Instant::now() >= deadline;
         if let Some(result) = app.runtime.browsing.take_result() {
             assert_eq!(result.run, run);
             app.browse_tree = result.tree.map(Arc::new);
             break;
         }
-        assert!(Instant::now() < deadline);
+        assert!(!expired);
         std::thread::sleep(Duration::from_millis(1));
     }
     app.filter_dirty = false;

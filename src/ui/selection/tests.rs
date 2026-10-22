@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::worker_patience;
 fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
     let dir = tempfile::tempdir().unwrap();
     let mut app =
@@ -28,13 +29,14 @@ fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
     (dir, app)
 }
 fn settle(app: &mut PhotoSortApp) {
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = Instant::now() + worker_patience();
     loop {
+        let expired = Instant::now() >= until;
         app.refilter();
         if app.browse_run.is_none() {
             break;
         }
-        assert!(Instant::now() < until);
+        assert!(!expired);
         std::thread::sleep(Duration::from_millis(1));
     }
 }

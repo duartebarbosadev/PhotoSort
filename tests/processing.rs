@@ -1,3 +1,5 @@
+#[path = "../src/test_support.rs"]
+mod test_support;
 use photosort::core::{
     models::Models,
     processing::{self, Control, Mode, Preferences},
@@ -101,7 +103,7 @@ fn accepted_jobs_keep_their_thread_snapshot_and_reuse_measurements_after_a_chang
             mode: Mode::Maximum,
             ..Default::default()
         });
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + test_support::worker_patience();
         loop {
             assert!(Instant::now() < deadline, "Worker timed out");
             match rt.events.recv_timeout(Duration::from_millis(200)) {

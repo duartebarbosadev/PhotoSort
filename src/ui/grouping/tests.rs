@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::worker_patience;
 fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
     let dir = tempfile::tempdir().unwrap();
     let mut app =
@@ -40,16 +41,17 @@ fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
     (dir, app)
 }
 fn settle(app: &mut PhotoSortApp) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + worker_patience();
     let ctx = egui::Context::default();
     theme_install(&ctx);
     loop {
+        let expired = Instant::now() >= deadline;
         app.poll(&ctx);
         app.refilter();
         if !app.busy && app.group_task.is_none() && app.browse_run.is_none() && !app.filter_dirty {
             break;
         }
-        assert!(Instant::now() < deadline, "{:?}", app.error);
+        assert!(!expired, "{:?}", app.error);
         std::thread::sleep(Duration::from_millis(1));
     }
     assert!(app.error.is_none(), "{:?}", app.error);
@@ -302,8 +304,9 @@ fn real_application_reopen_restores_groups_and_bookmark_without_ai() {
     let mut app =
         PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None);
     app.scan_folder(catalog.root.clone());
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + worker_patience();
     loop {
+        let expired = Instant::now() >= deadline;
         app.poll(&egui::Context::default());
         app.refilter();
         app.restore_bookmark();
@@ -321,7 +324,7 @@ fn real_application_reopen_restores_groups_and_bookmark_without_ai() {
         {
             break;
         }
-        assert!(Instant::now() < deadline);
+        assert!(!expired);
         std::thread::sleep(Duration::from_millis(1));
     }
     assert_eq!(app.manual_groups.len(), 2);
@@ -374,7 +377,7 @@ fn every_workflow_preserves_both_namespaces_on_save_exit_and_folder_reset() {
         let mut app =
             PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None);
         app.scan_folder(catalog.root.clone());
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + worker_patience();
         while app.scanning || app.busy {
             app.poll(&egui::Context::default());
             assert!(app.error.is_none(), "{:?}", app.error);

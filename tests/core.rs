@@ -1,3 +1,5 @@
+#[path = "../src/test_support.rs"]
+mod test_support;
 use image::{DynamicImage, Rgba, RgbaImage};
 use photosort::core::{
     analysis::{self, Thresholds},
@@ -365,7 +367,7 @@ fn switching_folders_discards_old_generation_results() {
     runtime.io(IoWork::Scan(first.path().to_owned())).unwrap();
     let current = runtime.next_epoch();
     runtime.io(IoWork::Scan(second.path().to_owned())).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + test_support::worker_patience();
     let mut opened = false;
     while Instant::now() < deadline {
         if let Ok(event) = runtime.events.recv_timeout(Duration::from_millis(100)) {

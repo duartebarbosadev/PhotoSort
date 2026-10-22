@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::worker_patience;
 fn app() -> PhotoSortApp {
     let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
     app.step = Step::Organize;
@@ -334,7 +335,7 @@ fn visual_preview_ignores_technical_groups_waits_once_and_plans_only_verified_me
             stats: Default::default(),
         }],
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + worker_patience();
     while app.busy {
         assert!(Instant::now() < deadline);
         app.poll(&egui::Context::default());
@@ -370,7 +371,7 @@ fn empty_visual_results_are_complete_and_never_move_videos_or_failed_photos() {
         app.busy && app.analysis_run.is_none(),
         "Empty complete results must not restart AI"
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + worker_patience();
     while app.busy {
         assert!(Instant::now() < deadline);
         app.poll(&egui::Context::default());
@@ -516,7 +517,7 @@ fn current_folders_default_to_in_place_and_do_not_invent_root_moves() {
     assert_eq!(PathBuf::from(&app.output), folder.path());
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + worker_patience();
     while app.scanning && Instant::now() < deadline {
         app.poll(&ctx);
         std::thread::sleep(Duration::from_millis(5));

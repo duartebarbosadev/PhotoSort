@@ -1,3 +1,5 @@
+#[path = "../src/test_support.rs"]
+mod test_support;
 use chrono::{DateTime, Local};
 use photosort::core::{
     browsing::{self, Options, Sort},
@@ -169,10 +171,7 @@ fn real_encoded_movie_recording_time() {
 #[test]
 fn video_metadata_index_reuses_one_owner_across_repeated_requests() {
     use photosort::core::jobs::{Event, Runtime};
-    use std::{
-        sync::Arc,
-        time::{Duration, Instant},
-    };
+    use std::{sync::Arc, time::Instant};
     let temp = tempfile::tempdir().unwrap();
     for i in 0..65 {
         movie(&temp.path().join(format!("{i:03}.mp4")), 1_700_000_000 + i);
@@ -182,11 +181,14 @@ fn video_metadata_index_reuses_one_owner_across_repeated_requests() {
     let runtime = Runtime::new(|| {});
     for _ in 0..2 {
         let run = runtime.index_metadata(items.clone()).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + test_support::worker_patience();
         let mut found = 0;
         loop {
             assert!(Instant::now() < deadline);
-            let envelope = runtime.events.recv_timeout(Duration::from_secs(3)).unwrap();
+            let envelope = runtime
+                .events
+                .recv_timeout(test_support::worker_patience())
+                .unwrap();
             if let Event::MetadataBatch {
                 run: current,
                 items: batch,

@@ -1,3 +1,5 @@
+#[path = "../src/test_support.rs"]
+mod test_support;
 use photosort::core::{
     browsing::{self, Filter, Options, Query, RatingFilter, Seed, Sort, Update, Worker},
     catalog::Catalog,
@@ -27,13 +29,14 @@ fn catalog(count: usize) -> Arc<Catalog> {
     })
 }
 fn receive(worker: &Worker, run: u64) -> browsing::ResultSet {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + test_support::worker_patience();
     loop {
+        let expired = Instant::now() >= deadline;
         if let Some(result) = worker.take_result() {
             assert_eq!(result.run, run, "obsolete query was published");
             return result;
         }
-        assert!(Instant::now() < deadline, "view query timed out");
+        assert!(!expired, "view query timed out");
         std::thread::sleep(Duration::from_millis(1));
     }
 }

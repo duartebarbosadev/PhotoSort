@@ -1,3 +1,5 @@
+#[path = "../src/test_support.rs"]
+mod test_support;
 use photosort::core::{
     catalog::Catalog,
     jobs::{Event, IoWork, Runtime},
@@ -146,7 +148,7 @@ fn corrupt_view_file_cannot_prevent_scanning_or_session_loading() {
     fs::write(path, b"broken view").unwrap();
     let mut runtime = Runtime::with_cache(|| {}, dir.path().join("cache"));
     runtime.io(IoWork::Scan(catalog.root.clone())).unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = Instant::now() + test_support::worker_patience();
     let mut warning = false;
     let mut opened = false;
     while Instant::now() < until && !opened {

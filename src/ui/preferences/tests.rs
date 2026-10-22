@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::worker_patience;
 #[test]
 fn settings_errors_are_bounded_and_dismissible_without_hiding_footer_or_losing_draft() {
     for size in [egui::vec2(600., 500.), egui::vec2(1440., 990.)] {
@@ -183,10 +184,10 @@ fn cache_folder_settings_uses_injected_location_in_every_workflow_without_extra_
                     ],
                 );
             }
-            let request = received.recv_timeout(Duration::from_secs(5)).unwrap();
+            let request = received.recv_timeout(worker_patience()).unwrap();
             assert_eq!(request.path, cache);
             assert_eq!(request.action, Action::OpenFolder);
-            let deadline = Instant::now() + Duration::from_secs(5);
+            let deadline = Instant::now() + worker_patience();
             while app.runtime.desktop.running() {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(2));
@@ -410,7 +411,7 @@ fn clearing_shared_caches_preserves_every_workflows_review_and_bookmark_state() 
         app.stats.resident_bytes = 123;
         app.stats.detail_bytes = 456;
         assert!(app.runtime.cache.request(true));
-        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = Instant::now() + worker_patience();
         while app.runtime.cache.status().busy {
             assert!(Instant::now() < deadline);
             app.poll(&egui::Context::default());

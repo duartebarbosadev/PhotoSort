@@ -1,3 +1,5 @@
+#[path = "../src/test_support.rs"]
+mod test_support;
 use photosort::core::{
     browsing::{self, Options, RatingFilter, Sort},
     catalog::Catalog,
@@ -7,11 +9,7 @@ use photosort::core::{
     model::*,
     pipeline::Pipeline,
 };
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 fn media(id: u64, name: &str) -> Media {
     Media {
         id: MediaId(id),
@@ -230,10 +228,13 @@ fn metadata_worker_batches_reuses_results_and_cancels_independently_of_rendering
     for pass in 0..2 {
         let run = runtime.index_metadata(items.clone()).unwrap();
         let mut counts = vec![];
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + test_support::worker_patience();
         loop {
             assert!(Instant::now() < deadline);
-            let e = runtime.events.recv_timeout(Duration::from_secs(2)).unwrap();
+            let e = runtime
+                .events
+                .recv_timeout(test_support::worker_patience())
+                .unwrap();
             if let Event::MetadataBatch {
                 run: r,
                 items: batch,
@@ -262,7 +263,7 @@ fn metadata_worker_batches_reuses_results_and_cancels_independently_of_rendering
     loop {
         if let Event::MetadataBatch { run, .. } = runtime
             .events
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(test_support::worker_patience())
             .unwrap()
             .event
             && run == old
@@ -273,10 +274,13 @@ fn metadata_worker_batches_reuses_results_and_cancels_independently_of_rendering
     runtime.cancel_metadata();
     let epoch = runtime.next_epoch();
     let new = runtime.index_metadata(Arc::new(vec![])).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + test_support::worker_patience();
     loop {
         assert!(Instant::now() < deadline);
-        let e = runtime.events.recv_timeout(Duration::from_secs(1)).unwrap();
+        let e = runtime
+            .events
+            .recv_timeout(test_support::worker_patience())
+            .unwrap();
         if let Event::MetadataBatch {
             run, done, total, ..
         } = e.event
@@ -292,7 +296,10 @@ fn metadata_worker_batches_reuses_results_and_cancels_independently_of_rendering
         .image(ImageWork::Asset(items[0].clone(), true))
         .unwrap();
     loop {
-        let e = runtime.events.recv_timeout(Duration::from_secs(2)).unwrap();
+        let e = runtime
+            .events
+            .recv_timeout(test_support::worker_patience())
+            .unwrap();
         if let Event::AssetError { id, .. } = e.event {
             assert_eq!(id, items[0].id);
             break;

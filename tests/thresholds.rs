@@ -1,3 +1,5 @@
+#[path = "../src/test_support.rs"]
+mod test_support;
 use photosort::core::{
     analysis::{Analysis, Thresholds},
     catalog::Catalog,
@@ -94,7 +96,7 @@ fn repeated_worker_analysis_uses_new_thresholds_without_repeating_measurement_de
             .unwrap();
         settings.blur = 1000.0; // Changing a future settings value cannot mutate the accepted run.
         assert_eq!(settings.blur, 1000.0);
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + test_support::worker_patience();
         let mut received = false;
         loop {
             assert!(Instant::now() < deadline, "Analysis did not complete");

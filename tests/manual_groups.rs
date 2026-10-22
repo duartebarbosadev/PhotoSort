@@ -1,3 +1,5 @@
+#[path = "../src/test_support.rs"]
+mod test_support;
 use photosort::core::{
     catalog::Catalog,
     jobs::{Event, IoWork, Runtime},
@@ -228,7 +230,7 @@ fn video_unknown_targets_and_cancellation_do_not_change_the_previous_snapshot() 
     assert_eq!(previous.len(), 2);
 }
 fn result(runtime: &mut Runtime) -> manual_groups::Resolved {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + test_support::worker_patience();
     loop {
         match runtime.events.recv_timeout(Duration::from_millis(20)) {
             Ok(e) => match e.event {

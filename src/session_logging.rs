@@ -191,6 +191,7 @@ impl<W: Write> Write for Capped<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::worker_patience;
 
     #[test]
     fn opt_in_preserves_existing_files_and_flushes_filtered_utf8_records() {
@@ -299,16 +300,14 @@ mod tests {
         });
         let errors = writer.error_counter();
         writer.write_all(b"first").unwrap();
-        ready
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .unwrap();
+        ready.recv_timeout(worker_patience()).unwrap();
         // A separate producer gives the test a deadline if backpressure regresses.
         let producer = std::thread::spawn(move || {
             for _ in 0..QUEUE_LIMIT + 17 {
                 writer.write_all(b"event").unwrap();
             }
         });
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + worker_patience();
         while !producer.is_finished() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }

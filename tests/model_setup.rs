@@ -1,3 +1,5 @@
+#[path = "../src/test_support.rs"]
+mod test_support;
 use photosort::core::{
     model_assets::{self, Health, Id, Work, Worker},
     models,
@@ -191,7 +193,7 @@ fn missing_explicit_orientation_model_is_reported_before_any_photo_decode() {
     let run = runtime
         .orient(Arc::new(vec![media]), dir.path().join("missing.onnx"))
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + test_support::worker_patience();
     loop {
         assert!(Instant::now() < deadline);
         match runtime.events.recv_timeout(Duration::from_millis(20)) {

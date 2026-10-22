@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::worker_patience;
 fn app(step: Step) -> PhotoSortApp {
     let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
     app.root = Some("/absent/library".into());
@@ -152,7 +153,7 @@ fn organize_mode_location_reuses_one_metadata_run_and_cached_results() {
         assert!(app.view_shortcut(egui::Key::Num5, egui::Modifiers::ALT));
         assert_eq!(app.metadata_run, Some(run));
     }
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + worker_patience();
     while app.metadata_run.is_some() {
         app.poll(&ctx);
         assert!(Instant::now() < deadline, "Metadata did not finish");

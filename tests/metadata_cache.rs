@@ -1,4 +1,6 @@
 //! Metadata persistence belongs to the shared image owner, including worker restart.
+#[path = "../src/test_support.rs"]
+mod test_support;
 use photosort::core::{
     cache::{self, Limits},
     catalog::Catalog,
@@ -7,7 +9,7 @@ use photosort::core::{
     model::Media,
     pipeline::Pipeline,
 };
-use std::{cell::Cell, fs, path::Path, sync::Arc, time::Duration};
+use std::{cell::Cell, fs, path::Path, sync::Arc};
 
 fn fixture(root: &Path) -> Media {
     let path = root.join("photo.png");
@@ -211,7 +213,7 @@ fn metadata_worker_restart_uses_disk_without_decoding() {
                 stats,
             } = rt
                 .events
-                .recv_timeout(Duration::from_secs(10))
+                .recv_timeout(test_support::worker_patience())
                 .unwrap()
                 .event
             {

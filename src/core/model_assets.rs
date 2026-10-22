@@ -603,6 +603,7 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::worker_patience;
     const ABC: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     fn count(root: &Path) -> usize {
         std::fs::read_dir(root.join("models")).unwrap().count()
@@ -733,7 +734,7 @@ mod tests {
         assert!(!worker.state().running);
         assert!(worker.state().snapshot.is_none());
         worker.start(Work::Inspect).unwrap();
-        let until = Instant::now() + Duration::from_secs(5);
+        let until = Instant::now() + worker_patience();
         while worker.state().running {
             assert!(Instant::now() < until);
             std::thread::sleep(Duration::from_millis(1));

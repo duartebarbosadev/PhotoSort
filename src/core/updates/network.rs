@@ -58,6 +58,7 @@ pub(super) fn check(source: &Source, current: &str, cancelled: &AtomicBool) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::worker_patience;
     use std::{
         io::{Read, Write},
         net::TcpListener,
@@ -146,7 +147,7 @@ mod tests {
                     })
                 })
                 .unwrap();
-            received.recv_timeout(Duration::from_secs(2)).unwrap();
+            received.recv_timeout(worker_patience()).unwrap();
             let start = Instant::now();
             worker.shutdown();
             assert!(start.elapsed() < Duration::from_millis(600));

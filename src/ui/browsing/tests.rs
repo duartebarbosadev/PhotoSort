@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::worker_patience;
 #[test]
 fn metadata_cancel_survives_browse_completion_between_pointer_down_and_up() {
     for width in [640.0, 1440.0] {
@@ -67,13 +68,14 @@ fn metadata_cancel_survives_browse_completion_between_pointer_down_and_up() {
     }
 }
 fn settle(app: &mut PhotoSortApp) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + worker_patience();
     loop {
+        let expired = Instant::now() >= deadline;
         app.refilter();
         if app.browse_run.is_none() {
             return;
         }
-        assert!(Instant::now() < deadline, "Browse worker did not finish");
+        assert!(!expired, "Browse worker did not finish");
         std::thread::sleep(Duration::from_millis(1));
     }
 }
@@ -152,7 +154,7 @@ fn cull_indexes_once_without_decoding_and_keeps_richer_metadata_and_staged_ratin
     );
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + worker_patience();
     while app.metadata_run.is_some() && Instant::now() < deadline {
         app.poll(&ctx);
         std::thread::sleep(Duration::from_millis(2));
@@ -194,7 +196,7 @@ fn cancelled_metadata_batches_do_not_change_a_different_workflow() {
     assert!(app.metadata_run.is_none());
     assert_eq!(app.stats.decodes, 0);
     app.set_step(Step::Cull);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + worker_patience();
     while app.metadata_run.is_some() && Instant::now() < deadline {
         app.poll(&ctx);
         std::thread::sleep(Duration::from_millis(2));

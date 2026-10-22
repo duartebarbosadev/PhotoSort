@@ -357,6 +357,7 @@ mod tests {
 #[cfg(all(test, any(target_os = "macos", feature = "portable-video")))]
 mod playback_tests {
     use super::*;
+    use crate::test_support::worker_patience;
 
     fn input(events: Vec<egui::Event>) -> egui::RawInput {
         egui::RawInput {
@@ -391,7 +392,7 @@ mod playback_tests {
         let _ = ctx.run_test(input(events), |ui| app.update_workspace(ui, false));
     }
     fn saved(root: &std::path::Path) -> Preferences {
-        let until = Instant::now() + Duration::from_secs(5);
+        let until = Instant::now() + worker_patience();
         loop {
             if let Ok(preferences) = Preferences::load(&root.join("preferences.json"))
                 && preferences.intro_shown
@@ -429,7 +430,7 @@ mod playback_tests {
         let Intro::Playing(film) = &app.intro else {
             unreachable!()
         };
-        let until = Instant::now() + Duration::from_secs(3);
+        let until = Instant::now() + worker_patience();
         while !film.player.snapshot().ready {
             assert!(Instant::now() < until);
             std::thread::sleep(Duration::from_millis(2));

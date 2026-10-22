@@ -1,4 +1,6 @@
 #![cfg(feature = "native-imaging")]
+#[path = "../src/test_support.rs"]
+mod test_support;
 use image::{DynamicImage, Rgba, RgbaImage};
 use photosort::core::{
     catalog::Catalog,
@@ -222,7 +224,7 @@ fn image_actor_discards_old_epochs_and_reuses_inspection_across_workflows() {
             submitted.elapsed() < Duration::from_secs(1),
             "UI request performed blocking image work"
         );
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + test_support::worker_patience();
         loop {
             assert!(
                 Instant::now() < deadline,
