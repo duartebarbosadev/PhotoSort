@@ -37,16 +37,12 @@ fn cycles_collisions_root_and_invalid_names_leave_draft_unchanged() {
     assert!(d.rename_folder("trip", "trips").is_err());
     assert!(d.rename_folder("", "root").is_err());
     assert!(d.create_parent("trip", "trips").is_err());
-    for name in [
-        "",
-        ".",
-        "..",
-        "../outside",
-        "/absolute",
-        "a\\b",
-        "a:b",
-        " spaced ",
-    ] {
+    let mut invalid = vec!["", ".", "..", "../outside", "/absolute", "a\\b", " spaced "];
+    // Only Linux allows a `:` in new names.
+    if cfg!(any(windows, target_os = "macos")) {
+        invalid.push("a:b");
+    }
+    for name in invalid {
         assert!(d.create_folder("", name).is_err(), "{name}");
     }
     assert_eq!(before, d);

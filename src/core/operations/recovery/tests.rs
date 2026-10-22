@@ -1792,7 +1792,7 @@ fn filename_amendment_rejects_invalid_names_collisions_and_cancellation_atomical
     let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
     let pointer = fs::read(store.pointer(&context.root)).unwrap();
     let journal = fs::read(store.directory.join(&restored.ticket.journal)).unwrap();
-    for name in [
+    let mut invalid = vec![
         "",
         ".",
         "..",
@@ -1800,11 +1800,18 @@ fn filename_amendment_rejects_invalid_names_collisions_and_cancellation_atomical
         "a/b",
         "a\\b",
         " trailing ",
-        "trailing.",
-        "bad:name",
         "b",
         "a",
-    ] {
+    ];
+    // New names follow the platform: only Windows drops trailing dots, and
+    // only Linux allows a `:`.
+    if cfg!(windows) {
+        invalid.push("trailing.");
+    }
+    if cfg!(any(windows, target_os = "macos")) {
+        invalid.push("bad:name");
+    }
+    for name in invalid {
         assert!(
             store
                 .amend_destination(

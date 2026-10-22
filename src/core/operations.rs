@@ -581,25 +581,10 @@ pub fn decisions_plan_with_metadata(
     })
 }
 
+/// Clean a name PhotoSort creates (a generated grouping or a typed name) for
+/// this platform. Never apply it to a name read from the library.
 pub fn safe_component(value: &str) -> String {
-    let clean: String = value
-        .chars()
-        .map(|c| {
-            if c.is_control() || "/\\:*?\"<>|".contains(c) {
-                '_'
-            } else {
-                c
-            }
-        })
-        .collect();
-    // Leading dots are valid names, not navigation. Trimming them would
-    // silently rename existing hidden folders in an unchanged Current plan.
-    let clean = clean.trim().trim_end_matches('.');
-    if clean.is_empty() {
-        "Unsorted".into()
-    } else {
-        clean.chars().take(100).collect()
-    }
+    super::names::NameRules::CURRENT.sanitize(value)
 }
 /// Cheap, filesystem-free departure check. The worker still builds the exact
 /// collision-safe plan before asking the user to resolve changes.
@@ -626,11 +611,7 @@ pub fn organize_changes_pending(
             path.parent() != Some(folder_destination(output, label).as_path())
                 || names
                     .get(id)
-                    .filter(|name| !name.trim().is_empty())
-                    .is_some_and(|name| {
-                        path.file_stem().and_then(|s| s.to_str())
-                            != Some(safe_component(name).as_str())
-                    })
+                    .is_some_and(|name| super::organize::requested_stem(path, name).is_some())
         })
     })
 }
@@ -813,11 +794,8 @@ pub fn organize_plan_with_layout_cancellable(
         .iter()
         .filter_map(|(source, target)| {
             let adjusted = casing.rebase(&folder_destination(&catalog.root, source));
-            let adjusted = adjusted
-                .strip_prefix(&catalog.root)
-                .ok()?
-                .to_string_lossy()
-                .replace('\\', "/");
+            let adjusted =
+                super::names::relative_label(adjusted.strip_prefix(&catalog.root).ok()?)?;
             (adjusted != *target).then(|| (adjusted, target.clone()))
         })
         .collect();
@@ -837,8 +815,14 @@ pub fn organize_plan_with_layout_cancellable(
 }
 pub(crate) fn folder_destination(output: &Path, label: &str) -> PathBuf {
     let mut path = output.to_path_buf();
+    // Labels name existing folders verbatim, including ones like `23:Dec`.
+    // Only a component that cannot be a single folder name is cleaned.
     for component in label.split('/').filter(|c| !c.is_empty()) {
-        path.push(safe_component(component));
+        if super::names::is_single_component(component) {
+            path.push(component);
+        } else {
+            path.push(safe_component(component));
+        }
     }
     path
 }

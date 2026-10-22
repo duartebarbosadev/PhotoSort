@@ -119,6 +119,12 @@ enum Command {
     Drop(Selection, String),
     RenameFile(MediaId, String),
 }
+// Tree keys are built from labels, so a `\` inside a macOS or Linux folder name
+// must stay part of that name rather than become a separator.
+fn folder_label(path: &std::path::Path) -> String {
+    crate::core::names::relative_label(path)
+        .unwrap_or_else(|| path.to_string_lossy().replace('\\', "/"))
+}
 fn folder_title(path: &str) -> &str {
     if path.is_empty() {
         "Library root"
@@ -295,7 +301,9 @@ impl Editor {
             let mut candidates = self.catalog.directories.iter().filter(|folder| {
                 folder
                     .strip_prefix(&self.catalog.root)
-                    .is_ok_and(|relative| relative.to_string_lossy().replace('\\', "/") == original)
+                    .is_ok_and(|relative| {
+                        crate::core::names::relative_label(relative).as_deref() == Some(original)
+                    })
             });
             let first = candidates.next()?;
             candidates.next().is_none().then(|| first.clone())
@@ -904,7 +912,7 @@ impl Editor {
                     .iter()
                     .filter_map(|&i| match &self.tree.nodes[i].key {
                         Key::Folder(path) if !path.as_os_str().is_empty() => {
-                            Some(path.to_string_lossy().replace('\\', "/"))
+                            Some(folder_label(path))
                         }
                         _ => None,
                     })
@@ -915,7 +923,7 @@ impl Editor {
         let Key::Folder(anchor) = &self.tree.nodes[self.visible_folders[start]].key else {
             unreachable!()
         };
-        self.folder_anchor = Some(anchor.to_string_lossy().replace('\\', "/"));
+        self.folder_anchor = Some(folder_label(anchor));
         self.folder = path.into();
         self.folder_edit = None;
         self.folder_name_focus = false;
@@ -972,7 +980,7 @@ impl Editor {
                     && let Key::Folder(path) = result.key
                 {
                     self.select_folder(
-                        &path.to_string_lossy().replace('\\', "/"),
+                        &folder_label(&path),
                         modifiers.command || modifiers.ctrl,
                         modifiers.shift,
                     );
@@ -989,7 +997,7 @@ impl Editor {
                     let i = self.visible_folders[row];
                     let node = &self.tree.nodes[i];
                     let Key::Folder(path) = &node.key else { unreachable!() };
-                    let path = path.to_string_lossy().replace('\\', "/");
+                    let path = folder_label(path);
                     let (count, depth) = (node.count, node.depth);
                     ui.push_id(("folder", &path), |ui| {
                         ui.horizontal(|ui| {
@@ -1143,11 +1151,7 @@ impl Editor {
                     let Key::Folder(path) = &node.key else {
                         unreachable!()
                     };
-                    ui.selectable_value(
-                        &mut self.parent,
-                        path.to_string_lossy().replace('\\', "/"),
-                        &node.label,
-                    );
+                    ui.selectable_value(&mut self.parent, folder_label(path), &node.label);
                 }
             });
         ui.horizontal_wrapped(|ui| {
@@ -1404,7 +1408,14 @@ impl PhotoSortApp {
                             .as_ref()
                             .is_some_and(|labels| labels.contains_key(&m.id)))
             })
-            .map(|m| (m.id, self.label_for(m)))
+            .filter_map(|m| {
+                let label = if self.group_mode == GroupMode::Current {
+                    self.current_label(m)?
+                } else {
+                    self.label_for(m)
+                };
+                Some((m.id, label))
+            })
             .collect();
         if let Some(catalog) = &self.catalog {
             crate::core::organize::include_inventory(catalog, &mut labels);
