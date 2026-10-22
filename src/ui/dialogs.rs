@@ -12,10 +12,12 @@ impl PhotoSortApp {
             let (headline, details) = error_parts(&error);
             let models = error.to_ascii_lowercase().contains("model");
             egui::Window::new("Something needs attention")
+                .id(egui::Id::new(ERROR_DIALOG))
                 .open(&mut open)
-                .resizable(true)
+                .resizable(false)
                 .collapsible(false)
-                .default_width(460.0)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .default_width((ctx.content_rect().width() - 64.0).clamp(280.0, 460.0))
                 .show(ctx, |ui| {
                     ui.add(egui::Label::new(RichText::new(headline).color(INK)).wrap());
                     if let Some(details) = details {
@@ -256,6 +258,9 @@ impl PhotoSortApp {
     }
 }
 
+/// The "Something needs attention" window, centred like the other dialogs.
+pub(super) const ERROR_DIALOG: &str = "error_dialog";
+
 /// Splits "What failed: low-level cause" into a readable headline and the
 /// technical remainder, which stays available under Details.
 fn error_parts(error: &str) -> (String, Option<String>) {
@@ -268,7 +273,7 @@ fn error_parts(error: &str) -> (String, Option<String>) {
             Some(error.to_owned()),
         );
     }
-    if first.chars().count() <= 160 && !error.contains('\n') {
+    if first.chars().count() <= 240 && !error.contains('\n') {
         return (error.to_owned(), None);
     }
     let short: String = first.chars().take(140).collect();
@@ -290,6 +295,15 @@ mod error_tests {
             "Folder is no longer available"
         );
         assert!(error_parts("Folder is no longer available").1.is_none());
+        // A folder message with a long path is still shown whole.
+        let folder = std::path::PathBuf::from(format!("/Volumes/{}", "y".repeat(200)));
+        for problem in [
+            crate::core::catalog::Unavailable::Missing,
+            crate::core::catalog::Unavailable::NoPermission,
+        ] {
+            let message = problem.message(&folder);
+            assert_eq!(error_parts(&message), (message, None));
+        }
         let long = "x".repeat(400);
         let (headline, details) = error_parts(&long);
         assert!(headline.chars().count() <= 141 && details.is_some());

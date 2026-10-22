@@ -199,7 +199,17 @@ impl Files<'_> {
     fn scan(&self, root: PathBuf) -> anyhow::Result<()> {
         let epoch = self.epoch;
         tracing::info!(epoch, root = %root.display(), "folder discovery started");
-        let root = std::fs::canonicalize(root)?;
+        let root = match crate::core::catalog::open_root(&root) {
+            Ok(root) => root,
+            Err((problem, error)) => {
+                tracing::warn!(epoch, root = %root.display(), ?problem, %error, "photo folder unavailable");
+                self.send(Event::FolderUnavailable {
+                    folder: root,
+                    problem,
+                });
+                return Ok(());
+            }
+        };
         let restored =
             operations::recovery::Store::standard().restore(&root, &|| self.cancelled())?;
         let catalog = Catalog::scan(
