@@ -11,14 +11,12 @@ use std::path::{Component, Path};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NameRules {
     Windows,
-    Mac,
+    /// macOS and Linux.
     Unix,
 }
 impl NameRules {
     pub const CURRENT: Self = if cfg!(windows) {
         Self::Windows
-    } else if cfg!(target_os = "macos") {
-        Self::Mac
     } else {
         Self::Unix
     };
@@ -26,7 +24,7 @@ impl NameRules {
     fn illegal(self, c: char) -> bool {
         match self {
             Self::Windows => c.is_control() || "/\\:*?\"<>|".contains(c),
-            Self::Mac | Self::Unix => c == '/' || c == '\0',
+            Self::Unix => c == '/' || c == '\0',
         }
     }
     /// Characters replaced in names PhotoSort creates. Existing names keep
@@ -34,11 +32,11 @@ impl NameRules {
     /// - Control characters are legal on macOS and Linux but invisible.
     /// - A `\` is legal on macOS and Linux but is a folder separator on
     ///   Windows, so a new name with one would read as two folders there.
-    /// - A `:` is legal on APFS, but Finder shows it as `/` and the classic
-    ///   macOS APIs treat it as a separator, so new names on macOS avoid it.
-    ///   Linux tools show it as typed, so Linux keeps it.
+    /// - A `:` is legal on APFS and Linux, but Finder shows it as `/`, classic
+    ///   macOS APIs treat it as a separator, and exFAT, SMB and Windows refuse
+    ///   it, so new names never use it and generated names match everywhere.
     fn replaced(self, c: char) -> bool {
-        c.is_control() || c == '\\' || self.illegal(c) || (self == Self::Mac && c == ':')
+        c.is_control() || c == '\\' || c == ':' || self.illegal(c)
     }
     fn trim(self, value: &str) -> &str {
         let value = value.trim();
@@ -107,28 +105,24 @@ mod tests {
         use NameRules::*;
         for (rules, input, expected) in [
             (Windows, "23:Dec", "23_Dec"),
-            (Mac, "23:Dec", "23_Dec"),
-            (Unix, "23:Dec", "23:Dec"),
+            (Unix, "23:Dec", "23_Dec"),
             (Windows, r#"a?b*c"d<e>f|g\h"#, "a_b_c_d_e_f_g_h"),
-            (Mac, r#"a?b*c"d<e>f|g\h"#, r#"a?b*c"d<e>f|g_h"#),
             (Unix, r#"a?b*c"d<e>f|g\h"#, r#"a?b*c"d<e>f|g_h"#),
             (Windows, "a/b", "a_b"),
-            (Mac, "a/b", "a_b"),
             (Unix, "a/b", "a_b"),
             (Unix, "nul\0tab\t", "nul_tab_"),
             (Windows, "Mr. ", "Mr"),
-            (Mac, "Mr. ", "Mr."),
             (Unix, " Mr. ", "Mr."),
             (Windows, "..", "Unsorted"),
-            (Mac, "..", "Unsorted"),
+            (Unix, "..", "Unsorted"),
             (Unix, ".", "Unsorted"),
-            (Mac, "  ", "Unsorted"),
-            (Mac, ".hidden", ".hidden"),
+            (Unix, "  ", "Unsorted"),
+            (Unix, ".hidden", ".hidden"),
         ] {
             assert_eq!(rules.sanitize(input), expected, "{rules:?} {input:?}");
         }
         let long = format!("{}{}", "a".repeat(99), " b");
-        for rules in [Windows, Mac, Unix] {
+        for rules in [Windows, Unix] {
             let once = rules.sanitize(&long);
             assert_eq!(once, "a".repeat(99));
             assert_eq!(rules.sanitize(&once), once, "{rules:?} is idempotent");

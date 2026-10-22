@@ -1800,16 +1800,13 @@ fn filename_amendment_rejects_invalid_names_collisions_and_cancellation_atomical
         "a/b",
         "a\\b",
         " trailing ",
+        "bad:name",
         "b",
         "a",
     ];
-    // New names follow the platform: only Windows drops trailing dots, and
-    // only Linux allows a `:`.
+    // Only Windows drops trailing dots from new names.
     if cfg!(windows) {
         invalid.push("trailing.");
-    }
-    if cfg!(any(windows, target_os = "macos")) {
-        invalid.push("bad:name");
     }
     for name in invalid {
         assert!(
