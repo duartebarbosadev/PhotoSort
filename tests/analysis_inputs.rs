@@ -1,4 +1,6 @@
 //! Shared neutral inputs must not inherit display resizing or RAW enhancements.
+#[path = "../src/test_support.rs"]
+mod test_support;
 use photosort::core::{catalog::Catalog, metadata, pipeline::Pipeline};
 use std::{
     sync::Arc,
@@ -304,7 +306,7 @@ fn seven_samples_use_neutral_inputs_and_raw_embedded_or_fallback_paths() -> anyh
 #[test]
 fn cancelled_analysis_retires_without_errors_and_serves_display_from_shared_decode() {
     use photosort::core::jobs::{AnalysisProfile, Event, ImageWork, Runtime};
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
     let root = tempfile::tempdir().unwrap();
     image::RgbImage::from_pixel(200, 100, image::Rgb([40, 80, 120]))
         .save(root.path().join("photo.png"))
@@ -321,12 +323,12 @@ fn cancelled_analysis_retires_without_errors_and_serves_display_from_shared_deco
             AnalysisProfile::Technical,
         )
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + test_support::worker_patience();
     loop {
         assert!(Instant::now() < deadline);
         match runtime
             .events
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(test_support::worker_patience())
             .unwrap()
             .event
         {
@@ -343,7 +345,7 @@ fn cancelled_analysis_retires_without_errors_and_serves_display_from_shared_deco
         assert!(Instant::now() < deadline);
         match runtime
             .events
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(test_support::worker_patience())
             .unwrap()
             .event
         {

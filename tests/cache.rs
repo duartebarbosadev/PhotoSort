@@ -1,3 +1,5 @@
+#[path = "../src/test_support.rs"]
+mod test_support;
 use photosort::core::{
     cache::{self, Limits},
     catalog::Catalog,
@@ -148,13 +150,14 @@ fn lowered_memory_limits_evict_without_redecoding_and_zero_disk_disables_writes(
     assert_eq!(cache::maintain(&disk, None, || false).unwrap().files, 0);
 }
 fn wait_cache(runtime: &Runtime) -> cache::Status {
-    let until = Instant::now() + Duration::from_secs(10);
+    let until = Instant::now() + test_support::worker_patience();
     loop {
+        let expired = Instant::now() >= until;
         let status = runtime.cache.status();
         if !status.busy {
             return status;
         }
-        assert!(Instant::now() < until);
+        assert!(!expired);
         std::thread::sleep(Duration::from_millis(5));
     }
 }
@@ -166,7 +169,7 @@ fn analyze(
     loop {
         match runtime
             .events
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(test_support::worker_patience())
             .unwrap()
             .event
         {

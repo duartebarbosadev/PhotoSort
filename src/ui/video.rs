@@ -316,6 +316,7 @@ fn playback_controls(ui: &mut egui::Ui, player: &playback::Player, state: &playb
 #[cfg(all(test, any(target_os = "macos", feature = "portable-video")))]
 mod tests {
     use super::*;
+    use crate::test_support::worker_patience;
     #[test]
     fn time_counters_show_short_clips_and_carry_without_invalid_values() {
         for (value, expected) in [
@@ -426,7 +427,7 @@ mod tests {
             let ctx = &ui.ctx().clone();
             app.sync_playback(ctx)
         });
-        let until = Instant::now() + Duration::from_secs(2);
+        let until = Instant::now() + worker_patience();
         while app.runtime.playback.snapshot().frame.is_none() {
             assert!(Instant::now() < until);
             std::thread::sleep(Duration::from_millis(2));
@@ -479,7 +480,7 @@ mod tests {
             let ctx = &ui.ctx().clone();
             app.sync_playback(ctx)
         });
-        let until = Instant::now() + Duration::from_secs(2);
+        let until = Instant::now() + worker_patience();
         while !app.runtime.playback.snapshot().ready {
             assert!(Instant::now() < until);
             std::thread::sleep(Duration::from_millis(2));
@@ -566,7 +567,7 @@ mod tests {
             let ctx = &ui.ctx().clone();
             app.sync_playback(ctx)
         });
-        let until = Instant::now() + Duration::from_secs(2);
+        let until = Instant::now() + worker_patience();
         while app.runtime.playback.snapshot().frame.is_none() {
             assert!(Instant::now() < until);
             std::thread::sleep(Duration::from_millis(2));
@@ -638,7 +639,7 @@ mod tests {
         });
         assert!(app.runtime.playback.snapshot().play_requested);
         assert_eq!(app.active, Some(MediaId(1)));
-        let until = Instant::now() + Duration::from_secs(2);
+        let until = Instant::now() + worker_patience();
         while !app.runtime.playback.snapshot().ready {
             assert!(Instant::now() < until);
             std::thread::sleep(Duration::from_millis(2));

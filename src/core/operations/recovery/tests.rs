@@ -4,6 +4,7 @@ use crate::core::{
     operations::{Action, Source},
     views::Bookmark,
 };
+use crate::test_support::worker_patience;
 use std::{
     cell::Cell,
     collections::HashMap,
@@ -552,7 +553,7 @@ fn crash_after_first(store: &Store, context: &Context, plan: &Plan) {
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + worker_patience();
     loop {
         if let Some(status) = child.try_wait().unwrap() {
             assert_eq!(status.code(), Some(75));

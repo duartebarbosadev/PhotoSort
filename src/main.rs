@@ -1,5 +1,7 @@
 mod diagnostic_output;
 mod session_logging;
+#[cfg(test)]
+mod test_support;
 
 fn main() -> eframe::Result {
     // The bundled ONNX Runtime uploader can race its own C++ static teardown.

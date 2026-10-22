@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::worker_patience;
 #[test]
 fn organize_trash_menus_share_state_for_mixed_files_and_folder_descendants() {
     for width in [640.0, 1440.0] {
@@ -688,7 +689,7 @@ fn metadata_fixture(count: usize) -> (PhotoSortApp, tempfile::TempDir) {
     (app, temp)
 }
 fn wait_metadata(app: &mut PhotoSortApp) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + worker_patience();
     while app.metadata_run.is_some() || app.busy {
         app.poll(&egui::Context::default());
         assert!(
@@ -1706,7 +1707,7 @@ fn organize_trash_supporting_selection_and_marks_survive_worker_reload_and_repla
     std::fs::write(dir.path().join("notes.txt"), b"document").unwrap();
     let root = dir.path().canonicalize().unwrap();
     fn settle(app: &mut PhotoSortApp) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + worker_patience();
         while app.scanning
             || app.pending_bookmark.is_some()
             || app.filter_dirty
@@ -2008,7 +2009,7 @@ fn hidden_inventory_reaches_editor_and_shared_planner_without_decoding() {
     app.organize();
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + worker_patience();
     while app.busy && Instant::now() < deadline {
         app.poll(&ctx);
         std::thread::sleep(Duration::from_millis(5));
@@ -2050,7 +2051,7 @@ fn empty_folder_editor_intent_reaches_shared_io_worker_without_mutation() {
     app.organize();
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + worker_patience();
     while app.busy && Instant::now() < deadline {
         app.poll(&ctx);
         std::thread::sleep(Duration::from_millis(5));
@@ -2885,7 +2886,7 @@ fn organize_preview_submits_detail_after_modal_render_and_escape_cancels_it() {
     app.begin_organize_preview();
     app.actual_size();
     let size = egui::vec2(640., 600.);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + worker_patience();
     while app.inspection_frames.is_empty() {
         frame(&mut app, &ctx, size, vec![]);
         assert!(
@@ -3488,7 +3489,7 @@ fn organize_action_text_popup_drag_and_modified_keys_keep_input_ownership() {
     }
 }
 fn action_settle(app: &mut PhotoSortApp, ctx: &egui::Context) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + worker_patience();
     while app.busy {
         app.poll(ctx);
         assert!(Instant::now() < deadline, "{:?}", app.error);

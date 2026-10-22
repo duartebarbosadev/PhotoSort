@@ -1,3 +1,5 @@
+#[path = "../src/test_support.rs"]
+mod test_support;
 use photosort::core::{
     cache,
     catalog::Catalog,
@@ -249,7 +251,7 @@ fn native_rotation_cache_reuses_seven_samples_across_runs_restart_and_invalidati
         time::{Duration, Instant},
     };
     fn wait_cache(rt: &Runtime) {
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + test_support::worker_patience();
         while rt.cache.status().busy {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
@@ -259,7 +261,7 @@ fn native_rotation_cache_reuses_seven_samples_across_runs_restart_and_invalidati
         wait_cache(rt);
         while rt.events.try_recv().is_ok() {}
         assert!(rt.cache.request(false));
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + test_support::worker_patience();
         loop {
             assert!(Instant::now() < deadline);
             if let Ok(e) = rt.events.recv_timeout(Duration::from_millis(100))

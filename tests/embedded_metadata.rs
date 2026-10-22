@@ -1,3 +1,5 @@
+#[path = "../src/test_support.rs"]
+mod test_support;
 use photosort::core::{
     catalog::Catalog,
     metadata::{self, WritePolicy, WriteTarget},
@@ -314,7 +316,7 @@ fn image_actor_reuses_indexed_metadata_while_planning_embedded_edits() {
     let media = c.media[0].clone();
     let mut rt = Runtime::with_cache(|| {}, temp.path().join("cache"));
     rt.index_metadata(Arc::new(c.media.clone())).unwrap();
-    let indexed_deadline = Instant::now() + Duration::from_secs(15);
+    let indexed_deadline = Instant::now() + test_support::worker_patience();
     loop {
         assert!(Instant::now() < indexed_deadline);
         match rt.events.recv_timeout(Duration::from_millis(200)) {
@@ -345,7 +347,7 @@ fn image_actor_reuses_indexed_metadata_while_planning_embedded_edits() {
         policy: WritePolicy::EmbedWhenSupported,
     })
     .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + test_support::worker_patience();
     let mut planned = false;
     loop {
         assert!(Instant::now() < deadline);

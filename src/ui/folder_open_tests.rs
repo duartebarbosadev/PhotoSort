@@ -3,6 +3,7 @@ use crate::core::{
     startup::Options,
     views::{Bookmark, Saved},
 };
+use crate::test_support::worker_patience;
 
 fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
     // Relative paths are resolved against Cargo's cwd without changing the
@@ -20,7 +21,7 @@ fn app(dir: &tempfile::TempDir) -> PhotoSortApp {
     PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None)
 }
 fn settle(app: &mut PhotoSortApp) {
-    let until = Instant::now() + Duration::from_secs(10);
+    let until = Instant::now() + worker_patience();
     let ctx = egui::Context::default();
     theme_install(&ctx);
     while app.scanning || app.busy {
@@ -142,7 +143,7 @@ fn alternate_open_spellings_reuse_session_bookmarks_and_one_recent_folder() {
         app.preferences = preferences;
         app.open(spelling);
         settle(&mut app);
-        let until = Instant::now() + Duration::from_secs(10);
+        let until = Instant::now() + worker_patience();
         while app.pending_bookmark.is_some() {
             app.refilter();
             app.restore_bookmark();

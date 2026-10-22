@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::worker_patience;
 
 #[derive(Clone, Copy, Debug)]
 enum Request {
@@ -61,7 +62,7 @@ fn rejected_requests_preserve_accepted_analysis_rotation_and_metadata() {
         assert!(worker_queue.try_send(message).is_ok());
         let event = runtime
             .events
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(worker_patience())
             .unwrap()
             .event;
         match (request, event) {
@@ -85,7 +86,7 @@ fn receiver_waits_for_admission_commit_without_cancelling_running_work_early() {
     let (received_tx, received_rx) = mpsc::sync_channel(0);
     let worker_generation = generation.clone();
     let worker = thread::spawn(move || {
-        let run = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let run = rx.recv_timeout(worker_patience()).unwrap();
         // Receipt really happened inside submit, before it published the ID.
         assert_eq!(worker_generation.current(), 0);
         assert!(matches!(
@@ -98,7 +99,7 @@ fn receiver_waits_for_admission_commit_without_cancelling_running_work_early() {
     let run = generation
         .submit(|run| {
             tx.send(run).unwrap();
-            received_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            received_rx.recv_timeout(worker_patience()).unwrap();
             assert_eq!(generation.current(), 0);
             Ok(())
         })
@@ -137,7 +138,7 @@ fn cancellation_serializes_with_an_admission_in_progress() {
     let (cancel_tx, cancel_rx) = mpsc::sync_channel(0);
     let cancel_generation = generation.clone();
     let cancel = thread::spawn(move || {
-        cancel_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        cancel_rx.recv_timeout(worker_patience()).unwrap();
         assert!(matches!(
             cancel_generation.admission.try_lock(),
             Err(std::sync::TryLockError::WouldBlock)
@@ -148,7 +149,7 @@ fn cancellation_serializes_with_an_admission_in_progress() {
     let accepted = generation
         .submit(|_| {
             cancel_tx.send(()).unwrap();
-            started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            started_rx.recv_timeout(worker_patience()).unwrap();
             Ok(())
         })
         .unwrap();
@@ -203,7 +204,7 @@ fn obsolete_requests_cannot_replace_current_work_or_start_image_and_model_setup(
         for _ in 0..2 {
             match runtime
                 .events
-                .recv_timeout(Duration::from_secs(10))
+                .recv_timeout(worker_patience())
                 .unwrap()
                 .event
             {

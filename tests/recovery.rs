@@ -1,3 +1,5 @@
+#[path = "../src/test_support.rs"]
+mod test_support;
 use photosort::core::{
     catalog::Catalog,
     model::*,
@@ -270,7 +272,7 @@ fn shutdown_drains_accepted_source_and_destination_session_saves() {
         .unwrap();
     runtime
         .events
-        .recv_timeout(std::time::Duration::from_secs(5))
+        .recv_timeout(test_support::worker_patience())
         .unwrap();
     runtime
         .io(IoWork::Save {

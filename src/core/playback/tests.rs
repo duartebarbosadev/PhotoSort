@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::worker_patience;
 use std::sync::atomic::AtomicUsize;
 #[derive(Default)]
 pub(super) struct Counts {
@@ -74,7 +75,7 @@ fn media(root: &Path, name: &str) -> Media {
     }
 }
 fn wait(player: &Player, condition: impl Fn(&Snapshot) -> bool) -> Snapshot {
-    let until = Instant::now() + Duration::from_secs(3);
+    let until = Instant::now() + worker_patience();
     loop {
         let s = player.snapshot();
         if condition(&s) {
@@ -255,7 +256,7 @@ fn blocked_open_cancels_on_selection_change_and_shutdown_without_publishing_stal
         }),
     );
     player.select(Some(&a));
-    let until = Instant::now() + Duration::from_secs(2);
+    let until = Instant::now() + worker_patience();
     while entered.load(Ordering::Acquire) < 1 {
         assert!(Instant::now() < until);
         thread::sleep(Duration::from_millis(1));

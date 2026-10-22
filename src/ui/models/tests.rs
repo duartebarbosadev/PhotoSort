@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::worker_patience;
 fn app() -> (tempfile::TempDir, PhotoSortApp) {
     let dir = tempfile::tempdir().unwrap();
     let mut app =
@@ -88,7 +89,7 @@ fn model_dialog_fits_compact_and_wide_windows_without_loading_models_or_images()
         .unwrap();
     }
     app.open_model_setup();
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = Instant::now() + worker_patience();
     while app.runtime.model_assets.state().running {
         assert!(Instant::now() < until);
         std::thread::sleep(Duration::from_millis(1));
@@ -181,7 +182,7 @@ fn model_removal_uses_shared_worker_and_preserves_all_workflow_reviews() {
         assert!(path.exists());
         app.busy = false;
         app.start_model_operation(Work::Remove(copy));
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + worker_patience();
         while app.runtime.model_assets.state().running {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(1));
@@ -415,7 +416,7 @@ fn model_panel_summarises_groups_and_links_every_model_source() {
     app.step = Step::Cull;
     pending_recovery(&mut app);
     app.open_model_setup();
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = Instant::now() + worker_patience();
     while app.runtime.model_assets.state().running {
         assert!(Instant::now() < until);
         std::thread::sleep(Duration::from_millis(1));

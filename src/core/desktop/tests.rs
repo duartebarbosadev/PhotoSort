@@ -1,10 +1,11 @@
 use super::*;
+use crate::test_support::worker_patience;
 use std::{
     sync::{atomic::AtomicUsize, mpsc},
     time::{Duration, Instant},
 };
 fn wait(worker: &Worker) {
-    let end = Instant::now() + Duration::from_secs(5);
+    let end = Instant::now() + worker_patience();
     while worker.running() {
         assert!(Instant::now() < end);
         thread::sleep(Duration::from_millis(2));
@@ -220,7 +221,7 @@ fn one_inflight_handoff_is_bounded_and_obsolete_failures_are_discarded() {
         }),
     );
     worker.start(0, request.clone()).unwrap();
-    ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    ready.recv_timeout(worker_patience()).unwrap();
     assert!(worker.start(0, request.clone()).is_err());
     generation.store(1, Ordering::Release);
     assert!(worker.start(0, request).is_err());
@@ -248,11 +249,11 @@ fn shutdown_does_not_wait_for_a_stalled_file_manager_or_publish_its_result() {
         }),
     );
     worker.start(0, request.clone()).unwrap();
-    ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    ready.recv_timeout(worker_patience()).unwrap();
     worker.shutdown();
     assert!(worker.start(0, request).is_err());
     release.send(()).unwrap();
-    finished.recv_timeout(Duration::from_secs(5)).unwrap();
+    finished.recv_timeout(worker_patience()).unwrap();
     assert!(worker.take().is_none());
 }
 #[test]

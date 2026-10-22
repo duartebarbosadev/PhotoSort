@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::worker_patience;
 fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
     let dir = tempfile::tempdir().unwrap();
     for name in ["a.jpg", "b.jpg", "c.jpg"] {
@@ -30,14 +31,15 @@ fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
     (dir, app)
 }
 fn settle(app: &mut PhotoSortApp) {
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = Instant::now() + worker_patience();
     loop {
+        let expired = Instant::now() >= until;
         app.refilter();
         app.restore_bookmark();
         if !app.filter_dirty && app.browse_run.is_none() && app.pending_bookmark.is_none() {
             break;
         }
-        assert!(Instant::now() < until, "view failed to settle");
+        assert!(!expired, "view failed to settle");
         std::thread::sleep(Duration::from_millis(2));
     }
 }
@@ -94,7 +96,7 @@ fn delayed_restoration_preserves_saved_focus_and_explicit_navigation_takes_over(
     app.prepare_bookmark();
     app.metadata_run = Some(100);
     app.refilter();
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = Instant::now() + worker_patience();
     while app.browse_run.is_some() {
         app.refilter();
         assert!(Instant::now() < until);

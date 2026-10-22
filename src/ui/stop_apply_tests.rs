@@ -1,5 +1,6 @@
 use super::*;
 use crate::core::operations::{Action, Source};
+use crate::test_support::worker_patience;
 use std::sync::{
     Condvar, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -90,7 +91,7 @@ fn fixture(step: Step) -> (tempfile::TempDir, PhotoSortApp, mpsc::Receiver<()>, 
     (temp, app, ready, gate)
 }
 fn settle(app: &mut PhotoSortApp) {
-    let until = Instant::now() + Duration::from_secs(10);
+    let until = Instant::now() + worker_patience();
     while app.busy || app.scanning {
         app.poll(&egui::Context::default());
         assert!(Instant::now() < until, "file work stalled: {:?}", app.error);
@@ -138,7 +139,7 @@ fn every_workflow_can_stop_from_compact_footer_and_retry_without_losing_intent()
         let release = Release(gate); // Drop before app, including during panic.
         let root = app.root.clone().unwrap();
         app.apply_reviewed_plan();
-        ready.recv_timeout(Duration::from_secs(10)).unwrap();
+        ready.recv_timeout(worker_patience()).unwrap();
         assert!(app.busy && app.applying_plan.is_some());
         let token = app.apply_stop.as_ref().unwrap().clone();
         let epoch = app.runtime.epoch();

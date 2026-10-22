@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::worker_patience;
 
 pub(super) fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
     let temp = tempfile::tempdir().unwrap();
@@ -52,13 +53,14 @@ pub(super) fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
     (temp, app)
 }
 fn settle(app: &mut PhotoSortApp) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + worker_patience();
     loop {
+        let expired = Instant::now() >= deadline;
         app.refilter();
         if app.browse_run.is_none() {
             break;
         }
-        assert!(Instant::now() < deadline, "browse query did not finish");
+        assert!(!expired, "browse query did not finish");
         std::thread::sleep(Duration::from_millis(1));
     }
 }

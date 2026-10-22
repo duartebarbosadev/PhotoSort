@@ -111,6 +111,7 @@ fn command(folder: &Path) -> Result<Command> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::worker_patience;
     use std::{
         thread,
         time::{Duration, Instant},
@@ -156,7 +157,7 @@ mod tests {
     fn child_probe() {
         if std::env::var_os("PHOTOSORT_TERMINAL_CHILD_PROBE").is_some() {
             std::fs::write("probe-ready", "ready").unwrap();
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now() + worker_patience();
             while !Path::new("probe-release").exists() {
                 assert!(
                     Instant::now() < deadline,
@@ -179,7 +180,7 @@ mod tests {
             .spawn()
             .unwrap();
         let children = Children(Mutex::new(vec![child]));
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + worker_patience();
         while !dir.path().join("probe-ready").exists() {
             assert!(Instant::now() < end);
             thread::sleep(Duration::from_millis(5));

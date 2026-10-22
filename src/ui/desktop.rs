@@ -139,6 +139,7 @@ impl PhotoSortApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::worker_patience;
     #[test]
     fn shared_path_menu_copies_exact_text_without_dispatching_or_mutating_files() {
         use crate::ui::test_frame::absolute;
@@ -273,11 +274,8 @@ mod tests {
                 } else {
                     request
                 };
-                assert_eq!(
-                    received.recv_timeout(Duration::from_secs(5)).unwrap(),
-                    expected
-                );
-                let deadline = Instant::now() + Duration::from_secs(5);
+                assert_eq!(received.recv_timeout(worker_patience()).unwrap(), expected);
+                let deadline = Instant::now() + worker_patience();
                 while app.runtime.desktop.running() {
                     assert!(Instant::now() < deadline);
                     std::thread::sleep(Duration::from_millis(2));

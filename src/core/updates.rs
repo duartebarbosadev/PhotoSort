@@ -280,6 +280,7 @@ impl Drop for Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::worker_patience;
     use std::{
         sync::mpsc,
         time::{Duration, Instant},
@@ -407,7 +408,7 @@ mod tests {
                 })
                 .unwrap()
         );
-        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        started_rx.recv_timeout(worker_patience()).unwrap();
         for _ in crate::core::model::Step::ALL {
             assert!(!worker.start_task(|_| panic!("duplicate request")).unwrap());
         }

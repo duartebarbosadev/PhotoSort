@@ -1,5 +1,7 @@
 //! Opt-in real-camera regression tests. Originals are read-only; edits use copies.
 //! PHOTOSORT_SAMPLE_DIR=tests/samples cargo test --release --test reference_samples -- --ignored --nocapture
+#[path = "../src/test_support.rs"]
+mod test_support;
 use photosort::core::{
     catalog::Catalog, metadata, model::*, models::Models, operations, pipeline::Pipeline,
 };
@@ -680,7 +682,7 @@ fn duplicate_worker_shares_models_cache_and_previews_on_disposable_samples() -> 
         .analyze(media.clone(), AnalysisProfile::Duplicates)
         .map_err(anyhow::Error::msg)?;
     loop {
-        if matches!(runtime.events.recv_timeout(Duration::from_secs(10))?.event,Event::DuplicateStarted{run:found} if found==run)
+        if matches!(runtime.events.recv_timeout(test_support::worker_patience())?.event,Event::DuplicateStarted{run:found} if found==run)
         {
             break;
         }
@@ -690,7 +692,7 @@ fn duplicate_worker_shares_models_cache_and_previews_on_disposable_samples() -> 
         .analyze(media, AnalysisProfile::Technical)
         .map_err(anyhow::Error::msg)?;
     loop {
-        if matches!(runtime.events.recv_timeout(Duration::from_secs(10))?.event,Event::AnalysisDone{run:found,..} if found==run)
+        if matches!(runtime.events.recv_timeout(test_support::worker_patience())?.event,Event::AnalysisDone{run:found,..} if found==run)
         {
             break;
         }
