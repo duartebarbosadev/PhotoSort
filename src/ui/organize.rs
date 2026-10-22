@@ -1393,11 +1393,13 @@ impl PhotoSortApp {
                             .visual_groups
                             .as_ref()
                             .is_some_and(|groups| groups.contains_key(&m.id)))
+                    // Photos without a recognized person (group 0) stay in place.
                     && (self.group_mode != GroupMode::Faces
                         || self
                             .face_groups
                             .as_ref()
-                            .is_some_and(|groups| groups.groups.contains_key(&m.id)))
+                            .and_then(|groups| groups.groups.get(&m.id))
+                            .is_some_and(|&group| group != 0))
                     && (self.group_mode != GroupMode::Mixed
                         || self
                             .mixed_labels
@@ -1410,6 +1412,65 @@ impl PhotoSortApp {
             crate::core::organize::include_inventory(catalog, &mut labels);
         }
         labels
+    }
+    /// An analysis-based grouping is chosen, has no result or folder edits
+    /// yet, and did not just fail or get cancelled.
+    pub(super) fn organize_grouping_wanted(&self) -> bool {
+        self.automatic_organize_mode()
+            && !self.organize_grouping_ready()
+            && !self.organize_drafts.contains_key(&self.group_mode)
+            && self.organize_halted != Some(self.group_mode)
+    }
+    /// Ends the running Organize grouping without results; it waits for the
+    /// user to choose it again instead of restarting into the same failure.
+    pub(super) fn halt_organize_run(&mut self) {
+        if let Some((_, mode)) = self.organize_run.take() {
+            self.organize_halted = Some(mode);
+        }
+    }
+    /// Choosing an analysis-based grouping starts it, or says why it waits.
+    pub(super) fn start_organize_grouping(&mut self) {
+        self.organize_halted = None;
+        if self.step != Step::Organize || !self.organize_grouping_wanted() {
+            return;
+        }
+        self.start_ready_analysis();
+        let mode = self.group_mode;
+        if self
+            .analysis_run
+            .is_some_and(|run| self.organize_run == Some((run, mode)))
+            || self.scanning
+            || self.media.is_empty()
+        {
+            return; // Started, or starts once the folder has been read.
+        }
+        let what = mode.title().to_lowercase();
+        let message = if self.model_issue.is_some() || self.model_dialog {
+            format!("Grouping by {what} needs AI models · open AI models to set them up")
+        } else if self.analysis_run.is_some() || self.rotation_run.is_some() {
+            format!("Grouping by {what} starts when the current analysis finishes")
+        } else if self.busy || self.plan_open || self.retry_plan.is_some() {
+            format!("Grouping by {what} waits for the current task · then press Preview moves")
+        } else {
+            return; // `analyze` already reported why it could not start.
+        };
+        self.set_organize_status(mode, message);
+    }
+    /// What a finished people grouping found; `None` before it has run.
+    pub(super) fn face_group_status(&self) -> Option<String> {
+        let summary = crate::core::face_groups::summarize(self.face_groups.as_ref()?);
+        Some(match summary {
+            crate::core::face_groups::Summary { photos: 0, .. } => {
+                "No faces found in these photos".into()
+            }
+            crate::core::face_groups::Summary { repeated: 0, .. } => {
+                "Faces found, but no person appears in more than one photo".into()
+            }
+            crate::core::face_groups::Summary { repeated, .. } => format!(
+                "People groups ready · {repeated} {} in more than one photo",
+                if repeated == 1 { "person" } else { "people" }
+            ),
+        })
     }
     pub(super) fn organize_grouping_ready(&self) -> bool {
         match self.group_mode {

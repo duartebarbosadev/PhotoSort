@@ -46,6 +46,8 @@ impl PhotoSortApp {
             "Checking model setup · your current reviews are preserved"
         } else if self.model_retry_ready(state) {
             "Models ready · open AI models to retry the paused analysis"
+        } else if self.step == Step::Organize && self.group_mode == GroupMode::Faces {
+            "Grouping by faces needs the face models · open AI models to download them"
         } else {
             "Local AI needs model setup · your current reviews are preserved"
         })
@@ -70,6 +72,7 @@ impl PhotoSortApp {
         if self.analysis_run != Some(run) {
             return;
         }
+        let grouping = self.organize_run.map(|(_, mode)| mode);
         self.remember_model_retry();
         self.runtime.cancel_analysis();
         self.analysis_run = None;
@@ -81,7 +84,18 @@ impl PhotoSortApp {
         self.organize_preview_requested = false;
         self.resume_suspended = true;
         self.model_issue = Some(issue);
-        self.set_status("Local AI needs model setup · your current reviews are preserved".into());
+        match grouping {
+            Some(mode) => self.set_organize_status(
+                mode,
+                format!(
+                    "Grouping by {} needs AI models · download them in AI models",
+                    mode.title().to_lowercase()
+                ),
+            ),
+            None => self.set_status(
+                "Local AI needs model setup · your current reviews are preserved".into(),
+            ),
+        }
         self.open_model_setup();
     }
     fn model_retry_valid(&self) -> bool {

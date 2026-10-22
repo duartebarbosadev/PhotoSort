@@ -32,6 +32,13 @@ impl PhotoSortApp {
                 status.backend.label()
             ));
         }
+        if self.step == Step::Organize
+            && let Some(run) = self.analysis_run
+            && self.organize_run == Some((run, GroupMode::Faces))
+            && let Some((done, total)) = self.progress
+        {
+            return Cow::Owned(format!("Finding faces · {done} of {total}"));
+        }
         if self.status_scope.is_none_or(|(step, mode)| {
             self.step == step && mode.is_none_or(|mode| self.group_mode == mode)
         }) {

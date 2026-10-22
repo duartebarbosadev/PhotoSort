@@ -308,7 +308,7 @@ impl PhotoSortApp {
             self.rotation_run = None;
             self.delete_run = None;
             self.pick_run = None;
-            self.organize_run = None;
+            self.halt_organize_run();
             self.organize_preview_requested = false;
             self.progress = None;
             self.set_status("Analysis stopped · the first photos could not be analyzed".into());
@@ -512,24 +512,32 @@ impl PhotoSortApp {
             self.progress = None;
             if let Some((_, completed)) = self.organize_run.filter(|(owner, _)| *owner == run) {
                 self.organize_run = None;
-                self.set_organize_status(
-                    completed,
-                    match completed {
-                        GroupMode::Faces => {
-                            "People groups ready · group portraits have one shared destination"
-                        }
-                        GroupMode::Mixed => "Date and similarity groups ready",
-                        _ => "Visual groups ready · review destinations before applying",
-                    }
-                    .into(),
-                );
-                let preview = std::mem::take(&mut self.organize_preview_requested);
+                let faces = (completed == GroupMode::Faces)
+                    .then(|| {
+                        self.face_groups
+                            .as_ref()
+                            .map(crate::core::face_groups::summarize)
+                    })
+                    .flatten();
+                let message = match completed {
+                    GroupMode::Faces => self.face_group_status().unwrap_or_default(),
+                    GroupMode::Mixed => "Date and similarity groups ready".into(),
+                    _ => "Visual groups ready · review destinations before applying".into(),
+                };
+                self.set_organize_status(completed, message + &self.failure_note());
+                // Without a single recognized face every photo stays in place, so
+                // a preview would move nothing; the message is the result.
+                let preview = std::mem::take(&mut self.organize_preview_requested)
+                    && faces.is_none_or(|summary| summary.photos > 0);
                 if preview
                     && self.step == Step::Organize
                     && self.group_mode == completed
                     && self.organize_grouping_ready()
                 {
                     self.organize();
+                }
+                if !self.organize_grouping_ready() && self.group_mode == completed {
+                    self.organize_halted = Some(completed);
                 }
             } else if self.rotation_run == Some(run) {
                 self.finish_rotation_detection();
@@ -546,6 +554,10 @@ impl PhotoSortApp {
                     self.duplicates.len(),
                     self.failure_note()
                 ));
+            }
+            // A grouping chosen while this run was busy starts now.
+            if self.step == Step::Organize && self.analysis_run.is_none() {
+                self.start_ready_analysis();
             }
         }
     }
@@ -742,7 +754,16 @@ impl PhotoSortApp {
         self.rotation_run = None;
         self.delete_run = None;
         self.pick_run = None;
-        self.organize_run = None;
+        if let Some((_, mode)) = self.organize_run {
+            self.set_organize_status(
+                mode,
+                format!(
+                    "Grouping by {} failed · choose it again to retry",
+                    mode.title().to_lowercase()
+                ),
+            );
+        }
+        self.halt_organize_run();
         self.organize_preview_requested = false;
         self.busy = false;
         self.scanning = false;

@@ -280,6 +280,9 @@ impl PhotoSortApp {
                 self.cancel_metadata_index();
             }
         }
+        // Choosing an analysis-based grouping, or choosing it again after it
+        // stopped, starts it; without this nothing happened until Preview moves.
+        self.start_organize_grouping();
     }
 
     /// A single status line: what is happening on the left, progress and safe
@@ -490,6 +493,15 @@ impl PhotoSortApp {
             )
             .on_hover_text(hint);
         }
+        if self.automatic_organize_mode()
+            && self.model_issue.is_some()
+            && ui
+                .button("AI models…")
+                .on_hover_text("Download or import the models this grouping needs")
+                .clicked()
+        {
+            self.open_model_setup();
+        }
         if self.group_mode == GroupMode::Location {
             self.location_layout_controls(ui);
         }
@@ -574,13 +586,13 @@ impl PhotoSortApp {
             GroupMode::Mixed => Some(if self.mixed_labels.is_some() {
                 "Dates contain similar-photo groups; single photos stay in the date folder."
             } else {
-                "Preview moves analyzes dates and similarity first. Your files stay unchanged until Apply."
+                "Dates and similarity are analyzed when you choose this grouping. Your files stay unchanged until Apply."
             }),
             GroupMode::Faces => Some(
-                "Groups photos by the main people. Group portraits get one shared folder, such as People 001 + 003. Unclear matches stay unassigned. Preview moves analyzes first; Apply moves the files.",
+                "Groups photos by the main people; finding faces starts when you choose Faces. Group portraits get one shared folder, such as People 001 + 003. Photos without a recognized person and videos stay in place. Apply moves the files.",
             ),
             GroupMode::Visual => Some(
-                "Select photos with Cmd/Ctrl-click or Shift-click, then use Scenes to correct groups. Preview moves analyzes first. Ungrouped photos and videos stay in place.",
+                "Select photos with Cmd/Ctrl-click or Shift-click, then use Scenes to correct groups. Analysis starts when you choose this grouping. Ungrouped photos and videos stay in place.",
             ),
             _ if self.metadata_organize_mode() => Some(
                 "Folder proposals use photo metadata. Location names are resolved offline; AI analysis is not needed.",
