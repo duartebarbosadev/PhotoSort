@@ -163,7 +163,7 @@ impl PhotoSortApp {
             .iter()
             .filter_map(|s| Some((s.path.as_deref()?, s.range.len())))
             .collect();
-        let folders = paths
+        let folders: Vec<FolderRow> = paths
             .iter()
             .map(|path| FolderRow {
                 path: path.clone(),
@@ -180,6 +180,21 @@ impl PhotoSortApp {
                     .sum(),
             })
             .collect();
+        // A generated grouping lists the folders it fills, not the library's
+        // existing folders it empties; folders made on the board stay.
+        let folders = if self.group_mode == GroupMode::Current {
+            folders
+        } else {
+            let created = draft.map(|d| d.created_folders());
+            folders
+                .into_iter()
+                .filter(|f| {
+                    f.path.is_empty()
+                        || f.total > 0
+                        || created.is_some_and(|c| c.iter().any(|p| within(p, &f.path)))
+                })
+                .collect()
+        };
         self.board.unplaced = sections
             .iter()
             .filter(|s| s.path.is_none())
@@ -289,6 +304,43 @@ impl PhotoSortApp {
             Err(error) => self.navigation_notice = Some(error.to_string()),
         }
     }
+    /// Two to nine selected photos on the board, in board order: the preview
+    /// compares them side by side. Larger selections preview the active photo.
+    pub(super) fn board_selection_comparison(&self) -> Option<Vec<MediaId>> {
+        if self.step != Step::Organize
+            || !self.library_selection_mode()
+            || !(2..=9).contains(&self.selection.len())
+        {
+            return None;
+        }
+        // Called several times a frame: one pass that stops at the last
+        // selected tile, without hashing every shown photo's id.
+        let wanted: Vec<usize> = self
+            .selection
+            .snapshot()
+            .0
+            .iter()
+            .filter_map(|id| self.index.get(id).copied())
+            .collect();
+        let mut shown = Vec::with_capacity(wanted.len());
+        for &index in &self.filtered {
+            if wanted.contains(&index) {
+                shown.push(self.media[index].id);
+                if shown.len() == wanted.len() {
+                    break;
+                }
+            }
+        }
+        (shown.len() > 1).then_some(shown)
+    }
+    /// Back to the single preview: keeps only the active photo selected.
+    pub(super) fn end_board_comparison(&mut self) {
+        self.comparison.clear();
+        if let Some(active) = self.active {
+            self.selection.single(active);
+        }
+        self.focused_slot = 0;
+    }
     /// The photos a drag or a menu acts on: the selection when `id` is in it.
     fn board_targets(&self, id: MediaId) -> Vec<MediaId> {
         if self.selection.contains(id) {
@@ -348,7 +400,12 @@ impl PhotoSortApp {
                         } else {
                             format!("{parent}/{name}")
                         };
+                        // Hidden empty folders still take their names.
                         !self.board.folders.iter().any(|f| f.path == path)
+                            && !self
+                                .organize_drafts
+                                .get(&self.group_mode)
+                                .is_some_and(|d| d.folders().contains(&path))
                     })
                     .unwrap_or_default();
                 if let Some(draft) = self.board_draft()
@@ -599,14 +656,23 @@ impl PhotoSortApp {
         ui.horizontal(|ui| {
             ui.add(egui::Label::new(RichText::new(media.name()).font(semibold(13.0))).truncate())
                 .on_hover_text(media.path.display().to_string());
-            if ids.len() > 1 {
-                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                    if ui.small_button("End comparison").clicked() {
-                        self.comparison.clear();
-                        self.focused_slot = 0;
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                if ids.len() > 1 {
+                    if ui
+                        .small_button("End comparison")
+                        .on_hover_text("Show only this photo · Esc")
+                        .clicked()
+                    {
+                        self.end_board_comparison();
                     }
-                });
-            }
+                } else if self.library_selection_mode() && self.selection.len() > 9 {
+                    ui.label(
+                        RichText::new("Select 2–9 photos to compare")
+                            .small()
+                            .color(MUTED),
+                    );
+                }
+            });
         });
         let root = self.board_root_name();
         let folder = match destination.as_deref() {
@@ -626,15 +692,9 @@ impl PhotoSortApp {
             (ui.available_height() - controls).max(80.0),
         );
         let ids = if ids.is_empty() { vec![active] } else { ids };
-        let columns = if ids.len() == 1 {
-            1
-        } else if size.x >= 520.0 {
-            2
-        } else {
-            1
-        };
-        let rows = ids.len().div_ceil(columns);
         let gap = ui.spacing().item_spacing;
+        let columns = self.preview_columns(&ids, size, gap);
+        let rows = ids.len().div_ceil(columns);
         let cell = egui::vec2(
             (size.x - gap.x * (columns - 1) as f32) / columns as f32,
             ((size.y - gap.y * (rows - 1) as f32) / rows as f32).max(60.0),
@@ -675,6 +735,40 @@ impl PhotoSortApp {
             }
             self.review_ratings(ui, active);
         });
+    }
+    /// Columns that show compared photos largest: their typical shape decides
+    /// between side by side and stacked in the panel's shape.
+    fn preview_columns(&self, ids: &[MediaId], size: Vec2, gap: Vec2) -> usize {
+        let aspects: Vec<f32> = ids
+            .iter()
+            .filter_map(|id| self.metadata.get(id))
+            .filter(|m| m.width > 0 && m.height > 0)
+            .map(|m| {
+                let (w, h) = if (5..=8).contains(&m.orientation) {
+                    (m.height, m.width)
+                } else {
+                    (m.width, m.height)
+                };
+                w as f32 / h as f32
+            })
+            .collect();
+        let aspect = if aspects.is_empty() {
+            1.5
+        } else {
+            aspects.iter().sum::<f32>() / aspects.len() as f32
+        };
+        (1..=ids.len().max(1))
+            .max_by(|a, b| {
+                let width = |columns: usize| {
+                    let rows = ids.len().div_ceil(columns);
+                    let w = (size.x - gap.x * (columns - 1) as f32) / columns as f32;
+                    let h = (size.y - gap.y * (rows - 1) as f32) / rows as f32;
+                    w.min(h * aspect)
+                };
+                // Ties keep fewer columns.
+                width(*a).total_cmp(&width(*b)).then(b.cmp(a))
+            })
+            .unwrap_or(1)
     }
     /// Above the photos: where you are, what it holds, and thumbnail size.
     fn board_summary(&mut self, ui: &mut egui::Ui) {
@@ -743,14 +837,30 @@ impl PhotoSortApp {
                 ui.label(RichText::new(icon::IMAGE).size(11.0).color(MUTED));
                 if self.library_selection_mode() && !self.selection.is_empty() {
                     ui.add_space(S3);
-                    ui.label(
-                        RichText::new(format!(
-                            "{} selected · drag onto a folder to move",
-                            self.selection.len()
-                        ))
-                        .small()
-                        .color(ACCENT),
-                    );
+                    // Only what fits beside the title: text that overflows a
+                    // right-to-left row would push the board under the folders.
+                    let count = self.selection.len();
+                    let font = egui::TextStyle::Small.resolve(ui.style());
+                    let width = |text: &str| {
+                        ui.painter()
+                            .layout_no_wrap(text.to_owned(), font.clone(), ACCENT)
+                            .size()
+                            .x
+                    };
+                    let full = format!("{count} selected · drag onto a folder to move");
+                    let short = format!("{count} selected");
+                    let room = ui.available_width();
+                    let text = if width(&full) <= room {
+                        Some(full)
+                    } else if width(&short) <= room {
+                        Some(short)
+                    } else {
+                        None
+                    };
+                    if let Some(text) = text {
+                        ui.label(RichText::new(text).small().color(ACCENT))
+                            .on_hover_text("Drag onto a folder to move");
+                    }
                 }
             });
         });
@@ -1215,6 +1325,128 @@ mod tests {
         // Nothing has moved on disk or been staged as a decision.
         assert!(app.decisions.is_empty());
         assert!(app.media.iter().all(|m| m.path.exists()));
+        app.runtime.shutdown();
+    }
+
+    fn key(key: egui::Key, modifiers: egui::Modifiers) -> Vec<egui::Event> {
+        vec![egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }]
+    }
+
+    #[test]
+    fn shift_arrows_compare_the_selection_in_the_preview_and_escape_returns() {
+        use super::super::compact_cull_tests::{frame, rendered};
+        let (_temp, mut app) = organize();
+        let ids: Vec<MediaId> = app.filtered.iter().map(|i| app.media[*i].id).collect();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1400.0, 900.0);
+        app.select_library(ids[0], false, false);
+        assert_eq!(app.comparison_ids(), vec![ids[0]]);
+        for _ in 0..2 {
+            frame(
+                &mut app,
+                &ctx,
+                size,
+                key(egui::Key::ArrowRight, egui::Modifiers::SHIFT),
+            );
+        }
+        assert_eq!(app.selection.len(), 3);
+        assert_eq!(app.comparison_ids(), ids[..3].to_vec());
+        assert_eq!(app.active, Some(ids[2]));
+        assert_eq!(app.focused_slot, 2);
+        let nodes = rendered(&mut app, &ctx, size);
+        assert!(nodes.iter().any(|(label, _)| label == "End comparison"));
+        // Escape keeps the active photo and shows it alone.
+        frame(
+            &mut app,
+            &ctx,
+            size,
+            key(egui::Key::Escape, Default::default()),
+        );
+        assert_eq!(app.comparison_ids(), vec![ids[2]]);
+        assert_eq!(
+            app.selection.ordered(&app.media, &app.filtered),
+            vec![ids[2]]
+        );
+        assert_eq!(app.focused_slot, 0);
+        let nodes = rendered(&mut app, &ctx, size);
+        assert!(!nodes.iter().any(|(label, _)| label == "End comparison"));
+        // A second Escape clears the selection as before.
+        frame(
+            &mut app,
+            &ctx,
+            size,
+            key(egui::Key::Escape, Default::default()),
+        );
+        assert!(app.selection.is_empty() && app.active.is_none());
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn the_comparison_follows_board_order_and_stops_past_nine() {
+        let (_temp, mut app) = organize();
+        let ids: Vec<MediaId> = app.filtered.iter().map(|i| app.media[*i].id).collect();
+        // Clicked out of order, compared in the order the board shows them.
+        app.select_library(ids[6], false, false);
+        app.select_library(ids[1], true, false);
+        app.select_library(ids[4], true, false);
+        assert_eq!(app.comparison_ids(), vec![ids[1], ids[4], ids[6]]);
+        assert_eq!(app.active, Some(ids[4]));
+        assert_eq!(app.focused_slot, 1);
+        app.selection.all(&app.media, &app.filtered);
+        assert_eq!(app.comparison_ids(), ids);
+        // A tenth selected item (one this view does not show) ends the
+        // comparison; the preview shows the active photo.
+        let mut selected = ids.clone();
+        selected.push(MediaId(u64::MAX));
+        app.selection.replace(selected);
+        assert_eq!(app.comparison_ids(), vec![ids[4]]);
+        // Other steps keep their own comparisons.
+        app.select_library(ids[0], false, false);
+        app.select_library(ids[1], true, false);
+        app.step = Step::Cull;
+        assert_eq!(app.comparison_ids(), vec![ids[1]]);
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn generated_groupings_hide_emptied_folders_but_keep_created_ones() {
+        let (_temp, mut app) = organize();
+        // Making a folder creates the draft, which knows every library folder.
+        app.board.editing = Some((String::new(), "Trip".into(), true));
+        app.board_finish_edit();
+        app.check_board();
+        app.refilter();
+        let paths = |app: &PhotoSortApp| -> Vec<String> {
+            app.board.folders.iter().map(|f| f.path.clone()).collect()
+        };
+        // Current folders lists them all, empty or not.
+        assert_eq!(paths(&app), ["", "A", "A/Day1", "B", "Empty", "Trip"]);
+        app.group_mode = GroupMode::Camera;
+        app.board.editing = Some((String::new(), "Picks".into(), true));
+        app.board_finish_edit();
+        app.board.editing = Some(("Picks".into(), "Best".into(), true));
+        app.board_finish_edit();
+        app.check_board();
+        app.refilter();
+        assert_eq!(
+            paths(&app),
+            ["", "Picks", "Picks/Best", "Unknown camera"],
+            "Camera lists the folders it fills and the ones made on the board"
+        );
+        // A folder emptied by a move disappears unless it was made by hand.
+        let ids: Vec<MediaId> = app.media.iter().map(|m| m.id).collect();
+        app.board_move(&ids, "Picks/Best");
+        app.check_board();
+        app.refilter();
+        assert_eq!(paths(&app), ["", "Picks", "Picks/Best"]);
         app.runtime.shutdown();
     }
 }

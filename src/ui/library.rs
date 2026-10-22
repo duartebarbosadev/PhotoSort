@@ -385,7 +385,9 @@ impl PhotoSortApp {
             active,
             comparison || selected,
         );
-        if self.library_selection_mode() && (selected || hovered) && !active {
+        if self.library_selection_mode()
+            && shows_check(selected, hovered, active, self.selection.len())
+        {
             check_mark(
                 &painter,
                 image_rect.right_bottom() - egui::vec2(S2 + 1.0, S2 + 1.0),
@@ -664,6 +666,17 @@ fn ring(ui: &egui::Ui, id: egui::Id, rect: egui::Rect, radius: u8, active: bool,
     }
 }
 
+/// Whether a tile in selection mode carries the check. The active tile's
+/// outline already marks a single selection; among several selected photos
+/// it is checked like the rest.
+fn shows_check(selected: bool, hovered: bool, active: bool, selected_count: usize) -> bool {
+    if active {
+        selected && selected_count > 1
+    } else {
+        selected || hovered
+    }
+}
+
 /// Selection mode's check: a filled accent disc when selected, an empty ring
 /// on hover to show the tile can be picked.
 fn check_mark(painter: &egui::Painter, center: egui::Pos2, selected: bool) {
@@ -690,6 +703,26 @@ fn check_mark(painter: &egui::Painter, center: egui::Pos2, selected: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_active_tile_is_checked_only_among_several_selected() {
+        // (selected, hovered, active, selected count) -> check
+        for (selected, hovered, active, count, check) in [
+            (true, false, false, 1, true),
+            (false, true, false, 0, true),
+            (false, false, false, 2, false),
+            (true, false, true, 1, false),
+            (true, true, true, 1, false),
+            (false, true, true, 2, false),
+            (true, false, true, 2, true),
+            (true, false, true, 9, true),
+        ] {
+            assert_eq!(
+                shows_check(selected, hovered, active, count),
+                check,
+                "selected {selected}, hovered {hovered}, active {active}, {count} selected"
+            );
+        }
+    }
     #[test]
     fn staged_rotation_updates_every_thumbnail_layout_without_new_image_work() {
         let temp = tempfile::tempdir().unwrap();
