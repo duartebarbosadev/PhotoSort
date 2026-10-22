@@ -30,14 +30,28 @@ fn edit(app: &mut PhotoSortApp) {
     draft.rename_folder("Before", "After").unwrap();
     app.organize_drafts.insert(app.group_mode, draft);
 }
+/// How long a test waits for the file worker before calling it hung. Waits end
+/// as soon as the worker reports, so this only bounds a failure. On Windows each
+/// file replacement may retry for up to 5 s (`core::replace`), and shared CI
+/// runners can pause every thread for seconds, so CI gets a much longer bound.
+fn worker_patience() -> Duration {
+    Duration::from_secs(if std::env::var_os("CI").is_some() {
+        120
+    } else {
+        15
+    })
+}
 fn settle(app: &mut PhotoSortApp) {
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = Instant::now() + worker_patience();
     loop {
+        // Read the clock before polling: a pause after the deadline still gets
+        // one more look at the worker's results before the test fails.
+        let expired = Instant::now() >= until;
         app.poll(&egui::Context::default());
         if !app.busy && !app.scanning && app.metadata_run.is_none() {
             break;
         }
-        assert!(Instant::now() < until, "worker did not finish");
+        assert!(!expired, "worker did not finish");
         std::thread::sleep(Duration::from_millis(5));
     }
 }
@@ -1025,7 +1039,7 @@ fn pre_apply_ui_cannot_autosave_over_worker_persisted_moves_before_receipt_deliv
         let event = app
             .runtime
             .events
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(worker_patience())
             .unwrap()
             .event;
         match event {
@@ -1050,7 +1064,7 @@ fn pre_apply_ui_cannot_autosave_over_worker_persisted_moves_before_receipt_deliv
         if matches!(
             app.runtime
                 .events
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(worker_patience())
                 .unwrap()
                 .event,
             Event::Saved
@@ -1480,10 +1494,14 @@ fn hidden_window_keeps_receiving_worker_results() {
     app.open(root);
     assert!(app.scanning);
     let input = hidden_input(false);
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = Instant::now() + worker_patience();
     while app.scanning || app.catalog.is_none() {
+        let expired = Instant::now() >= until;
         app_logic(&mut app, &ctx, &input);
-        assert!(Instant::now() < until, "results waited for the window");
+        assert!(
+            !expired || !(app.scanning || app.catalog.is_none()),
+            "results waited for the window"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(app.media.len(), 1);

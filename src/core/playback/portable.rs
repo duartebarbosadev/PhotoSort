@@ -356,9 +356,14 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("invalid.mp4");
         std::fs::write(&path, "not video").unwrap();
-        let start = Instant::now();
-        assert!(thumbnail(&path, &|| false).is_err());
-        assert!(start.elapsed() < Duration::from_secs(3));
+        // The cancelled calls above return before GStreamer starts. Its first
+        // start scans every plugin when there is no registry cache, so do that
+        // outside the measured call.
+        initialize().unwrap();
+        // GStreamer's own error must end the attempt, before thumbnail's frame
+        // deadline does. Checking which one fired needs no wall-clock bound.
+        let error = format!("{:#}", thumbnail(&path, &|| false).unwrap_err());
+        assert!(!error.contains("timed out"), "{error}");
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video/large.mp4");
         let attempts = std::cell::Cell::new(0);
         assert!(
