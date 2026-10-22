@@ -12,6 +12,7 @@ pub mod jobs;
 pub mod metadata;
 pub mod model;
 pub mod models;
+pub mod names;
 pub mod operations;
 pub mod pipeline;
 pub mod raw_look;

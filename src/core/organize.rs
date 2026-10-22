@@ -71,7 +71,8 @@ impl Intent {
             .filter_map(|(p, id)| {
                 p.strip_prefix(&catalog.root)
                     .ok()
-                    .map(|relative| (relative.to_string_lossy().replace('\\', "/"), *id))
+                    .and_then(super::names::relative_label)
+                    .map(|relative| (relative, *id))
             })
             .collect()
     }
@@ -104,15 +105,12 @@ impl Intent {
         let current_labels = catalog
             .organize_files()
             .into_iter()
-            .map(|(id, path)| {
-                (
-                    id,
-                    path.parent()
-                        .and_then(|p| p.strip_prefix(&catalog.root).ok())
-                        .unwrap_or_else(|| std::path::Path::new(""))
-                        .to_string_lossy()
-                        .replace('\\', "/"),
-                )
+            .filter_map(|(id, path)| {
+                let parent = path
+                    .parent()
+                    .and_then(|p| p.strip_prefix(&catalog.root).ok())
+                    .unwrap_or_else(|| std::path::Path::new(""));
+                Some((id, super::names::relative_label(parent)?))
             })
             .collect();
         let baseline = Draft::from_catalog(catalog, current_labels);
@@ -247,8 +245,13 @@ impl Draft {
             .flat_map(|path| path.parent().into_iter().flat_map(|p| p.ancestors()))
             .collect();
         for path in &catalog.directories {
-            if let Ok(relative) = path.strip_prefix(&catalog.root) {
-                let label = relative.to_string_lossy().replace('\\', "/");
+            // A folder whose name is not valid Unicode has no exact label; it
+            // stays out of the editable layout and is never created or moved.
+            if let Some(label) = path
+                .strip_prefix(&catalog.root)
+                .ok()
+                .and_then(super::names::relative_label)
+            {
                 draft.include_parents(&label);
                 if !label.is_empty() {
                     draft.directory_origins.insert(label.clone(), label.clone());
@@ -516,7 +519,11 @@ impl Draft {
         Ok(target.into())
     }
     pub fn rename_folder(&mut self, source: &str, name: &str) -> Result<String> {
-        validate_leaf(name)?;
+        // Keeping an existing name is not a new name, even one such as
+        // `23:Dec` that a new folder could not use.
+        if name != leaf(source) {
+            validate_leaf(name)?;
+        }
         let parent = source.rsplit_once('/').map_or("", |(p, _)| p);
         self.relocate(source, &join(parent, name))
     }
@@ -557,10 +564,9 @@ pub fn include_inventory(catalog: &super::catalog::Catalog, labels: &mut HashMap
             && let Some(parent) = path
                 .parent()
                 .and_then(|p| p.strip_prefix(&catalog.root).ok())
+                .and_then(super::names::relative_label)
         {
-            labels
-                .entry(id)
-                .or_insert_with(|| parent.to_string_lossy().replace('\\', "/"));
+            labels.entry(id).or_insert(parent);
         }
     }
 }
@@ -594,16 +600,9 @@ pub fn resolve_file_names(
         if i % 256 == 0 {
             ensure!(!cancelled(), "Naming cancelled");
         }
-        let Some(name) = names.get(id).filter(|v| !v.trim().is_empty()) else {
+        let Some(name) = names.get(id).and_then(|name| requested_stem(path, name)) else {
             continue;
         };
-        if path.file_stem().and_then(|v| v.to_str()) == Some(name.as_str()) {
-            continue;
-        }
-        let name = safe_component(name);
-        if path.file_stem().and_then(|v| v.to_str()) == Some(name.as_str()) {
-            continue;
-        }
         let key = name_key(path, companions);
         if let Some(previous) = requested.insert(key, name.clone()) {
             ensure!(
@@ -623,6 +622,17 @@ pub fn resolve_file_names(
     }
     ensure!(!cancelled(), "Naming cancelled");
     Ok(resolved)
+}
+/// The cleaned new base name a request asks for, or `None` when it keeps the
+/// current one. The current name counts as kept even when a new name could not
+/// use it, so an existing `23:Dec.jpg` is never renamed implicitly.
+pub(crate) fn requested_stem(path: &std::path::Path, name: &str) -> Option<String> {
+    let current = path.file_stem().and_then(|v| v.to_str());
+    if name.trim().is_empty() || current == Some(name) {
+        return None;
+    }
+    let name = safe_component(name);
+    (current != Some(name.as_str())).then_some(name)
 }
 /// Atomically edit or restore a base name and its enabled photo companions.
 /// The editor owns this disposable draft until Keep/Preview accepts it.

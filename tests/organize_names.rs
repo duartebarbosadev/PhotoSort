@@ -110,7 +110,12 @@ fn draft_names_handle_supporting_files_extensions_restoration_and_atomic_validat
         "An unchanged existing long name is not a rename"
     );
     let before = names.clone();
-    for invalid in ["../escape", "a/b", "a\\b", "name.", " ", "bad:name"] {
+    let mut invalid = vec!["../escape", "a/b", "a\\b", " ", "bad:name"];
+    // Only Windows drops trailing dots from new names.
+    if cfg!(windows) {
+        invalid.push("name.");
+    }
+    for invalid in invalid {
         assert!(organize::set_file_name(&catalog, &mut names, id, invalid, true).is_err());
         assert_eq!(names, before);
     }

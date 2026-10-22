@@ -1149,23 +1149,18 @@ impl PhotoSortApp {
     fn label_for(&self, media: &Media) -> String {
         let meta = self.metadata.get(&media.id);
         match self.group_mode {
-            GroupMode::Current => media
-                .path
-                .parent()
-                .and_then(|p| {
-                    self.catalog
-                        .as_ref()
-                        .and_then(|c| p.strip_prefix(&c.root).ok())
-                })
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_default(),
+            GroupMode::Current => self.current_label(media).unwrap_or_else(|| {
+                self.relative_parent(media)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            }),
             GroupMode::Date => {
                 crate::core::dates::label(media, meta.unwrap_or(&Metadata::default()))
                     .unwrap_or_else(|| "undated".into())
             }
             GroupMode::Camera => meta
-                .filter(|m| !m.camera.is_empty())
-                .map(|m| m.camera.clone())
+                .filter(|m| !m.camera.trim().is_empty())
+                .map(|m| crate::core::operations::safe_component(&m.camera))
                 .unwrap_or_else(|| "Unknown camera".into()),
             GroupMode::Location => self
                 .preferences
@@ -1212,6 +1207,18 @@ impl PhotoSortApp {
                         "Analyze to group scenes".into()
                     }
                 }),
+        }
+    }
+    fn relative_parent<'a>(&self, media: &'a Media) -> Option<&'a std::path::Path> {
+        let root = &self.catalog.as_ref()?.root;
+        media.path.parent()?.strip_prefix(root).ok()
+    }
+    /// The exact folder label for Current folders, or `None` when the folder
+    /// name is not valid Unicode and the file must stay where it is.
+    pub(super) fn current_label(&self, media: &Media) -> Option<String> {
+        match self.relative_parent(media) {
+            Some(parent) => crate::core::names::relative_label(parent),
+            None => Some(String::new()),
         }
     }
     fn review_trash(&mut self, request: crate::core::operations::TrashRequest) {

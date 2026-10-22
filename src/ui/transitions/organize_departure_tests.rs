@@ -5,11 +5,14 @@ use crate::core::{
 };
 
 fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
+    fixture_in("Before")
+}
+fn fixture_in(folder: &str) -> (tempfile::TempDir, PhotoSortApp) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
-    std::fs::create_dir(root.join("Before")).unwrap();
+    std::fs::create_dir_all(root.join(folder)).unwrap();
     // Deliberately invalid images: departure and file planning must not decode.
-    std::fs::write(root.join("Before/a.jpg"), b"original bytes").unwrap();
+    std::fs::write(root.join(folder).join("a.jpg"), b"original bytes").unwrap();
     let catalog = Catalog::scan(&root, || false, |_| {}).unwrap();
     let mut app = PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, root.join("cache")), None);
     app.root = Some(root.clone());
@@ -318,6 +321,23 @@ fn unchanged_library_leaves_without_planning_or_analysis() {
     app.request_departure(Destination::Step(Step::Cull));
     assert!(app.step == Step::Cull);
     assert!(app.plan.is_none() && !app.busy && app.analysis_run.is_none());
+}
+// Windows cannot create these names.
+#[cfg(unix)]
+#[test]
+fn existing_folder_names_with_reserved_characters_are_not_changes() {
+    for folder in [
+        "Archive/toEdit/23:Dec/DCIM/10051129",
+        "?*\"<>|",
+        "trailing. ",
+    ] {
+        let (_dir, mut app) = fixture_in(folder);
+        assert_eq!(app.group_mode, GroupMode::Current);
+        assert_eq!(app.organize_labels()[&app.media[0].id], folder);
+        assert!(!app.organize_changes_pending(), "{folder}");
+        app.request_departure(Destination::Step(Step::Cull));
+        assert!(app.step == Step::Cull && app.plan.is_none(), "{folder}");
+    }
 }
 #[test]
 fn cancel_preserves_edits_and_discard_leaves_without_file_mutation() {
