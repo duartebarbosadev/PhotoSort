@@ -844,7 +844,10 @@ impl PhotoSortApp {
         };
         ui.add(egui::Label::new(RichText::new(line).small().color(MUTED)).truncate());
         ui.add_space(S1);
-        let controls = 34.0;
+        // The mark, rating and zoom controls take two rows in a narrow panel,
+        // so they never widen it over the board.
+        let narrow = ui.available_width() < 560.0;
+        let controls = if narrow { 70.0 } else { 34.0 };
         let size = egui::vec2(
             ui.available_width(),
             (ui.available_height() - controls).max(80.0),
@@ -869,7 +872,14 @@ impl PhotoSortApp {
                 });
             }
         });
-        ui.horizontal_centered(|ui| {
+        let row = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
+            if narrow {
+                ui.horizontal_wrapped(|ui| add(ui));
+            } else {
+                ui.horizontal_centered(|ui| add(ui));
+            }
+        };
+        row(ui, &mut |ui| {
             let rejected = self.decision(active).rejected;
             if icon_text_button(
                 ui,
@@ -1129,11 +1139,15 @@ impl PhotoSortApp {
             )
             .show(ui, |ui| self.board_tree(ui));
         // The clicked photo, large, on the right.
-        let preview_width = (ui.available_width() * 0.42).clamp(260.0, 900.0);
+        // The board keeps room for a row of tiles and its header; the preview
+        // gives way in a narrow window.
+        // Its controls need about 330 points in two rows.
+        let widest = (ui.available_width() - 290.0).clamp(330.0, 1100.0);
+        let preview_width = (ui.available_width() * 0.42).clamp(330.0, widest.min(900.0));
         egui::Panel::right("organize_preview_panel")
             .resizable(true)
             .default_size(preview_width)
-            .size_range(240.0..=1100.0)
+            .size_range(330.0..=widest)
             .frame(
                 egui::Frame::new()
                     .fill(PANEL)
