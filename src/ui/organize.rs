@@ -56,6 +56,15 @@ pub(super) struct Editor {
     folder_scroll: f32,
     restore_scroll: [Option<f32>; 2],
 }
+/// Why an analysis-based grouping has no result yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Pending {
+    Running,
+    /// Not started: another task, the folder scan or AI models come first.
+    Waiting,
+    Cancelled,
+    Failed,
+}
 struct PhotoRow {
     id: MediaId,
     source: PathBuf,
@@ -1437,7 +1446,35 @@ impl PhotoSortApp {
     pub(super) fn halt_organize_run(&mut self) {
         if let Some((_, mode)) = self.organize_run.take() {
             self.organize_halted = Some(mode);
+            self.organize_cancelled = false;
         }
+    }
+    /// The chosen grouping is analyzing right now.
+    pub(super) fn organize_running(&self) -> bool {
+        self.analysis_run
+            .is_some_and(|run| self.organize_run == Some((run, self.group_mode)))
+    }
+    /// An analysis-based grouping has no result or folder edits yet, so the
+    /// board must not present its photos as staying in place.
+    pub(super) fn organize_pending(&self) -> Option<Pending> {
+        if self.step != Step::Organize
+            || !self.automatic_organize_mode()
+            || self.organize_grouping_ready()
+            || self.organize_drafts.contains_key(&self.group_mode)
+        {
+            return None;
+        }
+        Some(if self.organize_running() {
+            Pending::Running
+        } else if self.organize_halted == Some(self.group_mode) {
+            if self.organize_cancelled {
+                Pending::Cancelled
+            } else {
+                Pending::Failed
+            }
+        } else {
+            Pending::Waiting
+        })
     }
     /// Choosing an analysis-based grouping starts it, or says why it waits.
     pub(super) fn start_organize_grouping(&mut self) {

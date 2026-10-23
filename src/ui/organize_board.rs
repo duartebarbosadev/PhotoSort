@@ -3,6 +3,7 @@
 //! dragged onto folders; folders can be created and renamed in place. Every
 //! edit goes into the same folder draft as the folder editor, and nothing
 //! moves on disk until the planned moves are previewed and applied.
+use super::organize::Pending;
 use super::*;
 use crate::core::organize::Draft;
 
@@ -63,7 +64,50 @@ fn within(path: &str, folder: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// The heading over photos outside every proposed folder. Until an
+/// analysis-based grouping has a result, they are waiting, not staying.
+pub(super) fn unplaced_title(pending: Option<Pending>) -> &'static str {
+    match pending {
+        None => "Stays in place",
+        Some(Pending::Running) => "Grouping…",
+        Some(_) => "Not grouped yet",
+    }
+}
+
 impl PhotoSortApp {
+    /// The note under the folder tree about photos outside every folder.
+    pub(super) fn board_note(&self) -> Option<String> {
+        let unplaced = self.board.unplaced;
+        Some(match self.organize_pending() {
+            Some(Pending::Running) => "Folders appear when grouping finishes".into(),
+            Some(Pending::Waiting) => "Not grouped yet · nothing moves until you apply".into(),
+            Some(Pending::Cancelled) => "Grouping cancelled · no folders proposed".into(),
+            Some(Pending::Failed) => "Grouping stopped · no folders proposed".into(),
+            None if unplaced > 0 => format!(
+                "{unplaced} {} stay where they are",
+                if unplaced == 1 { "item" } else { "items" }
+            ),
+            None => return None,
+        })
+    }
+    /// The counts beside the board's title.
+    pub(super) fn board_counts(&self, folders: usize, items: usize, all: bool) -> String {
+        let items = format!("{items} {}", if items == 1 { "item" } else { "items" });
+        match self.organize_pending() {
+            Some(Pending::Running) => format!("{items} · grouping…"),
+            Some(_) => format!("{items} · not grouped yet"),
+            None => {
+                let mut summary = format!(
+                    "{folders} {} · {items}",
+                    if folders == 1 { "folder" } else { "folders" }
+                );
+                if all && self.board.unplaced > 0 {
+                    summary.push_str(&format!(" · {} stay in place", self.board.unplaced));
+                }
+                summary
+            }
+        }
+    }
     pub(super) fn board_key(&self) -> BoardKey {
         BoardKey {
             mode: self.group_mode,
@@ -208,6 +252,59 @@ impl PhotoSortApp {
         {
             self.board.focus = None;
         }
+    }
+    /// The board section holding the active photo.
+    fn active_section(&self) -> Option<&Section> {
+        let index = self.index.get(&self.active?)?;
+        let position = self.filtered.iter().position(|i| i == index)?;
+        self.board
+            .sections
+            .iter()
+            .find(|s| s.range.contains(&position))
+    }
+    /// Shows one folder (`None`: every item). Its first photo becomes the
+    /// current one unless the current photo is already in it, so the arrow
+    /// keys walk this folder's photos next.
+    pub(super) fn board_select_folder(&mut self, focus: Option<String>) {
+        let shown = |section: &Section| match (&focus, &section.path) {
+            (None, _) => true,
+            (Some(focus), Some(path)) => within(path, focus),
+            (Some(_), None) => false,
+        };
+        let inside = self.active_section().is_some_and(shown);
+        let first = self
+            .board
+            .sections
+            .iter()
+            .find(|s| shown(s))
+            .and_then(|s| self.filtered.get(s.range.start))
+            .map(|&i| self.media[i].id);
+        self.board.focus = focus;
+        if !inside && let Some(id) = first {
+            if self.library_selection_mode() {
+                self.selection.single(id);
+                self.comparison.clear();
+            }
+            self.set_active(id);
+        }
+        self.library_reveal = false;
+    }
+    /// After the arrow keys move past the shown folder's last (or first)
+    /// photo, the sidebar follows to the folder now holding it.
+    pub(super) fn board_follow_active(&mut self) {
+        let Some(focus) = self.board.focus.as_deref() else {
+            return;
+        };
+        let Some(section) = self.active_section() else {
+            return;
+        };
+        let next = match &section.path {
+            Some(path) if within(path, focus) => return,
+            Some(path) => Some(path.clone()),
+            None => None, // Only "every item" shows those staying in place.
+        };
+        self.board.focus = next;
+        self.library_reveal = true;
     }
     /// The folder draft to edit, created from the current proposal when the
     /// first edit is made, as the folder editor does.
@@ -452,20 +549,9 @@ impl PhotoSortApp {
         egui::ScrollArea::vertical()
             .id_salt("organize_folders")
             .auto_shrink([false, false])
-            .show_rows(ui, row_height, rows + 2, |ui, range| {
+            .show_rows(ui, row_height, rows + 1, |ui, range| {
                 for row in range {
-                    if row == 0 {
-                        // Every folder at once.
-                        let selected = self.board.focus.is_none();
-                        let total = self.filtered.len();
-                        if folder_row(ui, "All folders", icon::SQUARES_FOUR, 0, total, selected)
-                            .clicked()
-                        {
-                            select = Some(None);
-                        }
-                        continue;
-                    }
-                    if row == rows + 1 {
+                    if row == rows {
                         if let Some((parent, name, true)) = &mut self.board.editing {
                             let depth = if parent.is_empty() {
                                 1
@@ -488,24 +574,15 @@ impl PhotoSortApp {
                                 }
                                 finish |= response.lost_focus();
                             });
-                        } else if self.board.unplaced > 0 {
-                            ui.label(
-                                RichText::new(format!(
-                                    "{} {} stay where they are",
-                                    self.board.unplaced,
-                                    if self.board.unplaced == 1 {
-                                        "item"
-                                    } else {
-                                        "items"
-                                    }
-                                ))
-                                .small()
-                                .color(MUTED),
+                        } else if let Some(note) = self.board_note() {
+                            ui.add(
+                                egui::Label::new(RichText::new(note).small().color(MUTED))
+                                    .truncate(),
                             );
                         }
                         continue;
                     }
-                    let folder = &self.board.folders[row - 1];
+                    let folder = &self.board.folders[row];
                     let path = folder.path.clone();
                     let (depth, direct, total) = (folder.depth, folder.direct, folder.total);
                     if let Some((editing, name, false)) = &mut self.board.editing
@@ -529,11 +606,18 @@ impl PhotoSortApp {
                     } else {
                         leaf(&path).to_owned()
                     };
-                    let selected = self.board.focus.as_deref() == Some(path.as_str());
+                    // The library folder is the top row and shows every
+                    // item, those staying in place included.
+                    let top = path.is_empty();
+                    let selected = if top {
+                        self.board.focus.as_deref().is_none_or(str::is_empty)
+                    } else {
+                        self.board.focus.as_deref() == Some(path.as_str())
+                    };
                     let response = folder_row(
                         ui,
                         &title,
-                        if path.is_empty() {
+                        if top {
                             icon::HARD_DRIVES
                         } else if total == 0 {
                             icon::FOLDER_DASHED
@@ -541,13 +625,16 @@ impl PhotoSortApp {
                             icon::FOLDER_SIMPLE
                         },
                         depth,
-                        total,
+                        if top { self.filtered.len() } else { total },
                         selected,
                     )
-                    .on_hover_text(format!(
-                        "{} · {direct} here, {total} including subfolders",
-                        if path.is_empty() { &root } else { &path }
-                    ));
+                    .on_hover_text(if top {
+                        format!(
+                            "{root} · every item · {direct} directly in it, {total} in its folders"
+                        )
+                    } else {
+                        format!("{path} · {direct} here, {total} including subfolders")
+                    });
                     if editable
                         && response
                             .dnd_hover_payload::<super::grouping::PhotoDrag>()
@@ -567,7 +654,10 @@ impl PhotoSortApp {
                         drop = Some((payload.0.clone(), path.clone()));
                     }
                     if response.clicked() {
-                        select = Some(Some(path.clone()));
+                        select = Some((!top).then(|| path.clone()));
+                        // Arrow keys then walk this folder's photos instead
+                        // of moving between folder rows.
+                        ui.memory_mut(|m| m.surrender_focus(response.id));
                     }
                     if response.double_clicked() && editable && !path.is_empty() {
                         self.board.editing = Some((path.clone(), leaf(&path).to_owned(), false));
@@ -605,8 +695,7 @@ impl PhotoSortApp {
                 }
             });
         if let Some(focus) = select {
-            self.board.focus = focus;
-            self.library_reveal = false;
+            self.board_select_folder(focus);
             ui.ctx()
                 .data_mut(|d| d.insert_temp(egui::Id::new("organize-board-top"), true));
         }
@@ -676,7 +765,7 @@ impl PhotoSortApp {
         });
         let root = self.board_root_name();
         let folder = match destination.as_deref() {
-            None => "Stays in place".to_owned(),
+            None => unplaced_title(self.organize_pending()).to_owned(),
             Some("") => root,
             Some(path) => format!("{root} / {}", path.replace('/', " / ")),
         };
@@ -794,65 +883,50 @@ impl PhotoSortApp {
                 (shown.len(), shown.iter().map(|s| s.range.len()).sum())
             }
         };
+        let title = match &focus {
+            None => root.clone(),
+            Some(path) if path.is_empty() => root.clone(),
+            Some(path) => format!("{root} / {}", path.replace('/', " / ")),
+        };
+        let summary = self.board_counts(folders, items, focus.is_none());
         ui.horizontal(|ui| {
             ui.set_height(28.0);
-            if focus.is_some()
-                && named(
-                    ui.small_button(icon::ARROW_LEFT),
-                    egui::WidgetType::Button,
-                    "Back to all folders",
-                )
-                .on_hover_text("All folders")
-                .clicked()
-            {
-                self.board.focus = None;
-            }
-            let title = match &focus {
-                None => "All folders".to_owned(),
-                Some(path) if path.is_empty() => root.clone(),
-                Some(path) => format!("{root} / {}", path.replace('/', " / ")),
-            };
-            ui.label(RichText::new(title).font(semibold(13.0)));
-            let mut summary = format!(
-                "{folders} {} · {items} {}",
-                if folders == 1 { "folder" } else { "folders" },
-                if items == 1 { "item" } else { "items" }
-            );
-            if focus.is_none() && self.board.unplaced > 0 {
-                summary.push_str(&format!(" · {} stay in place", self.board.unplaced));
-            }
-            ui.label(RichText::new(summary).color(MUTED));
+            // The size slider is placed first, from the right; the title and
+            // counts then get only the room left of it and truncate there.
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 ui.label(RichText::new(icon::IMAGE).size(16.0).color(MUTED));
                 let mut tile = self.board.tile.unwrap_or(TILE);
                 ui.spacing_mut().slider_width = 90.0;
                 ui.spacing_mut().interact_size.y = 14.0;
-                if ui
-                    .add(egui::Slider::new(&mut tile, 110.0..=300.0).show_value(false))
-                    .on_hover_text("Thumbnail size")
-                    .changed()
+                if named(
+                    ui.add(egui::Slider::new(&mut tile, 110.0..=300.0).show_value(false)),
+                    egui::WidgetType::Slider,
+                    "Thumbnail size",
+                )
+                .on_hover_text("Thumbnail size")
+                .changed()
                 {
                     self.board.tile = Some(tile);
                 }
                 ui.label(RichText::new(icon::IMAGE).size(11.0).color(MUTED));
+                ui.add_space(S3);
+                // The selection count only when it fits beside the title.
+                let small = egui::TextStyle::Small.resolve(ui.style());
+                let width = |text: &str, font: FontId| {
+                    ui.painter()
+                        .layout_no_wrap(text.to_owned(), font, ACCENT)
+                        .size()
+                        .x
+                };
+                let title_width = width(&title, semibold(13.0)) + 40.0;
                 if self.library_selection_mode() && !self.selection.is_empty() {
-                    ui.add_space(S3);
-                    // Only what fits beside the title: text that overflows a
-                    // right-to-left row would push the board under the folders.
                     let count = self.selection.len();
-                    let font = egui::TextStyle::Small.resolve(ui.style());
-                    let width = |text: &str| {
-                        ui.painter()
-                            .layout_no_wrap(text.to_owned(), font.clone(), ACCENT)
-                            .size()
-                            .x
-                    };
                     let full = format!("{count} selected · drag onto a folder to move");
                     let short = format!("{count} selected");
-                    let room = ui.available_width();
-                    let text = if width(&full) <= room {
+                    let room = ui.available_width() - title_width;
+                    let text = if width(&full, small.clone()) <= room {
                         Some(full)
-                    } else if width(&short) <= room {
+                    } else if width(&short, small.clone()) <= room {
                         Some(short)
                     } else {
                         None
@@ -860,10 +934,94 @@ impl PhotoSortApp {
                     if let Some(text) = text {
                         ui.label(RichText::new(text).small().color(ACCENT))
                             .on_hover_text("Drag onto a folder to move");
+                        ui.add_space(S3);
                     }
                 }
+                ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
+                    if focus.is_some()
+                        && named(
+                            ui.small_button(icon::ARROW_LEFT),
+                            egui::WidgetType::Button,
+                            "Back to all folders",
+                        )
+                        .on_hover_text(format!("Every item in {root}"))
+                        .clicked()
+                    {
+                        self.board.focus = None;
+                    }
+                    ui.add(egui::Label::new(RichText::new(&title).font(semibold(13.0))).truncate());
+                    ui.add(egui::Label::new(RichText::new(&summary).color(MUTED)).truncate())
+                        .on_hover_text(&summary);
+                });
             });
         });
+    }
+    /// Why the chosen grouping has no result, and the action that starts it.
+    pub(super) fn organize_notice_text(
+        &self,
+    ) -> Option<(&'static str, String, String, Option<&'static str>)> {
+        use egui_phosphor::regular as icon;
+        let what = self.group_mode.title().to_lowercase();
+        Some(match self.organize_pending()? {
+            Pending::Running => return None,
+            Pending::Cancelled => (
+                icon::PROHIBIT,
+                format!("Grouping by {what} cancelled"),
+                "Photos stay where they are. Group again to propose folders.".into(),
+                Some("Group again"),
+            ),
+            Pending::Failed => (
+                icon::WARNING,
+                format!("Grouping by {what} stopped"),
+                "It could not finish. Group again to retry.".into(),
+                Some("Group again"),
+            ),
+            Pending::Waiting if self.model_issue.is_some() || self.model_dialog => (
+                icon::CPU,
+                format!("Grouping by {what} needs AI models"),
+                "Set up the models it needs, then group again.".into(),
+                Some("AI models…"),
+            ),
+            Pending::Waiting if self.analysis_run.is_some() || self.rotation_run.is_some() => (
+                icon::HOURGLASS_MEDIUM,
+                format!("Grouping by {what} is next"),
+                "It starts when the current analysis finishes.".into(),
+                None,
+            ),
+            Pending::Waiting if self.scanning || self.media.is_empty() => (
+                icon::HOURGLASS_MEDIUM,
+                format!("Grouping by {what} is next"),
+                "It starts once the folder has been read.".into(),
+                None,
+            ),
+            Pending::Waiting if self.busy || self.plan_open || self.retry_plan.is_some() => (
+                icon::HOURGLASS_MEDIUM,
+                format!("Grouping by {what} is next"),
+                "It waits for the current task to finish.".into(),
+                None,
+            ),
+            Pending::Waiting => (
+                icon::CIRCLE_DASHED,
+                format!("Not grouped by {what} yet"),
+                "Group photos to propose folders. Nothing moves until you preview and apply."
+                    .into(),
+                Some("Group photos"),
+            ),
+        })
+    }
+    fn organize_notice(&mut self, ui: &mut egui::Ui) {
+        let Some((glyph, title, body, action)) = self.organize_notice_text() else {
+            return;
+        };
+        let models = action == Some("AI models…");
+        let enabled = models || self.can_start_analysis();
+        if super::states::notice_card(ui, glyph, &title, &body, action.map(|a| (a, enabled))) {
+            if models {
+                self.open_model_setup();
+            } else {
+                self.start_organize_grouping();
+            }
+        }
     }
     /// The middle of Organize: photos grouped under their destination folder.
     pub(super) fn organize_board(&mut self, ui: &mut egui::Ui) {
@@ -914,6 +1072,15 @@ impl PhotoSortApp {
                     }),
             )
             .show(ui, |ui| self.board_preview(ui));
+        let pending = self.organize_pending();
+        if self.analysis_run.is_some() {
+            self.analysis_banner(ui);
+            ui.add_space(S2);
+        }
+        if pending.is_some_and(|p| p != Pending::Running) {
+            self.organize_notice(ui);
+            ui.add_space(S2);
+        }
         self.board_summary(ui);
         let gap = ui.spacing().item_spacing.x;
         let width = ui.available_width();
@@ -993,6 +1160,7 @@ impl PhotoSortApp {
         }
         let editable = self.can_edit_folders() && self.organize_editor.is_none();
         let root = self.board_root_name();
+        let dim = matches!(pending, Some(Pending::Running | Pending::Waiting));
         let mut drop: Option<(Vec<MediaId>, String)> = None;
         let mut select_section: Option<usize> = None;
         let output = scroll.show_viewport(ui, |ui, viewport| {
@@ -1033,6 +1201,7 @@ impl PhotoSortApp {
                             &root,
                             &counts,
                             response.hovered(),
+                            pending,
                         );
                         if let Some(path) = &section.path {
                             if editable
@@ -1054,12 +1223,12 @@ impl PhotoSortApp {
                                 drop = Some((payload.0.clone(), path.clone()));
                             }
                         }
-                        let name = format!(
-                            "Folder {}",
-                            section.path.as_deref().map_or("stays in place", |p| {
-                                if p.is_empty() { &root } else { p }
-                            })
-                        );
+                        let name = match section.path.as_deref() {
+                            None if pending.is_some() => "Photos not grouped yet".to_owned(),
+                            None => "Folder stays in place".to_owned(),
+                            Some("") => format!("Folder {root}"),
+                            Some(path) => format!("Folder {path}"),
+                        };
                         response.widget_info(|| {
                             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name)
                         });
@@ -1084,7 +1253,14 @@ impl PhotoSortApp {
                                 egui::UiBuilder::new()
                                     .id_salt(("board", position))
                                     .max_rect(rect),
-                                |ui| self.card(ui, media, cell, tile_height, true),
+                                |ui| {
+                                    // Photos wait, dimmed, for the grouping
+                                    // that will place them.
+                                    if dim {
+                                        ui.multiply_opacity(0.45);
+                                    }
+                                    self.card(ui, media, cell, tile_height, true)
+                                },
                             );
                         }
                     }
@@ -1138,7 +1314,7 @@ fn folder_row(
     } else if hover > 0.0 {
         painter.rect_filled(rect, R_CONTROL, CARD.gamma_multiply(hover));
     }
-    let x = rect.left() + 8.0 + depth.saturating_sub(1) as f32 * 14.0;
+    let x = rect.left() + 8.0 + depth as f32 * 14.0;
     painter.text(
         egui::pos2(x, rect.center().y),
         Align2::LEFT_CENTER,
@@ -1180,12 +1356,21 @@ fn section_header(
     root: &str,
     counts: &str,
     hovered: bool,
+    pending: Option<Pending>,
 ) {
     use egui_phosphor::regular as icon;
     let painter = ui.painter_at(rect);
     let y = rect.bottom() - 16.0;
     let (glyph, title, parent) = match path {
-        None => (icon::PUSH_PIN, "Stays in place".to_owned(), String::new()),
+        None => (
+            match pending {
+                None => icon::PUSH_PIN,
+                Some(Pending::Running) => icon::HOURGLASS_MEDIUM,
+                Some(_) => icon::CIRCLE_DASHED,
+            },
+            unplaced_title(pending).to_owned(),
+            String::new(),
+        ),
         Some("") => (icon::HARD_DRIVES, root.to_owned(), String::new()),
         Some(path) => (
             icon::FOLDER_SIMPLE,
@@ -1447,6 +1632,221 @@ mod tests {
         app.check_board();
         app.refilter();
         assert_eq!(paths(&app), ["", "Picks", "Picks/Best"]);
+        app.runtime.shutdown();
+    }
+
+    fn labels(app: &mut PhotoSortApp, width: f32) -> Vec<(String, egui::Rect)> {
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        super::super::compact_cull_tests::rendered(app, &ctx, egui::vec2(width, 900.0))
+    }
+    fn shows(nodes: &[(String, egui::Rect)], text: &str) -> bool {
+        nodes.iter().any(|(label, _)| label.contains(text))
+    }
+
+    #[test]
+    fn a_running_grouping_shows_progress_instead_of_a_result() {
+        let (_temp, mut app) = organize();
+        app.group_mode = GroupMode::Visual;
+        app.visual_groups = None;
+        app.filter_dirty = true;
+        app.refilter();
+        app.analysis_run = Some(7);
+        app.organize_run = Some((7, GroupMode::Visual));
+        app.progress = Some((27, 502));
+        assert_eq!(app.organize_pending(), Some(Pending::Running));
+        assert_eq!(unplaced_title(app.organize_pending()), "Grouping…");
+        assert_eq!(app.board_counts(0, 9, true), "9 items · grouping…");
+        assert_eq!(
+            app.board_note().as_deref(),
+            Some("Folders appear when grouping finishes")
+        );
+        let nodes = labels(&mut app, 1440.0);
+        assert!(shows(&nodes, "Grouping by visual similarity"));
+        assert!(shows(&nodes, "27 of 502 photos"));
+        assert!(nodes.iter().any(|(label, _)| label == "Cancel"));
+        assert!(shows(&nodes, "Photos not grouped yet"));
+        for claim in ["Stays in place", "stay where they are", "9 stay in place"] {
+            assert!(!shows(&nodes, claim), "{claim} shown while grouping");
+        }
+        // Model preparation is named while it runs.
+        #[cfg(feature = "onnx")]
+        {
+            app.runtime
+                .processing
+                .preparing("dinov2", crate::core::processing::Backend::CoreMl);
+            let nodes = labels(&mut app, 1440.0);
+            assert!(shows(&nodes, "Preparing AI models · first run only"));
+            app.runtime.processing.report(
+                "dinov2",
+                crate::core::processing::Backend::Cpu,
+                "CPU fallback".into(),
+            );
+        }
+        // Cancelled: says so and offers to group again; still no result.
+        app.cancel_analysis();
+        assert_eq!(app.organize_pending(), Some(Pending::Cancelled));
+        // Cancelling another step's analysis later does not change that.
+        app.analysis_run = Some(9);
+        app.delete_run = Some(9);
+        app.cancel_analysis();
+        assert_eq!(app.organize_pending(), Some(Pending::Cancelled));
+        let nodes = labels(&mut app, 1440.0);
+        assert!(shows(&nodes, "Grouping by visual similarity cancelled"));
+        assert!(nodes.iter().any(|(label, _)| label == "Group again"));
+        assert!(!shows(&nodes, "27 of 502"));
+        assert!(!shows(&nodes, "9 items stay where they are"));
+        assert_eq!(
+            app.board_note().as_deref(),
+            Some("Grouping cancelled · no folders proposed")
+        );
+        // A failed run reads differently from a cancelled one.
+        app.analysis_run = Some(8);
+        app.organize_run = Some((8, GroupMode::Visual));
+        app.halt_organize_run(); // As a failed run does.
+        app.analysis_run = None;
+        assert_eq!(app.organize_pending(), Some(Pending::Failed));
+        assert!(
+            app.organize_notice_text()
+                .is_some_and(|(_, title, _, _)| title == "Grouping by visual similarity stopped")
+        );
+        // Finished without any group: now staying in place is the result.
+        app.visual_groups = Some(HashMap::new());
+        app.check_board();
+        app.refilter();
+        assert_eq!(app.organize_pending(), None);
+        let nodes = labels(&mut app, 1440.0);
+        assert!(shows(&nodes, "Folder stays in place"));
+        assert!(shows(&nodes, "9 items stay where they are"));
+        assert!(!shows(&nodes, "Grouping by visual similarity"));
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn another_steps_analysis_shows_its_own_card_and_the_grouping_waits() {
+        let (_temp, mut app) = organize();
+        app.group_mode = GroupMode::Faces;
+        app.analysis_run = Some(3);
+        app.delete_run = Some(3);
+        app.progress = Some((4, 9));
+        assert_eq!(app.organize_pending(), Some(Pending::Waiting));
+        let nodes = labels(&mut app, 1440.0);
+        assert!(shows(&nodes, "Looking for photos to clean up"));
+        assert!(shows(&nodes, "4 of 9 photos"));
+        assert!(shows(&nodes, "Grouping by faces is next"));
+        assert!(!shows(&nodes, "stay where they are"));
+        // Cull keeps its grid and gets the same card above it.
+        app.delete_run = None;
+        app.cull_group_run = Some(3);
+        app.step = Step::Cull;
+        app.filter_dirty = true;
+        app.refilter();
+        let nodes = labels(&mut app, 1440.0);
+        assert!(shows(&nodes, "Analyzing the library"));
+        assert!(shows(&nodes, "4 of 9 photos"));
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn board_counts_never_run_under_the_thumbnail_slider() {
+        let (_temp, mut app) = organize();
+        app.group_mode = GroupMode::Visual;
+        app.visual_groups = Some(HashMap::new());
+        app.filter_dirty = true;
+        app.refilter();
+        let summary = app.board_counts(0, 9, true);
+        assert_eq!(summary, "0 folders · 9 items · 9 stay in place");
+        for width in [900.0, 1000.0, 1100.0, 1200.0, 1440.0, 1800.0] {
+            let nodes = labels(&mut app, width);
+            let rect = |name: &str| {
+                nodes
+                    .iter()
+                    .find(|(label, _)| label == name)
+                    .unwrap_or_else(|| panic!("{name} missing at {width}"))
+                    .1
+            };
+            let (counts, slider) = (rect(&summary), rect("Thumbnail size"));
+            assert!(
+                counts.right() <= slider.left(),
+                "counts {counts:?} overlap the slider {slider:?} at {width}"
+            );
+        }
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn the_library_folder_is_one_row_that_shows_every_item() {
+        let (_temp, mut app) = organize();
+        let root = app.board_root_name();
+        let nodes = labels(&mut app, 1400.0);
+        let row = format!("{root}  ·  9");
+        assert_eq!(nodes.iter().filter(|(label, _)| *label == row).count(), 1);
+        assert!(!shows(&nodes, "All folders"));
+        // Choosing it after a folder shows every item again.
+        app.board_select_folder(Some("B".into()));
+        app.board_select_folder(None);
+        assert!(app.board.focus.is_none());
+        // Dropping onto it still moves photos to the library folder.
+        let id = app.media[app.filtered[0]].id;
+        app.board_move(&[id], "");
+        assert_eq!(
+            app.organize_drafts[&GroupMode::Current].labels().get(&id),
+            Some(&String::new())
+        );
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn arrow_keys_walk_a_folders_photos_then_continue_into_the_next_folder() {
+        use super::super::compact_cull_tests::{click_label, frame};
+        let (_temp, mut app) = organize();
+        let ids: Vec<MediaId> = app.filtered.iter().map(|i| app.media[*i].id).collect();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1400.0, 900.0);
+        let press = |app: &mut PhotoSortApp, pressed: egui::Key| {
+            frame(app, &ctx, size, key(pressed, Default::default()));
+        };
+        // Clicking a folder starts at its first photo; arrows stay in its photos.
+        click_label(&mut app, &ctx, size, "Day1  ·  4");
+        assert_eq!(app.board.focus.as_deref(), Some("A/Day1"));
+        assert_eq!(app.active, Some(ids[0]));
+        for &id in &ids[1..4] {
+            press(&mut app, egui::Key::ArrowDown);
+            assert_eq!(app.active, Some(id));
+            assert_eq!(app.board.focus.as_deref(), Some("A/Day1"));
+        }
+        // Past the last photo: the next folder's first, and the sidebar follows.
+        press(&mut app, egui::Key::ArrowDown);
+        assert_eq!(app.active, Some(ids[4]));
+        assert_eq!(app.board.focus.as_deref(), Some("B"));
+        assert_eq!(
+            app.selection.ordered(&app.media, &app.filtered),
+            vec![ids[4]]
+        );
+        // And back.
+        press(&mut app, egui::Key::ArrowUp);
+        assert_eq!(app.active, Some(ids[3]));
+        assert_eq!(app.board.focus.as_deref(), Some("A/Day1"));
+        // The end of the last folder stays put.
+        for _ in 0..8 {
+            press(&mut app, egui::Key::ArrowDown);
+        }
+        assert_eq!(app.active, Some(ids[8]));
+        assert_eq!(app.board.focus.as_deref(), Some("B"));
+        // The library row walks every photo across folders without
+        // narrowing the view.
+        let root = format!("{}  ·  9", app.board_root_name());
+        click_label(&mut app, &ctx, size, &root);
+        assert!(app.board.focus.is_none());
+        assert_eq!(app.active, Some(ids[8]));
+        for &id in ids[2..8].iter().rev() {
+            press(&mut app, egui::Key::ArrowUp);
+            assert_eq!(app.active, Some(id));
+            assert!(app.board.focus.is_none());
+        }
         app.runtime.shutdown();
     }
 }

@@ -18,14 +18,7 @@ impl PhotoSortApp {
         self.status_scope = Some((Step::Organize, Some(mode)));
     }
     pub(super) fn workflow_status(&self) -> Cow<'_, str> {
-        if (self.analysis_run.is_some() || self.rotation_run.is_some())
-            && let Some(status) = self
-                .runtime
-                .processing
-                .status()
-                .into_iter()
-                .find(|s| s.preparing)
-        {
+        if let Some(status) = self.preparing_model() {
             return Cow::Owned(format!(
                 "Preparing {} · {} · first use can take minutes",
                 status.model,

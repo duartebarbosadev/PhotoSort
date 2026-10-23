@@ -143,6 +143,24 @@ fn main() -> anyhow::Result<()> {
             false,
             [900.0, 700.0],
         ),
+        (
+            "03e-organize-grouping-wide",
+            Some(Step::Organize),
+            false,
+            [1440.0, 900.0],
+        ),
+        (
+            "10b-organize-grouping-compact",
+            Some(Step::Organize),
+            false,
+            [900.0, 700.0],
+        ),
+        (
+            "01b-cull-analyzing-wide",
+            Some(Step::Cull),
+            false,
+            [1440.0, 900.0],
+        ),
     ];
     // Each scene reopens the same folder, which restores its saved session, so a
     // scene that leaves staged folder changes must run last (see the end).
@@ -179,6 +197,13 @@ fn main() -> anyhow::Result<()> {
             if name.contains("compare") {
                 harness.state_mut().gallery_select(3);
                 settle(&mut harness);
+            }
+            if name.contains("grouping") || name.contains("analyzing") {
+                // A pretend run: settling would wait for it to finish.
+                harness.state_mut().gallery_running_analysis();
+                for _ in 0..5 {
+                    harness.step();
+                }
             }
         }
         let image = harness.render().map_err(|e| anyhow::anyhow!("{e}"))?;
