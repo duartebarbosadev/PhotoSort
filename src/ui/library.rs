@@ -38,6 +38,13 @@ impl PhotoSortApp {
             self.organize_board(ui);
             return;
         }
+        // Guided steps show one review card per suggestion or group.
+        match self.step {
+            Step::EasyDelete => return self.delete_grid(ui),
+            Step::Rotation => return self.rotation_grid(ui),
+            Step::PickBest => return self.pick_grid(ui),
+            _ => {}
+        }
         if self.step != Step::Cull || self.library_layout == Layout::Grid {
             self.grid(ui);
         } else {
@@ -239,8 +246,8 @@ impl PhotoSortApp {
         let columns = ((ui.available_width() + gap) / 200.0).floor().max(1.0) as usize;
         let cell_width =
             (ui.available_width() - gap * (columns.saturating_sub(1) as f32)) / columns as f32;
-        // Cull can hide captions for a denser, image-only grid.
-        let captioned = self.step != Step::Cull || self.preferences.show_filenames;
+        // Hiding file names gives a denser, image-only grid.
+        let captioned = self.preferences.show_filenames;
         let row_height = cell_width * 0.75 + if captioned { CAPTION } else { 0.0 };
         let rows = self.filtered.len().div_ceil(columns);
         let scroll = self.library_scroll(ui, row_height, columns, egui::Id::new("library_grid"));
@@ -408,26 +415,9 @@ impl PhotoSortApp {
                 FontId::proportional(11.5),
                 INK,
             );
-            // Organize names each tile's folder in the board's section header.
-            let (detail, color) = if self.step == Step::Rotation {
-                (
-                    self.rotation_review
-                        .choice(id)
-                        .map(|c| {
-                            format!(
-                                "{} · {}°",
-                                if c.confirmed {
-                                    "Confirmed"
-                                } else {
-                                    "Unconfirmed"
-                                },
-                                c.degrees()
-                            )
-                        })
-                        .unwrap_or_else(|| "Not reviewed".into()),
-                    MUTED,
-                )
-            } else if rating > 0 {
+            // Organize names each tile's folder in the board's section header;
+            // the guided steps have review cards instead.
+            let (detail, color) = if rating > 0 {
                 ("★".repeat(rating as usize), ACCENT)
             } else if let Some(a) = self.analysis.get(&id).filter(|a| !a.issues.is_empty()) {
                 (a.issues.join(" · "), RED)
@@ -589,12 +579,12 @@ fn badge(painter: &egui::Painter, anchor: egui::Pos2, align: Align2, text: &str,
 
 /// A loading thumbnail's placeholder: a shade lighter than its tile, so a
 /// photo arriving brightens the tile instead of flashing dark first.
-const WELL: Color32 = Color32::from_rgb(0x2D, 0x2D, 0x31);
+pub(super) const WELL: Color32 = Color32::from_rgb(0x2D, 0x2D, 0x31);
 
 /// How far a thumbnail has faded in. The first frame with pixels starts the
 /// fade, so a scrolling grid fills softly instead of popping; thumbnails that
 /// were already loaded appear at once.
-fn reveal(ui: &egui::Ui, id: MediaId, loaded: bool) -> f32 {
+pub(super) fn reveal(ui: &egui::Ui, id: MediaId, loaded: bool) -> f32 {
     let time = ui.ctx().global_style().animation_time * 1.75;
     ui.ctx().animate_bool_with_time_and_easing(
         egui::Id::new(("thumbnail-reveal", id)),
@@ -608,7 +598,7 @@ fn reveal(ui: &egui::Ui, id: MediaId, loaded: bool) -> f32 {
 /// band of light sweeping across it. The band stays in phase across tiles,
 /// so a loading grid reads as one wave rather than many blinking cells.
 /// Reduce motion keeps the well and drops the sweep.
-fn shimmer(ui: &egui::Ui, rect: egui::Rect) {
+pub(super) fn shimmer(ui: &egui::Ui, rect: egui::Rect) {
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     painter.rect_filled(rect, 6.0, WELL);
     if ui.ctx().global_style().animation_time == 0.0 {
@@ -637,7 +627,14 @@ fn shimmer(ui: &egui::Ui, rect: egui::Rect) {
 
 /// The focus ring: accent for the active photo, a quieter line for compared
 /// or selected ones. It eases in and out so moving through photos glides.
-fn ring(ui: &egui::Ui, id: egui::Id, rect: egui::Rect, radius: u8, active: bool, marked: bool) {
+pub(super) fn ring(
+    ui: &egui::Ui,
+    id: egui::Id,
+    rect: egui::Rect,
+    radius: u8,
+    active: bool,
+    marked: bool,
+) {
     let ctx = ui.ctx();
     let strength = ctx.animate_bool_responsive(id.with("ring"), active);
     let marked = ctx.animate_bool_responsive(id.with("marked"), marked && !active);
@@ -746,6 +743,14 @@ mod tests {
             egui::TextureOptions::LINEAR,
         );
         let texture_id = texture.id();
+        // Easy Delete's grid shows suggestions, so give the photo one.
+        app.delete_review
+            .replace(vec![crate::core::delete_review::Entry {
+                subject: id,
+                companion: None,
+                category: crate::core::delete_review::Category::Dark,
+                reason: "dark".into(),
+            }]);
         app.textures.insert(
             (id, false),
             Texture {
@@ -754,13 +759,9 @@ mod tests {
                 used: 0,
             },
         );
-        for step in [
-            Step::Cull,
-            Step::Organize,
-            Step::EasyDelete,
-            Step::PickBest,
-            Step::Rotation,
-        ] {
+        // Pick Best's grid needs a group of two; its cards draw photos the
+        // same way as Easy Delete's.
+        for step in [Step::Cull, Step::Organize, Step::EasyDelete, Step::Rotation] {
             app.step = step;
             // Each workflow is checked on its own requests.
             app.requested.clear();
@@ -798,8 +799,16 @@ mod tests {
                         }
                     }
                     assert!(!images.is_empty());
-                    let expected = if turns % 2 == 0 { 2.0 } else { 0.5 };
-                    for bounds in images {
+                    let turned = if turns % 2 == 0 { 2.0 } else { 0.5 };
+                    let count = images.len();
+                    for (i, bounds) in images.into_iter().enumerate() {
+                        // Fix Rotation's card shows the untouched original
+                        // before the correction.
+                        let expected = if step == Step::Rotation && count > 1 && i == 0 {
+                            2.0
+                        } else {
+                            turned
+                        };
                         assert!(bounds.is_positive());
                         assert!((bounds.width() / bounds.height() - expected).abs() < 0.01);
                     }

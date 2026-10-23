@@ -36,6 +36,8 @@ mod plan_review;
 mod pointer;
 #[path = "review.rs"]
 mod review;
+#[path = "review_card.rs"]
+mod review_card;
 #[path = "rotation.rs"]
 mod rotation;
 #[path = "selection.rs"]
@@ -1559,12 +1561,6 @@ impl PhotoSortApp {
         self.restore_bookmark();
         self.intro_keys(ctx);
         self.keyboard(ctx);
-        // Pick Best is always a side-by-side review: it has no grid view, and
-        // its choices and Confirm live under the photos. Older saved views
-        // may still ask for the grid.
-        if self.step == Step::PickBest {
-            self.review = true;
-        }
         // Organize has no separate Review: its board shows the clicked
         // photo in a preview panel beside the folders and thumbnails.
         if self.step == Step::Organize {
@@ -1723,13 +1719,26 @@ impl PhotoSortApp {
     pub fn gallery_seed_reviews(&mut self) {
         use crate::core::delete_review::{Category, Entry};
         // Scenes use the demo photos the ui_gallery example derives from
-        // tests/samples, so each shows what it claims: a softened copy is the near
-        // duplicate, a blurred copy the blurry photo, a sideways copy needs
-        // rotating, and three frames of one scene form the Pick Best burst.
+        // tests/samples, so each shows what it claims: a byte copy is the exact
+        // duplicate, a softened copy the near duplicate, a blurred copy the
+        // blurry photo, darkened and brightened copies the badly exposed ones,
+        // a sideways copy needs rotating, and three frames of one scene form
+        // the Pick Best burst.
         // Folders without these files get no scenes.
         let names: HashMap<String, MediaId> = self.media.iter().map(|m| (m.name(), m.id)).collect();
         let id = |name: &str| names.get(name).copied();
         let mut entries = Vec::new();
+        if let (Some(copy), Some(original)) = (
+            id("20230428_035435_IMG_4666 copy.JPG"),
+            id("20230428_035435_IMG_4666.JPG"),
+        ) {
+            entries.push(Entry {
+                subject: copy,
+                companion: Some(original),
+                category: Category::Exact,
+                reason: "Byte-for-byte identical to the photo beside it".into(),
+            });
+        }
         if let (Some(copy), Some(original)) = (id("GAB00915 (2).jpg"), id("GAB00915.jpg")) {
             entries.push(Entry {
                 subject: copy,
@@ -1745,6 +1754,27 @@ impl PhotoSortApp {
                 category: Category::Blur,
                 reason: "Blurry · out of focus across the frame".into(),
             });
+        }
+        for (name, category, reason) in [
+            (
+                "DSC01310.jpg",
+                Category::Dark,
+                "Very dark · sharpness 3.2 · brightness 21.4/255",
+            ),
+            (
+                "DSC01320.jpg",
+                Category::Bright,
+                "Overexposed · sharpness 6.8 · brightness 238.9/255",
+            ),
+        ] {
+            if let Some(subject) = id(name) {
+                entries.push(Entry {
+                    subject,
+                    companion: None,
+                    category,
+                    reason: reason.into(),
+                });
+            }
         }
         if !entries.is_empty() {
             self.delete_review.replace(entries);
@@ -1789,7 +1819,7 @@ impl PhotoSortApp {
     pub fn gallery_close_model_dialog(&mut self) {
         self.model_dialog = false;
     }
-    /// Shows or hides Cull's file names (preference, not saved).
+    /// Shows or hides file names under thumbnails (preference, not saved).
     pub fn gallery_show_filenames(&mut self, show: bool) {
         self.preferences.show_filenames = show;
     }
@@ -1842,9 +1872,9 @@ impl PhotoSortApp {
     pub fn gallery_organize_by_date(&mut self) {
         self.set_group_mode(GroupMode::Date);
     }
-    /// Shows Cull's photo strip on the left (preference, not saved).
+    /// Shows Review's photo strip on the left (preference, not saved).
     pub fn gallery_left_strip(&mut self, left: bool) {
-        self.preferences.cull_strip = if left {
+        self.preferences.strip_position = if left {
             crate::core::preferences::StripPosition::Left
         } else {
             crate::core::preferences::StripPosition::Bottom

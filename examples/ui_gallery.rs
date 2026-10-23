@@ -90,8 +90,32 @@ fn main() -> anyhow::Result<()> {
             [1440.0, 900.0],
         ),
         (
+            "04b-easy-delete-grid-wide",
+            Some(Step::EasyDelete),
+            false,
+            [1440.0, 900.0],
+        ),
+        (
             "05-rotation-wide",
             Some(Step::Rotation),
+            true,
+            [1440.0, 900.0],
+        ),
+        (
+            "05b-rotation-grid-wide",
+            Some(Step::Rotation),
+            false,
+            [1440.0, 900.0],
+        ),
+        (
+            "06b-pick-best-grid-wide",
+            Some(Step::PickBest),
+            false,
+            [1440.0, 900.0],
+        ),
+        (
+            "06c-pick-best-review-left-strip-no-names",
+            Some(Step::PickBest),
             true,
             [1440.0, 900.0],
         ),
@@ -129,6 +153,12 @@ fn main() -> anyhow::Result<()> {
             "08-easy-delete-compact",
             Some(Step::EasyDelete),
             true,
+            [900.0, 700.0],
+        ),
+        (
+            "08b-easy-delete-grid-compact",
+            Some(Step::EasyDelete),
+            false,
             [900.0, 700.0],
         ),
         (
@@ -402,10 +432,11 @@ fn pump_main() {
 }
 
 /// Demo photos for the review scenes, derived from tests/samples and named as a
-/// camera would name them (see `PhotoSortApp::gallery_seed_reviews`): a softer,
-/// slightly shifted copy of the island for Easy Delete's near duplicate, an
-/// out-of-focus desert, a sideways Chrysler Building for Fix Rotation, and a
-/// three-frame burst of the street where only the first frame is sharp.
+/// camera would name them (see `PhotoSortApp::gallery_seed_reviews`): for Easy
+/// Delete an exact copy of the harbour, a softer, slightly shifted copy of the
+/// island, an out-of-focus desert, an underexposed and an overexposed frame; a
+/// sideways Chrysler Building for Fix Rotation, and a three-frame burst of the
+/// street where only the first frame is sharp.
 fn write_demo_photos(root: &std::path::Path) -> anyhow::Result<()> {
     use image::{DynamicImage, imageops::FilterType};
     let open = |name: &str| -> anyhow::Result<DynamicImage> {
@@ -432,6 +463,24 @@ fn write_demo_photos(root: &std::path::Path) -> anyhow::Result<()> {
     // What a real library also holds: system files and other documents.
     std::fs::write(root.join(".DS_Store"), b"\0\0\0\x01Bud1")?;
     std::fs::write(root.join("notes.json"), b"{}")?;
+    if root.join("20230428_035435_IMG_4666.JPG").is_file() {
+        std::fs::copy(
+            root.join("20230428_035435_IMG_4666.JPG"),
+            root.join("20230428_035435_IMG_4666 copy.JPG"),
+        )?;
+    }
+    if root.join("20230428_042445_IMG_4667.JPG").is_file() {
+        save(
+            &open("20230428_042445_IMG_4667.JPG")?.brighten(-110),
+            "DSC01310.jpg",
+        )?;
+    }
+    if root.join("20230428_034640_IMG_4658.JPG").is_file() {
+        save(
+            &open("20230428_034640_IMG_4658.JPG")?.brighten(120),
+            "DSC01320.jpg",
+        )?;
+    }
     if root.join("GAB00915.jpg").is_file() {
         let island = open("GAB00915.jpg")?;
         save(&crop(&island, 0.03, 0.02).blur(4.0), "GAB00915 (2).jpg")?;

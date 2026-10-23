@@ -745,9 +745,8 @@ impl PhotoSortApp {
                     {
                         self.inspector ^= true;
                     }
-                    // Pick Best is always side by side; Organize previews
-                    // the clicked photo beside its folders.
-                    if !matches!(self.step, Step::PickBest | Step::Organize) {
+                    // Organize previews the clicked photo beside its folders.
+                    if self.step != Step::Organize {
                         ui.add_space(S1);
                         self.view_switch(ui);
                     }

@@ -217,13 +217,12 @@ impl PhotoSortApp {
         // On short windows, give the photos room and use Previous/Next instead
         // of squeezing both the canvas and a clipped thumbnail strip below it.
         let editor_preview = self.organize_preview().is_some();
-        // Cull can keep its strip in a column on the left instead.
-        let side_strip = self.step == Step::Cull
-            && !editor_preview
-            && self.preferences.cull_strip == crate::core::preferences::StripPosition::Left
+        // The strip can sit in a column on the left instead.
+        let side_strip = !editor_preview
+            && self.preferences.strip_position == crate::core::preferences::StripPosition::Left
             && ui.available_width() >= 640.0;
         if side_strip {
-            egui::Panel::left("cull_side_strip")
+            egui::Panel::left("review_side_strip")
                 .resizable(true)
                 .default_size(150.0)
                 .size_range(100.0..=300.0)
@@ -557,10 +556,9 @@ impl PhotoSortApp {
         )
         .on_hover_text("Zoom relative to fitting the whole photo");
     }
-    /// Whether photo-strip tiles show file names: only in Cull, and only
-    /// while its Show filenames preference is on.
+    /// Whether photo-strip tiles show file names, in every step.
     pub(super) fn strip_names(&self) -> bool {
-        self.step == Step::Cull && self.preferences.show_filenames
+        self.preferences.show_filenames
     }
     /// One strip tile: the shared card, with its name below when enabled.
     fn strip_tile(&mut self, ui: &mut egui::Ui, position: usize, rect: egui::Rect, image: Vec2) {
@@ -634,7 +632,7 @@ impl PhotoSortApp {
                 }
             });
     }
-    /// Cull's photo strip as a vertical column beside the canvas.
+    /// The photo strip as a vertical column beside the canvas.
     fn side_strip(&mut self, ui: &mut egui::Ui) {
         let name = if self.strip_names() { STRIP_NAME } else { 0.0 };
         let width = (ui.available_width() - 10.0).max(60.0);
@@ -908,9 +906,16 @@ impl PhotoSortApp {
             );
         }
         if let Some(&index) = self.index.get(&id) {
+            // The file name follows the app-wide file name preference.
+            let named = |head: &str| {
+                if self.preferences.show_filenames {
+                    format!("{head} / {}", self.media[index].name())
+                } else {
+                    head.to_owned()
+                }
+            };
             let label = if self.step == Step::Rotation {
-                format!(
-                    "{} / {}",
+                named(
                     if self
                         .rotation_review
                         .choice(id)
@@ -926,10 +931,9 @@ impl PhotoSortApp {
                     } else {
                         "Original"
                     },
-                    self.media[index].name()
                 )
             } else {
-                let mut label = format!("{} / {}", slot + 1, self.media[index].name());
+                let mut label = named(&(slot + 1).to_string());
                 // Pick Best ranks by its cluster score; elsewhere show the
                 // photo's quality score once analysis has run.
                 let score = (self.step == Step::PickBest)

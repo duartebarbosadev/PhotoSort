@@ -248,23 +248,43 @@ fn companion_moves_default_on_and_survive_a_save() {
     );
 }
 #[test]
-fn cull_view_preferences_round_trip_and_default_for_older_files() {
+fn strip_and_filename_preferences_round_trip_and_default_for_older_files() {
     use photosort::core::preferences::StripPosition;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("preferences.json");
-    // A file written before the Cull strip and filename options existed.
+    // A file written before the strip and filename options existed.
     std::fs::write(&path, br#"[1, {"show_shortcuts": false}]"#).unwrap();
     let old = Preferences::load(&path).unwrap();
     assert!(!old.show_shortcuts);
-    assert_eq!(old.cull_strip, StripPosition::Bottom);
+    assert_eq!(old.strip_position, StripPosition::Bottom);
     assert!(old.show_filenames);
     let p = Preferences {
-        cull_strip: StripPosition::Left,
+        strip_position: StripPosition::Left,
         show_filenames: false,
         ..Default::default()
     };
     p.save(&path).unwrap();
     let loaded = Preferences::load(&path).unwrap();
-    assert_eq!(loaded.cull_strip, StripPosition::Left);
+    assert_eq!(loaded.strip_position, StripPosition::Left);
     assert!(!loaded.show_filenames);
+}
+#[test]
+fn the_cull_only_strip_preference_becomes_the_global_one() {
+    use photosort::core::preferences::StripPosition;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("preferences.json");
+    // Written when the strip position and file names applied to Cull only.
+    std::fs::write(
+        &path,
+        br#"[1, {"cull_strip": "Left", "show_filenames": false}]"#,
+    )
+    .unwrap();
+    let migrated = Preferences::load(&path).unwrap();
+    assert_eq!(migrated.strip_position, StripPosition::Left);
+    assert!(!migrated.show_filenames);
+    // Saving writes the new name, and the choice survives another load.
+    migrated.save(&path).unwrap();
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("strip_position") && !saved.contains("cull_strip"));
+    assert_eq!(Preferences::load(&path).unwrap(), migrated);
 }

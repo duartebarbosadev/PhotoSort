@@ -286,6 +286,16 @@ impl PhotoSortApp {
                         ui.add(Switch::new(&mut draft.show_shortcuts, "Show workflow shortcut hints"));
                         ui.add(Switch::new(&mut draft.reduce_motion, "Reduce motion"))
                             .on_hover_text("Panels, tabs and photos appear instantly instead of sliding and fading");
+                        ui.separator();
+                        settings_heading(ui, "Photo strip and file names");
+                        ui.horizontal_wrapped(|ui| {
+                            use crate::core::preferences::StripPosition;
+                            ui.label("Photo strip in Review:");
+                            ui.selectable_value(&mut draft.strip_position, StripPosition::Bottom, "Bottom");
+                            ui.selectable_value(&mut draft.strip_position, StripPosition::Left, "Left");
+                        });
+                        ui.add(Switch::new(&mut draft.show_filenames, "Show file names under thumbnails"));
+                        settings_note(ui, "Applies to every step's grid, photo strip and Review. Cull's View options change the same settings.");
                     ui.separator();
                     settings_heading(ui, "Easy Delete sensitivity");
                     ui.add(egui::Slider::new(&mut draft.easy_delete.blur,10.0..=1000.0).text("Blur threshold"));
