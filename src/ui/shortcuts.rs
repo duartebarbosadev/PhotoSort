@@ -264,6 +264,9 @@ impl PhotoSortApp {
             _ => return,
         };
         self.navigate_axis(direction, modifiers.shift, command, horizontal);
+        if self.step == Step::Organize {
+            self.board_follow_active();
+        }
     }
 
     /// Single-photo actions shared by every workflow that shows a canvas.

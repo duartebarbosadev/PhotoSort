@@ -256,6 +256,8 @@ pub struct PhotoSortApp {
     /// The automatic grouping whose last run was cancelled or failed; it is not
     /// restarted on its own until the mode is chosen again or Preview moves.
     organize_halted: Option<GroupMode>,
+    /// The halted grouping was cancelled, rather than failed.
+    organize_cancelled: bool,
     organize_preview_requested: bool,
     file_names: HashMap<MediaId, String>,
     status: String,
@@ -492,6 +494,7 @@ impl PhotoSortApp {
             mixed_labels: None,
             organize_run: None,
             organize_halted: None,
+            organize_cancelled: false,
             organize_preview_requested: false,
             file_names: HashMap::new(),
             status_scope: None,
@@ -1018,7 +1021,10 @@ impl PhotoSortApp {
         }
         self.delete_run = None; // A cancelled pass never publishes partial pair choices.
         self.pick_run = None;
-        self.halt_organize_run();
+        if self.organize_run.is_some() {
+            self.halt_organize_run();
+            self.organize_cancelled = true;
+        }
         self.organize_preview_requested = false;
         self.analysis_run = None;
         self.progress = None;
@@ -1356,6 +1362,9 @@ impl PhotoSortApp {
     }
     fn navigate_selection(&mut self, delta: isize, extend: bool, include_marked: bool) {
         self.navigate_axis(delta, extend, include_marked, false);
+        if self.step == Step::Organize {
+            self.board_follow_active();
+        }
     }
     fn navigate_axis(
         &mut self,
@@ -1640,10 +1649,17 @@ impl PhotoSortApp {
                             } else if self.organize_editor.is_some() {
                                 // The editor owns the visible content. Do not render or
                                 // submit hidden image/detail requests behind its modal.
-                            } else if self.review && self.step != Step::Organize {
-                                self.review_canvas(ui);
                             } else {
-                                self.library(ui);
+                                // Organize shows it above its board, between the panels.
+                                if self.step != Step::Organize && self.analysis_run.is_some() {
+                                    self.analysis_banner(ui);
+                                    ui.add_space(S2);
+                                }
+                                if self.review && self.step != Step::Organize {
+                                    self.review_canvas(ui);
+                                } else {
+                                    self.library(ui);
+                                }
                             }
                         });
                 }
@@ -1771,6 +1787,25 @@ impl PhotoSortApp {
     /// Shows or hides Cull's file names (preference, not saved).
     pub fn gallery_show_filenames(&mut self, show: bool) {
         self.preferences.show_filenames = show;
+    }
+    /// Shows an analysis about a third done, as if started 40 seconds ago:
+    /// a visual-similarity grouping in Organize, Analyze library elsewhere.
+    /// No worker runs, so the scene must not wait for it to settle.
+    pub fn gallery_running_analysis(&mut self) {
+        let run = u64::MAX;
+        if self.step == Step::Organize {
+            self.group_mode = GroupMode::Visual;
+            self.visual_groups = None;
+            self.organize_run = Some((run, GroupMode::Visual));
+        } else {
+            self.cull_group_run = Some(run);
+        }
+        let total = self.media.len().max(1);
+        self.analysis_run = Some(run);
+        self.progress = Some((total / 3, total));
+        self.progress_started = Instant::now().checked_sub(Duration::from_secs(40));
+        self.set_status("Analyzing locally · previews stay available".into());
+        self.filter_dirty = true;
     }
     /// Groups Organize by capture date.
     pub fn gallery_organize_by_date(&mut self) {
