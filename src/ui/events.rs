@@ -21,6 +21,9 @@ impl PhotoSortApp {
             } => self.on_metadata_batch(run, items, done, total, stats),
             Event::Batch(batch) => self.on_batch(batch),
             Event::Opened(catalog, session, views) => self.on_opened(catalog, session, views),
+            Event::FolderUnavailable { folder, problem } => {
+                self.on_folder_unavailable(&folder, problem)
+            }
             Event::Asset {
                 id,
                 preview,
@@ -139,6 +142,30 @@ impl PhotoSortApp {
         }
         self.filter_dirty = true;
         self.set_status(format!("Discovered {} items…", self.media.len()));
+    }
+
+    /// Back to the welcome screen with a sentence that names the folder.
+    fn on_folder_unavailable(
+        &mut self,
+        folder: &std::path::Path,
+        problem: crate::core::catalog::Unavailable,
+    ) {
+        self.scanning = false;
+        self.progress = None;
+        self.root = None;
+        self.output.clear();
+        self.set_status("Ready when you are".into());
+        // A disconnected drive leaves Recents until it is back; a folder
+        // that needs permission still exists and stays listed.
+        if problem == crate::core::catalog::Unavailable::Missing {
+            self.missing_recent.insert(folder.to_path_buf());
+        }
+        let message = problem.message(folder);
+        // A failed apply rescans and reports first; keep both.
+        self.error = Some(match self.error.take() {
+            Some(earlier) => format!("{earlier}\n{message}"),
+            None => message,
+        });
     }
 
     fn on_opened(

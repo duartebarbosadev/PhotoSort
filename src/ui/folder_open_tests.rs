@@ -201,3 +201,54 @@ fn opened_event_reuses_worker_identity_without_rescanning_or_resolving_on_ui_thr
     assert_eq!(app.stats.decodes, 0);
     assert_eq!(app.stats.metadata_reads, 0);
 }
+
+#[test]
+fn unavailable_folder_explains_itself_in_a_centred_dialog_over_the_welcome_screen() {
+    let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let missing = dir.path().join("Unplugged SSD").join("Photos");
+    let file = dir.path().join("photo.jpg");
+    std::fs::write(&file, b"").unwrap();
+    for (folder, expected, hidden) in [
+        (&missing, "doesn't exist or isn't connected", true),
+        (&file, "it's a file, not a folder", false),
+    ] {
+        let mut app = app(&dir);
+        app.preferences.recent_folders = vec![folder.clone()];
+        app.open(folder.clone());
+        let until = Instant::now() + worker_patience();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        while app.scanning {
+            app.poll(&ctx);
+            assert!(Instant::now() < until, "folder check did not finish");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        // Back on the welcome screen, ready for another folder.
+        assert!(app.root.is_none() && app.catalog.is_none());
+        assert!(app.output.is_empty());
+        let error = app.error.clone().unwrap();
+        // Long temporary paths are shortened in the middle; the name stays.
+        let name = folder.file_name().unwrap().to_string_lossy();
+        assert!(error.contains(&format!("{name}”")), "{error}");
+        assert!(error.contains(expected), "{error}");
+        assert!(!error.contains("os error"), "{error}");
+        assert_eq!(app.missing_recent.contains(folder), hidden);
+
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            };
+            let _ = ctx.run_test(input, |ui| app.update_workspace(ui, false));
+        }
+        let dialog = ctx
+            .memory(|m| m.area_rect(egui::Id::new(super::dialogs::ERROR_DIALOG)))
+            .expect("the error dialog is shown");
+        assert!(
+            (dialog.center() - screen.center()).length() < 2.0,
+            "{dialog:?} is not centred in {screen:?}"
+        );
+        assert!(dialog.width() <= 480.0, "{dialog:?}");
+    }
+}

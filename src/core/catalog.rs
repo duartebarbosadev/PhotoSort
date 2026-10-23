@@ -155,3 +155,161 @@ impl Catalog {
         index
     }
 }
+
+/// Why a chosen photo folder can't be opened. The raw OS error belongs in
+/// the log; [`Unavailable::message`] is what the person reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unavailable {
+    /// Gone, renamed, or on a drive that isn't connected.
+    Missing,
+    NotAFolder,
+    NoPermission,
+    Other,
+}
+
+impl Unavailable {
+    fn of(error: &std::io::Error) -> Self {
+        use std::io::ErrorKind;
+        match error.kind() {
+            ErrorKind::NotFound | ErrorKind::NotADirectory => Self::Missing,
+            ErrorKind::PermissionDenied => Self::NoPermission,
+            _ => Self::Other,
+        }
+    }
+
+    /// One plain sentence or two naming the folder; never an OS error code.
+    pub fn message(self, folder: &Path) -> String {
+        let folder = shown_path(folder);
+        match self {
+            Self::Missing => format!(
+                "Can't open “{folder}” — it doesn't exist or isn't connected. If it's on an external drive, connect it and try again."
+            ),
+            Self::NotAFolder => format!(
+                "Can't open “{folder}” — it's a file, not a folder. Choose the folder that holds your photos."
+            ),
+            Self::NoPermission if cfg!(target_os = "macos") => format!(
+                "PhotoSort isn't allowed to open “{folder}”. Allow access in System Settings › Privacy & Security › Files and Folders, then try again."
+            ),
+            Self::NoPermission => format!(
+                "PhotoSort isn't allowed to open “{folder}”. Make sure your account can read this folder, then try again."
+            ),
+            Self::Other => format!(
+                "Can't open “{folder}”. Check that its drive is connected and readable, then try again."
+            ),
+        }
+    }
+}
+
+/// Checks that `root` is a folder PhotoSort can list before any scan or
+/// recovery work touches it, and returns its canonical path.
+pub fn open_root(root: &Path) -> std::result::Result<PathBuf, (Unavailable, std::io::Error)> {
+    let canonical = root
+        .canonicalize()
+        .map_err(|error| (Unavailable::of(&error), error))?;
+    if !canonical.is_dir() {
+        return Err((
+            Unavailable::NotAFolder,
+            std::io::Error::from(std::io::ErrorKind::NotADirectory),
+        ));
+    }
+    std::fs::read_dir(&canonical).map_err(|error| (Unavailable::of(&error), error))?;
+    Ok(canonical)
+}
+
+/// Very long paths keep their start (the drive) and their end (the folder
+/// itself) so the message stays a few lines long.
+fn shown_path(path: &Path) -> String {
+    const LIMIT: usize = 100;
+    let full = path.display().to_string();
+    let count = full.chars().count();
+    if count <= LIMIT {
+        return full;
+    }
+    let head: String = full.chars().take(30).collect();
+    let tail: String = full.chars().skip(count - (LIMIT - 31)).collect();
+    format!("{head}…{tail}")
+}
+
+#[cfg(test)]
+mod unavailable_tests {
+    use super::*;
+
+    #[test]
+    fn messages_name_the_folder_and_never_the_os_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("Photos 2024");
+        let (problem, error) = open_root(&missing).unwrap_err();
+        assert_eq!(problem, Unavailable::Missing);
+        assert!(error.to_string().contains("os error"));
+        let message = problem.message(&missing);
+        assert!(message.contains(&format!("“{}”", missing.display())));
+        assert!(message.contains("doesn't exist or isn't connected"));
+        assert!(message.contains("external drive"));
+
+        let file = dir.path().join("photo.jpg");
+        std::fs::write(&file, b"").unwrap();
+        assert_eq!(open_root(&file).unwrap_err().0, Unavailable::NotAFolder);
+        assert!(
+            Unavailable::NotAFolder
+                .message(&file)
+                .contains("it's a file, not a folder")
+        );
+        // A path through a file is as missing as a path that never existed.
+        assert_eq!(
+            open_root(&file.join("inside")).unwrap_err().0,
+            Unavailable::Missing
+        );
+
+        assert_eq!(
+            open_root(dir.path()).unwrap(),
+            dir.path().canonicalize().unwrap()
+        );
+        for problem in [
+            Unavailable::Missing,
+            Unavailable::NotAFolder,
+            Unavailable::NoPermission,
+            Unavailable::Other,
+        ] {
+            let message = problem.message(&missing);
+            assert!(
+                !message.contains("os error") && !message.contains(": "),
+                "{message}"
+            );
+        }
+        assert!(
+            Unavailable::NoPermission
+                .message(&missing)
+                .contains("isn't allowed to open")
+        );
+    }
+
+    #[test]
+    fn long_paths_keep_the_drive_and_the_folder_name() {
+        let long = PathBuf::from(format!(
+            "/Volumes/Samsung T7/{}/Lisbon trip",
+            "nested/".repeat(30)
+        ));
+        let message = Unavailable::Missing.message(&long);
+        assert!(message.contains("“/Volumes/Samsung T7/"));
+        assert!(message.contains("…"));
+        assert!(message.contains("/Lisbon trip”"));
+        assert!(shown_path(&long).chars().count() <= 100);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_folders_ask_for_access() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let result = open_root(&locked);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Root reads anything; the check only means something for other users.
+        let Err((problem, _)) = result else {
+            return;
+        };
+        assert_eq!(problem, Unavailable::NoPermission);
+    }
+}

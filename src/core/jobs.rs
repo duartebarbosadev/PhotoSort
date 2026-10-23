@@ -48,6 +48,11 @@ pub enum Event {
     CacheStats(Stats),
     Batch(Vec<Media>),
     Opened(Arc<Catalog>, Session, super::views::Saved),
+    /// The chosen folder can't be opened; nothing was scanned.
+    FolderUnavailable {
+        folder: std::path::PathBuf,
+        problem: super::catalog::Unavailable,
+    },
     Asset {
         id: MediaId,
         preview: bool,
