@@ -1,5 +1,8 @@
 use super::*;
 
+/// The keyboard-shortcuts window, centred like the other dialogs.
+pub(super) const HELP_DIALOG: &str = "help_dialog";
+
 impl PhotoSortApp {
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         self.crash_dialog(ctx);
@@ -56,9 +59,14 @@ impl PhotoSortApp {
         self.updates_dialog(ctx);
         self.models_dialog(ctx);
         if self.help {
+            let width = (ctx.content_rect().width() - 64.0).clamp(280.0, 460.0);
             egui::Window::new("A few useful keys")
+                .id(egui::Id::new(HELP_DIALOG))
                 .open(&mut self.help)
-                .default_width(460.0)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .default_width(width)
+                .max_width(width)
                 .max_height((ctx.content_rect().height() - 80.0).max(120.0))
                 .vscroll(true)
                 .show(ctx, |ui| {
@@ -168,10 +176,16 @@ impl PhotoSortApp {
                         ("Shift + Enter", "Review staged changes"),
                     ];
                     for (key, action) in shortcuts {
-                        ui.horizontal(|ui| {
+                        let row = |ui: &mut egui::Ui| {
                             ui.monospace(key);
-                            ui.label(action);
-                        });
+                            ui.add(egui::Label::new(action).wrap());
+                        };
+                        // Narrow windows put the action under its key.
+                        if width < 400.0 {
+                            ui.vertical(row);
+                        } else {
+                            ui.horizontal(row);
+                        }
                     }
                     ui.separator();
                     ui.label("Ctrl/Cmd+Alt+1–5 switches to a visible workflow step.");
@@ -293,5 +307,44 @@ mod error_tests {
         let long = "x".repeat(400);
         let (headline, details) = error_parts(&long);
         assert!(headline.chars().count() <= 141 && details.is_some());
+    }
+}
+
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+
+    #[test]
+    fn shortcuts_open_in_a_centred_window_that_fits_narrow_screens() {
+        let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        for size in [egui::vec2(1200.0, 800.0), egui::vec2(360.0, 640.0)] {
+            let mut app = PhotoSortApp::with_runtime(
+                Runtime::with_cache(|| {}, dir.path().join("cache")),
+                None,
+            );
+            app.help = true;
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            for _ in 0..3 {
+                let input = egui::RawInput {
+                    screen_rect: Some(screen),
+                    ..Default::default()
+                };
+                let _ = ctx.run_test(input, |ui| app.update_workspace(ui, false));
+            }
+            let dialog = ctx
+                .memory(|m| m.area_rect(egui::Id::new(HELP_DIALOG)))
+                .expect("the shortcuts window is shown");
+            assert!(
+                (dialog.center() - screen.center()).length() < 2.0,
+                "{dialog:?} is not centred in {screen:?}"
+            );
+            assert!(
+                screen.contains_rect(dialog),
+                "{dialog:?} overflows {screen:?}"
+            );
+            assert!(dialog.width() <= 480.0, "{dialog:?}");
+        }
     }
 }
