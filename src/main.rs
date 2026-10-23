@@ -118,7 +118,7 @@ fn run(options: photosort::core::startup::Options) -> eframe::Result {
     photosort::ui::initialize_native_application()
         .map_err(|error| eframe::Error::AppCreation(Box::new(error)))?;
     let mut viewport = eframe::egui::ViewportBuilder::default()
-        .with_title("PhotoSort — Keep what matters")
+        .with_title("PhotoSort - Keep what matters")
         .with_inner_size([1440.0, 960.0])
         .with_min_inner_size([640.0, 600.0]);
     match photosort::ui::app_icon() {

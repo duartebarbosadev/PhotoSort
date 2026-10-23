@@ -182,10 +182,10 @@ impl Unavailable {
         let folder = shown_path(folder);
         match self {
             Self::Missing => format!(
-                "Can't open “{folder}” — it doesn't exist or isn't connected. If it's on an external drive, connect it and try again."
+                "Can't open “{folder}” because it doesn't exist or isn't connected. If it's on an external drive, connect it and try again."
             ),
             Self::NotAFolder => format!(
-                "Can't open “{folder}” — it's a file, not a folder. Choose the folder that holds your photos."
+                "Can't open “{folder}” because it's a file, not a folder. Choose the folder that holds your photos."
             ),
             Self::NoPermission if cfg!(target_os = "macos") => format!(
                 "PhotoSort isn't allowed to open “{folder}”. Allow access in System Settings › Privacy & Security › Files and Folders, then try again."
