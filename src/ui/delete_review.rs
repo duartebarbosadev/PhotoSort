@@ -1,5 +1,18 @@
+use super::review_card::{Badge, CardButton, CardEvent, CardPhoto, CardState, ReviewCard};
 use super::*;
-use crate::core::delete_review::{self, Category};
+use crate::core::delete_review::{self, Category, Entry};
+
+/// A card's title: what kind of problem the suggestion is about.
+fn card_title(category: Category) -> &'static str {
+    match category {
+        Category::Exact => "Duplicate",
+        Category::Near => "Near-duplicate",
+        Category::Blur => "Blurry",
+        Category::Dark => "Too dark",
+        Category::Bright => "Too bright",
+    }
+}
+
 impl PhotoSortApp {
     pub(super) fn finish_delete_analysis(&mut self) {
         let entries = delete_review::from_analysis(
@@ -105,13 +118,9 @@ impl PhotoSortApp {
         self.review_changed();
     }
     /// The categories to review, as filter chips with their counts. The
-    /// decision and Confirm live under the photos; bulk actions in More.
+    /// decision and Confirm live under the photos in Review and on each card
+    /// in the grid; bulk actions in More.
     pub(super) fn delete_controls(&mut self, ui: &mut egui::Ui) {
-        // In the grid the bar under the photos is not shown.
-        if !self.review && self.delete_current.is_some() {
-            self.delete_confirm_button(ui);
-            divider(ui);
-        }
         for category in Category::ALL {
             let count = self
                 .delete_review
@@ -199,6 +208,154 @@ impl PhotoSortApp {
             }
         }
     }
+}
+
+impl PhotoSortApp {
+    /// Easy Delete's grid: one card per suggestion, a pair side by side or a
+    /// single photo, with what PhotoSort suggests and the same Keep/Trash,
+    /// Confirm and Reset as Review. The focused card is Review's current
+    /// suggestion, so the keyboard shortcuts act on it in either view.
+    pub(super) fn delete_grid(&mut self, ui: &mut egui::Ui) {
+        let subjects = self.delete_review_ids();
+        let current = self
+            .delete_current
+            .and_then(|id| subjects.iter().position(|other| *other == id));
+        let clicked = self.card_grid(
+            ui,
+            "delete",
+            subjects.len(),
+            2,
+            |app, i| {
+                let entry = app.delete_review.entry(subjects[i])?.clone();
+                Some(app.delete_card(&entry))
+            },
+            current,
+        );
+        if let Some((i, event)) = clicked {
+            self.delete_card_event(subjects[i], event);
+        }
+    }
+
+    /// The card for one suggestion: its photos with their Keep/Trash
+    /// choice, the reason, and Keep/Trash per photo, Reset and Confirm.
+    fn delete_card(&self, entry: &Entry) -> ReviewCard {
+        let subject = entry.subject;
+        let confirmed = self.delete_review.confirmed(subject);
+        let changed = self.delete_review.unfinished(Some(subject));
+        let enabled = !self.busy && self.delete_run.is_none();
+        let candidates = entry.candidates();
+        let mut buttons: Vec<CardButton> = candidates
+            .iter()
+            .enumerate()
+            .map(|(side, id)| {
+                let keep = self.delete_review.keeps(subject, *id);
+                CardButton::new(
+                    decision_label(side, keep),
+                    format!(
+                        "Toggle photo {} · {} on the selected card",
+                        side + 1,
+                        side + 1
+                    ),
+                )
+                .enabled(enabled)
+            })
+            .collect();
+        buttons.push(
+            CardButton::new(
+                if confirmed {
+                    "Cancel confirmation"
+                } else {
+                    "Confirm"
+                },
+                "Enter on the selected card",
+            )
+            .primary(!confirmed)
+            .enabled(enabled)
+            .trailing(),
+        );
+        buttons.push(
+            CardButton::new("Reset", "Back to the suggestion · R on the selected card")
+                .enabled(enabled && (confirmed || changed))
+                .trailing(),
+        );
+        ReviewCard {
+            title: card_title(entry.category).into(),
+            state: if confirmed {
+                CardState::Confirmed
+            } else if changed {
+                CardState::Changed
+            } else {
+                CardState::Provisional
+            },
+            state_text: None,
+            photos: candidates
+                .iter()
+                .map(|id| {
+                    let media = self.index.get(id).map(|i| &self.media[*i]);
+                    CardPhoto {
+                        id: *id,
+                        turns: self.preview_turns(*id),
+                        badge: Badge::keep(self.delete_review.keeps(subject, *id)),
+                        suggested: false,
+                        caption: media.map(Media::name).unwrap_or_default(),
+                        name: media
+                            .map(|m| m.path.display().to_string())
+                            .unwrap_or_default(),
+                    }
+                })
+                .collect(),
+            note: entry.reason.clone(),
+            warning: false,
+            buttons,
+            current: self.delete_current == Some(subject),
+        }
+    }
+
+    /// Applies a card's event to its suggestion. The card becomes the
+    /// current suggestion first, through the same guard as Review: while
+    /// another card has an unconfirmed change, nothing happens to this one.
+    pub(super) fn delete_card_event(&mut self, subject: MediaId, event: CardEvent) {
+        self.pending_bookmark = None;
+        if self.delete_current != Some(subject) && self.delete_review.entry(subject).is_some() {
+            self.set_active(subject);
+        }
+        if self.delete_current != Some(subject) {
+            return;
+        }
+        let sides = self
+            .delete_review
+            .entry(subject)
+            .map_or(0, |e| e.candidates().len());
+        match event {
+            CardEvent::Select(side) | CardEvent::Open(side) => {
+                if let Some(id) = self
+                    .delete_review
+                    .entry(subject)
+                    .and_then(|e| e.candidates().get(side).copied())
+                {
+                    self.active = Some(id);
+                    self.focused_slot = side as u64;
+                }
+                if matches!(event, CardEvent::Open(_)) {
+                    self.open_review();
+                }
+            }
+            CardEvent::Button(side) if side < sides => self.toggle_delete_candidate(side),
+            CardEvent::Button(index) if index == sides => self.confirm_delete(),
+            CardEvent::Button(_) => self.reset_delete(false),
+        }
+    }
+}
+
+/// The Keep/Trash toggle's label for one side, as on Review's bar.
+pub(super) fn decision_label(side: usize, keep: bool) -> String {
+    use egui_phosphor::regular as icon;
+    format!(
+        "{}  {}  {}",
+        side + 1,
+        if keep { icon::CHECK } else { icon::TRASH },
+        if keep { "Keep" } else { "Trash" }
+    )
 }
 
 #[cfg(test)]
@@ -402,5 +559,90 @@ mod tests {
         app.accept_delete_defaults();
         assert!(app.decisions[&MediaId(1)].rejected);
         assert!(!app.decisions.contains_key(&MediaId(3)));
+    }
+    #[test]
+    fn grid_shows_one_card_per_suggestion_with_its_suggestion_and_state() {
+        let mut app = app();
+        let shown = super::super::review_card::render_grid(&mut app);
+        for text in [
+            "Duplicate",
+            "Too dark",
+            "copy",
+            "dark",
+            "Provisional",
+            "Confirm",
+        ] {
+            assert!(shown.contains(text), "{text} missing from:\n{shown}");
+        }
+        // The pair is one card: both photos, one Trash and one Keep pill.
+        assert!(shown.contains("1.jpg") && shown.contains("2.jpg"));
+        assert_eq!(shown.matches("Duplicate").count(), 1);
+        assert!(
+            app.decisions.is_empty(),
+            "Drawing the grid changed a decision"
+        );
+        // Category chips filter the grid like Review.
+        app.delete_categories.remove(&Category::Dark);
+        app.filter_dirty = true;
+        app.refilter();
+        let shown = super::super::review_card::render_grid(&mut app);
+        assert!(!shown.contains("Too dark"));
+        app.confirm_delete();
+        let shown = super::super::review_card::render_grid(&mut app);
+        assert!(shown.contains("Confirmed") && shown.contains("Cancel confirmation"));
+    }
+    #[test]
+    fn card_actions_focus_their_suggestion_and_never_bypass_a_pending_choice() {
+        let mut app = app();
+        assert_eq!(app.delete_current, Some(MediaId(1)));
+        // Keep the dark photo: its card becomes Review's current suggestion.
+        app.delete_card_event(MediaId(3), CardEvent::Button(0));
+        assert_eq!(app.delete_current, Some(MediaId(3)));
+        assert!(app.delete_review.keeps(MediaId(3), MediaId(3)));
+        assert!(
+            app.decisions.is_empty(),
+            "A provisional choice changed a Trash mark"
+        );
+        // The pair's card cannot be confirmed while that choice is pending.
+        app.delete_card_event(MediaId(1), CardEvent::Button(2));
+        assert_eq!(app.delete_current, Some(MediaId(3)));
+        assert_eq!(app.review_notice, Some(Step::EasyDelete));
+        assert!(app.decisions.is_empty());
+        app.review_notice = None;
+        // Reset on the dark card, then confirm the pair from its card.
+        app.delete_card_event(MediaId(3), CardEvent::Button(2));
+        assert!(!app.delete_review.keeps(MediaId(3), MediaId(3)));
+        app.delete_card_event(MediaId(1), CardEvent::Button(2));
+        assert!(app.decisions[&MediaId(1)].rejected);
+        assert!(!app.decisions.get(&MediaId(2)).is_some_and(|d| d.rejected));
+        assert_eq!(app.delete_current, Some(MediaId(3)));
+        // Opening a card's second photo shows that suggestion in Review.
+        app.delete_card_event(MediaId(1), CardEvent::Open(1));
+        assert!(app.review);
+        assert_eq!(app.delete_current, Some(MediaId(1)));
+        assert_eq!(app.active, Some(MediaId(2)));
+        assert_eq!(app.comparison_ids(), vec![MediaId(1), MediaId(2)]);
+    }
+    #[test]
+    fn keyboard_shortcuts_act_on_the_card_selected_in_the_grid() {
+        let mut app = app();
+        app.delete_card_event(MediaId(3), CardEvent::Select(0));
+        app.review = false;
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let _ = ctx.run_test(input, |ui| app.update_workspace(ui, true));
+        assert!(app.delete_review.confirmed(MediaId(3)));
+        assert!(!app.delete_review.confirmed(MediaId(1)));
+        assert!(app.decisions[&MediaId(3)].rejected);
     }
 }
