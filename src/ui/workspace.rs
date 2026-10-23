@@ -1718,13 +1718,26 @@ impl PhotoSortApp {
     pub fn gallery_seed_reviews(&mut self) {
         use crate::core::delete_review::{Category, Entry};
         // Scenes use the demo photos the ui_gallery example derives from
-        // tests/samples, so each shows what it claims: a softened copy is the near
-        // duplicate, a blurred copy the blurry photo, a sideways copy needs
-        // rotating, and three frames of one scene form the Pick Best burst.
+        // tests/samples, so each shows what it claims: a byte copy is the exact
+        // duplicate, a softened copy the near duplicate, a blurred copy the
+        // blurry photo, darkened and brightened copies the badly exposed ones,
+        // a sideways copy needs rotating, and three frames of one scene form
+        // the Pick Best burst.
         // Folders without these files get no scenes.
         let names: HashMap<String, MediaId> = self.media.iter().map(|m| (m.name(), m.id)).collect();
         let id = |name: &str| names.get(name).copied();
         let mut entries = Vec::new();
+        if let (Some(copy), Some(original)) = (
+            id("20230428_035435_IMG_4666 copy.JPG"),
+            id("20230428_035435_IMG_4666.JPG"),
+        ) {
+            entries.push(Entry {
+                subject: copy,
+                companion: Some(original),
+                category: Category::Exact,
+                reason: "Byte-for-byte identical to the photo beside it".into(),
+            });
+        }
         if let (Some(copy), Some(original)) = (id("GAB00915 (2).jpg"), id("GAB00915.jpg")) {
             entries.push(Entry {
                 subject: copy,
@@ -1740,6 +1753,27 @@ impl PhotoSortApp {
                 category: Category::Blur,
                 reason: "Blurry · out of focus across the frame".into(),
             });
+        }
+        for (name, category, reason) in [
+            (
+                "DSC01310.jpg",
+                Category::Dark,
+                "Very dark · sharpness 3.2 · brightness 21.4/255",
+            ),
+            (
+                "DSC01320.jpg",
+                Category::Bright,
+                "Overexposed · sharpness 6.8 · brightness 238.9/255",
+            ),
+        ] {
+            if let Some(subject) = id(name) {
+                entries.push(Entry {
+                    subject,
+                    companion: None,
+                    category,
+                    reason: reason.into(),
+                });
+            }
         }
         if !entries.is_empty() {
             self.delete_review.replace(entries);
