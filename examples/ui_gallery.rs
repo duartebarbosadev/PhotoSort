@@ -102,6 +102,18 @@ fn main() -> anyhow::Result<()> {
             [1440.0, 900.0],
         ),
         (
+            "05b-rotation-grid-wide",
+            Some(Step::Rotation),
+            false,
+            [1440.0, 900.0],
+        ),
+        (
+            "06b-pick-best-grid-wide",
+            Some(Step::PickBest),
+            false,
+            [1440.0, 900.0],
+        ),
+        (
             "06-pick-best-wide",
             Some(Step::PickBest),
             true,
