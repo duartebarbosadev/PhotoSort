@@ -244,6 +244,8 @@ pub struct PhotoSortApp {
     companions: bool,
     group_mode: GroupMode,
     pending_location_layout: Option<crate::core::geography::Layout>,
+    /// A "photos without people" choice waiting to replace Faces folder edits.
+    pending_faceless: Option<crate::core::preferences::Faceless>,
     output: String,
     organize_drafts: HashMap<GroupMode, crate::core::organize::Draft>,
     /// Organize's folder board and a counter bumped by its own edits.
@@ -485,6 +487,7 @@ impl PhotoSortApp {
             companions: true,
             group_mode: GroupMode::Current,
             pending_location_layout: None,
+            pending_faceless: None,
             output: String::new(),
             organize_drafts: HashMap::new(),
             board: Default::default(),
@@ -678,6 +681,7 @@ impl PhotoSortApp {
         self.apply_stop = None;
         self.plan_open = false;
         self.pending_location_layout = None;
+        self.pending_faceless = None;
         self.organize_drafts.clear();
         self.organize_editor = None;
         self.organize_departure = None;
@@ -1458,6 +1462,7 @@ impl PhotoSortApp {
         self.plan_open
             || self.browse_filters_open
             || self.pending_location_layout.is_some()
+            || self.pending_faceless.is_some()
             || self.organize_departure.is_some()
             || self.help
             || self.update_dialog
@@ -1806,6 +1811,32 @@ impl PhotoSortApp {
         self.progress_started = Instant::now().checked_sub(Duration::from_secs(40));
         self.set_status("Analyzing locally · previews stay available".into());
         self.filter_dirty = true;
+    }
+    /// Groups Organize by faces with a synthetic result, so screenshots need
+    /// no models: every fourth photo shows one person, the next another, and
+    /// the rest have no recognized person.
+    pub fn gallery_organize_by_faces(&mut self) {
+        let mut output = crate::core::regional::grouping::Output {
+            groups: HashMap::new(),
+            folders: HashMap::new(),
+        };
+        let photos = self.media.iter().filter(|m| m.kind == MediaKind::Photo);
+        for (n, media) in photos.enumerate() {
+            let (group, folder) = match n % 4 {
+                0 => (1, "Person 001"),
+                1 => (2, "Person 002"),
+                _ => (0, "Unassigned"),
+            };
+            output.groups.insert(media.id, group);
+            output.folders.insert(media.id, folder.into());
+        }
+        self.face_groups = Some(output);
+        self.set_group_mode(GroupMode::Faces);
+        self.filter_dirty = true;
+    }
+    /// Groups Organize by the current folders.
+    pub fn gallery_organize_by_folders(&mut self) {
+        self.set_group_mode(GroupMode::Current);
     }
     /// Groups Organize by capture date.
     pub fn gallery_organize_by_date(&mut self) {

@@ -505,6 +505,9 @@ impl PhotoSortApp {
         if self.group_mode == GroupMode::Location {
             self.location_layout_controls(ui);
         }
+        if self.group_mode == GroupMode::Faces {
+            self.faceless_controls(ui);
+        }
         if self.scene_editing() {
             self.group_controls(ui);
             if ui
@@ -517,52 +520,7 @@ impl PhotoSortApp {
                 self.compare_selection();
             }
         }
-        // Destination and companion handling live in one popover chip.
-        let destination = std::path::Path::new(&self.output)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Choose a folder".into());
-        let chip = ui
-            .add(egui::Button::new(format!(
-                "{}  Move to {destination}  {}",
-                icon::FOLDER_SIMPLE,
-                icon::CARET_DOWN
-            )))
-            .on_hover_text(format!("Destination: {}", self.output));
-        let label = format!("Move to {destination}");
-        chip.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
-        egui::Popup::menu(&chip)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .width(420.0)
-            .show(|ui| {
-                ui.set_width(420.0);
-                ui.label(RichText::new("Destination").font(medium(12.5)));
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.output)
-                            .background_color(BG)
-                            .desired_width(ui.available_width() - 36.0),
-                    )
-                    .on_hover_text("Folders are created inside this folder");
-                    if icon_button(ui, icon::FOLDER_OPEN, "Choose destination folder").clicked()
-                        && let Some(path) = rfd::FileDialog::new().pick_folder()
-                    {
-                        self.output = path.display().to_string();
-                    }
-                });
-                ui.add_space(S1);
-                if ui
-                    .add(Switch::new(
-                        &mut self.companions,
-                        "Keep RAW + JPEG + XMP together",
-                    ))
-                    .on_hover_text("Move sidecars and paired RAW files with their photo")
-                    .changed()
-                {
-                    self.preferences.keep_companions = self.companions;
-                    self.save_preferences();
-                }
-            });
+        self.destination_chip(ui);
         if ui
             .add_enabled(self.can_edit_folders(), egui::Button::new("Edit folders…"))
             .clicked()
@@ -580,6 +538,103 @@ impl PhotoSortApp {
             self.organize();
         }
     }
+    /// Where the organized folders are made, and whether a photo's RAW, JPEG
+    /// and edit files move together, in one popover chip.
+    fn destination_chip(&mut self, ui: &mut egui::Ui) {
+        use egui_phosphor::regular as icon;
+        let output = PathBuf::from(&self.output);
+        let here = self.root.as_deref().is_some_and(|root| root == output);
+        let name = output
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Choose a folder".into());
+        let label = format!("Organize into {name}");
+        let chip = ui
+            .add(egui::Button::new(format!(
+                "{}  {label}  {}",
+                icon::FOLDER_SIMPLE,
+                icon::CARET_DOWN
+            )))
+            .on_hover_text(format!(
+                "New folders are made inside {}",
+                super::inspector::readable_path(&output)
+            ));
+        chip.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+        egui::Popup::menu(&chip)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .width(400.0)
+            .show(|ui| {
+                ui.set_width(400.0);
+                ui.label(RichText::new("Organize into").font(medium(13.0)));
+                ui.label(
+                    RichText::new(
+                        "The folder where the new folders are made. Nothing moves until you preview and apply.",
+                    )
+                    .small()
+                    .color(MUTED),
+                );
+                ui.add_space(S2);
+                if let Some(root) = self.root.clone() {
+                    let root_name = root
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| root.display().to_string());
+                    if ui
+                        .radio(here, format!("This folder · {root_name}"))
+                        .on_hover_text(super::inspector::readable_path(&root))
+                        .clicked()
+                    {
+                        self.output = root.display().to_string();
+                    }
+                }
+                ui.horizontal(|ui| {
+                    let other = ui.radio(!here, "Another folder…");
+                    let change = !here
+                        && ui
+                            .small_button("Change…")
+                            .on_hover_text("Choose another folder")
+                            .clicked();
+                    if (other.clicked() || change)
+                        && let Some(path) = rfd::FileDialog::new().pick_folder()
+                    {
+                        self.output = path.display().to_string();
+                    }
+                });
+                if !here {
+                    // The folder's name stands out; where it is, quietly.
+                    let parent = output
+                        .parent()
+                        .map(|p| format!("{}/", super::inspector::readable_path(p)))
+                        .unwrap_or_default();
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add_space(S6);
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        ui.label(RichText::new(parent).small().color(MUTED));
+                        ui.label(RichText::new(&name).small().color(INK));
+                    });
+                }
+                ui.add_space(S2);
+                ui.separator();
+                ui.add_space(S1);
+                if ui
+                    .add(Switch::new(
+                        &mut self.companions,
+                        "Move RAW, JPEG and edit files of the same photo together",
+                    ))
+                    .changed()
+                {
+                    self.preferences.keep_companions = self.companions;
+                    self.save_preferences();
+                }
+                ui.label(
+                    RichText::new(
+                        "IMG_0042.ARW, IMG_0042.JPG and IMG_0042.xmp always land in the same folder, under the same name.",
+                    )
+                    .small()
+                    .color(MUTED),
+                );
+            });
+    }
     /// One-line explanation of the current Organize mode, shown on hover.
     fn organize_hint(&self) -> Option<&'static str> {
         match self.group_mode {
@@ -589,10 +644,10 @@ impl PhotoSortApp {
                 "Dates and similarity are analyzed when you choose this grouping. Your files stay unchanged until Apply."
             }),
             GroupMode::Faces => Some(
-                "Groups photos by the main people; finding faces starts when you choose Faces. Group portraits get one shared folder, such as People 001 + 003. Photos without a recognized person and videos stay in place. Apply moves the files.",
+                "Groups photos by the main people; finding faces starts when you choose Faces. Group portraits get one shared folder, such as People 001 + 003. Photos without a recognized person stay in their folders, or go to a “No people” folder if you choose. Videos stay in their folders. Apply moves the files.",
             ),
             GroupMode::Visual => Some(
-                "Select photos with Cmd/Ctrl-click or Shift-click, then use Scenes to correct groups. Analysis starts when you choose this grouping. Ungrouped photos and videos stay in place.",
+                "Select photos with Cmd/Ctrl-click or Shift-click, then use Scenes to correct groups. Analysis starts when you choose this grouping. Photos without similar photos, and videos, stay in their current folders.",
             ),
             _ if self.metadata_organize_mode() => Some(
                 "Folder proposals use photo metadata. Location names are resolved offline; AI analysis is not needed.",

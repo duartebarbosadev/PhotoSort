@@ -156,6 +156,18 @@ fn main() -> anyhow::Result<()> {
             [900.0, 700.0],
         ),
         (
+            "03f-organize-destination-wide",
+            Some(Step::Organize),
+            false,
+            [1440.0, 900.0],
+        ),
+        (
+            "03g-organize-faces-wide",
+            Some(Step::Organize),
+            false,
+            [1440.0, 900.0],
+        ),
+        (
             "01b-cull-analyzing-wide",
             Some(Step::Cull),
             false,
@@ -190,6 +202,12 @@ fn main() -> anyhow::Result<()> {
                 harness.state_mut().gallery_organize_by_date();
                 settle(&mut harness);
             }
+            if name.contains("faces") {
+                harness.state_mut().gallery_organize_by_faces();
+                settle(&mut harness);
+                harness.state_mut().gallery_select(1);
+                settle(&mut harness);
+            }
             harness.state_mut().gallery_review(review);
             settle(&mut harness);
             harness.state_mut().gallery_close_model_dialog();
@@ -197,6 +215,18 @@ fn main() -> anyhow::Result<()> {
             if name.contains("compare") {
                 harness.state_mut().gallery_select(3);
                 settle(&mut harness);
+            }
+            if name.contains("destination") {
+                // The destination chip in the Organize toolbar opens its popover.
+                use egui_kittest::kittest::Queryable;
+                let chip = ["Organize into", "Move to"]
+                    .into_iter()
+                    .find_map(|label| harness.query_all_by_label_contains(label).next())
+                    .ok_or_else(|| anyhow::anyhow!("destination chip"))?;
+                chip.click();
+                for _ in 0..5 {
+                    harness.step();
+                }
             }
             if name.contains("grouping") || name.contains("analyzing") {
                 // A pretend run: settling would wait for it to finish.
@@ -240,6 +270,8 @@ fn main() -> anyhow::Result<()> {
             Dialog::Models => harness.state_mut().gallery_models(),
             Dialog::OrganizeEditor => {
                 harness.state_mut().gallery_step(Step::Organize);
+                settle(&mut harness);
+                harness.state_mut().gallery_organize_by_folders();
                 settle(&mut harness);
                 harness.state_mut().gallery_organize_editor();
             }
@@ -296,6 +328,24 @@ fn main() -> anyhow::Result<()> {
         false,
         [1440.0, 900.0],
     )?;
+    // The folder editor over a date grouping, where most photos move.
+    let folder = dated_root.clone();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(|cc| PhotoSortApp::new(cc, Some(folder)));
+    settle(&mut harness);
+    harness.state_mut().gallery_step(Step::Organize);
+    settle(&mut harness);
+    harness.state_mut().gallery_organize_by_date();
+    settle(&mut harness);
+    harness.state_mut().gallery_organize_editor();
+    settle(&mut harness);
+    harness
+        .render()
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .save(out.join("16b-organize-editor-by-date.png"))?;
+    eprintln!("16b-organize-editor-by-date");
     // The notice after a crash in the previous session.
     photosort::core::crash::write_report(
         &photosort::core::crash::directory(),
@@ -379,6 +429,9 @@ fn write_demo_photos(root: &std::path::Path) -> anyhow::Result<()> {
             (h * 0.96) as u32,
         )
     };
+    // What a real library also holds: system files and other documents.
+    std::fs::write(root.join(".DS_Store"), b"\0\0\0\x01Bud1")?;
+    std::fs::write(root.join("notes.json"), b"{}")?;
     if root.join("GAB00915.jpg").is_file() {
         let island = open("GAB00915.jpg")?;
         save(&crop(&island, 0.03, 0.02).blur(4.0), "GAB00915 (2).jpg")?;

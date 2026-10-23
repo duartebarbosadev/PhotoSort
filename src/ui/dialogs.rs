@@ -54,6 +54,7 @@ impl PhotoSortApp {
             }
         }
         self.location_layout_dialog(ctx);
+        self.faceless_dialog(ctx);
         self.organize_dialog(ctx);
         self.organize_departure_dialog(ctx);
         self.review_dialogs(ctx);

@@ -767,3 +767,69 @@ fn a_failed_face_grouping_shows_the_error_and_waits_to_be_chosen_again() {
     app.cancel_analysis();
     app.runtime.shutdown();
 }
+#[test]
+fn photos_without_a_recognized_person_stay_or_go_to_one_folder_as_chosen() {
+    use crate::core::preferences::{Faceless, NO_PEOPLE};
+    let (_dir, mut app) = visual_fixture();
+    app.group_mode = GroupMode::Faces;
+    app.analysis_run = None;
+    app.organize_run = None;
+    let photos: Vec<Media> = app
+        .media
+        .iter()
+        .filter(|m| m.kind == MediaKind::Photo)
+        .cloned()
+        .collect();
+    let video = app
+        .media
+        .iter()
+        .find(|m| m.kind == MediaKind::Video)
+        .unwrap()
+        .id;
+    app.face_groups = Some(face_groups(&[
+        (photos[0].id, 1, "Person 001"),
+        (photos[1].id, 0, "Unassigned"),
+    ]));
+    // By default they stay in their folders, and Details says why.
+    assert_eq!(app.preferences.faceless, Faceless::Stay);
+    let labels = app.organize_labels();
+    assert_eq!(
+        labels.get(&photos[0].id).map(String::as_str),
+        Some("Person 001")
+    );
+    assert!(!labels.contains_key(&photos[1].id));
+    assert_eq!(app.unplaced_reason(&photos[1]), "no recognized person");
+    assert!(!app.placement(&photos[1]).moves);
+    assert_eq!(
+        app.unplaced_phrase(1, 1),
+        "1 photo without a recognized person and 1 video"
+    );
+    // Chosen: one "No people" folder; videos still stay.
+    app.change_faceless(Faceless::Folder);
+    assert_eq!(app.preferences.faceless, Faceless::Folder);
+    let labels = app.organize_labels();
+    assert_eq!(
+        labels.get(&photos[1].id).map(String::as_str),
+        Some(NO_PEOPLE)
+    );
+    assert!(!labels.contains_key(&video));
+    let placement = app.placement(&photos[1]);
+    assert!(placement.moves && placement.folder.ends_with(NO_PEOPLE));
+    // With folder edits, switching back asks before replacing them.
+    app.organize_drafts.insert(
+        GroupMode::Faces,
+        crate::core::organize::Draft::new(app.organize_labels()),
+    );
+    app.change_faceless(Faceless::Stay);
+    assert_eq!(app.pending_faceless, Some(Faceless::Stay));
+    assert_eq!(app.preferences.faceless, Faceless::Folder);
+    assert!(app.organize_drafts.contains_key(&GroupMode::Faces));
+    app.accept_faceless(Faceless::Stay);
+    app.pending_faceless = None;
+    assert_eq!(app.preferences.faceless, Faceless::Stay);
+    assert!(!app.organize_drafts.contains_key(&GroupMode::Faces));
+    assert!(!app.organize_labels().contains_key(&photos[1].id));
+    // Nothing on disk moved.
+    assert!(app.media.iter().all(|m| m.path.exists()));
+    app.runtime.shutdown();
+}
