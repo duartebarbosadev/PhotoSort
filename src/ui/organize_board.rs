@@ -1991,10 +1991,9 @@ mod tests {
         app.output = other.display().to_string();
         let placement = app.placement(&media);
         assert!(placement.moves);
-        assert!(
-            placement.folder.ends_with("SSD/A/Day1"),
-            "{}",
-            placement.folder
+        assert_eq!(
+            placement.folder,
+            super::super::inspector::readable_path(&other.join("A").join("Day1"))
         );
         app.runtime.shutdown();
     }
