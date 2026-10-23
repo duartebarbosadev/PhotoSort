@@ -114,6 +114,12 @@ fn main() -> anyhow::Result<()> {
             [1440.0, 900.0],
         ),
         (
+            "06c-pick-best-review-left-strip-no-names",
+            Some(Step::PickBest),
+            true,
+            [1440.0, 900.0],
+        ),
+        (
             "06-pick-best-wide",
             Some(Step::PickBest),
             true,

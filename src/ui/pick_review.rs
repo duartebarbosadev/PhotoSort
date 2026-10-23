@@ -1,3 +1,4 @@
+use super::review_card::{Badge, CardButton, CardEvent, CardPhoto, CardState, ReviewCard};
 use super::*;
 impl PhotoSortApp {
     /// Easy Delete, Fix Rotation and Pick Best start their analysis on entry
@@ -420,6 +421,180 @@ impl PhotoSortApp {
     }
 }
 
+impl PhotoSortApp {
+    /// Pick Best's grid: one card per group, showing its current round with
+    /// the suggested keeper and the same Keep/Trash, Confirm, Keep all and
+    /// Reset as Review. The focused card is Review's current group.
+    pub(super) fn pick_grid(&mut self, ui: &mut egui::Ui) {
+        let count = self.pick_review.tournaments().len();
+        let slots = self
+            .pick_review
+            .tournaments()
+            .iter()
+            .map(|t| t.comparison().paths.len())
+            .max()
+            .unwrap_or(2)
+            .max(2);
+        let current = (count > 0).then(|| self.pick_review.current_index());
+        let clicked = self.card_grid(
+            ui,
+            "pick",
+            count,
+            slots,
+            |app, i| Some(app.pick_card(i)),
+            current,
+        );
+        if let Some((i, event)) = clicked {
+            self.pick_card_event(i, event);
+        }
+    }
+
+    /// The card for one group: its current round's photos with their
+    /// Keep/Trash choice, the suggested keeper and the round actions.
+    fn pick_card(&self, index: usize) -> ReviewCard {
+        let t = &self.pick_review.tournaments()[index];
+        let c = t.comparison();
+        let current = index == self.pick_review.current_index();
+        let changed = current && self.pick_review.unfinished();
+        let enabled = !self.busy && self.pick_run.is_none();
+        let name = |id: &MediaId| {
+            self.index
+                .get(id)
+                .map(|i| self.media[*i].name())
+                .unwrap_or_default()
+        };
+        let rounds = t.comparisons.len() + t.upcoming().len();
+        let (state, state_text) = if t.finalized {
+            (CardState::Confirmed, Some(self.pick_group_status(index)))
+        } else if changed {
+            (
+                CardState::Changed,
+                Some(format!("Round {} of {rounds} · changed", t.current + 1)),
+            )
+        } else if c.confirmed {
+            (
+                CardState::Confirmed,
+                Some(format!("Round {} of {rounds} confirmed", t.current + 1)),
+            )
+        } else {
+            (
+                CardState::Provisional,
+                Some(format!("Round {} of {rounds}", t.current + 1)),
+            )
+        };
+        let mut buttons: Vec<CardButton> = c
+            .paths
+            .iter()
+            .enumerate()
+            .map(|(side, id)| {
+                CardButton::new(
+                    super::delete_review::decision_label(side, c.keeps(*id)),
+                    format!(
+                        "Toggle photo {} · {} on the selected card",
+                        side + 1,
+                        side + 1
+                    ),
+                )
+                .enabled(enabled)
+            })
+            .collect();
+        buttons.push(
+            CardButton::new(
+                if c.confirmed { "Confirmed" } else { "Confirm" },
+                "Apply these Keep/Trash choices and move to the next round · Enter on the selected card",
+            )
+            .primary(!c.confirmed)
+            .enabled(enabled && !c.confirmed)
+            .trailing(),
+        );
+        buttons.push(
+            CardButton::new(
+                "Keep all",
+                "Keep every photo shown and move on · K on the selected card",
+            )
+            .enabled(enabled)
+            .trailing(),
+        );
+        buttons.push(
+            CardButton::new("Reset", "Back to the suggestion · R on the selected card")
+                .enabled(enabled && (changed || c.confirmed || t.finalized))
+                .trailing(),
+        );
+        let score = t
+            .cluster
+            .scores
+            .get(&c.ai_pick)
+            .copied()
+            .unwrap_or_default();
+        let upcoming = match t.upcoming().len() {
+            0 => String::new(),
+            1 => " · 1 more photo to compare".to_owned(),
+            n => format!(" · {n} more photos to compare"),
+        };
+        ReviewCard {
+            title: format!("Group {} · {} photos", index + 1, t.cluster.ordered.len()),
+            state,
+            state_text,
+            photos: c
+                .paths
+                .iter()
+                .map(|id| CardPhoto {
+                    id: *id,
+                    turns: self.preview_turns(*id),
+                    badge: Badge::keep(c.keeps(*id)),
+                    suggested: *id == c.ai_pick,
+                    caption: name(id),
+                    name: self
+                        .index
+                        .get(id)
+                        .map(|i| self.media[*i].path.display().to_string())
+                        .unwrap_or_default(),
+                })
+                .collect(),
+            note: format!(
+                "Suggested keeper: {} · score {score:.1}{upcoming}",
+                name(&c.ai_pick)
+            ),
+            warning: false,
+            buttons,
+            current,
+        }
+    }
+
+    /// Applies a card's event to its group, which first becomes the current
+    /// group through Review's guard: an unconfirmed change in another group
+    /// keeps the focus, and the action, where it is.
+    pub(super) fn pick_card_event(&mut self, index: usize, event: CardEvent) {
+        self.pending_bookmark = None;
+        if self.pick_review.current_index() != index && self.allow_review_departure() {
+            self.pick_review.select_cluster(index);
+            self.sync_pick_view();
+        }
+        if self.pick_review.current_index() != index {
+            return;
+        }
+        let paths = self
+            .pick_review
+            .comparison()
+            .map(|c| c.paths.clone())
+            .unwrap_or_default();
+        match event {
+            CardEvent::Select(side) | CardEvent::Open(side) => {
+                if let Some(id) = paths.get(side) {
+                    self.set_active(*id);
+                }
+                if matches!(event, CardEvent::Open(_)) {
+                    self.open_review();
+                }
+            }
+            CardEvent::Button(side) if side < paths.len() => self.toggle_pick(paths[side]),
+            CardEvent::Button(button) if button == paths.len() => self.confirm_pick(false),
+            CardEvent::Button(button) if button == paths.len() + 1 => self.confirm_pick(true),
+            CardEvent::Button(_) => self.reset_pick(false),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -615,5 +790,76 @@ mod tests {
         assert_eq!(app.pick_review.current().unwrap().current, 0);
         assert!(app.decisions.is_empty());
         assert!(app.review_notice.is_none());
+    }
+    fn two_groups() -> PhotoSortApp {
+        let mut app = app();
+        app.media.push(Media {
+            id: MediaId(4),
+            path: "/4.jpg".into(),
+            kind: MediaKind::Photo,
+            fingerprint: Fingerprint::default(),
+        });
+        app.index.insert(MediaId(4), 3);
+        app.pick_review.replace(
+            vec![
+                crate::core::pick_review::Cluster {
+                    key: 1,
+                    ordered: vec![MediaId(1), MediaId(2)],
+                    scores: HashMap::from([(MediaId(1), 10.), (MediaId(2), 20.)]),
+                },
+                crate::core::pick_review::Cluster {
+                    key: 2,
+                    ordered: vec![MediaId(3), MediaId(4)],
+                    scores: HashMap::from([(MediaId(3), 10.), (MediaId(4), 20.)]),
+                },
+            ],
+            &mut app.decisions,
+        );
+        app.sync_pick_view();
+        app.refilter();
+        app
+    }
+    #[test]
+    fn grid_shows_each_groups_round_with_the_suggested_keeper() {
+        let mut app = two_groups();
+        let shown = super::super::review_card::render_grid(&mut app);
+        for text in [
+            "Group 1 · 2 photos",
+            "Group 2 · 2 photos",
+            "Round 1 of 1",
+            "Suggested",
+            "Suggested keeper: 2.jpg",
+            "Keep all",
+        ] {
+            assert!(shown.contains(text), "{text} missing from:\n{shown}");
+        }
+        assert!(app.decisions.is_empty());
+    }
+    #[test]
+    fn pick_card_actions_select_their_group_and_respect_pending_choices() {
+        let mut app = two_groups();
+        // Keep the second group's lower-scored photo too.
+        app.pick_card_event(1, CardEvent::Button(0));
+        assert_eq!(app.pick_review.current_index(), 1);
+        assert!(app.pick_review.unfinished());
+        // The first group cannot be confirmed while that is pending.
+        app.pick_card_event(0, CardEvent::Button(2));
+        assert_eq!(app.pick_review.current_index(), 1);
+        assert_eq!(app.review_notice, Some(Step::PickBest));
+        assert!(app.decisions.is_empty());
+        app.review_notice = None;
+        // Reset that group from its card, then confirm the first group.
+        app.pick_card_event(1, CardEvent::Button(4));
+        assert!(!app.pick_review.unfinished());
+        app.pick_card_event(0, CardEvent::Button(2));
+        assert!(app.decisions[&MediaId(1)].rejected);
+        assert!(!app.decisions.get(&MediaId(2)).is_some_and(|d| d.rejected));
+        // Keep all on the second group keeps both.
+        app.pick_card_event(1, CardEvent::Button(3));
+        assert!(app.pick_review.tournaments()[1].finalized);
+        assert!(!app.decisions.get(&MediaId(3)).is_some_and(|d| d.rejected));
+        app.pick_card_event(0, CardEvent::Open(0));
+        assert!(app.review);
+        assert_eq!(app.pick_review.current_index(), 0);
     }
 }

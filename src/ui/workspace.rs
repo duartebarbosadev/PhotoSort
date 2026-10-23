@@ -36,6 +36,8 @@ mod plan_review;
 mod pointer;
 #[path = "review.rs"]
 mod review;
+#[path = "review_card.rs"]
+mod review_card;
 #[path = "rotation.rs"]
 mod rotation;
 #[path = "selection.rs"]
@@ -1554,12 +1556,6 @@ impl PhotoSortApp {
         self.restore_bookmark();
         self.intro_keys(ctx);
         self.keyboard(ctx);
-        // Pick Best is always a side-by-side review: it has no grid view, and
-        // its choices and Confirm live under the photos. Older saved views
-        // may still ask for the grid.
-        if self.step == Step::PickBest {
-            self.review = true;
-        }
         // Organize has no separate Review: its board shows the clicked
         // photo in a preview panel beside the folders and thumbnails.
         if self.step == Step::Organize {
@@ -1818,7 +1814,7 @@ impl PhotoSortApp {
     pub fn gallery_close_model_dialog(&mut self) {
         self.model_dialog = false;
     }
-    /// Shows or hides Cull's file names (preference, not saved).
+    /// Shows or hides file names under thumbnails (preference, not saved).
     pub fn gallery_show_filenames(&mut self, show: bool) {
         self.preferences.show_filenames = show;
     }
@@ -1845,9 +1841,9 @@ impl PhotoSortApp {
     pub fn gallery_organize_by_date(&mut self) {
         self.set_group_mode(GroupMode::Date);
     }
-    /// Shows Cull's photo strip on the left (preference, not saved).
+    /// Shows Review's photo strip on the left (preference, not saved).
     pub fn gallery_left_strip(&mut self, left: bool) {
-        self.preferences.cull_strip = if left {
+        self.preferences.strip_position = if left {
             crate::core::preferences::StripPosition::Left
         } else {
             crate::core::preferences::StripPosition::Bottom

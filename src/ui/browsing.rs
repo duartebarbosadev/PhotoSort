@@ -209,8 +209,9 @@ impl PhotoSortApp {
             Err(error) => self.error = Some(error),
         }
     }
-    /// Cull's view options: where Review's photo strip sits and whether
-    /// thumbnails carry file names. Both persist as user preferences.
+    /// Quick view options in Cull: where Review's photo strip sits and
+    /// whether thumbnails carry file names. Both are app-wide preferences,
+    /// also in Settings, and apply to every step.
     pub(super) fn cull_view_options(&mut self, ui: &mut egui::Ui) {
         use crate::core::preferences::StripPosition;
         use egui_phosphor::regular as icon;
@@ -237,16 +238,16 @@ impl PhotoSortApp {
                     .collect();
                 let current = positions
                     .iter()
-                    .position(|p| *p == self.preferences.cull_strip);
+                    .position(|p| *p == self.preferences.strip_position);
                 if let Some(index) = segmented(
                     ui,
                     egui::Id::new("cull-strip-position"),
                     &segments,
                     current,
                     button_row_height(ui),
-                ) && self.preferences.cull_strip != positions[index]
+                ) && self.preferences.strip_position != positions[index]
                 {
-                    self.preferences.cull_strip = positions[index];
+                    self.preferences.strip_position = positions[index];
                     self.save_preferences();
                 }
                 ui.add_space(S2);

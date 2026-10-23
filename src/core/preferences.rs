@@ -27,9 +27,11 @@ pub struct Preferences {
     pub raw_look: super::raw_look::RawLook,
     /// Finish every interface animation instantly.
     pub reduce_motion: bool,
-    /// Where Cull's Review shows the strip of photos.
-    pub cull_strip: StripPosition,
-    /// Cull only: file names under thumbnails in its grid and photo strips.
+    /// Where Review shows the strip of photos, in every step. Older files
+    /// stored it as Cull's own `cull_strip`.
+    #[serde(alias = "cull_strip")]
+    pub strip_position: StripPosition,
+    /// File names under thumbnails in every step's grid and photo strip.
     pub show_filenames: bool,
     /// The first-run intro has played. Menu → Watch the intro replays it.
     pub intro_shown: bool,
@@ -59,7 +61,7 @@ impl Default for Preferences {
             keep_companions: true,
             raw_look: Default::default(),
             reduce_motion: false,
-            cull_strip: StripPosition::Bottom,
+            strip_position: StripPosition::Bottom,
             show_filenames: true,
             intro_shown: false,
         }
