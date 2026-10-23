@@ -918,12 +918,15 @@ impl PhotoSortApp {
                         .size()
                         .x
                 };
-                let title_width = width(&title, semibold(13.0)) + 40.0;
+                // The title and counts come first; the count of selected
+                // photos only fills what they leave.
+                let body = egui::TextStyle::Body.resolve(ui.style());
+                let reserved = width(&title, semibold(13.0)) + width(&summary, body) + 40.0;
                 if self.library_selection_mode() && !self.selection.is_empty() {
                     let count = self.selection.len();
                     let full = format!("{count} selected · drag onto a folder to move");
                     let short = format!("{count} selected");
-                    let room = ui.available_width() - title_width;
+                    let room = ui.available_width() - reserved;
                     let text = if width(&full, small.clone()) <= room {
                         Some(full)
                     } else if width(&short, small.clone()) <= room {
@@ -966,45 +969,48 @@ impl PhotoSortApp {
             Pending::Running => return None,
             Pending::Cancelled => (
                 icon::PROHIBIT,
-                format!("Grouping by {what} cancelled"),
-                "Photos stay where they are. Group again to propose folders.".into(),
+                "Grouping cancelled".into(),
+                format!(
+                    "Grouping by {what} was cancelled. Photos stay where they are; group again to propose folders."
+                ),
                 Some("Group again"),
             ),
             Pending::Failed => (
                 icon::WARNING,
-                format!("Grouping by {what} stopped"),
-                "It could not finish. Group again to retry.".into(),
+                "Grouping stopped".into(),
+                format!("Grouping by {what} could not finish. Group again to retry."),
                 Some("Group again"),
             ),
             Pending::Waiting if self.model_issue.is_some() || self.model_dialog => (
                 icon::CPU,
-                format!("Grouping by {what} needs AI models"),
-                "Set up the models it needs, then group again.".into(),
+                "AI models needed".into(),
+                format!("Grouping by {what} needs AI models. Set them up, then group again."),
                 Some("AI models…"),
             ),
             Pending::Waiting if self.analysis_run.is_some() || self.rotation_run.is_some() => (
                 icon::HOURGLASS_MEDIUM,
-                format!("Grouping by {what} is next"),
-                "It starts when the current analysis finishes.".into(),
+                "Grouping is next".into(),
+                format!("Grouping by {what} starts when the current analysis finishes."),
                 None,
             ),
             Pending::Waiting if self.scanning || self.media.is_empty() => (
                 icon::HOURGLASS_MEDIUM,
-                format!("Grouping by {what} is next"),
-                "It starts once the folder has been read.".into(),
+                "Grouping is next".into(),
+                format!("Grouping by {what} starts once the folder has been read."),
                 None,
             ),
             Pending::Waiting if self.busy || self.plan_open || self.retry_plan.is_some() => (
                 icon::HOURGLASS_MEDIUM,
-                format!("Grouping by {what} is next"),
-                "It waits for the current task to finish.".into(),
+                "Grouping is next".into(),
+                format!("Grouping by {what} waits for the current task to finish."),
                 None,
             ),
             Pending::Waiting => (
                 icon::CIRCLE_DASHED,
-                format!("Not grouped by {what} yet"),
-                "Group photos to propose folders. Nothing moves until you preview and apply."
-                    .into(),
+                "Not grouped yet".into(),
+                format!(
+                    "Group by {what} to propose folders. Nothing moves until you preview and apply."
+                ),
                 Some("Group photos"),
             ),
         })
@@ -1693,7 +1699,7 @@ mod tests {
         app.cancel_analysis();
         assert_eq!(app.organize_pending(), Some(Pending::Cancelled));
         let nodes = labels(&mut app, 1440.0);
-        assert!(shows(&nodes, "Grouping by visual similarity cancelled"));
+        assert!(shows(&nodes, "Grouping cancelled"));
         assert!(nodes.iter().any(|(label, _)| label == "Group again"));
         assert!(!shows(&nodes, "27 of 502"));
         assert!(!shows(&nodes, "9 items stay where they are"));
@@ -1709,7 +1715,7 @@ mod tests {
         assert_eq!(app.organize_pending(), Some(Pending::Failed));
         assert!(
             app.organize_notice_text()
-                .is_some_and(|(_, title, _, _)| title == "Grouping by visual similarity stopped")
+                .is_some_and(|(_, title, _, _)| title == "Grouping stopped")
         );
         // Finished without any group: now staying in place is the result.
         app.visual_groups = Some(HashMap::new());
@@ -1734,7 +1740,7 @@ mod tests {
         let nodes = labels(&mut app, 1440.0);
         assert!(shows(&nodes, "Looking for photos to clean up"));
         assert!(shows(&nodes, "4 of 9 photos"));
-        assert!(shows(&nodes, "Grouping by faces is next"));
+        assert!(shows(&nodes, "Grouping is next"));
         assert!(!shows(&nodes, "stay where they are"));
         // Cull keeps its grid and gets the same card above it.
         app.delete_run = None;
