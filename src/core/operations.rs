@@ -346,6 +346,31 @@ impl Report {
     }
 }
 
+/// Files that follow a trashed photo sharing their name: the XMP sidecar and,
+/// with companions on, RAW files beside a JPEG/HEIC/... Photos with the same
+/// name in other formats are separate shots and never follow. Followers stay
+/// while any of those photos is kept, so a kept photo keeps its RAW and XMP.
+fn trash_followers<'a>(
+    group: &'a [PathBuf],
+    companions: bool,
+    rejected: &'a HashSet<MediaId>,
+) -> impl Iterator<Item = PathBuf> + 'a {
+    let kind = |p: &Path| MediaKind::from_path(p);
+    let has_photo = group.iter().any(|p| kind(p) == Some(MediaKind::Photo));
+    let follows = move |p: &Path| {
+        p.extension().is_some_and(|e| e.eq_ignore_ascii_case("xmp"))
+            || (companions && has_photo && kind(p) == Some(MediaKind::Raw))
+    };
+    let all_trashed = group
+        .iter()
+        .filter(|p| !follows(p))
+        .all(|p| rejected.contains(&MediaId::for_path(p)));
+    group
+        .iter()
+        .filter(move |p| all_trashed && follows(p))
+        .cloned()
+}
+
 /// Shared Trash expansion for staged decisions and explicit context-menu requests.
 fn trash_actions(
     catalog: &Catalog,
@@ -371,24 +396,10 @@ fn trash_actions(
         anyhow::ensure!(!cancelled(), "File planning cancelled");
         if rejected.contains(&id) {
             let photo = MediaKind::from_path(path).is_some_and(|kind| kind != MediaKind::Video);
-            let files = if companions && photo {
-                index
-                    .get(&path.with_extension(""))
-                    .cloned()
-                    .unwrap_or_else(|| vec![path.to_path_buf()])
-            } else {
-                let mut f = vec![path.to_path_buf()];
-                if photo && let Some(pair) = index.get(&path.with_extension("")) {
-                    f.extend(
-                        pair.iter()
-                            .filter(|p| {
-                                p.extension().is_some_and(|e| e.eq_ignore_ascii_case("xmp"))
-                            })
-                            .cloned(),
-                    );
-                }
-                f
-            };
+            let mut files = vec![path.to_path_buf()];
+            if photo && let Some(group) = index.get(&path.with_extension("")) {
+                files.extend(trash_followers(group, companions, rejected));
+            }
             let files = files
                 .into_iter()
                 .filter(|p| seen.insert(p.clone()))

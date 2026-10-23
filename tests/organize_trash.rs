@@ -256,3 +256,59 @@ fn organize_trash_supporting_intent_survives_serialization_moves_and_recovery_co
     session.reconcile_catalog(&replaced);
     assert!(!session.decisions.contains_key(&new_id));
 }
+
+#[test]
+fn trash_takes_only_raw_and_xmp_with_a_photo_never_same_name_photos() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in [
+        "shot.jpeg",
+        "shot.heic",
+        "shot.ARW",
+        "shot.xmp",
+        "pair.jpg",
+        "pair.ARW",
+        "pair.xmp",
+    ] {
+        fs::write(dir.path().join(name), name.as_bytes()).unwrap();
+    }
+    let c = Catalog::scan(dir.path(), || false, |_| {}).unwrap();
+    let trashed = |names: &[&str], companions: bool| {
+        let decisions = names
+            .iter()
+            .map(|n| {
+                (
+                    id(&c, n),
+                    Decision {
+                        rejected: true,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let plan = operations::decisions_plan(&c, &decisions, companions).unwrap();
+        let mut got: Vec<_> = paths(&plan)
+            .into_iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        got.sort();
+        got
+    };
+    // A JPEG and a HEIC with the same name are two photos: the kept one keeps its RAW and XMP.
+    assert_eq!(trashed(&["shot.jpeg"], true), ["shot.jpeg"]);
+    assert_eq!(trashed(&["shot.ARW"], true), ["shot.ARW"]);
+    assert_eq!(
+        trashed(&["shot.jpeg", "shot.heic"], true),
+        ["shot.ARW", "shot.heic", "shot.jpeg", "shot.xmp"]
+    );
+    // Without companions the RAW is its own photo, so the shared XMP stays with it.
+    assert_eq!(
+        trashed(&["shot.jpeg", "shot.heic"], false),
+        ["shot.heic", "shot.jpeg"]
+    );
+    // A plain RAW + JPEG pair still goes together.
+    assert_eq!(
+        trashed(&["pair.jpg"], true),
+        ["pair.ARW", "pair.jpg", "pair.xmp"]
+    );
+    assert_eq!(trashed(&["pair.jpg"], false), ["pair.jpg"]);
+}
