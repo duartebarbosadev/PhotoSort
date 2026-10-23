@@ -32,6 +32,14 @@ pub(super) struct Editor {
     rename_focus: bool,
     draft: Draft,
     rows: Vec<PhotoRow>,
+    /// What the file list draws, grouped by destination, and the rows it
+    /// shows in that order (arrow keys and Shift ranges follow it).
+    lines: Vec<Line>,
+    order: Vec<usize>,
+    /// System files and other non-media files are listed only on request;
+    /// they still move with their folders.
+    show_other: bool,
+    other: usize,
     tree: Tree,
     visible_folders: Vec<usize>,
     collapsed: std::collections::BTreeSet<Key>,
@@ -65,6 +73,18 @@ pub(super) enum Pending {
     Cancelled,
     Failed,
 }
+/// One line of the file list: a destination heading, a file (an index into
+/// `rows`), or the switch that shows other files.
+#[derive(Clone, Debug, PartialEq)]
+enum Line {
+    Group {
+        folder: String,
+        count: usize,
+        moving: bool,
+    },
+    File(usize),
+    Other,
+}
 struct PhotoRow {
     id: MediaId,
     source: PathBuf,
@@ -92,6 +112,7 @@ enum MarkRequest {
 enum FolderEdit {
     Create,
     Rename,
+    Parent,
 }
 #[derive(Clone, Copy)]
 enum EditAction {
@@ -133,6 +154,13 @@ enum Command {
 fn folder_label(path: &std::path::Path) -> String {
     crate::core::names::relative_label(path)
         .unwrap_or_else(|| path.to_string_lossy().replace('\\', "/"))
+}
+/// System files (names starting with a dot) and files that are not photos or
+/// videos: listed only on request, since they rarely need sorting by hand.
+fn hidden_file(path: &std::path::Path) -> bool {
+    path.file_name()
+        .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+        || crate::core::model::MediaKind::from_path(path).is_none()
 }
 fn folder_title(path: &str) -> &str {
     if path.is_empty() {
@@ -441,6 +469,8 @@ impl Editor {
             .folder_anchor
             .take()
             .filter(|p| self.draft.folders().contains(p));
+        // Counts are what the file list shows: hidden system and other
+        // files count only while they are listed.
         let mut counts = HashMap::<String, usize>::new();
         for row in &mut self.rows {
             row.after = self
@@ -449,13 +479,19 @@ impl Editor {
                 .get(&row.id)
                 .cloned()
                 .unwrap_or_default();
-            *counts.entry(row.after.clone()).or_default() += 1;
+            if self.show_other || !hidden_file(&row.source) {
+                *counts.entry(row.after.clone()).or_default() += 1;
+            }
         }
         self.tree = Tree::folders(
             self.draft.folders().iter().map(|path| {
                 (
                     PathBuf::from(path),
-                    folder_title(path).to_owned(),
+                    if path.is_empty() {
+                        self.root_name()
+                    } else {
+                        path.to_owned()
+                    },
                     counts.get(path).copied().unwrap_or_default(),
                 )
             }),
@@ -463,6 +499,105 @@ impl Editor {
         )
         .expect("in-memory folder tree is not cancelled");
         self.project_folders();
+        self.arrange_lines();
+    }
+    /// The opened folder's own name, for the top of the tree.
+    fn root_name(&self) -> String {
+        self.catalog
+            .root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| folder_title("").to_owned())
+    }
+    /// A folder as shown: the opened folder's name for the top.
+    fn title(&self, path: &str) -> String {
+        if path.is_empty() {
+            self.root_name()
+        } else {
+            path.replace('/', " / ")
+        }
+    }
+    /// True when a row ends up somewhere else on disk or under another name.
+    fn row_changes(&self, row: &PhotoRow) -> bool {
+        let renamed = self
+            .names
+            .get(&row.id)
+            .is_some_and(|stem| !stem.trim().is_empty());
+        let parent = row.source.parent().unwrap_or(std::path::Path::new(""));
+        let target = if self.output.is_absolute() {
+            operations::folder_destination(&self.output, &row.after)
+        } else {
+            operations::folder_destination(&self.catalog.root, &row.after)
+        };
+        renamed || target != parent
+    }
+    /// Groups the files under their destination, files that change first,
+    /// then those that stay; system and other non-media files go last and
+    /// only when asked for.
+    fn arrange_lines(&mut self) {
+        let other = |row: &PhotoRow| hidden_file(&row.source);
+        let mut moving = std::collections::BTreeMap::<&str, Vec<usize>>::new();
+        let mut staying = Vec::new();
+        let mut others = Vec::new();
+        for (i, row) in self.rows.iter().enumerate() {
+            if other(row) {
+                others.push(i);
+            } else if self.row_changes(row) {
+                moving.entry(row.after.as_str()).or_default().push(i);
+            } else {
+                staying.push(i);
+            }
+        }
+        let mut lines = Vec::new();
+        for (folder, rows) in &moving {
+            lines.push(Line::Group {
+                folder: (*folder).to_owned(),
+                count: rows.len(),
+                moving: true,
+            });
+            lines.extend(rows.iter().map(|&i| Line::File(i)));
+        }
+        if !staying.is_empty() {
+            lines.push(Line::Group {
+                folder: String::new(),
+                count: staying.len(),
+                moving: false,
+            });
+            lines.extend(staying.iter().map(|&i| Line::File(i)));
+        }
+        if !others.is_empty() {
+            lines.push(Line::Other);
+            if self.show_other {
+                lines.extend(others.iter().map(|&i| Line::File(i)));
+            }
+        }
+        self.other = others.len();
+        self.order = lines
+            .iter()
+            .filter_map(|line| match line {
+                Line::File(i) => Some(*i),
+                _ => None,
+            })
+            .collect();
+        self.lines = lines;
+    }
+    /// Shows or hides system and other files. Hidden ones leave the
+    /// selection, so no move takes them along unseen.
+    fn toggle_other_files(&mut self) {
+        self.show_other = !self.show_other;
+        self.refresh();
+        if !self.show_other {
+            let shown: HashSet<_> = self.order.iter().map(|&i| self.rows[i].id).collect();
+            self.selected.retain(|id| shown.contains(id));
+            if self.file_cursor.is_some_and(|i| !self.order.contains(&i)) {
+                self.file_cursor = None;
+            }
+        }
+    }
+    /// The file cursor's place in the shown order.
+    fn cursor_position(&self) -> Option<usize> {
+        let cursor = self.file_cursor?;
+        self.order.iter().position(|&i| i == cursor)
     }
     fn project_folders(&mut self) {
         self.tree.retain_branches(&mut self.collapsed);
@@ -575,52 +710,48 @@ impl Editor {
                 .find(|row| row.id == *id)
                 .map(|row| row.source.file_name().unwrap_or_default().to_string_lossy())
                 .unwrap_or_default();
-            ui.add(egui::Label::new(format!("Rename {original}")).truncate());
-            ui.label(
-                RichText::new("Base name only · extension stays unchanged")
-                    .small()
-                    .color(MUTED),
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!("Rename {original} · the extension stays"))
+                        .small()
+                        .color(MUTED),
+                )
+                .truncate(),
             );
-            let mut field = egui::TextEdit::singleline(name)
-                .id_salt("organize_file_name")
-                .desired_width(ui.available_width())
-                .hint_text("File name")
-                .show(ui);
-            if self.rename_focus {
-                field.response.request_focus();
-                field
-                    .state
-                    .cursor
-                    .set_char_range(Some(egui::text::CCursorRange::two(
-                        egui::text::CCursor::new(0),
-                        egui::text::CCursor::new(name.chars().count()),
-                    )));
-                field.state.store(ui.ctx(), field.response.id);
-                self.rename_focus = false;
-            }
-            let field = field.response;
-            let enter = (field.has_focus() || field.lost_focus())
-                && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("Stage name").clicked() || enter {
+            ui.horizontal(|ui| {
+                let buttons = 230.0;
+                let mut field = egui::TextEdit::singleline(name)
+                    .id_salt("organize_file_name")
+                    .desired_width((ui.available_width() - buttons).max(80.0))
+                    .hint_text("File name")
+                    .show(ui);
+                if self.rename_focus {
+                    field.response.request_focus();
+                    field
+                        .state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::two(
+                            egui::text::CCursor::new(0),
+                            egui::text::CCursor::new(name.chars().count()),
+                        )));
+                    field.state.store(ui.ctx(), field.response.id);
+                    self.rename_focus = false;
+                }
+                let field = field.response;
+                let enter = (field.has_focus() || field.lost_focus())
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if ui.button("Save").clicked() || enter {
                     command = Some(Command::RenameFile(*id, name.clone()));
                 }
-                if ui.button("Restore original name").clicked() {
+                if ui
+                    .button("Original name")
+                    .on_hover_text("Keep the name it has now")
+                    .clicked()
+                {
                     command = Some(Command::RenameFile(*id, String::new()));
                 }
-                if ui.button("Cancel name edit").clicked() {
+                if ui.button("Cancel").clicked() {
                     cancel = true;
-                }
-            });
-        } else {
-            ui.horizontal_wrapped(|ui| {
-                if ui.add_enabled(self.selected.len() == 1, egui::Button::new("Rename selected file…")).clicked()
-                    && let Some(id) = self.selected.iter().next().copied() {
-                    self.start_rename(id);
-                }
-                if ui.add_enabled(self.reset_enabled && !self.selected.is_empty(), egui::Button::new("Reset destinations"))
-                    .on_hover_text("Restore the initial grouping for selected files. Other edits and file names stay unchanged.").clicked() {
-                    self.reset_request = Some(Selection { files: self.selected.clone(), ..Default::default() });
                 }
             });
         }
@@ -653,17 +784,16 @@ impl Editor {
             &mut self.selected,
             &mut self.file_anchor,
             self.rows[row].id,
-            self.rows.iter().map(|r| r.id),
+            self.order.iter().map(|&i| self.rows[i].id),
             toggle,
             extend,
         );
     }
+    /// Every file shown; hidden system and other files stay unselected.
     fn select_all_files(&mut self) {
-        self.selected = self.rows.iter().map(|r| r.id).collect();
-        self.file_cursor = self
-            .file_cursor
-            .or_else(|| (!self.rows.is_empty()).then_some(0));
-        self.file_anchor = self.rows.first().map(|r| r.id);
+        self.selected = self.order.iter().map(|&i| self.rows[i].id).collect();
+        self.file_cursor = self.file_cursor.or_else(|| self.order.first().copied());
+        self.file_anchor = self.order.first().map(|&i| self.rows[i].id);
     }
     fn clear_files(&mut self) {
         self.selected.clear();
@@ -704,7 +834,7 @@ impl Editor {
             if repeat && key == egui::Key::Space {
                 continue;
             }
-            if self.rows.is_empty() {
+            if self.order.is_empty() {
                 break;
             }
             let special = modifiers.command || modifiers.ctrl;
@@ -718,37 +848,40 @@ impl Editor {
                 continue;
             }
             if key == egui::Key::Space {
-                let row = self.file_cursor.unwrap_or(0);
+                let row = self.file_cursor.unwrap_or(self.order[0]);
                 self.select_file(row, !modifiers.shift || special, modifiers.shift);
                 self.reveal_file = true;
                 continue;
             }
+            // Positions in the shown order, mapped back to rows.
+            let last = self.order.len() - 1;
+            let position = self.cursor_position();
             let target = match key {
                 egui::Key::ArrowUp | egui::Key::ArrowDown => {
                     crate::core::navigation::next_position(
-                        self.rows.len(),
-                        self.file_cursor,
+                        self.order.len(),
+                        position,
                         if key == egui::Key::ArrowUp { -1 } else { 1 },
-                        |i| {
+                        |p| {
                             special
                                 || modifiers.shift
-                                || !decisions.get(&self.rows[i].id).is_some_and(|d| d.rejected)
+                                || !decisions
+                                    .get(&self.rows[self.order[p]].id)
+                                    .is_some_and(|d| d.rejected)
                         },
                     )
                 }
                 egui::Key::Home => Some(0),
-                egui::Key::End => Some(self.rows.len() - 1),
-                egui::Key::PageUp => Some(
-                    self.file_cursor
-                        .unwrap_or(0)
-                        .saturating_sub(keyboard.page_rows(ui)),
-                ),
-                egui::Key::PageDown => Some(
-                    (self.file_cursor.unwrap_or(0) + keyboard.page_rows(ui))
-                        .min(self.rows.len() - 1),
-                ),
+                egui::Key::End => Some(last),
+                egui::Key::PageUp => {
+                    Some(position.unwrap_or(0).saturating_sub(keyboard.page_rows(ui)))
+                }
+                egui::Key::PageDown => {
+                    Some((position.unwrap_or(0) + keyboard.page_rows(ui)).min(last))
+                }
                 _ => None,
-            };
+            }
+            .map(|p| self.order[p]);
             if let Some(row) = target {
                 if modifiers.shift {
                     self.select_file(row, special, true);
@@ -769,19 +902,32 @@ impl Editor {
         decisions: &HashMap<MediaId, Decision>,
     ) -> Option<Command> {
         let mut command = None;
-        ui.label(RichText::new("Files").font(semibold(14.0)));
         ui.horizontal(|ui| {
-            if ui.button("Select all").clicked() {
-                self.select_all_files();
-            }
-            if ui.button("Clear selection").clicked() {
-                self.clear_files();
-            }
-            ui.label(format!("{} selected", self.selected.len()));
+            // A fixed height: the right-to-left part would otherwise grow
+            // to the column's height.
+            ui.set_height(button_row_height(ui));
+            ui.label(RichText::new("Photos").font(semibold(14.0)));
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                if !self.selected.is_empty() {
+                    if ui.small_button("Clear").clicked() {
+                        self.clear_files();
+                    }
+                    ui.label(
+                        RichText::new(format!("{} selected", self.selected.len()))
+                            .small()
+                            .color(ACCENT),
+                    );
+                } else if ui
+                    .small_button("Select all")
+                    .on_hover_text("Every photo shown · Ctrl/Cmd+A")
+                    .clicked()
+                {
+                    self.select_all_files();
+                }
+            });
         });
         command = self.file_name_controls(ui).or(command);
-        ui.separator();
-        let name_controls_height = if self.renaming.is_some() { 110.0 } else { 35.0 };
+        let name_controls_height = if self.renaming.is_some() { 64.0 } else { 0.0 };
         let mut scroll = egui::ScrollArea::vertical().id_salt("organize_photos");
         if let Some(offset) = self.restore_scroll[0].take() {
             scroll = scroll.vertical_scroll_offset(offset);
@@ -794,78 +940,124 @@ impl Editor {
             collection_controls::Keyboard::new(ui, "organize_photos", max_height, row_height);
         self.file_keyboard(ui, &keyboard, decisions);
         if std::mem::take(&mut self.reveal_file)
-            && let Some(row) = self.file_cursor
+            && let Some(cursor) = self.file_cursor
+            && let Some(line) = self.lines.iter().position(|l| *l == Line::File(cursor))
         {
-            scroll = keyboard.scroll(ui, scroll, row);
+            // The first file brings its heading along: Home shows the top.
+            let line = if self.order.first() == Some(&cursor) {
+                0
+            } else {
+                line
+            };
+            scroll = keyboard.scroll(ui, scroll, line);
         }
         let focused = keyboard.has_focus(ui);
+        let mut toggle_other = false;
+        // A fixed height, like the folders beside it: the dialog keeps its
+        // size and place from the first frame, so rows stay under the pointer.
         let output = scroll
-            .auto_shrink([false, true])
+            .auto_shrink([false, false])
+            .min_scrolled_height(max_height)
             .max_height(max_height)
-            .show_rows(ui, row_height, self.rows.len(), |ui, rows| {
+            .show_rows(ui, row_height, self.lines.len(), |ui, lines| {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                for i in rows {
-                    let id = self.rows[i].id;
-                    let name = self.rows[i].source.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                    let after_name = self.names.get(&id).map(|stem|
-                        crate::core::organize::renamed_file_name(std::path::Path::new(&name), std::ffi::OsStr::new(stem)).to_string_lossy().into_owned())
-                        .unwrap_or_else(|| name.clone());
-                    let before = self.rows[i].source.parent().and_then(|p| p.strip_prefix(&self.catalog.root).ok()).unwrap_or_else(|| std::path::Path::new("")).to_path_buf();
-                    let after = self.rows[i].after.clone();
-                    let selected = self.selected.contains(&id);
-                    ui.push_id(id.0, |ui| {
-                        let marked = decisions.get(&id).is_some_and(|d| d.rejected);
-                        let title = if marked { RichText::new(format!("{name} · Trash")).color(RED) } else { RichText::new(&name) };
-                        // The grow atom left-aligns the name across the full row.
-                        let response = ui.add_sized([ui.available_width(), button_row_height(ui)],
-                            egui::Button::selectable(selected, (title, egui::Atom::grow())).truncate().sense(collection_controls::pointer_sense(true)));
-                        keyboard.focus_on_click(&response);
-                        if focused && self.file_cursor == Some(i) {
-                            ui.painter().rect_stroke(response.rect, 2., ui.visuals().selection.stroke, StrokeKind::Inside);
-                        }
-                        if response.clicked() {
-                            let m = ui.input(|i| i.modifiers);
-                            self.select_file(i, !m.shift || m.command || m.ctrl, m.shift);
-                        }
-                        if response.double_clicked() { self.start_rename(id); }
-                        response.context_menu(|ui| {
-                            self.trash_menu(ui, self.file_selection(id), decisions);
-                            ui.separator();
-                            if ui.add_enabled(self.reset_enabled, egui::Button::new("Reset file destinations")).on_hover_text("Restore the initial grouping for the clicked file, or the selected files when it belongs to the selection. File names stay unchanged.").clicked() {
-                                self.reset_request = Some(Selection { files: if self.selected.contains(&id) { self.selected.clone() } else { HashSet::from([id]) }, ..Default::default() });
-                                ui.close();
-                            }
-                            ui.separator();
-                            let paths = self.file_locations(&self.rows[i]);
-                            if let Some(request) = desktop::locations_menu(ui, &paths, self.desktop_enabled) {
-                                self.desktop_pending = Some(request);
-                            }
+                for line in lines {
+                    #[cfg(test)]
+                    {
+                        let rect = egui::Rect::from_min_size(
+                            ui.cursor().min,
+                            egui::vec2(ui.available_width(), button_row_height(ui)),
+                        );
+                        ui.ctx().data_mut(|d| {
+                            d.insert_temp(egui::Id::new(("test_line_rect", line)), rect)
                         });
-                        #[cfg(test)]
-                        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("test_file_rect", id.0)), response.rect));
-                        if self.starts_drag(ui, &response) {
-                            egui::DragAndDrop::set_payload(ui.ctx(), self.file_drag(id));
-                        }
-                        self.track_completed_drag(ui, &response, Some(id), &after);
-                        if let Some(drop) = self.drop_target(ui, &response, &after) { command = Some(drop); }
-                        let before_path = std::path::Path::new(&before).join(&name);
-                        let after_path = std::path::Path::new(&after).join(&after_name);
-                        let line = if before_path == after_path {
-                            RichText::new(format!("Stays in {}", if before.as_os_str().is_empty() { "Library root".into() } else { before.display().to_string() })).small().color(FAINT)
-                        } else {
-                            RichText::new(format!("{}  →  {}", before_path.display(), after_path.display())).small().color(ACCENT)
-                        };
-                        // Align with the name inside the row button above,
-                        // without adding height: rows have a fixed pitch.
-                        egui::Frame::new()
-                            .inner_margin(egui::Margin { left: ui.spacing().button_padding.x as i8, ..Default::default() })
-                            .show(ui, |ui| {
-                                ui.add(egui::Label::new(line).truncate())
-                                .on_hover_text(format!("Before: {}\nAfter: {}\nDrag selected files onto a destination folder. Double-click a file to rename it.", before_path.display(), after_path.display()));
+                    }
+                    match self.lines[line].clone() {
+                        Line::Group { folder, count, moving } => {
+                            let (rect, response) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), row_height),
+                                Sense::hover(),
+                            );
+                            let (glyph, title, color) = if moving {
+                                (
+                                    egui_phosphor::regular::ARROW_RIGHT,
+                                    format!("To {}", self.title(&folder)),
+                                    ACCENT,
+                                )
+                            } else {
+                                (
+                                    egui_phosphor::regular::PUSH_PIN,
+                                    "Not moving".to_owned(),
+                                    MUTED,
+                                )
+                            };
+                            let y = rect.bottom() - 12.0;
+                            let painter = ui.painter_at(rect);
+                            painter.text(
+                                egui::pos2(rect.left() + 4.0, y),
+                                Align2::LEFT_CENTER,
+                                glyph,
+                                FontId::proportional(13.0),
+                                color,
+                            );
+                            let mut job = egui::text::LayoutJob::simple_singleline(
+                                format!("{title}  ·  {count}"),
+                                semibold(12.5),
+                                INK,
+                            );
+                            job.wrap = egui::text::TextWrapping::truncate_at_width(
+                                (rect.width() - 30.0).max(10.0),
+                            );
+                            let galley = painter.layout_job(job);
+                            painter.galley(
+                                egui::pos2(rect.left() + 24.0, y - galley.size().y / 2.0),
+                                galley,
+                                INK,
+                            );
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::WidgetType::Label,
+                                    true,
+                                    format!("{title}, {count} files"),
+                                )
                             });
-                    });
+                            // A heading takes files dropped on it.
+                            if moving
+                                && let Some(drop) = self.drop_target(ui, &response, &folder)
+                            {
+                                command = Some(drop);
+                            }
+                        }
+                        Line::Other => {
+                            ui.add_space((row_height - button_row_height(ui)) / 2.0);
+                            let text = if self.show_other {
+                                format!("Hide {} system and other files", self.other)
+                            } else {
+                                format!(
+                                    "Show {} system and other {}",
+                                    self.other,
+                                    if self.other == 1 { "file" } else { "files" }
+                                )
+                            };
+                            if ui
+                                .small_button(text)
+                                .on_hover_text("Files such as .DS_Store, documents and archives. They stay with their folder unless you move them.")
+                                .clicked()
+                            {
+                                toggle_other = true;
+                            }
+                        }
+                        Line::File(i) => {
+                            if let Some(drop) = self.file_line(ui, i, focused, &keyboard, decisions) {
+                                command = Some(drop);
+                            }
+                        }
+                    }
                 }
             });
+        if toggle_other {
+            self.toggle_other_files();
+        }
         #[cfg(test)]
         ui.ctx().data_mut(|d| {
             d.insert_temp(
@@ -878,9 +1070,149 @@ impl Editor {
                 ),
             )
         });
-        keyboard.finish(ui, output.inner_rect, "Files. Arrows move focus; Space selects; Shift extends selection; Control or Command A selects all; F2 renames; D marks; Delete reviews Trash; Control or Command Shift N creates a folder.");
+        keyboard.finish(ui, output.inner_rect, "Photos, grouped by where they go. Arrows move focus; Space selects; Shift extends selection; Control or Command A selects all; F2 renames; D marks; Delete reviews Trash; Control or Command Shift N creates a folder.");
         self.photo_scroll = output.state.offset.y;
         self.scroll_drag(ui, &output);
+        command
+    }
+    /// One file: its name, and where it comes from or stays.
+    fn file_line(
+        &mut self,
+        ui: &mut egui::Ui,
+        i: usize,
+        focused: bool,
+        keyboard: &collection_controls::Keyboard,
+        decisions: &HashMap<MediaId, Decision>,
+    ) -> Option<Command> {
+        let mut command = None;
+        let id = self.rows[i].id;
+        let name = self.rows[i]
+            .source
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let after_name = self
+            .names
+            .get(&id)
+            .map(|stem| {
+                crate::core::organize::renamed_file_name(
+                    std::path::Path::new(&name),
+                    std::ffi::OsStr::new(stem),
+                )
+                .to_string_lossy()
+                .into_owned()
+            })
+            .unwrap_or_else(|| name.clone());
+        let before = self.rows[i]
+            .source
+            .parent()
+            .and_then(|p| p.strip_prefix(&self.catalog.root).ok())
+            .unwrap_or_else(|| std::path::Path::new(""))
+            .to_path_buf();
+        let after = self.rows[i].after.clone();
+        let changes = self.row_changes(&self.rows[i]);
+        let selected = self.selected.contains(&id);
+        ui.push_id(id.0, |ui| {
+            let marked = decisions.get(&id).is_some_and(|d| d.rejected);
+            let title = if marked {
+                RichText::new(format!("{after_name} · Trash")).color(RED)
+            } else {
+                RichText::new(&after_name)
+            };
+            // The grow atom left-aligns the name across the full row.
+            let response = ui.add_sized(
+                [ui.available_width(), button_row_height(ui)],
+                egui::Button::selectable(selected, (title, egui::Atom::grow()))
+                    .truncate()
+                    .sense(collection_controls::pointer_sense(true)),
+            );
+            keyboard.focus_on_click(&response);
+            if focused && self.file_cursor == Some(i) {
+                ui.painter().rect_stroke(
+                    response.rect,
+                    2.,
+                    ui.visuals().selection.stroke,
+                    StrokeKind::Inside,
+                );
+            }
+            if response.clicked() {
+                let m = ui.input(|i| i.modifiers);
+                self.select_file(i, !m.shift || m.command || m.ctrl, m.shift);
+            }
+            if response.double_clicked() {
+                self.start_rename(id);
+            }
+            response.context_menu(|ui| {
+                if ui.button("Rename…  F2").clicked() {
+                    self.start_rename(id);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(self.reset_enabled, egui::Button::new("Back to the suggested folder"))
+                    .on_hover_text("Restore the initial grouping for this file, or the selected files when it is one of them. File names stay unchanged.")
+                    .clicked()
+                {
+                    self.reset_request = Some(Selection {
+                        files: if self.selected.contains(&id) {
+                            self.selected.clone()
+                        } else {
+                            HashSet::from([id])
+                        },
+                        ..Default::default()
+                    });
+                    ui.close();
+                }
+                ui.separator();
+                self.trash_menu(ui, self.file_selection(id), decisions);
+                ui.separator();
+                let paths = self.file_locations(&self.rows[i]);
+                if let Some(request) = desktop::locations_menu(ui, &paths, self.desktop_enabled) {
+                    self.desktop_pending = Some(request);
+                }
+            });
+            #[cfg(test)]
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(egui::Id::new(("test_file_rect", id.0)), response.rect)
+            });
+            if self.starts_drag(ui, &response) {
+                egui::DragAndDrop::set_payload(ui.ctx(), self.file_drag(id));
+            }
+            self.track_completed_drag(ui, &response, Some(id), &after);
+            if let Some(drop) = self.drop_target(ui, &response, &after) {
+                command = Some(drop);
+            }
+            let from = if before.as_os_str().is_empty() {
+                self.root_name()
+            } else {
+                before.display().to_string()
+            };
+            let mut line = if changes {
+                format!("from {from}")
+            } else {
+                format!("in {from}")
+            };
+            if after_name != name {
+                line.push_str(&format!(" · was {name}"));
+            }
+            let before_path = before.join(&name);
+            let after_path = std::path::Path::new(&after).join(&after_name);
+            // Align with the name inside the row button above,
+            // without adding height: rows have a fixed pitch.
+            egui::Frame::new()
+                .inner_margin(egui::Margin {
+                    left: ui.spacing().button_padding.x as i8,
+                    ..Default::default()
+                })
+                .show(ui, |ui| {
+                    ui.add(egui::Label::new(RichText::new(line).small().color(MUTED)).truncate())
+                        .on_hover_text(format!(
+                            "Before: {}\nAfter: {}\nDrag selected photos onto a folder. Double-click to rename.",
+                            before_path.display(),
+                            after_path.display()
+                        ));
+                });
+        });
         command
     }
     fn structure(
@@ -951,13 +1283,40 @@ impl Editor {
             .is_some_and(|payload| Arc::ptr_eq(&payload.owner, &self.drag_owner));
         let pointer = ui.ctx().pointer_interact_pos();
         let mut hovered_now: Option<(String, egui::Rect)> = None;
-        ui.label(RichText::new("Destination folders").font(semibold(14.0)));
+        ui.horizontal(|ui| {
+            ui.set_height(button_row_height(ui));
+            ui.label(RichText::new("Folders").font(semibold(14.0)));
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .small_button(format!(
+                        "{}  New folder",
+                        egui_phosphor::regular::FOLDER_PLUS
+                    ))
+                    .on_hover_text(
+                        "Inside the selected folder; selected photos go into it · Ctrl/Cmd+Shift+N",
+                    )
+                    .clicked()
+                {
+                    let folder = self.folder.clone();
+                    self.begin_folder_edit(&folder, FolderEdit::Create);
+                }
+            });
+        });
+        if let Some(edit) = self.folder_edit {
+            command = self.folder_name_bar(ui, edit).or(command);
+        }
         let mut scroll = egui::ScrollArea::vertical().id_salt("organize_folders");
         if let Some(offset) = self.restore_scroll[1].take() {
             scroll = scroll.vertical_scroll_offset(offset);
         }
         let row_height = button_row_height(ui);
-        let max_height = (height - 210.0).max(75.0);
+        let max_height = (height
+            - if self.folder_edit.is_some() {
+                96.0
+            } else {
+                56.0
+            })
+        .max(75.0);
         let keyboard = tree_controls::Keyboard::new(ui, "organize_folders", max_height, row_height);
         let events = keyboard.collection().events(ui, |key, modifiers| {
             EditAction::from_key(key, modifiers).is_some()
@@ -1000,6 +1359,7 @@ impl Editor {
         let output = scroll
             // Keep the centered dialog and drop targets still as branches open.
             .auto_shrink([false, false])
+            .min_scrolled_height(max_height)
             .max_height(max_height)
             .show_rows(ui, row_height, self.visible_folders.len(), |ui, rows| {
                 for row in rows {
@@ -1012,7 +1372,12 @@ impl Editor {
                         ui.horizontal(|ui| {
                             ui.add_space((depth as f32 * 12.0).min(96.0));
                             expansion_changed |= tree_controls::expander(ui, &self.tree, i, &mut self.collapsed, &keyboard);
-                            let title = folder_title(&path);
+                            let title = if path.is_empty() {
+                                self.root_name()
+                            } else {
+                                path.rsplit('/').next().unwrap_or_default().to_owned()
+                            };
+                            let title = title.as_str();
                             let response = ui.add_sized([ui.available_width(), row_height], egui::Button::selectable(
                                     self.selected_folders.contains(&path),
                                     (RichText::new(title), egui::Atom::grow(), RichText::new(count.to_string()).small().color(MUTED)),
@@ -1032,9 +1397,13 @@ impl Editor {
                             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("test_folder_rect", &path)), response.rect));
                             response.context_menu(|ui| {
                                 expansion_changed |= tree_controls::menu(ui, &self.tree, i, &mut self.collapsed);
+                                if let Some(structure) = self.folder_menu(ui, &path) {
+                                    command = Some(structure);
+                                }
+                                ui.separator();
                                 self.trash_menu(ui, self.folder_selection(&path), decisions);
                                 ui.separator();
-                                if ui.add_enabled(self.reset_enabled, egui::Button::new("Reset file destinations")).on_hover_text("Restore the initial grouping for files inside this folder, or the selected folders. Folder structure edits and file names stay unchanged.").clicked() {
+                                if ui.add_enabled(self.reset_enabled, egui::Button::new("Files back to their suggested folders")).on_hover_text("Restore the initial grouping for files inside this folder, or the selected folders. Folder structure edits and file names stay unchanged.").clicked() {
                                     self.reset_request = Some(Selection { folders: if self.selected_folders.contains(&path) { self.selected_folders.clone() } else { std::collections::BTreeSet::from([path.clone()]) }, ..Default::default() });
                                     ui.close();
                                 }
@@ -1082,26 +1451,63 @@ impl Editor {
         keyboard.finish(ui, output.inner_rect);
         self.folder_scroll = output.state.offset.y;
         self.scroll_drag(ui, &output);
-        ui.separator();
-        ui.add(egui::Label::new(format!("Selected: {}", folder_title(&self.folder))).truncate());
-        if ui
-            .add_enabled(
-                !self.selected.is_empty(),
-                egui::Button::new("Move selected files here"),
-            )
-            .clicked()
-        {
-            command = Some(Command::Move);
+        ui.label(
+            RichText::new("Drag photos or folders onto a folder. Right-click a folder to rename, nest or move it.")
+                .small()
+                .color(MUTED),
+        );
+        // Keep when the pointer arrived on this folder, so the preview waits.
+        let now = ui.input(|i| i.time);
+        self.folder_hover = hovered_now.map(|(path, rect)| match self.folder_hover.take() {
+            Some((previous, _, since)) if previous == path => (path, rect, since),
+            _ => (path, rect, now),
+        });
+        command
+    }
+    /// Starts naming a folder: a new one inside `path`, `path` itself, or a
+    /// new one around it.
+    fn begin_folder_edit(&mut self, path: &str, edit: FolderEdit) {
+        if !matches!(edit, FolderEdit::Create) && path.is_empty() {
+            return;
         }
+        self.folder = path.into();
+        self.name = match edit {
+            FolderEdit::Rename => path.rsplit('/').next().unwrap_or_default().into(),
+            _ => String::new(),
+        };
+        self.folder_edit = Some(edit);
+        self.folder_name_focus = true;
+        self.compact_folders = true;
+        self.error = None;
+    }
+    /// The one place a folder name is typed: what it is for, the name, and
+    /// Save or Cancel. Enter saves; Escape cancels.
+    fn folder_name_bar(&mut self, ui: &mut egui::Ui, edit: FolderEdit) -> Option<Command> {
+        let mut command = None;
+        let leaf = folder_title(self.folder.rsplit('/').next().unwrap_or_default()).to_owned();
+        let purpose = match edit {
+            FolderEdit::Create if self.selected.is_empty() => {
+                format!("New folder in {}", self.title(&self.folder))
+            }
+            FolderEdit::Create => format!(
+                "New folder in {} · the {} selected {} go into it",
+                self.title(&self.folder),
+                self.selected.len(),
+                if self.selected.len() == 1 {
+                    "photo"
+                } else {
+                    "photos"
+                }
+            ),
+            FolderEdit::Rename => format!("Rename “{leaf}”"),
+            FolderEdit::Parent => format!("New folder around “{leaf}”"),
+        };
+        ui.add(egui::Label::new(RichText::new(purpose).small().color(MUTED)).truncate());
+        let mut cancel = false;
         ui.horizontal(|ui| {
-            ui.label(match self.folder_edit {
-                Some(FolderEdit::Create) => "New folder",
-                Some(FolderEdit::Rename) => "Rename folder",
-                None => "Name",
-            });
             let mut field = egui::TextEdit::singleline(&mut self.name)
                 .id_salt("organize_folder_name")
-                .desired_width(ui.available_width())
+                .desired_width((ui.available_width() - 130.0).max(80.0))
                 .hint_text("Folder name")
                 .show(ui);
             if std::mem::take(&mut self.folder_name_focus) {
@@ -1115,77 +1521,100 @@ impl Editor {
                     )));
                 field.state.store(ui.ctx(), field.response.id);
             }
-            if (field.response.has_focus() || field.response.lost_focus())
-                && ui.input(|i| i.key_pressed(egui::Key::Enter))
-            {
-                command = self.folder_edit.map(|edit| match edit {
+            let typing = field.response.has_focus() || field.response.lost_focus();
+            let enter = typing && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            cancel = typing && ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if ui.add(primary("Save")).clicked() || enter {
+                command = Some(match edit {
                     FolderEdit::Create => Command::Create,
                     FolderEdit::Rename => Command::Rename,
+                    FolderEdit::Parent => Command::Parent,
                 });
             }
+            cancel |= ui.button("Cancel").clicked();
         });
-        ui.horizontal_wrapped(|ui| {
-            let create = match self.selected.len() {
-                0 => "Create folder".to_owned(),
-                1 => "Create folder with 1 file".to_owned(),
-                n => format!("Create folder with {n} files"),
-            };
-            if ui
-                .button(create)
-                .on_hover_text(
-                    "Creates the folder inside the selected one; selected files move into it",
-                )
-                .clicked()
-            {
-                command = Some(Command::Create);
+        if cancel {
+            self.folder_edit = None;
+            self.error = None;
+        }
+        command
+    }
+    /// Folder actions in a folder's context menu: make, rename and nest.
+    fn folder_menu(&mut self, ui: &mut egui::Ui, path: &str) -> Option<Command> {
+        let mut command = None;
+        if ui.button("New folder inside…").clicked() {
+            self.begin_folder_edit(path, FolderEdit::Create);
+            ui.close();
+        }
+        if !path.is_empty() {
+            if ui.button("Rename…  F2").clicked() {
+                self.begin_folder_edit(path, FolderEdit::Rename);
+                ui.close();
             }
             if ui
-                .add_enabled(!self.folder.is_empty(), egui::Button::new("Rename"))
+                .button("Put inside a new folder…")
+                .on_hover_text("Makes a folder in the same place and moves this one into it")
                 .clicked()
             {
-                command = Some(Command::Rename);
+                self.begin_folder_edit(path, FolderEdit::Parent);
+                ui.close();
             }
-            if ui
-                .add_enabled(!self.folder.is_empty(), egui::Button::new("Create parent"))
-                .clicked()
-            {
-                command = Some(Command::Parent);
-            }
-        });
-        egui::ComboBox::from_id_salt("organize_parent")
-            .selected_text(format!("Into: {}", folder_title(&self.parent)))
-            .width(ui.available_width().min(300.0))
-            .show_ui(ui, |ui| {
-                for node in &self.tree.nodes {
-                    let Key::Folder(path) = &node.key else {
-                        unreachable!()
-                    };
-                    ui.selectable_value(&mut self.parent, folder_label(path), &node.label);
-                }
+            let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
+            let targets: Vec<String> = self
+                .tree
+                .nodes
+                .iter()
+                .filter_map(|node| match &node.key {
+                    Key::Folder(p) => Some(folder_label(p)),
+                    _ => None,
+                })
+                .filter(|target| {
+                    target != path
+                        && target != parent
+                        && !target
+                            .strip_prefix(path)
+                            .is_some_and(|rest| rest.starts_with('/'))
+                })
+                .collect();
+            ui.add_enabled_ui(!targets.is_empty(), |ui| {
+                ui.menu_button("Move into", |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(320.0)
+                        .show(ui, |ui| {
+                            for target in targets {
+                                if ui.button(self.title(&target)).clicked() {
+                                    self.folder = path.into();
+                                    self.parent = target;
+                                    command = Some(Command::Nest);
+                                    ui.close();
+                                }
+                            }
+                        });
+                });
             });
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(!self.folder.is_empty(), egui::Button::new("Nest folder"))
-                .clicked()
-            {
-                command = Some(Command::Nest);
-            }
-            if ui
-                .add_enabled(
-                    self.folder.contains('/'),
-                    egui::Button::new("Move folder to root"),
-                )
-                .clicked()
-            {
+            if path.contains('/') && ui.button("Move to the top level").clicked() {
+                self.folder = path.into();
                 command = Some(Command::Unnest);
+                ui.close();
             }
-        });
-        // Keep when the pointer arrived on this folder, so the preview waits.
-        let now = ui.input(|i| i.time);
-        self.folder_hover = hovered_now.map(|(path, rect)| match self.folder_hover.take() {
-            Some((previous, _, since)) if previous == path => (path, rect, since),
-            _ => (path, rect, now),
-        });
+        }
+        if !self.selected.is_empty()
+            && ui
+                .button(format!(
+                    "Move {} selected {} here",
+                    self.selected.len(),
+                    if self.selected.len() == 1 {
+                        "photo"
+                    } else {
+                        "photos"
+                    }
+                ))
+                .clicked()
+        {
+            self.folder = path.into();
+            command = Some(Command::Move);
+            ui.close();
+        }
         command
     }
     fn apply(&mut self, command: Command, media: &[Media], companions: bool) {
@@ -1345,6 +1774,103 @@ impl PhotoSortApp {
                 }).response.on_hover_text("Choose location folder levels. Reuses cached metadata; no AI analysis needed to change levels.");
         });
     }
+    /// Faces only: whether photos without a recognized person stay in their
+    /// folders or go to one "No people" folder.
+    pub(super) fn faceless_controls(&mut self, ui: &mut egui::Ui) {
+        use crate::core::preferences::{Faceless, NO_PEOPLE};
+        let choices = [
+            (Faceless::Stay, "Keep in their folders".to_owned()),
+            (Faceless::Folder, format!("Put in a “{NO_PEOPLE}” folder")),
+        ];
+        let selected = &choices
+            .iter()
+            .find(|(choice, _)| *choice == self.preferences.faceless)
+            .unwrap()
+            .1;
+        ui.label(RichText::new("Photos without people").color(MUTED));
+        ui.add_enabled_ui(
+            !self.modal_active()
+                && !self.scanning
+                && self.analysis_run.is_none()
+                && self.retry_plan.is_none(),
+            |ui| {
+                egui::ComboBox::from_id_salt("faceless")
+                    .selected_text(selected.as_str())
+                    .width(190.0)
+                    .show_ui(ui, |ui| {
+                        for (choice, title) in &choices {
+                            if ui
+                                .selectable_label(self.preferences.faceless == *choice, title)
+                                .clicked()
+                            {
+                                self.change_faceless(*choice);
+                                ui.close();
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(
+                        "Photos where no person is recognized. Nothing moves until you preview and apply.",
+                    );
+            },
+        );
+    }
+    pub(super) fn change_faceless(&mut self, choice: crate::core::preferences::Faceless) {
+        if self.step != Step::Organize
+            || self.group_mode != GroupMode::Faces
+            || self.modal_active()
+            || self.scanning
+            || self.analysis_run.is_some()
+            || self.retry_plan.is_some()
+            || self.preferences.faceless == choice
+        {
+            return;
+        }
+        if self.organize_drafts.contains_key(&GroupMode::Faces) {
+            self.pending_faceless = Some(choice);
+        } else {
+            self.accept_faceless(choice);
+        }
+    }
+    pub(super) fn accept_faceless(&mut self, choice: crate::core::preferences::Faceless) {
+        self.preferences.faceless = choice;
+        self.organize_drafts.remove(&GroupMode::Faces);
+        self.organize_view = None;
+        self.pending_bookmark = None;
+        self.set_review_plan(None);
+        self.save_preferences();
+    }
+    pub(super) fn faceless_dialog(&mut self, ctx: &egui::Context) {
+        let Some(choice) = self.pending_faceless else {
+            return;
+        };
+        let mut action = None;
+        modal(egui::Id::new("replace_faceless")).show(ctx, |ui| {
+            ui.set_max_width(400.0_f32.min((ctx.content_rect().width() - 60.0).max(180.0)));
+            ui.heading("Replace your people folder edits?");
+            ui.label(match choice {
+                crate::core::preferences::Faceless::Folder => format!(
+                    "Photos without a recognized person will go to a “{}” folder. The people folders are proposed again, replacing the folder edits you made while grouping by faces. File names and other groupings keep their edits. Nothing changes on disk until you apply.",
+                    crate::core::preferences::NO_PEOPLE
+                ),
+                crate::core::preferences::Faceless::Stay => "Photos without a recognized person will stay in their current folders. The people folders are proposed again, replacing the folder edits you made while grouping by faces. File names and other groupings keep their edits. Nothing changes on disk until you apply.".into(),
+            });
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Keep my edits").clicked() {
+                    action = Some(false);
+                }
+                if ui.button("Replace folder edits").clicked() {
+                    action = Some(true);
+                }
+            });
+        });
+        if let Some(replace) = action {
+            self.pending_faceless = None;
+            if replace {
+                self.accept_faceless(choice);
+            }
+        }
+    }
     pub(super) fn location_layout_dialog(&mut self, ctx: &egui::Context) {
         let Some(_) = self.pending_location_layout else {
             return;
@@ -1392,46 +1918,99 @@ impl PhotoSortApp {
         let mut labels = self
             .media
             .iter()
-            .filter(|m| {
-                // Video GPS is not read, so a video without a resolved place would
-                // otherwise be swept into "No GPS"; it stays where it is instead.
-                !(self.group_mode == GroupMode::Location
-                    && m.kind == MediaKind::Video
-                    && self
-                        .metadata
-                        .get(&m.id)
-                        .is_none_or(|meta| meta.location.is_none()))
-                    && (self.group_mode != GroupMode::Visual
-                        || self
-                            .visual_groups
-                            .as_ref()
-                            .is_some_and(|groups| groups.contains_key(&m.id)))
-                    // Photos without a recognized person (group 0) stay in place.
-                    && (self.group_mode != GroupMode::Faces
-                        || self
-                            .face_groups
-                            .as_ref()
-                            .and_then(|groups| groups.groups.get(&m.id))
-                            .is_some_and(|&group| group != 0))
-                    && (self.group_mode != GroupMode::Mixed
-                        || self
-                            .mixed_labels
-                            .as_ref()
-                            .is_some_and(|labels| labels.contains_key(&m.id)))
-            })
-            .filter_map(|m| {
-                let label = if self.group_mode == GroupMode::Current {
-                    self.current_label(m)?
-                } else {
-                    self.label_for(m)
-                };
-                Some((m.id, label))
-            })
+            .filter_map(|m| Some((m.id, self.organize_label(m)?)))
             .collect();
         if let Some(catalog) = &self.catalog {
             crate::core::organize::include_inventory(catalog, &mut labels);
         }
         labels
+    }
+    /// The folder the current grouping proposes for one item, before any
+    /// folder edits; `None` keeps it in the folder it is in now.
+    pub(super) fn organize_label(&self, m: &Media) -> Option<String> {
+        let grouped = match self.group_mode {
+            // Video GPS is not read, so a video without a resolved place would
+            // otherwise be swept into "No GPS"; it stays where it is instead.
+            GroupMode::Location => {
+                m.kind != MediaKind::Video
+                    || self
+                        .metadata
+                        .get(&m.id)
+                        .is_some_and(|meta| meta.location.is_some())
+            }
+            GroupMode::Visual => self
+                .visual_groups
+                .as_ref()
+                .is_some_and(|groups| groups.contains_key(&m.id)),
+            // Photos without a recognized person (group 0) stay in place
+            // unless the "No people" folder is chosen.
+            GroupMode::Faces => match self.face_group(m.id) {
+                Some(0) => {
+                    return (m.kind != MediaKind::Video
+                        && self.preferences.faceless
+                            == crate::core::preferences::Faceless::Folder)
+                        .then(|| crate::core::preferences::NO_PEOPLE.into());
+                }
+                group => group.is_some(),
+            },
+            GroupMode::Mixed => self
+                .mixed_labels
+                .as_ref()
+                .is_some_and(|labels| labels.contains_key(&m.id)),
+            _ => true,
+        };
+        if !grouped {
+            None
+        } else if self.group_mode == GroupMode::Current {
+            self.current_label(m)
+        } else {
+            Some(self.label_for(m))
+        }
+    }
+    fn face_group(&self, id: MediaId) -> Option<usize> {
+        self.face_groups.as_ref()?.groups.get(&id).copied()
+    }
+    /// Why an item outside every proposed folder stays where it is, in the
+    /// words of the current grouping: "without a recognized person".
+    pub(super) fn unplaced_reason(&self, m: &Media) -> &'static str {
+        if self.organize_pending().is_some() {
+            return "not grouped yet";
+        }
+        match (self.group_mode, m.kind) {
+            (GroupMode::Location, MediaKind::Video) => "video locations are not read",
+            (GroupMode::Faces | GroupMode::Visual | GroupMode::Mixed, MediaKind::Video) => {
+                "videos are not grouped this way"
+            }
+            (GroupMode::Faces, _) => "no recognized person",
+            (GroupMode::Visual, _) => "no similar photos",
+            (GroupMode::Current, _) => "its folder name cannot be read",
+            _ => "not grouped",
+        }
+    }
+    /// "58 photos without a recognized person and 2 videos": what stays in
+    /// its current folders, said in the current grouping's terms.
+    pub(super) fn unplaced_phrase(&self, photos: usize, videos: usize) -> String {
+        let plural =
+            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let photos = match self.group_mode {
+            GroupMode::Faces => plural(
+                photos,
+                "photo without a recognized person",
+                "photos without a recognized person",
+            ),
+            GroupMode::Visual => plural(
+                photos,
+                "photo without similar photos",
+                "photos without similar photos",
+            ),
+            _ => plural(photos, "photo", "photos"),
+        };
+        let videos = plural(videos, "video", "videos");
+        match (photos.starts_with("0 "), videos.starts_with("0 ")) {
+            (false, false) => format!("{photos} and {videos}"),
+            (true, false) => videos,
+            _ => photos,
+        }
     }
     /// An analysis-based grouping is chosen, has no result or folder edits
     /// yet, and did not just fail or get cancelled.
@@ -1594,6 +2173,10 @@ impl PhotoSortApp {
             rename_focus: false,
             draft,
             rows,
+            lines: Vec::new(),
+            order: Vec::new(),
+            show_other: false,
+            other: 0,
             tree: Tree::default(),
             visible_folders: Vec::new(),
             collapsed: Default::default(),
@@ -1796,22 +2379,47 @@ impl PhotoSortApp {
         let mut command = None;
         modal(egui::Id::new("organize_editor")).show(ctx, |ui| {
             let width = (ctx.content_rect().width() - 64.0).clamp(280.0, 1080.0);
-            let height = (ctx.content_rect().height() - 380.0).clamp(160.0, 560.0);
+            let height = (ctx.content_rect().height() - 300.0).clamp(160.0, 640.0);
             ui.set_width(width);
-            ui.horizontal_wrapped(|ui| {
-                ui.heading("Arrange files and folders");
-                if ui.add_enabled(!self.organize_preview_ids(&editor).is_empty(), egui::Button::new("Preview selection"))
-                    .on_hover_text("Compare up to nine selected items without accepting edits. Supporting documents are omitted.").clicked() { action = 5; }
-                ui.menu_button("Actions", |ui| self.clear_trash_menu_item(ui));
+            ui.horizontal(|ui| {
+                ui.set_height(30.0);
+                ui.heading("Edit folders");
+                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                    let more = ui.menu_button(egui_phosphor::regular::DOTS_THREE, |ui| {
+                        if ui
+                            .button("Start over")
+                            .on_hover_text("Undo every folder and name edit in this grouping")
+                            .clicked()
+                        {
+                            action = 4;
+                            ui.close();
+                        }
+                        self.clear_trash_menu_item(ui);
+                    })
+                    .response;
+                    named(more, egui::WidgetType::Button, "More").on_hover_text("More");
+                    if ui
+                        .add_enabled(
+                            !self.organize_preview_ids(&editor).is_empty(),
+                            egui::Button::new("Compare selected"),
+                        )
+                        .on_hover_text("Compare up to nine selected photos side by side, without accepting edits")
+                        .clicked()
+                    {
+                        action = 5;
+                    }
+                });
             });
-            if width >= 680.0 {
-                ui.label(RichText::new("Drag files onto folders and folders into each other; double-click a file to rename it. Nothing changes on disk until you preview and apply the moves.").color(MUTED))
-                    .on_hover_text("Photo companions move and rename together when enabled. Added empty folders are included in the reviewed plan.");
-            } else {
-                ui.label("Drag files or folders to arrange them. Preview moves before applying.")
-                    .on_hover_text("Photo companions move and rename together when enabled. Added empty folders are included in the reviewed plan.");
-            }
-            ui.separator();
+            ui.label(
+                RichText::new(if width >= 680.0 {
+                    "Drag photos onto a folder, or folders into each other. Nothing changes on disk until you preview and apply the moves."
+                } else {
+                    "Drag photos onto folders. Nothing changes until you apply."
+                })
+                .color(MUTED),
+            )
+            .on_hover_text("A photo's RAW, JPEG and edit files move and rename together when that is switched on. New empty folders are part of the reviewed plan.");
+            ui.add_space(S2);
             if width >= 680.0 {
                 ui.columns(2, |columns| {
                     command = editor.photos(&mut columns[0], height, &self.decisions);
@@ -1819,7 +2427,7 @@ impl PhotoSortApp {
                 });
             } else {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut editor.compact_folders, false, "Files");
+                    ui.selectable_value(&mut editor.compact_folders, false, "Photos");
                     let folders = ui.selectable_value(&mut editor.compact_folders, true, "Folders");
                     #[cfg(test)]
                     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("test_folders_tab"), folders.rect));
@@ -1831,12 +2439,14 @@ impl PhotoSortApp {
                 else { command = editor.photos(ui, height, &self.decisions); }
             }
             if let Some(error) = &editor.error { ui.colored_label(RED, error); }
-            ui.separator();
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("Reset folder layout").clicked() { action = 4; }
-                if ui.button("Cancel edits").on_hover_text("Discard folder and name edits. Shared Trash marks remain staged for review.").clicked() { action = 1; }
-                if ui.button("Keep edits").clicked() { action = 2; }
-                if ui.add(primary("Preview moves")).clicked() { action = 3; }
+            ui.add_space(S2);
+            ui.horizontal(|ui| {
+                ui.set_height(button_row_height(ui));
+                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add(primary("Preview moves")).on_hover_text("See every move before anything changes · Ctrl/Cmd+Enter").clicked() { action = 3; }
+                    if ui.button("Done").on_hover_text("Keep these edits and go back to the board").clicked() { action = 2; }
+                    if named(ui.button("Cancel"), egui::WidgetType::Button, "Cancel edits").on_hover_text("Discard folder and name edits. Trash marks stay staged for review.").clicked() { action = 1; }
+                });
             });
         });
         self.folder_hover_preview(ctx, &editor);

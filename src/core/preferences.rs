@@ -23,6 +23,8 @@ pub struct Preferences {
     pub recent_folders: Vec<PathBuf>,
     /// Organize moves RAW, JPEG and XMP companions together.
     pub keep_companions: bool,
+    /// Organize by faces: where photos without a recognized person go.
+    pub faceless: Faceless,
     /// How RAW photos are displayed; analysis always uses the neutral render.
     pub raw_look: super::raw_look::RawLook,
     /// Finish every interface animation instantly.
@@ -36,6 +38,17 @@ pub struct Preferences {
     /// The first-run intro has played. Menu → Watch the intro replays it.
     pub intro_shown: bool,
 }
+/// Where grouping by faces puts photos without a recognized person.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Faceless {
+    /// They stay in the folders they are in now.
+    #[default]
+    Stay,
+    /// They go to one folder, [`NO_PEOPLE`].
+    Folder,
+}
+/// The folder for photos without a recognized person, when chosen.
+pub const NO_PEOPLE: &str = "No people";
 /// The side of the Review canvas that holds the photo strip.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StripPosition {
@@ -59,6 +72,7 @@ impl Default for Preferences {
             hidden_steps: HashSet::new(),
             recent_folders: vec![],
             keep_companions: true,
+            faceless: Default::default(),
             raw_look: Default::default(),
             reduce_motion: false,
             strip_position: StripPosition::Bottom,

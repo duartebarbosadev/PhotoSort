@@ -72,41 +72,7 @@ impl PhotoSortApp {
         if self.step == Step::Organize {
             ui.add_space(12.0);
             ui.separator();
-            section_title(ui, "Destination folder");
-            let label = self
-                .organize_drafts
-                .get(&self.group_mode)
-                .and_then(|draft| draft.labels().get(&id))
-                .cloned()
-                .unwrap_or_else(|| self.label_for(&media));
-            ui.label(if label.is_empty() {
-                "Library root"
-            } else {
-                &label
-            });
-            if ui
-                .add_enabled(self.can_edit_folders(), egui::Button::new("Edit folders…"))
-                .clicked()
-            {
-                self.open_organize_editor();
-            }
-
-            if let Some(name) = self.file_names.get(&id) {
-                let after = crate::core::organize::renamed_file_name(
-                    &media.path,
-                    std::ffi::OsStr::new(name),
-                );
-                ui.label(format!("Staged name: {}", after.to_string_lossy()));
-            }
-            if ui
-                .add_enabled(self.can_edit_folders(), egui::Button::new("Rename file…"))
-                .clicked()
-            {
-                self.open_organize_editor();
-                if let Some(editor) = self.organize_editor.as_mut() {
-                    editor.start_rename(id);
-                }
-            }
+            self.organize_destination(ui, &media);
         }
         if let Some(warning) = self.image_warnings.get(&id) {
             ui.add_space(10.0);
@@ -260,7 +226,7 @@ impl PhotoSortApp {
                             ui.label(RichText::new(format!("{}", n + 1)).small().color(FAINT));
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(if value.is_empty() { "—" } else { value })
+                                    RichText::new(if value.is_empty() { "-" } else { value })
                                         .color(ACCENT),
                                 )
                                 .wrap(),
@@ -295,6 +261,148 @@ fn detail_row(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::Ui))
 }
 
 /// Sentence-case section heading for the Details panel.
+impl PhotoSortApp {
+    /// Where this photo goes in the current folder proposal, in one line,
+    /// and the two things you can do about it: move it elsewhere or rename it.
+    fn organize_destination(&mut self, ui: &mut egui::Ui, media: &Media) {
+        use egui_phosphor::regular as icon;
+        let id = media.id;
+        let Placement {
+            label,
+            moves,
+            folder,
+        } = self.placement(media);
+        let name = self.file_names.get(&id).map(|stem| {
+            crate::core::organize::renamed_file_name(&media.path, std::ffi::OsStr::new(stem))
+                .to_string_lossy()
+                .into_owned()
+        });
+        let heading = if moves { "Will move to" } else { "Stays in" };
+        section_title(ui, heading);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(if moves {
+                    icon::ARROW_RIGHT
+                } else {
+                    icon::FOLDER_SIMPLE
+                })
+                .color(if moves { ACCENT } else { MUTED }),
+            );
+            ui.add(egui::Label::new(RichText::new(&folder).color(INK)).wrap());
+        });
+        if label.is_none() {
+            ui.label(
+                RichText::new(format!("Not moving · {}", self.unplaced_reason(media)))
+                    .small()
+                    .color(MUTED),
+            );
+        }
+        if let Some(name) = &name {
+            ui.label(
+                RichText::new(format!("Renamed to {name}"))
+                    .small()
+                    .color(MUTED),
+            );
+        }
+        ui.add_space(S1);
+        let editable = self.can_edit_folders() && self.organize_editor.is_none();
+        ui.horizontal_wrapped(|ui| {
+            if label.is_some() {
+                ui.add_enabled_ui(editable, |ui| {
+                    ui.menu_button(format!("{}  Move to…", icon::FOLDER_SIMPLE), |ui| {
+                        self.board_folder_list(ui, &[id]);
+                        ui.separator();
+                        if ui.button("New folder…").clicked() {
+                            self.board_new_folder_with(&[id]);
+                            ui.close();
+                        }
+                    })
+                    .response
+                    .on_hover_text("Choose another folder for this photo")
+                });
+            }
+            if ui
+                .add_enabled(
+                    editable,
+                    egui::Button::new(format!("{}  Rename…", icon::PENCIL_SIMPLE)),
+                )
+                .on_hover_text("Rename this photo · F2")
+                .clicked()
+            {
+                self.open_organize_editor();
+                if let Some(editor) = self.organize_editor.as_mut() {
+                    editor.start_rename(id);
+                }
+            }
+        });
+    }
+    /// Where an item goes in the current folder proposal, edits included.
+    pub(super) fn placement(&self, media: &Media) -> Placement {
+        let label = match self.organize_drafts.get(&self.group_mode) {
+            Some(draft) => draft.labels().get(&media.id).cloned(),
+            None => self.organize_label(media),
+        };
+        let parent = media.path.parent().unwrap_or(std::path::Path::new(""));
+        // Compared as folders on disk: with another destination, an item
+        // whose folder name stays the same still moves.
+        let target = label.as_deref().map(|label| {
+            crate::core::operations::folder_destination(std::path::Path::new(&self.output), label)
+        });
+        match target.filter(|target| target != parent) {
+            Some(target) => Placement {
+                label,
+                moves: true,
+                folder: self.readable_folder(&target),
+            },
+            None => Placement {
+                label,
+                moves: false,
+                folder: self.readable_folder(parent),
+            },
+        }
+    }
+    /// A folder as "Photos / 2025 / Trip": from the opened folder's name when
+    /// it is inside it, otherwise the path with the home folder as "~".
+    pub(super) fn readable_folder(&self, path: &std::path::Path) -> String {
+        if let Some(root) = self.root.as_deref()
+            && let Ok(relative) = path.strip_prefix(root)
+        {
+            let name = root
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root.display().to_string());
+            return std::iter::once(name)
+                .chain(
+                    relative
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+                )
+                .collect::<Vec<_>>()
+                .join(" / ");
+        }
+        readable_path(path)
+    }
+}
+/// Where an item goes: its proposed folder label (`None` keeps it where it
+/// is), whether that moves it, and the folder it ends up in, readably.
+pub(super) struct Placement {
+    pub(super) label: Option<String>,
+    pub(super) moves: bool,
+    pub(super) folder: String,
+}
+/// A path with the home folder shown as "~".
+pub(super) fn readable_path(path: &std::path::Path) -> String {
+    if let Some(home) = dirs::home_dir()
+        && let Ok(rest) = path.strip_prefix(&home)
+    {
+        return if rest.as_os_str().is_empty() {
+            "~".into()
+        } else {
+            format!("~/{}", rest.display())
+        };
+    }
+    path.display().to_string()
+}
 fn section_title(ui: &mut egui::Ui, title: &str) {
     ui.label(RichText::new(title).font(medium(12.5)).color(INK));
     ui.add_space(2.0);

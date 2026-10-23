@@ -860,7 +860,7 @@ fn selective_reset_menu_preserves_other_edits_names_and_selection_at_all_sizes()
             let node = tree
                 .nodes
                 .iter()
-                .find(|(_, n)| n.label() == Some("Reset file destinations"))
+                .find(|(_, n)| n.label() == Some("Back to the suggested folder"))
                 .unwrap();
             let bounds = node.1.bounds().unwrap();
             assert!(
@@ -1124,10 +1124,11 @@ fn virtual_editor_rows_keep_exact_pitch_and_last_entries_visible_without_image_w
                 let (viewport, content, offset, height) = ctx
                     .data(|d| d.get_temp::<(egui::Rect, Vec2, f32, f32)>(egui::Id::new(key)))
                     .unwrap();
+                // Files are listed under one heading per destination.
                 let count = if folders {
                     editor.tree.nodes.len()
                 } else {
-                    editor.rows.len()
+                    editor.lines.len()
                 };
                 let gap = ctx.global_style().spacing.item_spacing.y;
                 assert!(
@@ -1138,14 +1139,20 @@ fn virtual_editor_rows_keep_exact_pitch_and_last_entries_visible_without_image_w
                     viewport.width() >= width - 30.0,
                     "Scroll target must cover the available width"
                 );
-                let indices = if end { [998, 999] } else { [0, 1] };
+                let indices = if folders && end {
+                    [998, 999]
+                } else if end {
+                    [count - 2, count - 1]
+                } else {
+                    [0, 1]
+                };
                 let rects: Vec<_> = indices
                     .into_iter()
                     .map(|i| {
                         let key = if folders {
-                            egui::Id::new(("test_folder_rect", label(i)))
+                            egui::Id::new(("test_folder_rect", label(i as u64)))
                         } else {
-                            egui::Id::new(("test_file_rect", i))
+                            egui::Id::new(("test_line_rect", i))
                         };
                         ctx.data(|d| d.get_temp::<egui::Rect>(key)).unwrap()
                     })
@@ -1544,8 +1551,9 @@ fn file_keyboard_ranges_marks_rename_and_resume_share_cached_editor_state() {
             app.organize_editor.as_ref().unwrap().selected,
             HashSet::from([ids[2]])
         );
+        // The document is listed only on request, so it is not selected.
         frame(&mut app, vec![key(egui::Key::A, false, true, false)]);
-        assert_eq!(app.organize_editor.as_ref().unwrap().selected.len(), 4);
+        assert_eq!(app.organize_editor.as_ref().unwrap().selected.len(), 3);
         frame(&mut app, vec![key(egui::Key::A, true, true, false)]);
         assert!(app.organize_editor.as_ref().unwrap().selected.is_empty());
         frame(
@@ -1555,18 +1563,21 @@ fn file_keyboard_ranges_marks_rename_and_resume_share_cached_editor_state() {
                 key(egui::Key::End, true, false, false),
             ],
         );
-        assert_eq!(app.organize_editor.as_ref().unwrap().selected.len(), 4);
+        assert_eq!(app.organize_editor.as_ref().unwrap().selected.len(), 3);
         let editor = app.organize_editor.as_ref().unwrap();
         assert_eq!(editor.rows.as_ptr(), rows);
         assert_eq!(editor.draft.labels(), &labels);
         let bookmark = editor.bookmark();
-        assert_eq!(bookmark.focused, Some(ids[3]));
+        // End reaches the last file listed; the document is not.
+        assert_eq!(bookmark.focused, Some(ids[2]));
         assert_eq!(bookmark.anchor, Some(ids[0]));
         let editor = app.organize_editor.take().unwrap();
         app.finish_organize_edit(editor, 1);
         app.open_organize_editor();
         let editor = app.organize_editor.as_ref().unwrap();
         assert_eq!(editor.bookmark(), bookmark);
+        // The document is listed once other files are shown.
+        app.organize_editor.as_mut().unwrap().toggle_other_files();
         for _ in 0..2 {
             frame(&mut app, vec![]);
         }
@@ -1610,10 +1621,11 @@ fn file_keyboard_large_list_reveals_end_home_and_preserves_pointer_toggle_behavi
         editor.rows = (0..100_000)
             .map(|i| PhotoRow {
                 id: MediaId(i),
-                source: format!("/missing/{i:06}.txt").into(),
+                source: format!("/missing/{i:06}.jpg").into(),
                 after: String::new(),
             })
             .collect();
+        editor.refresh();
         let rows = editor.rows.as_ptr();
         let ctx = egui::Context::default();
         theme_install(&ctx);
@@ -2705,7 +2717,7 @@ fn organize_selected_media_preview_is_available_without_accepting_edits() {
             .collect();
     }
     assert!(
-        labels.iter().any(|s| s == "Preview selection"),
+        labels.iter().any(|s| s == "Compare selected"),
         "No photo preview from the folder editor: {labels:?}"
     );
     assert!(app.organize_drafts.is_empty());
@@ -2780,7 +2792,7 @@ fn organize_preview_preserves_draft_and_view_and_reuses_textures_at_both_sizes()
         editor.refresh();
         let selected = editor.selected.clone();
         let labels = editor.draft.labels().clone();
-        click_label(&mut app, &ctx, size, "Preview selection");
+        click_label(&mut app, &ctx, size, "Compare selected");
         assert_eq!(app.comparison_ids(), vec![ids[0], ids[2]]);
         let nodes = rendered(&mut app, &ctx, size);
         for label in ["< Back to arranging", "Fit", "1:1", "Sync"] {
@@ -3030,7 +3042,7 @@ fn clear_all_trash_editor_menu_preserves_pending_names_layout_and_selection() {
         let ctx = egui::Context::default();
         theme_install(&ctx);
         ctx.enable_accesskit();
-        click_label(&mut app, &ctx, size, "Actions");
+        click_label(&mut app, &ctx, size, "More");
         click_label(&mut app, &ctx, size, "Clear all Trash marks · Alt+D");
         let editor = app.organize_editor.as_ref().unwrap();
         assert_eq!(editor.renaming, Some((ids[0], "unfinished name".into())));
@@ -3828,4 +3840,63 @@ fn labels(output: &egui::FullOutput) -> Vec<String> {
         .iter()
         .filter_map(|(_, n)| n.value().or(n.label()).map(str::to_owned))
         .collect()
+}
+#[test]
+fn the_file_list_groups_moves_by_destination_and_tucks_away_other_files() {
+    let mut app = app();
+    let catalog = Arc::get_mut(app.catalog.as_mut().unwrap()).unwrap();
+    catalog.inventory.push("/missing/trip/.DS_Store".into());
+    catalog.inventory.push("/missing/trip/notes.json".into());
+    app.open_organize_editor();
+    let editor = app.organize_editor.as_mut().unwrap();
+    assert_eq!(editor.rows.len(), 5, "every file stays in the draft");
+    editor.draft.create_folder("", "Best").unwrap();
+    editor.draft.move_photos(&[MediaId(2)], "Best").unwrap();
+    editor.refresh();
+    let row = |id: u64| {
+        editor
+            .rows
+            .iter()
+            .position(|row| row.id == MediaId(id))
+            .unwrap()
+    };
+    let (a, raw, b) = (row(0), row(1), row(2));
+    let mut staying = vec![Line::File(a), Line::File(raw)];
+    staying.sort_by_key(|line| match line {
+        Line::File(i) => *i,
+        _ => 0,
+    });
+    let mut expected = vec![
+        Line::Group {
+            folder: "Best".into(),
+            count: 1,
+            moving: true,
+        },
+        Line::File(b),
+        Line::Group {
+            folder: String::new(),
+            count: 2,
+            moving: false,
+        },
+    ];
+    expected.extend(staying);
+    expected.push(Line::Other);
+    assert_eq!(editor.lines, expected);
+    // Select all takes the photos shown, never a hidden system file.
+    editor.select_all_files();
+    assert_eq!(
+        editor.selected,
+        HashSet::from([MediaId(0), MediaId(1), MediaId(2)])
+    );
+    // Shown on request, then selectable; hiding them deselects them.
+    editor.toggle_other_files();
+    assert_eq!(editor.lines.len(), 8);
+    editor.select_all_files();
+    assert_eq!(editor.selected.len(), 5);
+    editor.toggle_other_files();
+    assert_eq!(editor.selected.len(), 3);
+    // Folder counts follow what is listed.
+    let trip = editor.tree.lookup[&Key::Folder("trip".into())];
+    assert_eq!(editor.tree.nodes[trip].count, 2);
+    assert_eq!(editor.draft.labels().len(), 5);
 }
