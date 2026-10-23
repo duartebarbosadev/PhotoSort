@@ -833,3 +833,69 @@ fn photos_without_a_recognized_person_stay_or_go_to_one_folder_as_chosen() {
     assert!(app.media.iter().all(|m| m.path.exists()));
     app.runtime.shutdown();
 }
+#[test]
+fn the_no_people_folder_reaches_the_reviewed_plan_and_nothing_moves_on_disk() {
+    use crate::core::{
+        operations::Action,
+        preferences::{Faceless, NO_PEOPLE},
+    };
+    let (_dir, mut app) = visual_fixture();
+    app.group_mode = GroupMode::Faces;
+    app.analysis_run = None;
+    app.organize_run = None;
+    let photos: Vec<Media> = app
+        .media
+        .iter()
+        .filter(|m| m.kind == MediaKind::Photo)
+        .cloned()
+        .collect();
+    app.face_groups = Some(face_groups(&[
+        (photos[0].id, 1, "Person 001"),
+        (photos[1].id, 0, "Unassigned"),
+    ]));
+    app.preferences.faceless = Faceless::Folder;
+    app.organize();
+    let deadline = Instant::now() + worker_patience();
+    while app.busy {
+        assert!(Instant::now() < deadline);
+        app.poll(&egui::Context::default());
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(app.plan_open && app.error.is_none(), "{:?}", app.error);
+    let moves: Vec<(PathBuf, PathBuf)> = app
+        .plan
+        .as_ref()
+        .unwrap()
+        .actions
+        .iter()
+        .flat_map(|action| match action {
+            Action::Move { files } => files
+                .iter()
+                .map(|(source, target)| (source.path.clone(), target.clone()))
+                .collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    // Temporary folders may be spelled through a symlink (/var and
+    // /private/var on macOS), so compare the last folder and file names.
+    let lands = |photo: &Media, folder: &str| {
+        let name = photo.path.file_name().unwrap();
+        moves.iter().any(|(source, target)| {
+            source.file_name() == Some(name)
+                && target.file_name() == Some(name)
+                && target.parent().and_then(|p| p.file_name()) == Some(folder.as_ref())
+        })
+    };
+    assert!(lands(&photos[1], NO_PEOPLE));
+    assert!(lands(&photos[0], "Person 001"));
+    let root = PathBuf::from(&app.output);
+    assert!(
+        moves
+            .iter()
+            .all(|(source, _)| source.extension().is_none_or(|x| x != "mov")),
+        "videos stay in their folders"
+    );
+    assert!(app.media.iter().all(|m| m.path.exists()));
+    assert!(!root.join(NO_PEOPLE).exists());
+    app.runtime.shutdown();
+}

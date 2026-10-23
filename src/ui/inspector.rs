@@ -226,7 +226,7 @@ impl PhotoSortApp {
                             ui.label(RichText::new(format!("{}", n + 1)).small().color(FAINT));
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(if value.is_empty() { "—" } else { value })
+                                    RichText::new(if value.is_empty() { "-" } else { value })
                                         .color(ACCENT),
                                 )
                                 .wrap(),

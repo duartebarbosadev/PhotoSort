@@ -1325,7 +1325,9 @@ impl PhotoSortApp {
                             && self.group_mode == GroupMode::Faces
                             && self.preferences.faceless
                                 == crate::core::preferences::Faceless::Stay
-                            && photos > 0;
+                            && photos > 0
+                            // In a narrow board the toolbar's choice is enough.
+                            && rect.width() >= 480.0;
                         // The text stops short of the offer at the right.
                         let reserve = if offer { 210.0 } else { 0.0 };
                         section_header(
