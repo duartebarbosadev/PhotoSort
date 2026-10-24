@@ -221,13 +221,14 @@ impl PhotoSortApp {
     }
 
     /// Photos with a staged Trash mark, rating or rotation, plus confirmed
-    /// rotations waiting in Fix Rotation.
+    /// rotations waiting in Fix Rotation and planned changes in Organize.
     pub(super) fn staged_change_count(&self) -> usize {
         let decided = self.decisions.values().filter(|d| !d.is_empty()).count();
-        if self.step == Step::Rotation {
-            decided.max(self.rotation_review.pending_count())
-        } else {
-            decided
+        match self.step {
+            Step::Rotation => decided.max(self.rotation_review.pending_count()),
+            // Moves, renames and new folders are reviewed with them.
+            Step::Organize => decided + self.board.changes,
+            _ => decided,
         }
     }
     pub(super) fn switch_step(&mut self, step: Step) {
@@ -281,7 +282,7 @@ impl PhotoSortApp {
             }
         }
         // Choosing an analysis-based grouping, or choosing it again after it
-        // stopped, starts it; without this nothing happened until Preview moves.
+        // stopped, starts it; without this nothing happened until a review.
         self.start_organize_grouping();
     }
 
@@ -467,7 +468,8 @@ impl PhotoSortApp {
     }
 
     /// Organize's own controls, inline in the context bar: how photos are
-    /// grouped, where they go, then edit and preview.
+    /// grouped and where they go. Folders are edited on the board itself and
+    /// every change is reviewed with Review changes.
     fn organize_controls(&mut self, ui: &mut egui::Ui) {
         use egui_phosphor::regular as icon;
         ui.label(RichText::new("Group by").color(MUTED));
@@ -521,22 +523,6 @@ impl PhotoSortApp {
             }
         }
         self.destination_chip(ui);
-        if ui
-            .add_enabled(self.can_edit_folders(), egui::Button::new("Edit folders…"))
-            .clicked()
-        {
-            self.open_organize_editor();
-        }
-        if ui
-            .add_enabled(
-                !self.scanning && !self.busy && self.organize_metadata_ready(),
-                primary("Preview moves"),
-            )
-            .on_hover_text("See every move before anything changes")
-            .clicked()
-        {
-            self.organize();
-        }
     }
     /// Where the organized folders are made, and whether a photo's RAW, JPEG
     /// and edit files move together, in one popover chip.
@@ -568,7 +554,7 @@ impl PhotoSortApp {
                 ui.label(RichText::new("Organize into").font(medium(13.0)));
                 ui.label(
                     RichText::new(
-                        "The folder where the new folders are made. Nothing moves until you preview and apply.",
+                        "The folder where the new folders are made. Nothing moves until you review the changes and apply them.",
                     )
                     .small()
                     .color(MUTED),

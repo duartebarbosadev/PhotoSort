@@ -43,7 +43,7 @@ pub(super) fn locations_menu(
         let response = ui.add_enabled(text.is_some(), egui::Button::new(label));
         if label == "Copy proposed destination" {
             response.clone().on_hover_text(
-                "Preview moves confirms the final path, including any filename conflicts.",
+                "Review changes confirms the final path, including any filename conflicts.",
             );
         }
         if response.clicked() {
@@ -129,9 +129,6 @@ impl PhotoSortApp {
                 completion.request.path.display(),
                 error
             );
-            if let Some(editor) = &mut self.organize_editor {
-                editor.error = Some(message.clone());
-            }
             self.error = Some(message);
         }
     }

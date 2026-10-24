@@ -19,8 +19,7 @@ impl PhotoSortApp {
         (self.step == Step::Cull
             || (self.scene_editing()
                 && self.visual_groups.is_some()
-                && !self.organize_drafts.contains_key(&GroupMode::Visual)
-                && self.organize_editor.is_none()))
+                && !self.organize_drafts.contains_key(&GroupMode::Visual)))
             && !self.busy
             && !self.scanning
             && !self.filter_dirty
@@ -205,7 +204,7 @@ impl PhotoSortApp {
             && match self.step {
                 Step::Cull => !self.cull_groups.is_empty() && self.groups_ready(),
                 // Onto a proposed folder in Organize's board.
-                Step::Organize => self.can_edit_folders() && self.organize_editor.is_none(),
+                Step::Organize => self.board_editable(),
                 _ => false,
             }
     }

@@ -96,7 +96,6 @@ impl PhotoSortApp {
         if organize {
             self.group_mode = GroupMode::Current;
             self.organize_drafts.clear();
-            self.organize_editor = None;
             self.file_names.clear();
             self.output = self
                 .root
@@ -238,7 +237,6 @@ impl PhotoSortApp {
             && self.retry_edit.is_none()
             && self.retry_plan.is_some()
             && self.recovery_ticket.is_some()
-            && self.organize_editor.is_none()
             && self.organize_departure.is_none()
             && self.departure.is_none()
             && self.review_notice.is_none()
@@ -252,7 +250,6 @@ impl PhotoSortApp {
         }
         if self.busy
             || self.plan_open
-            || self.organize_editor.is_some()
             || self.organize_departure.is_some()
             || self.departure.is_some()
             || self.review_notice.is_some()
@@ -359,7 +356,7 @@ pub(super) enum OrganizeResolution {
     Review,
 }
 impl PhotoSortApp {
-    fn organize_changes_pending(&self) -> bool {
+    pub(super) fn organize_changes_pending(&self) -> bool {
         if self.step != Step::Organize || self.scanning {
             return false;
         }

@@ -2,9 +2,6 @@ use super::*;
 
 impl PhotoSortApp {
     pub(super) fn comparison_ids(&self) -> Vec<MediaId> {
-        if let Some(preview) = self.organize_preview() {
-            return preview.ids.clone();
-        }
         if self.step == Step::PickBest {
             return self
                 .pick_review
@@ -134,7 +131,7 @@ impl PhotoSortApp {
             }
         }
     }
-    fn view_for(&self, slot: u64) -> InspectionView {
+    pub(super) fn view_for(&self, slot: u64) -> InspectionView {
         if self.sync_views {
             self.inspection_view
         } else {
@@ -145,9 +142,7 @@ impl PhotoSortApp {
         }
     }
     fn set_view(&mut self, slot: u64, view: InspectionView) {
-        if self.organize_preview().is_none() {
-            self.pending_bookmark = None;
-        }
+        self.pending_bookmark = None;
         if self.sync_views {
             self.inspection_view = view;
         } else {
@@ -216,10 +211,9 @@ impl PhotoSortApp {
         let compact = ui.available_width() < 1100.0;
         // On short windows, give the photos room and use Previous/Next instead
         // of squeezing both the canvas and a clipped thumbnail strip below it.
-        let editor_preview = self.organize_preview().is_some();
         // The strip can sit in a column on the left instead.
-        let side_strip = !editor_preview
-            && self.preferences.strip_position == crate::core::preferences::StripPosition::Left
+        let side_strip = self.preferences.strip_position
+            == crate::core::preferences::StripPosition::Left
             && ui.available_width() >= 640.0;
         if side_strip {
             egui::Panel::left("review_side_strip")
@@ -234,7 +228,7 @@ impl PhotoSortApp {
                 }))
                 .show(ui, |ui| self.side_strip(ui));
         }
-        let show_filmstrip = !editor_preview && !side_strip && ui.available_height() >= 360.0;
+        let show_filmstrip = !side_strip && ui.available_height() >= 360.0;
         let filmstrip_height = FILMSTRIP + if self.strip_names() { STRIP_NAME } else { 0.0 };
         let short = ui.ctx().content_rect().height() < 760.0;
         let controls_height = match (compact, short) {
@@ -322,12 +316,6 @@ impl PhotoSortApp {
             });
         ui.spacing_mut().scroll = scroll_style;
         ui.add_space(S1);
-        if editor_preview {
-            floating_bar(ui, egui::Id::new("review_bar_preview"), |ui| {
-                self.review_view_controls(ui)
-            });
-            return;
-        }
         floating_bar(
             ui,
             egui::Id::new(("review_bar", compact, self.step)),
@@ -1013,7 +1001,6 @@ impl PhotoSortApp {
         if pixels
             && matches!(self.step, Step::Cull | Step::Organize)
             && self.comparison_ids().len() > 1
-            && self.organize_preview().is_none()
         {
             self.slot_stars(ui, rect, id);
         }
@@ -1032,13 +1019,16 @@ impl PhotoSortApp {
             self.focused_slot = slot;
         }
         if response.hovered() {
-            let delta = ui.input(|i| i.smooth_scroll_delta.y);
-            if delta.abs() > 0.0 {
+            // Scrolling zooms, and so does a trackpad pinch (or Ctrl+scroll,
+            // which egui reports as a zoom instead of a scroll).
+            let (delta, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+            let factor = (delta * 0.003).exp() * pinch;
+            if factor != 1.0 {
                 self.focused_slot = slot;
                 let anchor = response
                     .hover_pos()
                     .map_or(egui::Vec2::ZERO, |pointer| pointer - rect.center());
-                self.zoom_view_at((delta * 0.003).exp(), anchor);
+                self.zoom_view_at(factor, anchor);
             }
         }
         if pan.is_none() && response.double_clicked() {

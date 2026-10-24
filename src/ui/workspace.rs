@@ -159,7 +159,6 @@ pub struct PhotoSortApp {
     view_checkpoint: Instant,
     library_offset: f32,
     library_restore_offset: Option<f32>,
-    organize_view: Option<crate::core::views::EditorBookmark>,
     runtime: Runtime,
     catalog: Option<Arc<Catalog>>,
     media: Vec<Media>,
@@ -253,16 +252,19 @@ pub struct PhotoSortApp {
     /// Organize's folder board and a counter bumped by its own edits.
     board: organize_board::Board,
     board_epoch: u64,
-    organize_editor: Option<organize::Editor>,
     face_groups: Option<crate::core::regional::grouping::Output>,
     mixed_labels: Option<HashMap<MediaId, String>>,
     organize_run: Option<(u64, GroupMode)>,
     /// The automatic grouping whose last run was cancelled or failed; it is not
-    /// restarted on its own until the mode is chosen again or Preview moves.
+    /// restarted on its own until the mode is chosen again or the changes
+    /// are reviewed.
     organize_halted: Option<GroupMode>,
     /// The halted grouping was cancelled, rather than failed.
     organize_cancelled: bool,
     organize_preview_requested: bool,
+    /// Review changes in Organize shows the moves first; once they are
+    /// applied, the staged Trash marks, ratings and rotations come next.
+    review_after_moves: bool,
     file_names: HashMap<MediaId, String>,
     status: String,
     status_scope: Option<(Step, Option<GroupMode>)>,
@@ -403,7 +405,6 @@ impl PhotoSortApp {
             view_checkpoint: Instant::now(),
             library_offset: 0.0,
             library_restore_offset: None,
-            organize_view: None,
             runtime,
             catalog: None,
             media: Vec::new(),
@@ -494,13 +495,13 @@ impl PhotoSortApp {
             organize_drafts: HashMap::new(),
             board: Default::default(),
             board_epoch: 0,
-            organize_editor: None,
             face_groups: None,
             mixed_labels: None,
             organize_run: None,
             organize_halted: None,
             organize_cancelled: false,
             organize_preview_requested: false,
+            review_after_moves: false,
             file_names: HashMap::new(),
             status_scope: None,
             status: "Ready when you are".into(),
@@ -602,7 +603,6 @@ impl PhotoSortApp {
         self.browse_filters_open = false;
         self.clear_model_retry();
         self.runtime.next_epoch();
-        self.organize_view = None;
         self.saved_views = Default::default();
         self.pending_bookmark = None;
         self.view_data_ready = [Step::Organize, Step::Cull, Step::Rotation]
@@ -685,12 +685,13 @@ impl PhotoSortApp {
         self.pending_location_layout = None;
         self.pending_faceless = None;
         self.organize_drafts.clear();
-        self.organize_editor = None;
         self.organize_departure = None;
         self.mixed_labels = None;
         self.organize_run = None;
         self.organize_halted = None;
         self.organize_preview_requested = false;
+        // `review_after_moves` survives: the rescan after applying the moves
+        // is what opens the next review, and it consumes the flag.
         self.file_names.clear();
         self.analysis_run = None;
         self.progress = None;
@@ -1133,6 +1134,29 @@ impl PhotoSortApp {
             );
             return;
         }
+        // Organize's moves, renames and new folders are one plan; staged
+        // Trash marks, ratings and rotations follow once it is applied.
+        // Nothing changes on disk until each plan is reviewed and applied.
+        if self.step == Step::Organize && self.organize_changes_pending() {
+            self.review_after_moves = self.decisions.values().any(|d| !d.is_empty());
+            self.set_review_plan(None);
+            self.organize();
+            // Metadata or a grouping comes first: no plan is on its way.
+            if !self.busy {
+                self.review_after_moves = false;
+            }
+            return;
+        }
+        // With nothing staged, a grouping that has not run yet runs first
+        // and its plan opens after; staged marks never wait for a grouping.
+        if self.step == Step::Organize
+            && !self.organize_grouping_ready()
+            && !self.organize_drafts.contains_key(&self.group_mode)
+            && self.decisions.values().all(|d| d.is_empty())
+        {
+            self.organize();
+            return;
+        }
         self.review_decisions();
     }
     fn review_decisions(&mut self) {
@@ -1233,7 +1257,7 @@ impl PhotoSortApp {
             None => Some(String::new()),
         }
     }
-    fn review_trash(&mut self, request: crate::core::operations::TrashRequest) {
+    pub(super) fn review_trash(&mut self, request: crate::core::operations::TrashRequest) {
         if self.scanning || self.busy || self.review_remaining_operations() {
             return;
         }
@@ -1458,7 +1482,7 @@ impl PhotoSortApp {
         self.set_active(id);
     }
     fn modal_active(&self) -> bool {
-        self.organize_editor.is_some() || self.other_modal_active()
+        self.other_modal_active()
     }
     fn other_modal_active(&self) -> bool {
         self.plan_open
@@ -1647,9 +1671,6 @@ impl PhotoSortApp {
                                 self.working_state(ui, "Updating the view", "Applying the search and filters.");
                             } else if self.media.is_empty() || self.filtered.is_empty() {
                                 self.empty_state(ui);
-                            } else if self.organize_editor.is_some() {
-                                // The editor owns the visible content. Do not render or
-                                // submit hidden image/detail requests behind its modal.
                             } else {
                                 // Organize shows it above its board, between the panels.
                                 if self.step != Step::Organize && self.analysis_run.is_some() {
@@ -1689,7 +1710,7 @@ impl PhotoSortApp {
         self.handle_close_request(ctx, native_requested || smoke_requested);
         self.dialogs(ctx);
         self.intro_overlay(ctx);
-        // Include detail requested by the folder editor's shared preview canvas.
+        // Include detail requested by the preview canvases drawn this frame.
         self.runtime.inspect(self.inspection_wanted.clone());
         self.inspection_frames.retain(|slot, _| {
             self.inspection_wanted
@@ -1868,6 +1889,17 @@ impl PhotoSortApp {
     pub fn gallery_organize_by_folders(&mut self) {
         self.set_group_mode(GroupMode::Current);
     }
+    /// Makes a new folder holding the first two photos and starts naming it.
+    pub fn gallery_organize_new_folder(&mut self) {
+        let ids: Vec<_> = self
+            .filtered
+            .iter()
+            .take(2)
+            .map(|&i| self.media[i].id)
+            .collect();
+        self.selection.replace(ids.iter().copied());
+        self.board_new_folder("", &ids);
+    }
     /// Groups Organize by capture date.
     pub fn gallery_organize_by_date(&mut self) {
         self.set_group_mode(GroupMode::Date);
@@ -1882,9 +1914,6 @@ impl PhotoSortApp {
     }
     pub fn gallery_review(&mut self, review: bool) {
         self.review = review;
-    }
-    pub fn gallery_organize_editor(&mut self) {
-        self.open_organize_editor();
     }
     /// Compares the first `count` shown photos.
     pub fn gallery_compare(&mut self, count: usize) {

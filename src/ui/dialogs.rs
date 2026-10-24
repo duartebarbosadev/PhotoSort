@@ -55,7 +55,6 @@ impl PhotoSortApp {
         }
         self.location_layout_dialog(ctx);
         self.faceless_dialog(ctx);
-        self.organize_dialog(ctx);
         self.organize_departure_dialog(ctx);
         self.review_dialogs(ctx);
         self.preferences_dialog(ctx);
@@ -87,32 +86,24 @@ impl PhotoSortApp {
                         ("F10 / Ctrl/Cmd + ,", "Open Settings"),
                         ("F12", "About PhotoSort"),
                         (
-                            "Organize files: arrows / Space",
-                            "Move focus / toggle selection; Ctrl/Cmd+arrows include Trash marks",
-                        ),
-                        (
-                            "Organize files: Shift + click/arrows",
-                            "Select a range; Ctrl/Cmd+Shift adds to the selection",
-                        ),
-                        (
-                            "Organize files: Ctrl/Cmd+A",
-                            "Select all; add Shift to clear selection",
-                        ),
-                        (
                             "Organize: F2",
-                            "Rename the focused file or folder; Enter stages the name",
+                            "Rename the current photo; Enter stages the name",
                         ),
                         (
                             "Organize: Ctrl/Cmd+Shift+N",
-                            "Name a new folder inside the focused destination",
+                            "New folder inside the folder shown",
                         ),
                         (
-                            "Organize: D / Delete",
-                            "Toggle selection marks / review selected files for Trash",
+                            "Organize: hold \\",
+                            "Show the original folders until released",
                         ),
                         (
-                            "Organize: Shift+Enter or Ctrl/Cmd+Enter",
-                            "Preview moves; applying still requires review",
+                            "Organize: drag on empty space",
+                            "Select every photo the rectangle touches; Shift or Ctrl/Cmd adds",
+                        ),
+                        (
+                            "Shift+Enter",
+                            "Review changes: every move, rename, new folder and Trash mark",
                         ),
                         (
                             "Tree: Up / Down",

@@ -305,7 +305,7 @@ impl PhotoSortApp {
             );
         }
         ui.add_space(S1);
-        let editable = self.can_edit_folders() && self.organize_editor.is_none();
+        let editable = self.board_editable();
         ui.horizontal_wrapped(|ui| {
             if label.is_some() {
                 ui.add_enabled_ui(editable, |ui| {
@@ -329,10 +329,7 @@ impl PhotoSortApp {
                 .on_hover_text("Rename this photo · F2")
                 .clicked()
             {
-                self.open_organize_editor();
-                if let Some(editor) = self.organize_editor.as_mut() {
-                    editor.start_rename(id);
-                }
+                self.board_rename_photo(id);
             }
         });
     }

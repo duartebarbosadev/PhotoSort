@@ -1,13 +1,11 @@
-//! Pointer gestures shared by folder dragging and photo panning. A complete
-//! gesture may arrive between repaints, after egui's `Response::dragged` ends.
+//! Pointer gestures for photo panning. A complete gesture may arrive
+//! between repaints, after egui's `Response::dragged` ends.
 use eframe::egui::{self, Pos2, Vec2};
 
 #[derive(Clone, Copy)]
 pub(super) struct Motion {
     pub start: Pos2,
-    pub end: Pos2,
     delta: Vec2,
-    finished: bool,
     claimed: bool,
 }
 struct Active {
@@ -71,7 +69,7 @@ impl DragTracker {
                             });
                         } else if let Some(active) = self.active.as_mut() {
                             active.current = *pos;
-                            self.emit(true);
+                            self.emit();
                             self.active = None;
                         }
                     }
@@ -88,33 +86,21 @@ impl DragTracker {
                 }
             }
         });
-        self.emit(false);
+        self.emit();
         true
     }
-    fn emit(&mut self, finished: bool) {
+    fn emit(&mut self) {
         if let Some(active) = self.active.as_mut() {
             active.dragging |= active.start.distance(active.current) > 6.0;
             if active.dragging {
                 self.motions.push(Motion {
                     start: active.start,
-                    end: active.current,
                     delta: active.current - active.applied,
-                    finished,
                     claimed: false,
                 });
                 active.applied = active.current;
             }
         }
-    }
-    pub fn start(&self) -> Option<Pos2> {
-        self.active.as_ref().map(|active| active.start)
-    }
-    pub fn completed(&self) -> Option<Motion> {
-        self.motions
-            .iter()
-            .rev()
-            .find(|motion| motion.finished)
-            .copied()
     }
     /// Claim each movement once, using the press location rather than the latest
     /// hover target. This keeps fast drags anchored to the correct comparison pane.
@@ -215,7 +201,6 @@ mod tests {
                 true,
                 vec![egui::Event::PointerMoved(end), button(end, false)],
             );
-            assert!(tracker.completed().is_none(), "reason {reason}");
             assert!(tracker.motions.is_empty(), "reason {reason}");
         }
     }

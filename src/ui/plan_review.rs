@@ -338,6 +338,13 @@ impl PhotoSortApp {
                 file_rows(ui, plan, &self.plan_rows, self.root.as_deref(), height);
                 ui.separator();
                 if self.close_save_pending { ui.label("Saving before quitting…"); }
+                if self.review_after_moves && !retry {
+                    let staged = self.decisions.values().filter(|d| !d.is_empty()).count();
+                    ui.label(RichText::new(format!(
+                        "Next: {staged} {} with Trash marks, ratings or rotations, reviewed once these changes are applied.",
+                        if staged == 1 { "photo" } else { "photos" }
+                    )).color(MUTED));
+                }
                 if retry && matches!(self.after_apply, Some(Destination::Close)) && self.recovery_ticket.is_some() {
                     ui.label("Save your plan and review progress to resume next time. No remaining file operations will run.");
                     if self.has_unsaved_plan_extras() { ui.label("Keep reviewing to apply or reset other unsaved organization or confirmed rotation choices first."); }
@@ -362,6 +369,7 @@ impl PhotoSortApp {
         if cancel {
             self.plan_open = false;
             self.after_apply = None;
+            self.review_after_moves = false;
             if self.retry_plan.is_none() {
                 self.rotation_plan = false;
             }
