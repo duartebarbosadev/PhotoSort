@@ -467,12 +467,8 @@ fn case_only_file_edit_uses_shared_review_and_preserves_staged_rating_after_relo
         ));
     }
     let tree = output.unwrap().platform_output.accesskit_update.unwrap();
-    // Relative paths are shown with the platform's separator.
-    let before = std::path::Path::new("Before");
-    for label in [
-        format!("From  {}", before.join("a.jpg").display()),
-        format!("To    {}", before.join("A.jpg").display()),
-    ] {
+    // The plain view names the folder once and the photo by its names.
+    for label in ["In Before 1 photo".to_string(), "a.jpg → A.jpg".to_string()] {
         assert!(
             tree.nodes
                 .iter()
