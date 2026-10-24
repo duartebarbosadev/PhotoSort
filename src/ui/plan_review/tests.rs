@@ -175,13 +175,14 @@ fn organize_review_reads_as_plain_sentences_without_full_paths() {
             "a.heic from 2025-10-25 / group-6",
             "c.heic from 2025-10-25 / group-2",
             "Back",
-            "Apply 3 changes",
+            // The new folder counts, as in Organize's "Review 4 changes".
+            "Apply 4 changes",
         ] {
             assert!(texts.iter().any(|t| t == expected), "{expected}: {texts:?}");
         }
         // Folder cleanup is one quiet, conditional line, never one row per folder.
         assert!(texts.iter().any(|t| t.starts_with(
-            "3 folders left empty afterwards are removed: 2025-10-25 / group-6, 2025-10-25 / group-2, 2025-10-25"
+            "Afterwards, these folders are removed if nothing is left in them: 2025-10-25 / group-6, 2025-10-25 / group-2, 2025-10-25"
         )));
         assert!(!texts.iter().any(|t| t.contains("Remove folder if empty")
             || t.contains("/library/")

@@ -65,6 +65,8 @@ struct Summary {
     destinations: usize,
     new_destinations: usize,
     empty_folders: usize,
+    /// Every folder the plan creates, as Organize's "Review N changes" counts them.
+    created: usize,
     trashed: usize,
     trashed_folders: usize,
     updated: usize,
@@ -136,12 +138,13 @@ impl Summary {
             format!("Update {n}")
         }
     }
-    /// What Apply applies, counted the way the headline counts.
+    /// What Apply applies: photos as the headline counts them, plus new
+    /// folders, as Organize's "Review N changes" counts them.
     fn changes(&self) -> usize {
         self.moved
             + self.renamed
             + self.folder_renames
-            + self.empty_folders
+            + self.created
             + self.updated
             + self.trashed
             + self.trashed_folders
@@ -232,6 +235,7 @@ impl Rows {
             })
             .collect();
         summary.empty_folders = empty.len();
+        summary.created = created.len();
         for path in empty {
             into.insert(path, (false, Vec::new()));
         }
@@ -873,11 +877,9 @@ impl PhotoSortApp {
                         .on_hover_text(output.display().to_string());
                 }
                 if !rows.summary.cleanup.is_empty() {
-                    let n = rows.summary.cleanup.len();
+                    // Conditional: a folder that still holds anything stays.
                     ui.add(egui::Label::new(RichText::new(format!(
-                        "{} left empty afterwards {} removed: {}",
-                        count(n, "folder", "folders"),
-                        if n == 1 { "is" } else { "are" },
+                        "Afterwards, these folders are removed if nothing is left in them: {}",
                         cleanup_text(plan, rows, self.root.as_deref(), 3),
                     )).small().color(MUTED)).truncate())
                     .on_hover_text(cleanup_text(plan, rows, self.root.as_deref(), 40));
