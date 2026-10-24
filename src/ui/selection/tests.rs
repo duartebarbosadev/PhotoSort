@@ -392,7 +392,7 @@ fn clear_all_trash_after_keep_reviewing_invalidates_only_the_cached_plan() {
     theme_install(&ctx);
     ctx.enable_accesskit();
     let size = egui::vec2(640., 600.);
-    click_label(&mut app, &ctx, size, "Keep reviewing");
+    click_label(&mut app, &ctx, size, "Back");
     assert!(!app.plan_open && app.plan.is_some());
     // The visible grid loads its previews; let that settle so the check
     // below measures only what clearing the marks does.

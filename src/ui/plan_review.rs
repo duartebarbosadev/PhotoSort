@@ -1,6 +1,8 @@
 //! Shared presentation of immutable operation plans. Rendering never rescans files.
 use super::*;
 use crate::core::operations::Action;
+use egui::text::{LayoutJob, TextFormat};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 #[derive(Default)]
@@ -10,43 +12,142 @@ pub(super) struct Rows {
     movable: Vec<usize>,
     generation: u64,
     summary: Summary,
+    /// The plain view: photos grouped by what happens to them, as plan indices.
+    lines: Vec<Line>,
+    /// Folders photos go into, in the order the plain view shows them.
+    folders: Vec<Folder>,
 }
-/// Plain counts for the plan headline, by what happens to the files.
+
+/// One line of the plain view. Every line has the same height so the list
+/// stays virtualized for any plan size; a heading line starts a card.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Line {
+    /// The card for `folders[i]`: photos going there, or a new empty folder.
+    Into(usize),
+    /// A photo, with its companions, moved or renamed (plan group).
+    Moved(usize),
+    FoldersRenamed,
+    FolderRenamed(usize),
+    Updates,
+    Updated(usize),
+    Trash,
+    Trashed(usize),
+}
+impl Line {
+    fn heading(self) -> bool {
+        matches!(
+            self,
+            Self::Into(_) | Self::FoldersRenamed | Self::Updates | Self::Trash
+        )
+    }
+}
+
+struct Folder {
+    path: PathBuf,
+    new: bool,
+    photos: usize,
+    /// False when every photo here keeps its folder and only gets a new name.
+    arrivals: bool,
+}
+
+fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+fn photos(n: usize) -> String {
+    count(n, "photo", "photos")
+}
+
+/// Plain counts for the plan headline: photos, not file operations.
 #[derive(Default)]
 struct Summary {
-    trash: usize,
-    moves: usize,
-    renames: usize,
-    metadata: usize,
-    folders: usize,
+    moved: usize,
+    renamed: usize,
+    destinations: usize,
+    new_destinations: usize,
+    empty_folders: usize,
+    /// Every folder the plan creates, as Organize's "Review N changes" counts them.
+    created: usize,
+    trashed: usize,
+    trashed_folders: usize,
+    updated: usize,
+    rotated: usize,
+    rated: usize,
+    folder_renames: usize,
+    /// Folders removed afterwards, only if nothing is left in them (plan groups).
+    cleanup: Vec<usize>,
 }
 impl Summary {
     fn parts(&self) -> Vec<(String, Color32)> {
-        let plural =
-            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
-        [
-            (
-                self.trash,
-                plural(self.trash, "file to Trash", "files to Trash"),
-                RED,
-            ),
-            (self.moves, plural(self.moves, "move", "moves"), ACCENT),
-            (self.renames, plural(self.renames, "rename", "renames"), INK),
-            (
-                self.metadata,
-                plural(self.metadata, "metadata update", "metadata updates"),
+        let mut parts = Vec::new();
+        if self.moved > 0 {
+            let into = if self.new_destinations == self.destinations {
+                count(self.destinations, "new folder", "new folders")
+            } else if self.new_destinations > 0 {
+                format!(
+                    "{} ({} new)",
+                    count(self.destinations, "folder", "folders"),
+                    self.new_destinations
+                )
+            } else {
+                count(self.destinations, "folder", "folders")
+            };
+            parts.push((format!("Move {} into {into}", photos(self.moved)), ACCENT));
+        }
+        if self.renamed > 0 {
+            parts.push((format!("Rename {}", photos(self.renamed)), INK));
+        }
+        if self.folder_renames > 0 {
+            parts.push((
+                format!("Rename {}", count(self.folder_renames, "folder", "folders")),
                 INK,
-            ),
-            (
-                self.folders,
-                plural(self.folders, "folder change", "folder changes"),
-                MUTED,
-            ),
-        ]
-        .into_iter()
-        .filter(|(n, ..)| *n > 0)
-        .map(|(_, text, color)| (text, color))
-        .collect()
+            ));
+        }
+        if self.empty_folders > 0 {
+            parts.push((
+                format!(
+                    "Create {}",
+                    count(self.empty_folders, "empty folder", "empty folders")
+                ),
+                INK,
+            ));
+        }
+        if self.updated > 0 {
+            parts.push((self.updates(), INK));
+        }
+        if self.trashed > 0 {
+            parts.push((format!("Move {} to the Trash", photos(self.trashed)), RED));
+        }
+        if self.trashed_folders > 0 {
+            parts.push((
+                format!(
+                    "Move {} to the Trash",
+                    count(self.trashed_folders, "folder", "folders")
+                ),
+                RED,
+            ));
+        }
+        parts
+    }
+    fn updates(&self) -> String {
+        let n = photos(self.updated);
+        if self.rotated == self.updated && self.rated == 0 {
+            format!("Rotate {n}")
+        } else if self.rated == self.updated && self.rotated == 0 {
+            format!("Set ratings on {n}")
+        } else {
+            format!("Update {n}")
+        }
+    }
+    /// What Apply applies: photos as the headline counts them, plus new
+    /// folders, as Organize's "Review N changes" counts them.
+    fn changes(&self) -> usize {
+        self.moved
+            + self.renamed
+            + self.folder_renames
+            + self.created
+            + self.updated
+            + self.trashed
+            + self.trashed_folders
     }
 }
 impl Rows {
@@ -54,42 +155,117 @@ impl Rows {
         self.generation = self.generation.wrapping_add(1);
         self.ends.clear();
         self.movable.clear();
+        self.lines.clear();
+        self.folders.clear();
         self.summary = Summary::default();
+        let Some(plan) = plan else {
+            return;
+        };
+        let summary = &mut self.summary;
+        // Destination folder -> (photos arrive, plan groups).
+        let mut into = BTreeMap::<&Path, (bool, Vec<usize>)>::new();
+        let (mut created, mut renamed, mut updates, mut trash) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let mut end = 0;
-        if let Some(plan) = plan {
-            for (group, action) in plan.actions.iter().enumerate() {
-                if matches!(action, Action::Move { files } if !files.is_empty()) {
-                    self.movable.push(group);
+        for (group, action) in plan.actions.iter().enumerate() {
+            if matches!(action, Action::Move { files } if !files.is_empty()) {
+                self.movable.push(group);
+            }
+            let pairs: Vec<(&Path, &Path)> = match action {
+                Action::Move { files } | Action::FinishMove { files } => files
+                    .iter()
+                    .map(|(s, to)| (s.path.as_path(), to.as_path()))
+                    .collect(),
+                Action::RenameFile { source, to } => vec![(source.path.as_path(), to.as_path())],
+                _ => Vec::new(),
+            };
+            if let Some(folder) = pairs.first().and_then(|(_, to)| to.parent()) {
+                let arrives = pairs.iter().any(|(s, to)| s.parent() != to.parent());
+                let entry = into.entry(folder).or_default();
+                entry.0 |= arrives;
+                entry.1.push(group);
+                if arrives {
+                    summary.moved += 1;
+                } else {
+                    summary.renamed += 1;
                 }
-                let summary = &mut self.summary;
-                match action {
-                    Action::Move { files } | Action::FinishMove { files } => {
-                        for (source, to) in files {
-                            if source.path.parent() == to.parent() {
-                                summary.renames += 1;
-                            } else {
-                                summary.moves += 1;
-                            }
-                        }
-                    }
-                    Action::Trash { files } => summary.trash += files.len(),
-                    Action::TrashDirectory(folder) => {
-                        summary.trash += folder.inventory.files.len().max(1)
-                    }
-                    Action::RenameFile { .. } => summary.renames += 1,
-                    Action::RenameDirectory(_) => summary.folders += 1,
-                    Action::Metadata { .. } => summary.metadata += 1,
-                    Action::CreateDirectory { .. } | Action::RemoveEmptyDirectory { .. } => {
-                        summary.folders += 1
-                    }
+            }
+            match action {
+                Action::Trash { files } if !files.is_empty() => {
+                    summary.trashed += 1;
+                    trash.push(group);
                 }
-                end += match action {
-                    Action::Move { files } | Action::FinishMove { files } => files.len().max(1),
-                    Action::Trash { files } => files.len().max(1),
-                    Action::TrashDirectory(folder) => 1 + folder.inventory.files.len(),
-                    _ => 1,
-                };
-                self.ends.push(end);
+                Action::TrashDirectory(_) => {
+                    summary.trashed_folders += 1;
+                    trash.push(group);
+                }
+                Action::Metadata {
+                    rating,
+                    orientation,
+                    ..
+                } => {
+                    summary.updated += 1;
+                    summary.rated += usize::from(rating.is_some());
+                    summary.rotated += usize::from(orientation.is_some());
+                    updates.push(group);
+                }
+                Action::RenameDirectory(_) => {
+                    summary.folder_renames += 1;
+                    renamed.push(group);
+                }
+                Action::CreateDirectory { path } => created.push(path.as_path()),
+                Action::RemoveEmptyDirectory { .. } => summary.cleanup.push(group),
+                _ => {}
+            }
+            end += match action {
+                Action::Move { files } | Action::FinishMove { files } => files.len().max(1),
+                Action::Trash { files } => files.len().max(1),
+                Action::TrashDirectory(folder) => 1 + folder.inventory.files.len(),
+                _ => 1,
+            };
+            self.ends.push(end);
+        }
+        // A new folder that only holds other new folders is shown through them.
+        let empty: Vec<&Path> = created
+            .iter()
+            .copied()
+            .filter(|path| {
+                !into.keys().any(|folder| folder.starts_with(path))
+                    && !created.iter().any(|c| c != path && c.starts_with(path))
+            })
+            .collect();
+        summary.empty_folders = empty.len();
+        summary.created = created.len();
+        for path in empty {
+            into.insert(path, (false, Vec::new()));
+        }
+        for (path, (arrivals, groups)) in into {
+            let new = created.contains(&path);
+            if arrivals {
+                summary.destinations += 1;
+                summary.new_destinations += usize::from(new);
+            }
+            self.lines.push(Line::Into(self.folders.len()));
+            self.lines.extend(groups.iter().map(|&g| Line::Moved(g)));
+            self.folders.push(Folder {
+                path: path.to_path_buf(),
+                new,
+                photos: groups.len(),
+                arrivals,
+            });
+        }
+        for (heading, groups, line) in [
+            (
+                Line::FoldersRenamed,
+                renamed,
+                Line::FolderRenamed as fn(usize) -> Line,
+            ),
+            (Line::Updates, updates, Line::Updated),
+            (Line::Trash, trash, Line::Trashed),
+        ] {
+            if !groups.is_empty() {
+                self.lines.push(heading);
+                self.lines.extend(groups.into_iter().map(line));
             }
         }
     }
@@ -101,6 +277,371 @@ impl Rows {
         let start = group.checked_sub(1).map_or(0, |i| self.ends[i]);
         (group, row - start)
     }
+}
+
+/// A folder as a person reads it: `2025-10-25 / group-2 / h`, relative to
+/// `base`, or the base folder's own name when it is the base.
+fn folder_text(path: &Path, base: Option<&Path>) -> String {
+    match base.and_then(|base| path.strip_prefix(base).ok()) {
+        Some(relative) if relative.as_os_str().is_empty() => path.file_name().map_or_else(
+            || path.display().to_string(),
+            |n| n.to_string_lossy().into(),
+        ),
+        Some(relative) => relative
+            .iter()
+            .map(|c| c.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" / "),
+        None => path.display().to_string(),
+    }
+}
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into()
+}
+/// Which of a photo's files a person thinks of as the photo, and a short
+/// note for the rest: a RAW twin or XMP sidecar is "+ RAW, XMP".
+fn lead_and_extras(paths: &[&Path]) -> (usize, String) {
+    let kind = |p: &Path| MediaKind::from_path(p);
+    let sidecar = |p: &Path| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("xmp"));
+    let lead = paths
+        .iter()
+        .position(|p| matches!(kind(p), Some(MediaKind::Photo | MediaKind::Video)))
+        .or_else(|| paths.iter().position(|p| !sidecar(p)))
+        .unwrap_or(0);
+    let mut extras: Vec<String> = Vec::new();
+    for (i, path) in paths.iter().enumerate() {
+        let tag = if kind(path) == Some(MediaKind::Raw) {
+            "RAW".to_string()
+        } else {
+            path.extension()
+                .map_or_else(String::new, |e| e.to_string_lossy().to_uppercase())
+        };
+        if i != lead && !tag.is_empty() && !extras.contains(&tag) {
+            extras.push(tag);
+        }
+    }
+    let note = if extras.is_empty() {
+        String::new()
+    } else {
+        format!("+ {}", extras.join(", "))
+    };
+    (lead, note)
+}
+/// A rating or rotation in everyday words.
+fn update_text(rating: Option<u8>, orientation: Option<u8>, pixels: bool) -> String {
+    let mut parts = Vec::new();
+    if let Some(orientation) = orientation {
+        parts.push(
+            match orientation {
+                1 => "set upright",
+                2 => "mirror",
+                3 => "turn upside down",
+                4 => "flip",
+                5 | 7 => "flip and turn",
+                6 => "rotate right",
+                8 => "rotate left",
+                _ => "change orientation",
+            }
+            .to_string(),
+        );
+    }
+    match rating {
+        Some(0) => parts.push("clear rating".into()),
+        Some(n) => parts.push(count(n.into(), "star", "stars")),
+        None => {}
+    }
+    let mut text = parts.join(", ");
+    if pixels {
+        text.push_str(" (re-saves the image)");
+    }
+    text
+}
+
+const LINE_HEIGHT: f32 = 30.0;
+/// Space above each card; part of its heading line so all lines stay equal.
+const CARD_GAP: f32 = 8.0;
+
+/// One plain line as text runs: (text, color, emphasised).
+fn plain_line(
+    plan: &Plan,
+    index: &Rows,
+    line: Line,
+    root: Option<&Path>,
+) -> Vec<(String, Color32, bool)> {
+    let output = plan.output_root.as_deref().or(root);
+    let mut runs = Vec::new();
+    let mut add = |text: String, color: Color32, strong: bool| runs.push((text, color, strong));
+    match line {
+        Line::Into(i) => {
+            let folder = &index.folders[i];
+            let name = folder_text(&folder.path, output);
+            if folder.photos == 0 {
+                add(format!("New folder {name}"), INK, true);
+                add("   stays empty for now".into(), MUTED, false);
+            } else {
+                add(
+                    format!("{} {name}", if folder.arrivals { "Into" } else { "In" }),
+                    INK,
+                    true,
+                );
+                if folder.new {
+                    add("   new folder".into(), GREEN, false);
+                }
+            }
+        }
+        Line::FoldersRenamed => add("Rename folders".into(), INK, true),
+        Line::Updates => add(index.summary.updates(), INK, true),
+        Line::Trash => add("To the Trash".into(), RED, true),
+        Line::Moved(group) => {
+            let (pairs, finishing): (Vec<(&Path, &Path)>, bool) = match &plan.actions[group] {
+                Action::Move { files } => (
+                    files
+                        .iter()
+                        .map(|(s, t)| (s.path.as_path(), t.as_path()))
+                        .collect(),
+                    false,
+                ),
+                Action::FinishMove { files } => (
+                    files
+                        .iter()
+                        .map(|(s, t)| (s.path.as_path(), t.as_path()))
+                        .collect(),
+                    true,
+                ),
+                Action::RenameFile { source, to } => {
+                    (vec![(source.path.as_path(), to.as_path())], false)
+                }
+                _ => (Vec::new(), false),
+            };
+            let sources: Vec<&Path> = pairs.iter().map(|(s, _)| *s).collect();
+            let (lead, extras) = lead_and_extras(&sources);
+            let Some(&(source, to)) = pairs.get(lead) else {
+                return runs;
+            };
+            let (before, after) = (file_name(source), file_name(to));
+            if before != after {
+                add(before, INK, false);
+                add("  →  ".into(), MUTED, false);
+            }
+            add(after, INK, false);
+            if !extras.is_empty() {
+                add(format!("  {extras}"), MUTED, false);
+            }
+            if source.parent() != to.parent() {
+                let from = source.parent().unwrap_or(Path::new(""));
+                add(format!("   from {}", folder_text(from, root)), MUTED, false);
+            }
+            if finishing {
+                add("   finishing an earlier move".into(), MUTED, false);
+            }
+        }
+        Line::Trashed(group) => match &plan.actions[group] {
+            Action::Trash { files } if !files.is_empty() => {
+                let sources: Vec<&Path> = files.iter().map(|s| s.path.as_path()).collect();
+                let (lead, extras) = lead_and_extras(&sources);
+                add(file_name(sources[lead]), INK, false);
+                if !extras.is_empty() {
+                    add(format!("  {extras}"), MUTED, false);
+                }
+                if let Some(from) = sources[lead].parent() {
+                    add(format!("   in {}", folder_text(from, root)), MUTED, false);
+                }
+            }
+            Action::TrashDirectory(folder) => {
+                add(
+                    format!("Folder {}", folder_text(&folder.path, root)),
+                    INK,
+                    false,
+                );
+                add(
+                    format!(
+                        "   with everything in it ({})",
+                        count(folder.inventory.files.len(), "file", "files")
+                    ),
+                    MUTED,
+                    false,
+                );
+            }
+            _ => {}
+        },
+        Line::Updated(group) => {
+            if let Action::Metadata {
+                source,
+                rating,
+                orientation,
+                target,
+                ..
+            } = &plan.actions[group]
+            {
+                add(file_name(&source.path), INK, false);
+                add(
+                    format!(
+                        "   {}",
+                        update_text(
+                            *rating,
+                            *orientation,
+                            *target == crate::core::metadata::WriteTarget::Pixels
+                        )
+                    ),
+                    MUTED,
+                    false,
+                );
+            }
+        }
+        Line::FolderRenamed(group) => {
+            if let Action::RenameDirectory(rename) = &plan.actions[group] {
+                add(folder_text(&rename.from, root), INK, false);
+                add("  →  ".into(), MUTED, false);
+                add(folder_text(&rename.to, root), INK, false);
+            }
+        }
+    }
+    runs
+}
+
+/// The photos a plan changes, in cards by destination, Trash and updates.
+/// Each line is one widget whose accessible value is the text it shows.
+fn plain_rows(
+    ui: &mut egui::Ui,
+    plan: &Plan,
+    index: &Rows,
+    root: Option<&Path>,
+    height: f32,
+) -> egui::scroll_area::ScrollAreaOutput<usize> {
+    ui.scope(|ui| {
+        // Lines of a card touch; the card gap is inside each heading line.
+        ui.spacing_mut().item_spacing.y = 0.0;
+        egui::ScrollArea::vertical()
+            .id_salt(("plan_plain", index.generation))
+            .max_height(height)
+            .auto_shrink([false, true])
+            .show_rows(ui, LINE_HEIGHT, index.lines.len(), |ui, rows| {
+                let rendered = rows.len();
+                let body = egui::TextStyle::Body.resolve(ui.style());
+                for row in rows {
+                    let line = index.lines[row];
+                    let last = index.lines.get(row + 1).is_none_or(|l| l.heading());
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), LINE_HEIGHT),
+                        Sense::hover(),
+                    );
+                    let mut card = rect;
+                    let radius = R_TILE;
+                    let mut corners = egui::CornerRadius::ZERO;
+                    if line.heading() {
+                        card.min.y += CARD_GAP;
+                        corners.nw = radius;
+                        corners.ne = radius;
+                    }
+                    if last {
+                        corners.sw = radius;
+                        corners.se = radius;
+                    }
+                    ui.painter().rect_filled(card, corners, CARD);
+                    let runs = plain_line(plan, index, line, root);
+                    let mut job = LayoutJob::default();
+                    let mut spoken = String::new();
+                    for (text, color, strong) in &runs {
+                        let font_id = if *strong {
+                            medium(body.size)
+                        } else {
+                            body.clone()
+                        };
+                        job.append(
+                            text,
+                            0.0,
+                            TextFormat {
+                                font_id,
+                                color: *color,
+                                ..Default::default()
+                            },
+                        );
+                        spoken.push_str(text.trim());
+                        spoken.push(' ');
+                    }
+                    let mut text_rect = card.shrink2(egui::vec2(S3, 0.0));
+                    // A card's photo count sits at its right edge.
+                    if let Some(total) = heading_count(index, line) {
+                        let galley = ui.painter().layout_no_wrap(
+                            total.clone(),
+                            egui::TextStyle::Small.resolve(ui.style()),
+                            MUTED,
+                        );
+                        let at = egui::pos2(
+                            text_rect.right() - galley.size().x,
+                            text_rect.center().y - galley.size().y / 2.0,
+                        );
+                        text_rect.max.x = at.x - S3;
+                        ui.painter().galley(at, galley, MUTED);
+                        spoken.push_str(&total);
+                    }
+                    let spoken = spoken.trim_end().to_string();
+                    let mut child = ui.new_child(
+                        egui::UiBuilder::new()
+                            .id_salt(row)
+                            .max_rect(text_rect)
+                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                    );
+                    let response = child.add(egui::Label::new(job).truncate().selectable(false));
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &spoken)
+                    });
+                    if let Line::Moved(group)
+                    | Line::Trashed(group)
+                    | Line::Updated(group)
+                    | Line::FolderRenamed(group) = line
+                    {
+                        response.on_hover_ui(|ui| {
+                            ui.label(plan.actions[group].label());
+                        });
+                    }
+                }
+                rendered
+            })
+    })
+    .inner
+}
+
+/// The count shown at the right of a card heading.
+fn heading_count(index: &Rows, line: Line) -> Option<String> {
+    let summary = &index.summary;
+    match line {
+        Line::Into(i) if index.folders[i].photos > 0 => Some(photos(index.folders[i].photos)),
+        Line::Trash if summary.trashed_folders == 0 => Some(photos(summary.trashed)),
+        Line::Trash => Some(count(
+            summary.trashed + summary.trashed_folders,
+            "item",
+            "items",
+        )),
+        _ => None,
+    }
+}
+
+/// The folders a plan removes afterwards if nothing is left in them, in one line.
+fn cleanup_text(plan: &Plan, index: &Rows, root: Option<&Path>, limit: usize) -> String {
+    let names: Vec<String> = index
+        .summary
+        .cleanup
+        .iter()
+        .filter_map(|&group| match &plan.actions[group] {
+            Action::RemoveEmptyDirectory { path, .. } => Some(folder_text(path, root)),
+            _ => None,
+        })
+        .collect();
+    let shown = limit.min(names.len());
+    let mut text = names
+        .iter()
+        .take(shown)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if names.len() > shown {
+        text.push_str(&format!(" and {} more", names.len() - shown));
+    }
+    text
 }
 
 const ROW_HEIGHT: f32 = 46.0;
@@ -307,27 +848,53 @@ impl PhotoSortApp {
             let top = ui.cursor().top();
             if let Some(plan) = &self.plan {
                 let retry = self.retry_plan.is_some();
+                let rows = &self.plan_rows;
                 ui.heading(if retry { "Unfinished file operations" } else { "Review your changes" });
                 ui.horizontal_wrapped(|ui| {
-                    for (part, color) in self.plan_rows.summary.parts() {
+                    for (i, (part, color)) in rows.summary.parts().into_iter().enumerate() {
+                        if i > 0 { ui.label(RichText::new("·").color(FAINT)); }
                         ui.label(RichText::new(part).font(medium(13.5)).color(color));
                     }
                 });
-                if let Some(root) = &self.root {
-                    ui.add(egui::Label::new(format!("Library: {}", root.display())).truncate()).on_hover_text(root.display().to_string());
-                }
+                // Reassurance first; the library is named, its full path is on hover.
+                let library = self.root.as_deref().map(|root| (folder_text(root, Some(root)), root));
+                let note = if retry {
+                    "Changes that finished are already applied. These are the ones left.".to_string()
+                } else {
+                    let mut note = match &library {
+                        Some((name, _)) => format!("Nothing in {name} has changed yet."),
+                        None => "Nothing has changed yet.".into(),
+                    };
+                    if rows.summary.trashed + rows.summary.trashed_folders > 0 {
+                        note.push_str(" Anything moved to the Trash can be restored from your system Trash.");
+                    }
+                    note
+                };
+                let response = ui.add(egui::Label::new(RichText::new(note).color(MUTED)).wrap());
+                if let Some((_, root)) = library { response.on_hover_text(root.display().to_string()); }
                 if let Some(output) = &plan.output_root && self.root.as_ref() != Some(output) {
-                    ui.add(egui::Label::new(format!("Destination: {}", output.display())).truncate()).on_hover_text(output.display().to_string());
+                    ui.add(egui::Label::new(RichText::new(format!("Photos go to {}", folder_text(output, Some(output)))).color(MUTED)).truncate())
+                        .on_hover_text(output.display().to_string());
+                }
+                if !rows.summary.cleanup.is_empty() {
+                    // Conditional: a folder that still holds anything stays.
+                    ui.add(egui::Label::new(RichText::new(format!(
+                        "Afterwards, these folders are removed if nothing is left in them: {}",
+                        cleanup_text(plan, rows, self.root.as_deref(), 3),
+                    )).small().color(MUTED)).truncate())
+                    .on_hover_text(cleanup_text(plan, rows, self.root.as_deref(), 40));
                 }
                 if retry && self.error.is_some() { ui.colored_label(RED, "Some operations need attention. Open details before retrying."); }
-                egui::CollapsingHeader::new("Operation details").show(ui, |ui| {
+                // Details swap the plain list for every file operation, so the
+                // list keeps one height budget. Retries start there.
+                let details = egui::CollapsingHeader::new("Operation details").id_salt(("plan_details", retry)).default_open(retry).show(ui, |ui| {
                     egui::ScrollArea::vertical().id_salt("plan_explanation").max_height(70.0).show(ui, |ui| {
                         ui.label(&plan.description);
                         if retry {
                             ui.label("Successful operations are already applied. Finish staged move rechecks that the destination is the same file before removing its source link. Edit destination saves a revised folder or base name for a pending move and all its companions. Retry uses the saved destinations and source checks. Resolve remaining conflicts first. Discard abandons only unfinished operations; the audit record is retained.");
                             if let Some(error) = &self.error { ui.colored_label(RED, error); }
                         } else {
-                            ui.label(if self.rotation_plan { "Only confirmed corrections are included. Metadata rows identify embedded updates, XMP sidecars or lossless pixel rotations." } else { "All listed companion files are included. Metadata rows identify embedded updates, XMP sidecars or lossless pixel rotations. Trash entries go to your system's Trash. Moves never overwrite existing files." });
+                            ui.label(if self.rotation_plan { "Only confirmed corrections are included. Metadata rows identify embedded updates, XMP sidecars or lossless pixel rotations." } else { "All listed companion files are included. Metadata rows identify embedded updates, XMP sidecars or lossless pixel rotations. Trash entries go to your system's Trash. Moves never overwrite existing files. Folders are removed only when nothing is left in them." });
                         }
                     });
                 });
@@ -335,7 +902,11 @@ impl PhotoSortApp {
                 // Account for actual wrapped heading/notice heights and reserve the footer.
                 let footer = if retry && matches!(self.after_apply, Some(Destination::Close)) { 230.0 } else { 130.0 };
                 let height = (ctx.content_rect().height() - footer - (ui.cursor().top() - top)).clamp(40.0, 400.0);
-                file_rows(ui, plan, &self.plan_rows, self.root.as_deref(), height);
+                if details.openness > 0.0 || rows.lines.is_empty() {
+                    file_rows(ui, plan, rows, self.root.as_deref(), height);
+                } else {
+                    plain_rows(ui, plan, rows, self.root.as_deref(), height);
+                }
                 ui.separator();
                 if self.close_save_pending { ui.label("Saving before quitting…"); }
                 if self.review_after_moves && !retry {
@@ -347,16 +918,23 @@ impl PhotoSortApp {
                 }
                 if retry && matches!(self.after_apply, Some(Destination::Close)) && self.recovery_ticket.is_some() {
                     ui.label("Save your plan and review progress to resume next time. No remaining file operations will run.");
-                    if self.has_unsaved_plan_extras() { ui.label("Keep reviewing to apply or reset other unsaved organization or confirmed rotation choices first."); }
+                    if self.has_unsaved_plan_extras() { ui.label("Go back to apply or reset other unsaved organization or confirmed rotation choices first."); }
                 }
+                let changes = rows.summary.changes();
+                let apply_label = if retry {
+                    "Retry unfinished changes".to_string()
+                } else if changes == 0 {
+                    "Apply changes".to_string()
+                } else {
+                    format!("Apply {}", count(changes, "change", "changes"))
+                };
                 ui.add_enabled_ui(!self.busy, |ui| { ui.horizontal_wrapped(|ui| {
                     if retry && self.recovery_ticket.is_some() && matches!(self.after_apply, Some(Destination::Close))
                         && ui.add_enabled(!self.has_unsaved_plan_extras(), egui::Button::new("Save plan and quit")).clicked() { save_quit = true; }
-                    if ui.button("Keep reviewing").clicked() { cancel = true; }
-                    if retry && ui.add_enabled(!self.busy && self.recovery_ticket.is_some() && !self.plan_rows.movable.is_empty(), egui::Button::new("Edit destination…")).clicked() { edit = true; }
+                    if ui.button("Back").clicked() { cancel = true; }
+                    if retry && ui.add_enabled(!self.busy && self.recovery_ticket.is_some() && !rows.movable.is_empty(), egui::Button::new("Edit destination…")).clicked() { edit = true; }
                     if retry && ui.button("Discard unfinished plan").clicked() { discard = true; }
-                    if ui.add_enabled(!plan.actions.is_empty() && !self.busy,
-                        primary(if retry { "Retry unfinished changes" } else { "Apply these changes" })).clicked() { apply = true; }
+                    if ui.add_enabled(!plan.actions.is_empty() && !self.busy, primary(apply_label)).clicked() { apply = true; }
                 }); });
             }
         });
