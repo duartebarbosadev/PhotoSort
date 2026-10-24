@@ -14,11 +14,10 @@ impl PhotoSortApp {
         let mut categories: Vec<_> = self.delete_categories.iter().copied().collect();
         categories.sort();
         let (selected, anchor) = self.selection.snapshot();
-        let preview = self.organize_preview();
         Bookmark {
             missing_focus: false,
-            editor: self.organize_view.clone(),
-            active: preview.map_or(self.active, |p| p.active_before),
+            editor: None,
+            active: self.active,
             selected,
             anchor,
             comparison,
@@ -40,21 +39,14 @@ impl PhotoSortApp {
             delete_categories: categories,
             rotation_queue_only: self.rotation_queue_only,
             pick_focus: self.pick_focus,
-            view: preview.map_or(self.inspection_view, |p| p.view_before),
-            independent_views: preview
-                .map_or(&self.independent_views, |p| &p.independent_before)
-                .clone(),
-            sync_views: preview.map_or(self.sync_views, |p| p.sync_before),
+            view: self.inspection_view,
+            independent_views: self.independent_views.clone(),
+            sync_views: self.sync_views,
             scroll: self.library_offset,
         }
     }
     pub(super) fn checkpoint_bookmarks(&mut self) {
-        if self.scanning
-            || self.catalog.is_none()
-            || self.busy
-            || self.plan_open
-            || self.organize_editor.is_some()
-        {
+        if self.scanning || self.catalog.is_none() || self.busy || self.plan_open {
             return;
         }
         let Some(root) = self.root.clone() else {
@@ -124,7 +116,6 @@ impl PhotoSortApp {
             // reopen it on request, never from a view saved in a wide window.
             self.inspector = view.inspector && self.was_wide;
             self.group_mode = view.group_mode;
-            self.organize_view = view.editor.clone();
             self.delete_categories = view.delete_categories.iter().copied().collect();
             self.rotation_queue_only = view.rotation_queue_only;
             self.active = view.active;
@@ -141,8 +132,7 @@ impl PhotoSortApp {
         self.filter_dirty = true;
     }
     pub(super) fn restore_bookmark(&mut self) {
-        if self.organize_editor.is_some()
-            || self.scanning
+        if self.scanning
             || self.busy
             || self.close_authorized
             || self.after_apply.is_some()

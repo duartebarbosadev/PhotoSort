@@ -553,6 +553,62 @@ impl Draft {
         self.explicit.insert(new_parent);
         Ok(target)
     }
+    /// Whether `path` and every folder inside it were made in this draft,
+    /// so none of them exists on disk yet.
+    pub fn is_new_folder(&self, path: &str) -> bool {
+        !path.is_empty()
+            && self
+                .folders
+                .iter()
+                .filter(|p| within(p, path))
+                .all(|p| self.explicit.contains(p))
+            && !self
+                .directory_origins
+                .values()
+                .chain(self.empty_origins.values())
+                .any(|target| within(target, path))
+    }
+    /// Removes a folder made in this draft, with the folders inside it. Its
+    /// photos go back to their place in `initial` (the generated proposal),
+    /// following that folder through renames and moves, or to the removed
+    /// folder's parent when that place is gone or was inside it.
+    pub fn remove_folder(&mut self, path: &str, initial: &HashMap<MediaId, String>) -> Result<()> {
+        ensure!(
+            self.folders.contains(path),
+            "Source folder no longer exists"
+        );
+        ensure!(
+            self.is_new_folder(path),
+            "Only folders made here can be removed; existing folders stay on disk"
+        );
+        let parent = path.rsplit_once('/').map_or("", |(p, _)| p).to_owned();
+        let returning: Vec<(MediaId, String)> = self
+            .labels
+            .iter()
+            .filter(|(_, label)| within(label, path))
+            .map(|(id, _)| {
+                let back = initial
+                    .get(id)
+                    .and_then(|label| {
+                        if self.folders.contains(label) {
+                            Some(label.clone())
+                        } else {
+                            self.directory_origins.get(label).cloned()
+                        }
+                    })
+                    .filter(|label| !within(label, path) && self.folders.contains(label))
+                    .unwrap_or_else(|| parent.clone());
+                (*id, back)
+            })
+            .collect();
+        self.folders.retain(|p| !within(p, path));
+        self.explicit.retain(|p| !within(p, path));
+        for (id, label) in returning {
+            self.include_parents(&label);
+            self.labels.insert(id, label);
+        }
+        Ok(())
+    }
 }
 
 /// Additional files keep their current relative folder until the user edits the

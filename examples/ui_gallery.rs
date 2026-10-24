@@ -278,7 +278,7 @@ fn main() -> anyhow::Result<()> {
     for (name, open) in [
         ("11-settings", Dialog::Settings),
         ("15-about", Dialog::About),
-        ("16-organize-editor", Dialog::OrganizeEditor),
+        ("16-organize-new-folder", Dialog::OrganizeNewFolder),
         ("17-cull-compare", Dialog::Compare),
         ("18-ai-models", Dialog::Models),
         // Last: it stages Trash marks, which the folder's saved session keeps.
@@ -298,12 +298,12 @@ fn main() -> anyhow::Result<()> {
             Dialog::About => harness.state_mut().gallery_about(),
             Dialog::Compare => harness.state_mut().gallery_compare(3),
             Dialog::Models => harness.state_mut().gallery_models(),
-            Dialog::OrganizeEditor => {
+            Dialog::OrganizeNewFolder => {
                 harness.state_mut().gallery_step(Step::Organize);
                 settle(&mut harness);
                 harness.state_mut().gallery_organize_by_folders();
                 settle(&mut harness);
-                harness.state_mut().gallery_organize_editor();
+                harness.state_mut().gallery_organize_new_folder();
             }
         }
         settle(&mut harness);
@@ -358,7 +358,8 @@ fn main() -> anyhow::Result<()> {
         false,
         [1440.0, 900.0],
     )?;
-    // The folder editor over a date grouping, where most photos move.
+    // A date grouping, where most photos move: held backslash shows the
+    // folders as they are now, then one review covers moves and Trash marks.
     let folder = dated_root.clone();
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
@@ -369,13 +370,22 @@ fn main() -> anyhow::Result<()> {
     settle(&mut harness);
     harness.state_mut().gallery_organize_by_date();
     settle(&mut harness);
-    harness.state_mut().gallery_organize_editor();
+    harness.key_down(egui::Key::Backslash);
     settle(&mut harness);
     harness
         .render()
         .map_err(|e| anyhow::anyhow!("{e}"))?
-        .save(out.join("16b-organize-editor-by-date.png"))?;
-    eprintln!("16b-organize-editor-by-date");
+        .save(out.join("16b-organize-original-by-date.png"))?;
+    eprintln!("16b-organize-original-by-date");
+    harness.key_up(egui::Key::Backslash);
+    settle(&mut harness);
+    harness.state_mut().gallery_plan_review(2);
+    settle(&mut harness);
+    harness
+        .render()
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .save(out.join("16c-organize-review-changes.png"))?;
+    eprintln!("16c-organize-review-changes");
     // The notice after a crash in the previous session.
     photosort::core::crash::write_report(
         &photosort::core::crash::directory(),
@@ -402,7 +412,7 @@ enum Dialog {
     Settings,
     PlanReview,
     About,
-    OrganizeEditor,
+    OrganizeNewFolder,
     Compare,
     Models,
 }

@@ -301,3 +301,60 @@ fn entering_unchanged_filename_does_not_create_collision_rename() {
         &Default::default()
     ));
 }
+#[test]
+fn only_folders_made_in_the_draft_can_be_removed_and_their_photos_go_back() {
+    let initial = draft().labels().clone();
+    let mut d = draft();
+    d.create_folder("", "Picks").unwrap();
+    d.create_folder("Picks", "Best").unwrap();
+    d.move_photos(&[MediaId(1)], "Picks/Best").unwrap();
+    d.move_photos(&[MediaId(3)], "Picks").unwrap();
+    // Existing (proposed) folders and the root stay.
+    let before = d.clone();
+    assert!(d.remove_folder("trip", &initial).is_err());
+    assert!(d.remove_folder("", &initial).is_err());
+    assert!(!d.is_new_folder("trip/day1"));
+    assert_eq!(d, before);
+    // A new folder goes with the new folders inside it; photos go back.
+    assert!(d.is_new_folder("Picks"));
+    d.remove_folder("Picks", &initial).unwrap();
+    assert!(!d.folders().iter().any(|p| p.starts_with("Picks")));
+    assert!(d.created_folders().is_empty());
+    assert_eq!(d.labels()[&MediaId(1)], "trip/day1");
+    assert_eq!(d.labels()[&MediaId(3)], "trips");
+    assert_eq!(d.labels().len(), 4);
+    // A photo whose suggested folder was renamed follows the new name; one
+    // whose folder is gone goes to the removed folder's parent.
+    let mut d = photosort::core::organize::Draft::from_catalog(
+        &photosort::core::catalog::Catalog {
+            root: "/library".into(),
+            directories: vec!["/library/trip".into(), "/library/trip/day1".into()],
+            ..Default::default()
+        },
+        initial.clone(),
+    );
+    d.rename_folder("trip/day1", "beach").unwrap();
+    d.create_folder("trip", "Picks").unwrap();
+    d.move_photos(&[MediaId(1)], "trip/Picks").unwrap();
+    d.remove_folder("trip/Picks", &initial).unwrap();
+    assert_eq!(d.labels()[&MediaId(1)], "trip/beach");
+    assert!(
+        !d.folders().contains("trip/day1"),
+        "the old name is not planned again"
+    );
+    let mut d = draft();
+    d.create_folder("", "Picks").unwrap();
+    d.move_photos(&[MediaId(2)], "Picks").unwrap();
+    d.move_photos(&[MediaId(1)], "Picks").unwrap();
+    d.rename_folder("trip/day2", "later").unwrap();
+    d.remove_folder("Picks", &initial).unwrap();
+    assert_eq!(d.labels()[&MediaId(1)], "trip/day1");
+    // Without catalog origins the renamed folder cannot be followed.
+    assert_eq!(d.labels()[&MediaId(2)], "");
+    // A renamed existing folder is not new, nor is a new one holding it.
+    let mut d = draft();
+    d.create_folder("", "Holder").unwrap();
+    d.nest_folder("trip", "Holder").unwrap();
+    assert!(!d.is_new_folder("Holder"));
+    assert!(d.remove_folder("Holder", &initial).is_err());
+}

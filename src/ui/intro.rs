@@ -163,7 +163,6 @@ impl PhotoSortApp {
         if matches!(self.intro, Intro::Due(_))
             && !self.other_modal_active()
             && !self.departure_pending()
-            && self.organize_editor.is_none()
             && self.crash_notice.is_none()
             && self.error.is_none()
             && let Intro::Due(path) = std::mem::replace(&mut self.intro, Intro::Off)

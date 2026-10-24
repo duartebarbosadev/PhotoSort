@@ -133,7 +133,10 @@ impl PhotoSortApp {
         if egui::Popup::is_any_open(ctx) || self.navigator_popup_open(ctx) || self.modal_active() {
             return;
         }
-        if self.application_shortcuts(ctx) || ctx.egui_wants_keyboard_input() {
+        // An inline name field in Organize keeps its keys: egui lets go of
+        // its focus on Escape before this runs, and the field then cancels.
+        let naming = self.step == Step::Organize && self.board.typing;
+        if self.application_shortcuts(ctx) || ctx.egui_wants_keyboard_input() || naming {
             return;
         }
         self.video_keyboard(ctx);

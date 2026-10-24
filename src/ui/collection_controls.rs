@@ -120,9 +120,6 @@ impl Keyboard {
                 .data_mut(|d| d.get_temp_mut_or_default::<State>(self.id).focus_requested = true);
         }
     }
-    pub(super) fn has_focus(&self, ui: &egui::Ui) -> bool {
-        ui.memory(|m| m.has_focus(self.id))
-    }
     pub(super) fn finish(&self, ui: &egui::Ui, rect: egui::Rect, label: &str) {
         ui.ctx()
             .data_mut(|d| d.get_temp_mut_or_default::<State>(self.id).rect = Some(rect));

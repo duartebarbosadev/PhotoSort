@@ -171,7 +171,7 @@ fn organize_mode_location_reuses_one_metadata_run_and_cached_results() {
 
 #[test]
 fn organize_mode_keys_preserve_text_modal_and_workflow_ownership() {
-    for blocker in ["text", "editor", "help", "busy", "plan", "welcome"] {
+    for blocker in ["text", "help", "busy", "plan", "welcome"] {
         let (_temp, mut app) = super::super::compact_cull_tests::fixture();
         app.step = Step::Organize;
         let ctx = egui::Context::default();
@@ -186,10 +186,6 @@ fn organize_mode_keys_preserve_text_modal_and_workflow_ownership() {
                             .request_focus();
                     });
                 });
-            }
-            "editor" => {
-                app.open_organize_editor();
-                assert!(app.organize_editor.is_some());
             }
             "help" => app.help = true,
             "busy" => app.busy = true,

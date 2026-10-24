@@ -529,7 +529,7 @@ impl PhotoSortApp {
 pub(super) fn workflow_hint(step: Step) -> &'static str {
     match step {
         Step::Organize => {
-            "Alt+1–5 · Grouping mode   Arrows · Browse   Shift+arrows · Compare   F2 · Rename   I · Details   Shift+Enter · Review changes"
+            "Alt+1–5 · Grouping mode   Arrows · Browse   Shift+arrows · Compare   F2 · Rename   Hold \\ · Original   Shift+Enter · Review changes"
         }
         Step::EasyDelete => {
             "1/Left, 2/Right · Keep/Trash   Up/Down · Browse   Enter · Confirm   R · Reset   Shift+R · Reset all   A · Accept defaults"

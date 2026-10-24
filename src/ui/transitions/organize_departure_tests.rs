@@ -1526,3 +1526,74 @@ fn hidden_window_keeps_receiving_worker_results() {
     }
     assert_eq!(app.media.len(), 1);
 }
+#[test]
+fn one_review_applies_organize_changes_then_opens_the_staged_trash_marks() {
+    let (dir, mut app) = fixture();
+    let root = dir.path().canonicalize().unwrap();
+    app.step = Step::Organize;
+    edit(&mut app);
+    let old_id = app.media[0].id;
+    app.decisions.entry(old_id).or_default().rejected = true;
+    app.review_changes();
+    settle(&mut app);
+    assert!(app.plan_open && app.error.is_none(), "{:?}", app.error);
+    assert!(app.review_after_moves);
+    let plan = app.plan.clone().unwrap();
+    assert!(!plan.actions.is_empty());
+    assert!(
+        plan.actions
+            .iter()
+            .all(|a| !matches!(a, Action::Trash { .. } | Action::TrashDirectory(_)))
+    );
+    // Nothing has changed on disk while the plan is only reviewed.
+    assert!(root.join("Before/a.jpg").is_file());
+    app.apply_reviewed_plan();
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(root.join("After/a.jpg").is_file());
+    // The staged Trash mark follows the moved file and is reviewed next,
+    // still without touching it.
+    let new_id = MediaId::for_path(&root.join("After/a.jpg"));
+    assert!(app.decisions[&new_id].rejected);
+    assert!(app.plan_open && !app.review_after_moves);
+    assert!(matches!(
+        app.plan.as_ref().unwrap().actions.as_slice(),
+        [Action::Trash { .. }]
+    ));
+    assert!(root.join("After/a.jpg").is_file());
+}
+#[test]
+fn review_changes_without_organize_changes_reviews_the_staged_marks_directly() {
+    let (_dir, mut app) = fixture();
+    app.step = Step::Organize;
+    let id = app.media[0].id;
+    app.decisions.entry(id).or_default().rejected = true;
+    app.review_changes();
+    settle(&mut app);
+    assert!(app.plan_open && !app.review_after_moves);
+    assert!(matches!(
+        app.plan.as_ref().unwrap().actions.as_slice(),
+        [Action::Trash { .. }]
+    ));
+    // Keeping on reviewing forgets nothing and moves nothing.
+    app.plan_open = false;
+    assert!(app.decisions[&id].rejected);
+}
+#[test]
+fn moving_an_existing_folder_to_trash_shows_the_whole_folder_for_review_first() {
+    use super::super::organize_board::FolderAction;
+    let (dir, mut app) = fixture();
+    let root = dir.path().canonicalize().unwrap();
+    app.step = Step::Organize;
+    let folder = app
+        .board_library_folder("Before")
+        .expect("Before is on disk");
+    app.board_folder_action(FolderAction::TrashFolder(folder));
+    settle(&mut app);
+    assert!(app.plan_open && app.error.is_none(), "{:?}", app.error);
+    assert!(matches!(
+        app.plan.as_ref().unwrap().actions.as_slice(),
+        [Action::TrashDirectory(_)]
+    ));
+    assert!(root.join("Before/a.jpg").is_file());
+}

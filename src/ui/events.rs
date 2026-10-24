@@ -219,6 +219,13 @@ impl PhotoSortApp {
         if let Some(destination) = self.after_apply.take() {
             self.continue_departure(destination);
         }
+        // The moves of one review are applied; the staged choices are next.
+        if std::mem::take(&mut self.review_after_moves)
+            && self.retry_plan.is_none()
+            && self.decisions.values().any(|d| !d.is_empty())
+        {
+            self.review_decisions();
+        }
         if let Some(plan) = &self.retry_plan {
             self.set_status(format!(
                 "{} unfinished operations · Review changes to resolve",
@@ -590,6 +597,7 @@ impl PhotoSortApp {
     }
 
     fn on_planning_cancelled(&mut self) {
+        self.review_after_moves = false;
         self.plan_stop = None;
         self.busy = false;
         self.organize_departure = None;
@@ -611,6 +619,12 @@ impl PhotoSortApp {
             plan.description = "Apply confirmed rotation corrections".into();
         }
         self.busy = false;
+        // No moves after all: review the staged choices straight away.
+        if self.review_after_moves && plan.actions.is_empty() && self.organize_departure.is_none() {
+            self.review_after_moves = false;
+            self.review_decisions();
+            return;
+        }
         if self.organize_departure.is_some() && plan.actions.is_empty() {
             let destination = self.organize_departure.take().unwrap();
             self.set_review_plan(None);
@@ -622,6 +636,7 @@ impl PhotoSortApp {
     }
 
     fn on_apply_failed(&mut self, error: String) {
+        self.review_after_moves = false;
         self.applying_plan = None;
         self.apply_stop = None;
         self.rotation_plan = false;
@@ -704,6 +719,7 @@ impl PhotoSortApp {
             report.cancelled || !report.errors.is_empty() || !report.remaining.actions.is_empty();
         if incomplete {
             self.after_apply = None;
+            self.review_after_moves = false;
         }
         let output = report.remaining.output_root.clone();
         let retry = (!report.remaining.actions.is_empty()).then_some(report.remaining);
