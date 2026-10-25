@@ -639,19 +639,28 @@ pub fn orientation_model() -> Option<PathBuf> {
 }
 
 /// Analysis descriptors must be invalidated when any installed model changes.
+/// Subject records embed face geometry, so the face recipe is part of it too.
 pub fn analysis_signature() -> String {
-    model_signature(&[
-        "dinov2-small.onnx",
-        "aesthetic.onnx",
-        "face_detector.onnx",
-        "face_landmarks_detector.onnx",
-    ])
+    format!(
+        "{}:{}",
+        super::faces::RECIPE,
+        model_signature(&[
+            "dinov2-small.onnx",
+            "aesthetic.onnx",
+            "face_detector.onnx",
+            "face_landmarks_detector.onnx",
+        ])
+    )
 }
 pub fn aesthetic_signature() -> String {
     model_signature(&["aesthetic.onnx"])
 }
 pub fn recognition_signature() -> String {
-    model_signature(&[super::face_groups::MODEL])
+    format!(
+        "{}:{}",
+        super::face_groups::RECIPE,
+        model_signature(&[super::face_groups::MODEL])
+    )
 }
 pub fn face_signature() -> String {
     format!(

@@ -79,6 +79,106 @@ fn recognition_groups_cannot_bridge_different_people_and_are_order_independent()
         .is_none()
     );
 }
+fn put_faces(store: &Store, id: u64, vectors: Vec<Vec<f32>>) -> Record {
+    let key = Store::recognition_key(&format!("faces-{id}"), "model");
+    store
+        .put_recognition(&key, &Recognition { vectors })
+        .unwrap();
+    Record {
+        id: MediaId(id),
+        key: Some(key),
+        portrait: false,
+        date: None,
+    }
+}
+/// A unit vector with `lead` on the first axis, which sets admission order
+/// (descriptors are taken in descending order), and the rest at `degrees` in
+/// the plane of the next two axes.
+fn ordered(lead: f32, degrees: f32) -> Vec<f32> {
+    let rest = (1. - lead * lead).sqrt();
+    let mut v = vec![0.; 128];
+    v[0] = lead;
+    v[1] = rest * degrees.to_radians().cos();
+    v[2] = rest * degrees.to_radians().sin();
+    v
+}
+#[test]
+fn one_poor_face_cannot_split_a_person_but_different_people_stay_apart() {
+    // Modelled on a phone library where one person's sunglasses photos matched
+    // her other faces 0.72 on average but a tiny inset selfie only 0.47, so
+    // requiring a match with every member gave her two folders.
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::new(root.path().into(), false).unwrap();
+    let records = vec![
+        put(&store, 1, 0.),
+        put(&store, 2, 10.),
+        put(&store, 3, -10.),
+        // The inset selfie, taken before the sunglasses photos.
+        put(&store, 4, -30.),
+        // Sunglasses: 0.42 with the inset selfie, 0.71 on average.
+        put(&store, 5, 35.),
+        put(&store, 6, 40.),
+        // Someone else, alone and next to her.
+        put(&store, 7, 90.),
+        put(&store, 8, 100.),
+        put_faces(&store, 9, vec![vector(0.), vector(95.)]),
+        // A third person who matches one of his faces 0.5, but 0.42 on
+        // average, is still a third.
+        put(&store, 10, 160.),
+    ];
+    let result = face_groups::group(&records, &store, || false)
+        .unwrap()
+        .unwrap();
+    let her = result.groups[&MediaId(1)];
+    for id in 2..=6 {
+        assert_eq!(result.groups[&MediaId(id)], her, "photo {id}");
+    }
+    let him = result.groups[&MediaId(7)];
+    assert_ne!(him, her);
+    assert_eq!(result.groups[&MediaId(8)], him);
+    assert!(result.folders[&MediaId(9)].starts_with("People "));
+    assert_ne!(result.groups[&MediaId(10)], him);
+    assert_ne!(result.groups[&MediaId(10)], her);
+    assert_eq!(
+        face_groups::summarize(&result),
+        face_groups::Summary {
+            photos: 10,
+            people: 3,
+            repeated: 2
+        }
+    );
+}
+#[test]
+fn people_split_by_admission_order_merge_unless_seen_together() {
+    // `q` comes first and matches `p0` only 0.46, so it starts its own group,
+    // although it matches the other faces of that person 0.81 and 0.83.
+    let faces = [
+        ordered(0.3, 65.),
+        ordered(0.2, 0.),
+        ordered(0.1, 30.),
+        ordered(0., 35.),
+    ];
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::new(root.path().into(), false).unwrap();
+    let apart: Vec<_> = (0..4)
+        .map(|i| put_faces(&store, i, vec![faces[i as usize].clone()]))
+        .collect();
+    let result = face_groups::group(&apart, &store, || false)
+        .unwrap()
+        .unwrap();
+    assert!((1..4).all(|i| result.groups[&MediaId(i)] == result.groups[&MediaId(0)]));
+    // In one photo together they are two people, and stay two.
+    let mut together = apart[2..].to_vec();
+    together.push(put_faces(
+        &store,
+        10,
+        vec![faces[0].clone(), faces[1].clone()],
+    ));
+    let result = face_groups::group(&together, &store, || false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.folders[&MediaId(10)], "People 001 + 002");
+}
 #[test]
 fn recognition_cache_is_model_keyed_persistent_and_rejects_invalid_descriptors() {
     let root = tempfile::tempdir().unwrap();
@@ -443,8 +543,8 @@ fn native_portrait_recognition_aligns_and_groups_brightness_variants() -> anyhow
     let portrait = image::imageops::crop_imm(&demo, 0, 12, 512, 488).to_image();
     let brighter = image::imageops::brighten(&portrait, 18);
     let group = image::imageops::crop_imm(&demo, 512, 122, 512, 267).to_image();
-    // A close-up pair exercises recognition independently of the small/distant
-    // face detector limit in the untouched group scene above.
+    // A close-up pair exercises recognition independently of the small faces
+    // in the untouched group scene above.
     let other = image::imageops::resize(
         &image::imageops::crop_imm(&demo, 686, 176, 48, 60).to_image(),
         224,
@@ -477,10 +577,12 @@ fn native_portrait_recognition_aligns_and_groups_brightness_variants() -> anyhow
         println!("{}: {} verified faces", media.name(), detected.count);
         let recognized = face_groups::describe(&mut models, &asset, &detected, || false)?;
         match media.name().as_str() {
-            "group.png" => assert!(
-                recognized.vectors.is_empty(),
-                "Distant unverified faces stay unassigned"
-            ),
+            // Five people facing the camera, faces about 30 pixels wide; the
+            // sixth, half-hidden face at the edge is not verified.
+            "group.png" => {
+                assert_eq!(detected.count, 5, "Small group faces must be found");
+                assert_eq!(recognized.vectors.len(), 5);
+            }
             "pair.png" | "together.png" | "together-brighter.png" => {
                 assert!(detected.count > 1);
                 assert_eq!(
@@ -508,8 +610,8 @@ fn native_portrait_recognition_aligns_and_groups_brightness_variants() -> anyhow
         }
     }
     assert_eq!(
-        models.initializations, 3,
-        "One detector, landmark and recognition session"
+        models.initializations, 4,
+        "One detector, landmark, blendshape and recognition session"
     );
     assert_eq!(descriptors.len(), 2);
     let cosine: f32 = descriptors[0]
@@ -548,7 +650,8 @@ fn native_portrait_recognition_aligns_and_groups_brightness_variants() -> anyhow
                         };
                         assert_ne!(groups[&id("portrait.png")], 0);
                         assert_eq!(groups[&id("portrait.png")], groups[&id("brighter.png")]);
-                        assert_eq!(groups[&id("group.png")], 0);
+                        assert_ne!(groups[&id("group.png")], 0);
+                        assert!(output.folders[&id("group.png")].starts_with("People "));
                         assert_ne!(groups[&id("together.png")], 0);
                         assert_eq!(
                             groups[&id("together.png")],
@@ -577,11 +680,66 @@ fn native_portrait_recognition_aligns_and_groups_brightness_variants() -> anyhow
             }
         }
     }
-    assert_eq!(snapshots[0].model_initializations, 3);
+    assert_eq!(snapshots[0].model_initializations, 4);
     assert_eq!(snapshots[0], snapshots[1]);
     assert_eq!(snapshots[2].decodes, 0);
     assert_eq!(snapshots[2].model_initializations, 0);
     assert_eq!(snapshots[2].model_inferences, 0);
     runtime.shutdown();
+    Ok(())
+}
+
+#[cfg(feature = "onnx")]
+#[test]
+#[ignore = "requires native face models and SFace"]
+fn native_distant_faces_are_found_and_recognized_from_the_display_image() -> anyhow::Result<()> {
+    use photosort::core::{catalog::Catalog, pipeline::Pipeline};
+    // A phone-sized photo of someone standing a few metres away: about 110
+    // pixels of face in 4032x3024, so about 28 pixels in the 1024-pixel
+    // analysis image. Five fixed detector windows never saw such a face, and
+    // its eyes are too close together there for recognition.
+    let demo =
+        image::load_from_memory(include_bytes!("fixtures/recognition/sface-demo.jpg"))?.to_rgba8();
+    let portrait = image::imageops::crop_imm(&demo, 0, 12, 512, 488).to_image();
+    let small = image::imageops::resize(&portrait, 400, 381, image::imageops::FilterType::Lanczos3);
+    let mut photo = image::RgbaImage::from_pixel(4032, 3024, image::Rgba([128, 128, 128, 255]));
+    image::imageops::replace(&mut photo, &small, 2600, 1900);
+    let root = tempfile::tempdir()?;
+    portrait.save(root.path().join("near.png"))?;
+    photo.save(root.path().join("far.png"))?;
+    let catalog = Catalog::scan(root.path(), || false, |_| {})?;
+    let cache = tempfile::tempdir()?;
+    let mut pipeline = Pipeline::new(128 * 1024 * 1024, cache.path().join("pixels"));
+    let mut models = Models::default();
+    let mut descriptors = std::collections::HashMap::new();
+    for media in &catalog.media {
+        let asset = pipeline.analysis(media, || false)?;
+        let detected = faces::analyze_cancellable(&mut models, &asset, || false)?;
+        assert_eq!(detected.count, 1, "{}: one face", media.name());
+        let recognized = face_groups::describe_detailed(
+            &mut models,
+            &asset,
+            &detected,
+            || pipeline.load_neutral_cancellable(media, || false),
+            || false,
+        )?;
+        assert_eq!(recognized.vectors.len(), 1, "{}: recognized", media.name());
+        if media.name() == "far.png" {
+            assert!(
+                face_groups::describe(&mut models, &asset, &detected, || false)?
+                    .vectors
+                    .is_empty(),
+                "The analysis image alone is too small to recognize this face"
+            );
+        }
+        descriptors.insert(media.name(), recognized.vectors[0].clone());
+    }
+    let cosine: f32 = descriptors["near.png"]
+        .iter()
+        .zip(&descriptors["far.png"])
+        .map(|(a, b)| a * b)
+        .sum();
+    println!("Near and far similarity: {cosine:.4}");
+    assert!(cosine >= face_groups::MIN_SIMILARITY);
     Ok(())
 }
