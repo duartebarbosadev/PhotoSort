@@ -28,6 +28,8 @@ mod navigator;
 mod organize;
 #[path = "organize_board.rs"]
 mod organize_board;
+#[path = "people.rs"]
+mod people;
 #[path = "pick_review.rs"]
 mod pick_review;
 #[path = "plan_review.rs"]
@@ -1489,6 +1491,7 @@ impl PhotoSortApp {
             || self.browse_filters_open
             || self.pending_location_layout.is_some()
             || self.pending_faceless.is_some()
+            || self.board.confirm_reset
             || self.organize_departure.is_some()
             || self.help
             || self.update_dialog
@@ -1642,7 +1645,8 @@ impl PhotoSortApp {
                     // The step's controls sit on a panel strip above the photos.
                     egui::Frame::new()
                         .fill(PANEL)
-                        .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: 2 })
+                        // Organize's bar has no context line: as much room below as above.
+                        .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: if self.step == Step::Organize { 6 } else { 2 } })
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             if self.group_task.is_some() {
@@ -1654,8 +1658,16 @@ impl PhotoSortApp {
                             }
                             self.toolbar(ui);
                         });
+                    let margin: i8 = if compact { 8 } else { 12 };
+                    // Organize's panels sit as far below the bar as they are
+                    // from each other.
+                    let top = if self.step == Step::Organize {
+                        (organize_board::BOARD_GAP - ui.spacing().item_spacing.y).max(0.0) as i8
+                    } else {
+                        margin
+                    };
                     egui::Frame::new()
-                        .inner_margin(if compact { 8 } else { 12 })
+                        .inner_margin(egui::Margin { left: margin, right: margin, top, bottom: margin })
                         .show(ui, |ui| {
                             ui.set_min_size(ui.available_size());
                             self.navigator_panel(ui);
@@ -1710,7 +1722,9 @@ impl PhotoSortApp {
         self.handle_close_request(ctx, native_requested || smoke_requested);
         self.dialogs(ctx);
         self.intro_overlay(ctx);
-        // Include detail requested by the preview canvases drawn this frame.
+        // Include detail requested by the preview canvases drawn this frame,
+        // then a few of Organize's sharp face crops.
+        self.request_sharp_faces();
         self.runtime.inspect(self.inspection_wanted.clone());
         self.inspection_frames.retain(|slot, _| {
             self.inspection_wanted
@@ -1884,6 +1898,29 @@ impl PhotoSortApp {
         self.face_groups = Some(output);
         self.set_group_mode(GroupMode::Faces);
         self.filter_dirty = true;
+    }
+    /// Gives each person in the synthetic faces grouping a face: the middle
+    /// of one of their photos, so screenshots need no face models.
+    pub fn gallery_face_portraits(&mut self) {
+        let Some(groups) = &self.face_groups else {
+            return;
+        };
+        for (id, group) in &groups.groups {
+            if let Some(label) = groups.folders.get(id).filter(|_| *group != 0)
+                && let Some([person]) = people::people_in(label).as_deref()
+            {
+                self.board
+                    .people
+                    .portraits
+                    .entry(person.clone())
+                    .or_insert_with(|| {
+                        vec![people::Portrait {
+                            id: *id,
+                            bbox: [0.35, 0.25, 0.65, 0.55],
+                        }]
+                    });
+            }
+        }
     }
     /// Groups Organize by the current folders.
     pub fn gallery_organize_by_folders(&mut self) {

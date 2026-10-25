@@ -334,3 +334,69 @@ fn selective_reset_feeds_shared_plan_and_keeps_unrelated_edits() {
         );
     }
 }
+
+#[test]
+fn items_left_in_place_move_with_their_companions_and_can_be_left_again() {
+    let media: Vec<_> = [
+        (1, "a/one.jpg", MediaKind::Photo),
+        (2, "a/one.ARW", MediaKind::Raw),
+        (3, "a/one.mov", MediaKind::Video),
+        (4, "a/clip.mov", MediaKind::Video),
+        (5, "a/two.jpg", MediaKind::Photo),
+    ]
+    .into_iter()
+    .map(|(id, path, kind)| Media {
+        id: MediaId(id),
+        path: format!("/missing/{path}").into(),
+        kind,
+        fingerprint: Default::default(),
+    })
+    .collect();
+    // The grouping places only two.jpg; the rest stay where they are.
+    let initial: HashMap<_, _> = [(MediaId(5), "Person 001".to_owned())].into();
+    let mut draft = Draft::new(initial.clone());
+    draft.create_folder("", "Trip").unwrap();
+    // Unknown items and missing folders are still refused, atomically.
+    let before = draft.clone();
+    assert!(
+        draft
+            .move_selection(&files(&[1, 99]), "Person 001", &media, true)
+            .is_err()
+    );
+    assert!(
+        draft
+            .move_selection(&files(&[1]), "missing", &media, true)
+            .is_err()
+    );
+    assert_eq!(draft, before);
+    // A photo left in place moves with its RAW, not its same-name video.
+    draft
+        .move_selection(&files(&[1]), "Person 001", &media, true)
+        .unwrap();
+    for id in [1, 2] {
+        assert_eq!(draft.labels()[&MediaId(id)], "Person 001");
+    }
+    assert!(!draft.labels().contains_key(&MediaId(3)));
+    // Without companions it moves alone; a video moves too.
+    let mut alone = before.clone();
+    alone
+        .move_selection(&files(&[1, 4]), "Trip", &media, false)
+        .unwrap();
+    assert_eq!(alone.labels()[&MediaId(1)], "Trip");
+    assert_eq!(alone.labels()[&MediaId(4)], "Trip");
+    assert!(!alone.labels().contains_key(&MediaId(2)));
+    // Left in place again, they lose their destination, companions too.
+    draft.keep_in_place(&[MediaId(1)].into(), &media, true);
+    assert!(!draft.labels().contains_key(&MediaId(1)));
+    assert!(!draft.labels().contains_key(&MediaId(2)));
+    assert_eq!(draft.labels()[&MediaId(5)], "Person 001");
+    // Removing a new folder returns what it held: placed items to their
+    // proposal, items left in place to no destination.
+    draft
+        .move_selection(&files(&[1, 5]), "Trip", &media, true)
+        .unwrap();
+    draft.remove_folder("Trip", &initial).unwrap();
+    assert_eq!(draft.labels()[&MediaId(5)], "Person 001");
+    assert!(!draft.labels().contains_key(&MediaId(1)));
+    assert!(!draft.labels().contains_key(&MediaId(2)));
+}

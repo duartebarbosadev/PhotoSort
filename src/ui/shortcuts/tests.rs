@@ -361,7 +361,11 @@ fn modified_unbound_keys_do_not_change_photos_in_any_workflow() {
 }
 #[test]
 fn find_shortcut_replaces_existing_query_in_the_real_toolbar() {
-    for step in Step::ALL.into_iter().filter(|step| *step != Step::PickBest) {
+    // Organize's search sits on its board; see organize_board's tests.
+    for step in Step::ALL
+        .into_iter()
+        .filter(|step| !matches!(step, Step::PickBest | Step::Organize))
+    {
         for width in [640.0, 1280.0] {
             for modifiers in [egui::Modifiers::CTRL, egui::Modifiers::COMMAND] {
                 let mut app = app(step);

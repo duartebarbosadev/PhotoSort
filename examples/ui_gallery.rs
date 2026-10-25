@@ -235,6 +235,8 @@ fn main() -> anyhow::Result<()> {
             if name.contains("faces") {
                 harness.state_mut().gallery_organize_by_faces();
                 settle(&mut harness);
+                harness.state_mut().gallery_face_portraits();
+                settle(&mut harness);
                 harness.state_mut().gallery_select(1);
                 settle(&mut harness);
             }

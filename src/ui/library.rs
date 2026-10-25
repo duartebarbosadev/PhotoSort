@@ -231,10 +231,12 @@ impl PhotoSortApp {
                         FontId::proportional(11.0),
                         if rejected { RED } else { ACCENT },
                     );
+                    // List rows have no selection circle.
                     self.library_response(
                         ui,
                         response.on_hover_text(media.path.display().to_string()),
                         id,
+                        None,
                     );
                 }
             });
@@ -392,14 +394,11 @@ impl PhotoSortApp {
             active,
             comparison || selected,
         );
+        let check = image_rect.right_bottom() - egui::vec2(S2 + 1.0, S2 + 1.0);
         if self.library_selection_mode()
             && shows_check(selected, hovered, active, self.selection.len())
         {
-            check_mark(
-                &painter,
-                image_rect.right_bottom() - egui::vec2(S2 + 1.0, S2 + 1.0),
-                selected,
-            );
+            check_mark(&painter, check, selected);
         }
         if captioned {
             let name = media.name();
@@ -451,6 +450,7 @@ impl PhotoSortApp {
             ui,
             response.on_hover_text(media.path.display().to_string()),
             id,
+            Some(check),
         );
     }
     /// All layouts use the same selection, comparison and staged mutation paths.
@@ -462,7 +462,15 @@ impl PhotoSortApp {
             Sense::click()
         }
     }
-    fn library_response(&mut self, ui: &egui::Ui, response: egui::Response, id: MediaId) {
+    /// `check` is where the tile draws its selection circle: a click there
+    /// adds or removes the photo, as Ctrl/Cmd-click does.
+    fn library_response(
+        &mut self,
+        ui: &egui::Ui,
+        response: egui::Response,
+        id: MediaId,
+        check: Option<egui::Pos2>,
+    ) {
         if self.photo_drag_enabled() && response.drag_started() {
             // Drag the whole selection when the tile belongs to it.
             let ids = if self.selection.contains(id) {
@@ -476,7 +484,14 @@ impl PhotoSortApp {
             self.pending_bookmark = None;
             if self.library_selection_mode() {
                 let modifiers = ui.input(|i| i.modifiers);
-                self.select_library(id, modifiers.command || modifiers.ctrl, modifiers.shift);
+                let on_check = check
+                    .zip(response.interact_pointer_pos())
+                    .is_some_and(|(check, pointer)| check.distance(pointer) <= CHECK_RADIUS + 3.0);
+                self.select_library(
+                    id,
+                    modifiers.command || modifiers.ctrl || on_check,
+                    modifiers.shift,
+                );
             } else if ui.input(|i| i.modifiers.command || i.modifiers.shift) {
                 self.compare_with(id);
                 self.review = true;
@@ -676,8 +691,9 @@ fn shows_check(selected: bool, hovered: bool, active: bool, selected_count: usiz
 
 /// Selection mode's check: a filled accent disc when selected, an empty ring
 /// on hover to show the tile can be picked.
+const CHECK_RADIUS: f32 = 9.0;
 fn check_mark(painter: &egui::Painter, center: egui::Pos2, selected: bool) {
-    const RADIUS: f32 = 9.0;
+    const RADIUS: f32 = CHECK_RADIUS;
     if selected {
         painter.circle_filled(center, RADIUS, ACCENT);
         painter.text(

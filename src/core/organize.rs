@@ -388,6 +388,8 @@ impl Draft {
     }
     /// All selected items move or none do. Companion expansion belongs here so
     /// buttons and drag/drop cannot produce different RAW/JPEG destinations.
+    /// Items the grouping leaves where they are (no destination yet) can be
+    /// moved too: that is how a missed face or place is corrected.
     pub fn move_selection(
         &mut self,
         selection: &Selection,
@@ -395,10 +397,11 @@ impl Draft {
         media: &[Media],
         companions: bool,
     ) -> Result<()> {
-        self.validate_move(selection, target)?;
-        let mut files = selection.files.clone();
-        self.expand_companions(&mut files, media, companions);
         let mut next = self.clone();
+        next.place(&selection.files, target, media, companions)?;
+        next.validate_move(selection, target)?;
+        let mut files = selection.files.clone();
+        next.expand_companions(&mut files, media, companions);
         // Explicitly selected files move directly to the target, matching the
         // reference's file-then-folder order for mixed selections.
         next.move_photos(&files.into_iter().collect::<Vec<_>>(), target)?;
@@ -407,6 +410,60 @@ impl Draft {
         }
         *self = next;
         Ok(())
+    }
+    /// Gives selected items without a destination `target` as their
+    /// destination, and with `companions` their RAW, JPEG and edit files that
+    /// have none either. Unknown ids are left for validation to reject.
+    fn place(
+        &mut self,
+        files: &HashSet<MediaId>,
+        target: &str,
+        media: &[Media],
+        companions: bool,
+    ) -> Result<()> {
+        let unplaced = |m: &&Media| !self.labels.contains_key(&m.id);
+        let selected: HashSet<MediaId> = media
+            .iter()
+            .filter(unplaced)
+            .filter(|m| files.contains(&m.id))
+            .map(|m| m.id)
+            .collect();
+        if selected.is_empty() {
+            return Ok(());
+        }
+        ensure!(
+            self.folders.contains(target),
+            "Destination folder no longer exists"
+        );
+        // A RAW and its JPEG left in place stay together when one is moved.
+        let photo = |m: &Media| companions && m.kind != MediaKind::Video;
+        let stems: HashSet<_> = media
+            .iter()
+            .filter(|m| selected.contains(&m.id) && photo(m))
+            .map(|m| m.path.with_extension(""))
+            .collect();
+        let placed: Vec<MediaId> = media
+            .iter()
+            .filter(unplaced)
+            .filter(|m| {
+                selected.contains(&m.id) || (photo(m) && stems.contains(&m.path.with_extension("")))
+            })
+            .map(|m| m.id)
+            .collect();
+        for id in placed {
+            self.labels.insert(id, target.to_owned());
+        }
+        Ok(())
+    }
+    /// Leaves items where they are on disk: they lose their destination, as
+    /// items the grouping does not place have none. With `companions`, a
+    /// photo's RAW, JPEG and edit files stay with it.
+    pub fn keep_in_place(&mut self, ids: &HashSet<MediaId>, media: &[Media], companions: bool) {
+        let mut files = ids.clone();
+        self.expand_companions(&mut files, media, companions);
+        for id in files {
+            self.labels.remove(&id);
+        }
     }
     fn expand_companions(&self, files: &mut HashSet<MediaId>, media: &[Media], companions: bool) {
         if companions {
@@ -484,6 +541,23 @@ impl Draft {
     }
     /// Rewrite the whole subtree atomically. Refuse ambiguous folder merges.
     fn relocate(&mut self, source: &str, target: &str) -> Result<String> {
+        ensure!(
+            !self.folders.contains(target) || source == target,
+            "Destination folder already exists"
+        );
+        self.relocate_into(source, target)
+    }
+    /// Combines `source` into the existing folder `target`: everything in
+    /// it, subfolders included, goes there and `source` is gone. Used when
+    /// two people folders turn out to be the same person.
+    pub fn merge_folder(&mut self, source: &str, target: &str) -> Result<String> {
+        ensure!(
+            self.folders.contains(target),
+            "Destination folder no longer exists"
+        );
+        self.relocate_into(source, target)
+    }
+    fn relocate_into(&mut self, source: &str, target: &str) -> Result<String> {
         ensure!(!source.is_empty(), "The library root cannot be moved");
         ensure!(
             self.folders.contains(source),
@@ -493,10 +567,6 @@ impl Draft {
             return Ok(target.into());
         }
         ensure!(!within(target, source), "A folder cannot contain itself");
-        ensure!(
-            !self.folders.contains(target),
-            "Destination folder already exists"
-        );
         let rewrite = |path: &str| {
             if within(path, source) {
                 format!("{target}{}", &path[source.len()..])
@@ -582,30 +652,37 @@ impl Draft {
             "Only folders made here can be removed; existing folders stay on disk"
         );
         let parent = path.rsplit_once('/').map_or("", |(p, _)| p).to_owned();
-        let returning: Vec<(MediaId, String)> = self
+        // Items the grouping left where they are (no initial destination)
+        // are left there again.
+        let returning: Vec<(MediaId, Option<String>)> = self
             .labels
             .iter()
             .filter(|(_, label)| within(label, path))
             .map(|(id, _)| {
-                let back = initial
-                    .get(id)
-                    .and_then(|label| {
-                        if self.folders.contains(label) {
-                            Some(label.clone())
-                        } else {
-                            self.directory_origins.get(label).cloned()
-                        }
-                    })
+                let back = initial.get(id).map(|label| {
+                    if self.folders.contains(label) {
+                        Some(label.clone())
+                    } else {
+                        self.directory_origins.get(label).cloned()
+                    }
                     .filter(|label| !within(label, path) && self.folders.contains(label))
-                    .unwrap_or_else(|| parent.clone());
+                    .unwrap_or_else(|| parent.clone())
+                });
                 (*id, back)
             })
             .collect();
         self.folders.retain(|p| !within(p, path));
         self.explicit.retain(|p| !within(p, path));
         for (id, label) in returning {
-            self.include_parents(&label);
-            self.labels.insert(id, label);
+            match label {
+                Some(label) => {
+                    self.include_parents(&label);
+                    self.labels.insert(id, label);
+                }
+                None => {
+                    self.labels.remove(&id);
+                }
+            }
         }
         Ok(())
     }
