@@ -386,6 +386,43 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .save(out.join("16c-organize-review-changes.png"))?;
     eprintln!("16c-organize-review-changes");
+    // Photos from several folders gathered into a new one: its card groups
+    // them by the folder each comes from. A library with subfolders, so the
+    // photos really come from different folders.
+    let sources = tempfile::tempdir()?;
+    let sources_root = sources.path().join("Photos");
+    let samples: Vec<_> = std::fs::read_dir(&root)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .map(|e| e.path())
+        .collect();
+    for (i, folder) in ["2023-04-28/group-1", "2023-04-28/group-2", "2024-04-18"]
+        .into_iter()
+        .enumerate()
+    {
+        let dir = sources_root.join(folder);
+        std::fs::create_dir_all(&dir)?;
+        for sample in samples.iter().skip(i * 2).take(2) {
+            std::fs::copy(sample, dir.join(sample.file_name().unwrap()))?;
+        }
+    }
+    let folder = sources_root.clone();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(|cc| PhotoSortApp::new(cc, Some(folder)));
+    settle(&mut harness);
+    harness.state_mut().gallery_step(Step::Organize);
+    settle(&mut harness);
+    harness.state_mut().gallery_organize_by_folders();
+    settle(&mut harness);
+    harness.state_mut().gallery_organize_gather(3);
+    settle(&mut harness);
+    harness
+        .render()
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .save(out.join("16d-organize-review-sources.png"))?;
+    eprintln!("16d-organize-review-sources");
     // The notice after a crash in the previous session.
     photosort::core::crash::write_report(
         &photosort::core::crash::directory(),

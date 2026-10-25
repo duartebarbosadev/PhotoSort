@@ -36,6 +36,28 @@ fn plan() -> Plan {
     }
 }
 
+/// The accessible texts of the review dialog after a few frames at `size`.
+fn dialog_texts(app: &mut PhotoSortApp, ctx: &egui::Context, size: egui::Vec2) -> Vec<String> {
+    let mut output = None;
+    for _ in 0..3 {
+        output = Some(ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.plan_review_dialog(ctx)
+            },
+        ));
+    }
+    let tree = output.unwrap().platform_output.accesskit_update.unwrap();
+    tree.nodes
+        .iter()
+        .filter_map(|(_, n)| n.value().or(n.label()).map(str::to_string))
+        .collect()
+}
+
 #[test]
 fn review_rows_cover_every_companion_and_refresh_on_plan_replacement() {
     let temp = tempfile::tempdir().unwrap();
@@ -59,52 +81,47 @@ fn review_rows_cover_every_companion_and_refresh_on_plan_replacement() {
     assert_eq!(app.plan_rows.at(1), (1, 0));
     app.set_review_plan(None);
     assert_eq!(app.plan_rows.len(), 0);
-    assert!(app.plan_rows.lines.is_empty() && app.plan_rows.folders.is_empty());
+    assert!(app.plan_rows.folders.is_empty() && app.plan_rows.trash.is_empty());
     app.runtime.shutdown();
 }
 
 #[test]
 fn plain_view_counts_photos_and_groups_them_by_folder() {
-    let mut index = Rows::default();
-    index.replace(Some(&plan()));
+    let temp = tempfile::tempdir().unwrap();
+    let mut app =
+        PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
+    app.root = Some("/library".into());
+    app.set_review_plan(Some(plan()));
+    let rows = &app.plan_rows;
     // A photo with its RAW and sidecar is one photo; renames in place keep their card.
+    assert_eq!(rows.folders.len(), 2);
     assert_eq!(
-        index.lines,
-        [
-            Line::Into(0),
-            Line::Moved(0),
-            Line::Moved(1),
-            Line::Into(1),
-            Line::Trash,
-            Line::Trashed(2),
-        ]
+        rows.folders[0].groups,
+        [("/library".into(), vec![Item::Group(0), Item::Group(1)])]
     );
-    assert!(!index.folders[0].new && !index.folders[0].arrivals);
-    assert!(index.folders[1].new && index.folders[1].photos == 0);
+    assert!(!rows.folders[0].new && !rows.folders[0].arrivals);
+    assert!(rows.folders[1].new && rows.folders[1].groups.is_empty());
+    let plan = app.plan.as_ref().unwrap();
     assert_eq!(
-        index
-            .summary
-            .parts()
-            .into_iter()
-            .map(|(p, _)| p)
-            .collect::<Vec<_>>(),
-        [
-            "Rename 2 photos",
-            "Create 1 empty folder",
-            "Move 1 photo to the Trash"
-        ]
+        app.card_sentence(plan, &rows.folders[0]),
+        "2 photos in library get new names"
     );
-    assert_eq!(index.summary.changes(), 4);
-    let text = |line| {
-        plain_line(&plan(), &index, line, Some(Path::new("/library")))
-            .into_iter()
-            .map(|(t, ..)| t.trim().to_string())
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    assert_eq!(text(Line::Moved(0)), "sample.JPG → keepers.JPG + RAW, XMP");
-    assert_eq!(text(Line::Trashed(2)), "rejected.jpg + XMP in library");
-    assert_eq!(text(Line::Into(1)), "New folder Empty stays empty for now");
+    assert_eq!(
+        app.card_sentence(plan, &rows.folders[1]),
+        "Empty is created and stays empty for now"
+    );
+    assert_eq!(rows.trash, [Item::Group(2)]);
+    assert_eq!(
+        lead_and_extras(&[Path::new("a.ARW"), Path::new("a.JPG"), Path::new("a.xmp")]),
+        (1, "+ RAW, XMP".to_string())
+    );
+    // The sentence and the button read the same counts.
+    assert_eq!(
+        app.review_sentence(app.plan.as_ref().unwrap(), rows),
+        "You're about to rename 2 photos, create 1 empty folder and send 1 photo to the Trash."
+    );
+    assert_eq!(rows.summary.apply_label(), "Apply all changes");
+    app.runtime.shutdown();
 }
 
 /// The Organize plan from a sample_images_2 screenshot: photos from two
@@ -149,50 +166,44 @@ fn organize_review_reads_as_plain_sentences_without_full_paths() {
     theme_install(&ctx);
     ctx.enable_accesskit();
     for size in [egui::vec2(600.0, 500.0), egui::vec2(1280.0, 800.0)] {
-        let mut output = None;
-        for _ in 0..3 {
-            output = Some(ctx.run_test(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                    ..Default::default()
-                },
-                |ui| {
-                    let ctx = &ui.ctx().clone();
-                    app.plan_review_dialog(ctx)
-                },
-            ));
-        }
-        let tree = output.unwrap().platform_output.accesskit_update.unwrap();
-        let texts: Vec<String> = tree
-            .nodes
-            .iter()
-            .filter_map(|(_, n)| n.value().or(n.label()).map(str::to_string))
-            .collect();
+        let texts = dialog_texts(&mut app, &ctx, size);
         for expected in [
-            "Move 3 photos into 1 new folder",
+            "You're about to move 3 photos into a new folder \"h\".",
             "Nothing in library has changed yet.",
-            "Into 2025-10-25 / group-2 / h new folder 3 photos",
-            "a.heic from 2025-10-25 / group-6",
-            "c.heic from 2025-10-25 / group-2",
+            "Moving",
+            // The card says where its photos go and where they come from,
+            // then shows them by source folder.
+            "h (in 2025-10-25 / group-2) gets 3 photos from 2 folders, new folder",
+            "From 2025-10-25 / group-2 · 1 photo",
+            "From 2025-10-25 / group-6 · 2 photos",
+            "a.heic",
+            "c.heic",
             "Back",
-            // The new folder counts, as in Organize's "Review 4 changes".
-            "Apply 4 changes",
+            // The button says what it does, with the sentence's count.
+            "Move 3 photos",
         ] {
             assert!(texts.iter().any(|t| t == expected), "{expected}: {texts:?}");
         }
-        // Folder cleanup is one quiet, conditional line, never one row per folder.
-        assert!(texts.iter().any(|t| t.starts_with(
-            "Afterwards, these folders are removed if nothing is left in them: 2025-10-25 / group-6, 2025-10-25 / group-2, 2025-10-25"
-        )));
+        if size.y > 600.0 {
+            // Folder cleanup is one quiet, conditional line, never one row per folder.
+            assert!(texts.iter().any(|t| t.starts_with(
+                "Folders left empty afterwards are removed: 2025-10-25 / group-6, 2025-10-25 / group-2, 2025-10-25"
+            )), "{texts:?}");
+        }
         assert!(!texts.iter().any(|t| t.contains("Remove folder if empty")
             || t.contains("/library/")
-            || t.contains("Library:")));
+            || t.starts_with("Apply")));
     }
+    assert_eq!(app.stats.decodes, 0);
     app.runtime.shutdown();
 }
 
 #[test]
 fn plain_view_virtualizes_hundreds_of_thousands_of_photos() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app =
+        PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
+    app.root = Some("/library".into());
     let ctx = egui::Context::default();
     theme_install(&ctx);
     ctx.enable_accesskit();
@@ -208,10 +219,10 @@ fn plain_view_virtualizes_hundreds_of_thousands_of_photos() {
         output_root: Some("/library".into()),
         ..Default::default()
     };
-    let mut index = Rows::default();
-    index.replace(Some(&plan));
-    assert_eq!(index.lines.len(), 100_001);
-    assert_eq!(index.folders.len(), 1);
+    let mut rows = Rows::default();
+    rows.replace(Some(&plan), &[]);
+    assert_eq!(rows.folders.len(), 1);
+    assert_eq!(rows.folders[0].photos(), 100_000);
     let mut scroll = None;
     for at_end in [false, true] {
         if at_end {
@@ -231,9 +242,8 @@ fn plain_view_virtualizes_hundreds_of_thousands_of_photos() {
                 },
                 |ui| {
                     egui::CentralPanel::default().show(ui, |ui| {
-                        let shown =
-                            plain_rows(ui, &plan, &index, Some(Path::new("/library")), 220.0);
-                        assert!(shown.inner <= 10, "{} rendered lines", shown.inner);
+                        let shown = app.plain_view(ui, &plan, &mut rows, 300.0);
+                        assert!(shown.inner <= 8, "{} rendered pieces", shown.inner);
                         scroll = Some((shown.id, shown.state));
                     });
                 },
@@ -241,9 +251,9 @@ fn plain_view_virtualizes_hundreds_of_thousands_of_photos() {
         }
         let tree = output.unwrap().platform_output.accesskit_update.unwrap();
         let expected = if at_end {
-            "99999.jpg from library"
+            "99999.jpg"
         } else {
-            "Into Sorted 100000 photos"
+            "100000 photos from library move to Sorted"
         };
         assert!(
             tree.nodes
@@ -253,6 +263,9 @@ fn plain_view_virtualizes_hundreds_of_thousands_of_photos() {
         );
         assert!(tree.nodes.len() < 100, "{} nodes", tree.nodes.len());
     }
+    // Rows past the end were laid out once, never drawn.
+    assert!(rows.layout.len() > 10_000);
+    app.runtime.shutdown();
 }
 
 #[test]
@@ -272,7 +285,7 @@ fn review_virtualization_reaches_last_file_without_materializing_other_rows() {
             .collect(),
     }];
     let mut index = Rows::default();
-    index.replace(Some(&plan));
+    index.replace(Some(&plan), &[]);
     assert_eq!(index.ends.len(), 1);
     let mut scroll = None;
     for at_end in [false, true] {
@@ -371,10 +384,7 @@ fn shared_review_exposes_names_and_keeps_apply_visible_in_compact_and_retry_view
                 let names: &[&str] = if retry {
                     &["From  sample.ARW", "To    keepers.ARW"]
                 } else {
-                    &[
-                        "sample.JPG → keepers.JPG + RAW, XMP",
-                        "To the Trash 1 photo",
-                    ]
+                    &["Going to the Trash", "rejected.jpg"]
                 };
                 if retry {
                     assert!(tree.nodes.iter().any(|(_, n)| {
@@ -395,7 +405,7 @@ fn shared_review_exposes_names_and_keeps_apply_visible_in_compact_and_retry_view
                     if retry {
                         "Retry unfinished changes"
                     } else {
-                        "Apply 4 changes"
+                        "Apply all changes"
                     },
                 ] {
                     let n = tree
@@ -412,6 +422,7 @@ fn shared_review_exposes_names_and_keeps_apply_visible_in_compact_and_retry_view
                         "{step:?} {size:?} retry={retry}: {label} {bounds:?}"
                     );
                 }
+                // Plan paths outside the library have no thumbnails to load.
                 assert!(
                     app.requested.is_empty()
                         && app.analysis_run.is_none()
@@ -422,6 +433,112 @@ fn shared_review_exposes_names_and_keeps_apply_visible_in_compact_and_retry_view
             }
         }
     }
+    app.runtime.shutdown();
+}
+
+#[test]
+fn review_names_lossless_pixel_rotations() {
+    use crate::core::metadata::WriteTarget;
+    let temp = tempfile::tempdir().unwrap();
+    let mut app =
+        PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
+    app.root = Some("/library".into());
+    app.set_review_plan(Some(Plan {
+        actions: vec![Action::Metadata {
+            source: source("scan.bmp"),
+            sidecar_before: None,
+            target: WriteTarget::Pixels,
+            rating: None,
+            orientation: Some(6),
+        }],
+        ..Default::default()
+    }));
+    app.plan_open = true;
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let texts = dialog_texts(&mut app, &ctx, egui::vec2(900.0, 700.0));
+    for expected in [
+        "You're about to rotate 1 photo.",
+        "Ratings and rotations",
+        "scan.bmp: Rotate right (re-saves the image)",
+        "Rotate 1 photo",
+    ] {
+        assert!(texts.iter().any(|t| t == expected), "{expected}: {texts:?}");
+    }
+    app.runtime.shutdown();
+}
+
+/// One review covers Organize's moves and the staged ratings: one Apply
+/// applies the moves, then plans and applies the ratings for the moved files
+/// without opening a second review.
+#[test]
+fn one_review_applies_moves_then_staged_choices_without_a_second_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("Before")).unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/samples/jpg_sample.jpg"),
+        root.join("Before/a.jpg"),
+    )
+    .unwrap();
+    let catalog = crate::core::catalog::Catalog::scan(&root, || false, |_| {}).unwrap();
+    let mut app = PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, root.join("cache")), None);
+    app.root = Some(root.clone());
+    app.output = root.display().to_string();
+    app.media = catalog.media.clone();
+    app.catalog = Some(Arc::new(catalog));
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+    app.step = Step::Organize;
+    let id = app.media[0].id;
+    app.file_names.insert(id, "b".into());
+    app.decisions.insert(
+        id,
+        Decision {
+            rating: Some(3),
+            ..Default::default()
+        },
+    );
+    let settle = |app: &mut PhotoSortApp| {
+        let until = std::time::Instant::now() + crate::test_support::worker_patience();
+        loop {
+            let expired = std::time::Instant::now() >= until;
+            app.poll(&egui::Context::default());
+            if !app.busy && !app.scanning && app.metadata_run.is_none() {
+                break;
+            }
+            assert!(!expired, "worker did not finish");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    app.review_changes();
+    settle(&mut app);
+    assert!(app.plan_open && app.error.is_none(), "{:?}", app.error);
+    // The staged rating is in the same review, under its own heading.
+    assert_eq!(app.plan_rows.updates.len(), 1);
+    assert_eq!(
+        app.review_sentence(app.plan.as_ref().unwrap(), &app.plan_rows),
+        "You're about to rename 1 photo and rate 1 photo."
+    );
+    assert_eq!(app.plan_rows.summary.apply_label(), "Apply all changes");
+    app.apply_reviewed_plan();
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.retry_plan.is_none() && !app.plan_open && !app.apply_planned);
+    // Each apply journals on its own; a finished chain leaves none behind.
+    assert!(app.recovery_ticket.is_none());
+    assert!(root.join("Before/b.jpg").exists());
+    // The rating was applied too: nothing is left staged.
+    assert!(
+        app.decisions.values().all(|d| d.is_empty()),
+        "{:?}",
+        app.decisions
+    );
     app.runtime.shutdown();
 }
 #[test]
@@ -493,50 +610,28 @@ fn destination_editor_virtualizes_large_plans_and_keeps_compact_controls_visible
 }
 
 #[test]
-fn review_names_lossless_pixel_rotations() {
-    use crate::core::metadata::WriteTarget;
+fn card_sentences_name_one_source_or_count_several() {
     let temp = tempfile::tempdir().unwrap();
     let mut app =
         PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
     app.root = Some("/library".into());
-    app.set_review_plan(Some(Plan {
-        actions: vec![Action::Metadata {
-            source: source("scan.bmp"),
-            sidecar_before: None,
-            target: WriteTarget::Pixels,
-            rating: None,
-            orientation: Some(6),
-        }],
-        ..Default::default()
-    }));
-    app.plan_open = true;
-    let ctx = egui::Context::default();
-    theme_install(&ctx);
-    ctx.enable_accesskit();
-    let mut output = None;
-    for _ in 0..3 {
-        output = Some(ctx.run_test(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(900.0, 700.0),
-                )),
-                ..Default::default()
-            },
-            |ui| {
-                let ctx = &ui.ctx().clone();
-                app.plan_review_dialog(ctx)
-            },
-        ));
-    }
-    let tree = output.unwrap().platform_output.accesskit_update.unwrap();
-    assert!(
-        tree.nodes
-            .iter()
-            .any(|(_, n)| n.value() == Some("Rotate 1 photo"))
+    let mut plan = organize_plan();
+    // Only the group-6 photos: one source folder.
+    plan.actions.remove(2);
+    app.set_review_plan(Some(plan));
+    let rows = &app.plan_rows;
+    assert_eq!(
+        app.card_sentence(app.plan.as_ref().unwrap(), &rows.folders[0]),
+        "2 photos from 2025-10-25 / group-6 move to h (in 2025-10-25 / group-2)"
     );
-    assert!(tree.nodes.iter().any(|(_, n)| {
-        n.value().or(n.label()) == Some("scan.bmp rotate right (re-saves the image)")
-    }));
+    // One source is named by the sentence, so the card has no source heading.
+    assert!(rows.layout.is_empty());
+    app.plan_rows.lay_out(800.0);
+    assert!(
+        !app.plan_rows
+            .layout
+            .iter()
+            .any(|p| matches!(p.block, Block::SourceHead(..)))
+    );
     app.runtime.shutdown();
 }

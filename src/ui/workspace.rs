@@ -265,6 +265,9 @@ pub struct PhotoSortApp {
     /// Review changes in Organize shows the moves first; once they are
     /// applied, the staged Trash marks, ratings and rotations come next.
     review_after_moves: bool,
+    /// The next planned file plan applies without a review: the staged
+    /// choices of a review that also covered moves.
+    apply_planned: bool,
     file_names: HashMap<MediaId, String>,
     status: String,
     status_scope: Option<(Step, Option<GroupMode>)>,
@@ -502,6 +505,7 @@ impl PhotoSortApp {
             organize_cancelled: false,
             organize_preview_requested: false,
             review_after_moves: false,
+            apply_planned: false,
             file_names: HashMap::new(),
             status_scope: None,
             status: "Ready when you are".into(),
@@ -1899,6 +1903,23 @@ impl PhotoSortApp {
             .collect();
         self.selection.replace(ids.iter().copied());
         self.board_new_folder("", &ids);
+    }
+    /// Closes the review, then gathers one photo from each of the first
+    /// `count` folders of the board into a new folder and reviews again.
+    pub fn gallery_organize_gather(&mut self, count: usize) {
+        self.plan_open = false;
+        let mut seen = HashSet::new();
+        let ids: Vec<_> = self
+            .filtered
+            .iter()
+            .map(|&i| &self.media[i])
+            .filter(|m| !self.decision(m.id).rejected && seen.insert(self.label_for(m)))
+            .take(count)
+            .map(|m| m.id)
+            .collect();
+        self.board_new_folder("", &ids);
+        self.board.editing = None;
+        self.review_changes();
     }
     /// Groups Organize by capture date.
     pub fn gallery_organize_by_date(&mut self) {

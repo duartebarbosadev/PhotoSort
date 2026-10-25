@@ -468,11 +468,14 @@ fn case_only_file_edit_uses_shared_review_and_preserves_staged_rating_after_relo
     }
     let tree = output.unwrap().platform_output.accesskit_update.unwrap();
     // The plain view names the folder once and the photo by its names.
-    for label in ["In Before 1 photo".to_string(), "a.jpg → A.jpg".to_string()] {
+    for label in [
+        "1 photo in Before gets a new name".to_string(),
+        "a.jpg → A.jpg".to_string(),
+    ] {
         assert!(
             tree.nodes
                 .iter()
-                .any(|(_, n)| n.value() == Some(label.as_str())),
+                .any(|(_, n)| n.value().or(n.label()) == Some(label.as_str())),
             "{label}"
         );
     }
@@ -1523,7 +1526,7 @@ fn hidden_window_keeps_receiving_worker_results() {
     assert_eq!(app.media.len(), 1);
 }
 #[test]
-fn one_review_applies_organize_changes_then_opens_the_staged_trash_marks() {
+fn one_review_shows_organize_changes_with_the_staged_trash_marks() {
     let (dir, mut app) = fixture();
     let root = dir.path().canonicalize().unwrap();
     app.step = Step::Organize;
@@ -1536,27 +1539,20 @@ fn one_review_applies_organize_changes_then_opens_the_staged_trash_marks() {
     assert!(app.review_after_moves);
     let plan = app.plan.clone().unwrap();
     assert!(!plan.actions.is_empty());
+    // The moves are planned first; the Trash mark is planned for the moved
+    // file once they are applied, by the same Apply, with no second review.
     assert!(
         plan.actions
             .iter()
             .all(|a| !matches!(a, Action::Trash { .. } | Action::TrashDirectory(_)))
     );
+    let sentence = app.review_sentence(&plan, &app.plan_rows);
+    assert!(
+        sentence.ends_with("send 1 photo to the Trash."),
+        "{sentence}"
+    );
     // Nothing has changed on disk while the plan is only reviewed.
     assert!(root.join("Before/a.jpg").is_file());
-    app.apply_reviewed_plan();
-    settle(&mut app);
-    assert!(app.error.is_none(), "{:?}", app.error);
-    assert!(root.join("After/a.jpg").is_file());
-    // The staged Trash mark follows the moved file and is reviewed next,
-    // still without touching it.
-    let new_id = MediaId::for_path(&root.join("After/a.jpg"));
-    assert!(app.decisions[&new_id].rejected);
-    assert!(app.plan_open && !app.review_after_moves);
-    assert!(matches!(
-        app.plan.as_ref().unwrap().actions.as_slice(),
-        [Action::Trash { .. }]
-    ));
-    assert!(root.join("After/a.jpg").is_file());
 }
 #[test]
 fn review_changes_without_organize_changes_reviews_the_staged_marks_directly() {

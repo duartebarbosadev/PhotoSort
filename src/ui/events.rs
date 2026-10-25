@@ -216,15 +216,26 @@ impl PhotoSortApp {
             self.rotation_queue_only = true;
         }
         self.filter_dirty = true;
-        if let Some(destination) = self.after_apply.take() {
-            self.continue_departure(destination);
-        }
-        // The moves of one review are applied; the staged choices are next.
-        if std::mem::take(&mut self.review_after_moves)
+        // One review covered the moves and the staged choices: the moves are
+        // applied, so plan the choices for the moved files and apply them
+        // without a second review. A departure waits until they are applied.
+        let staged_next = std::mem::take(&mut self.review_after_moves)
             && self.retry_plan.is_none()
-            && self.decisions.values().any(|d| !d.is_empty())
-        {
+            && self.decisions.values().any(|d| !d.is_empty());
+        if staged_next {
+            self.apply_planned = true;
             self.review_decisions();
+            self.set_status(
+                "Moves applied · now applying Trash marks, ratings and rotations…".into(),
+            );
+            if !self.busy {
+                self.apply_planned = false;
+            }
+        }
+        if !self.apply_planned
+            && let Some(destination) = self.after_apply.take()
+        {
+            self.continue_departure(destination);
         }
         if let Some(plan) = &self.retry_plan {
             self.set_status(format!(
@@ -598,6 +609,7 @@ impl PhotoSortApp {
 
     fn on_planning_cancelled(&mut self) {
         self.review_after_moves = false;
+        self.apply_planned = false;
         self.plan_stop = None;
         self.busy = false;
         self.organize_departure = None;
@@ -619,6 +631,19 @@ impl PhotoSortApp {
             plan.description = "Apply confirmed rotation corrections".into();
         }
         self.busy = false;
+        // The staged choices of an applied review: apply them, unreviewed again.
+        if std::mem::take(&mut self.apply_planned) {
+            if plan.actions.is_empty() {
+                self.set_review_plan(None);
+                if let Some(destination) = self.after_apply.take() {
+                    self.continue_departure(destination);
+                }
+            } else {
+                self.set_review_plan(Some(plan));
+                self.apply_reviewed_plan();
+            }
+            return;
+        }
         // No moves after all: review the staged choices straight away.
         if self.review_after_moves && plan.actions.is_empty() && self.organize_departure.is_none() {
             self.review_after_moves = false;
@@ -637,6 +662,7 @@ impl PhotoSortApp {
 
     fn on_apply_failed(&mut self, error: String) {
         self.review_after_moves = false;
+        self.apply_planned = false;
         self.applying_plan = None;
         self.apply_stop = None;
         self.rotation_plan = false;
@@ -717,6 +743,8 @@ impl PhotoSortApp {
         self.rotation_plan = false;
         let incomplete =
             report.cancelled || !report.errors.is_empty() || !report.remaining.actions.is_empty();
+        // The staged choices wait for the moves; they stay staged, not lost.
+        let staged_kept = incomplete && self.review_after_moves;
         if incomplete {
             self.after_apply = None;
             self.review_after_moves = false;
@@ -726,7 +754,9 @@ impl PhotoSortApp {
         let message = format!(
             "{} changes applied{}",
             report.completed.len(),
-            if incomplete {
+            if staged_kept {
+                " · unfinished operations retained · Trash marks, ratings and rotations are still staged"
+            } else if incomplete {
                 " · unfinished operations retained"
             } else {
                 ""
@@ -775,6 +805,7 @@ impl PhotoSortApp {
 
     fn on_error(&mut self, e: String) {
         self.plan_stop = None;
+        self.apply_planned = false;
         self.apply_stop = None;
         self.group_task = None;
         self.resume_suspended = self.pending_bookmark.is_some();
