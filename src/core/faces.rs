@@ -67,7 +67,7 @@ struct Detection {
     angle: f32,
 }
 /// Part of the face-cache identity; change it whenever a rule below changes.
-pub const RECIPE: &str = "faces-v4-cew";
+pub const RECIPE: &str = "faces-v5-tiles";
 /// Eyes count as closed when the Face Mesh eye aspect ratio is clearly shut
 /// (`SHUT_EYE_RATIO`), or when both MediaPipe blink scores reach `CLOSED_BLINK`
 /// and the ratio agrees (`CLOSED_EYE_RATIO`).
@@ -81,9 +81,29 @@ pub const RECIPE: &str = "faces-v4-cew";
 const SHUT_EYE_RATIO: f32 = 0.10;
 const CLOSED_BLINK: f32 = 0.55;
 const CLOSED_EYE_RATIO: f32 = 0.15;
-/// Minimum detector score on a crop centred on the candidate. In the same set it
-/// rejected 3 of 5 false faces (roof, blur, dark patch); real faces scored ≥ 0.66.
-const MIN_REDETECT: f32 = 0.6;
+/// Eyes are judged open or closed only when their centres are at least this many
+/// pixels apart. On smaller faces glasses, squints and blur decide more than the
+/// eyelids: in a 79-photo phone library the same 11-pixel face was "closed" in a
+/// HEIC and open in its JPEG twin. The five fixed detector windows used before
+/// tiling never found faces this small, so verdicts on larger faces are unchanged.
+const MIN_EYE_PIXELS: f32 = 20.0;
+/// Minimum detector score for a box centred on the candidate, on a crop centred
+/// on it, and minimum Face Mesh presence. Tiling gives the detector many more
+/// chances to fire on texture than five fixed windows did, so both are stricter
+/// than before (0.6 for any box in the crop, 0.5). On a 79-photo phone library
+/// and the SFace demo group, 74 real faces had a centred re-detection of at least
+/// 0.79 and presence of at least 0.91; the three false faces the tiles added
+/// (a wheel, a ceiling, wall texture) had centred re-detections of 0.73, under
+/// 0.6 and 0.66, and the wheel a presence of 0.65; the ceiling only passed the
+/// old check because a real face was beside it.
+const MIN_REDETECT: f32 = 0.7;
+const MIN_PRESENCE: f32 = 0.8;
+/// Detector tiles shrink by this factor per level, down to `MIN_TILE` pixels.
+const TILE_STEP: f32 = 0.6;
+const MIN_TILE: f32 = 160.0;
+/// Detector candidates verified with Face Mesh, strongest first; at most ten
+/// faces are kept.
+const MAX_CANDIDATES: usize = 24;
 /// MediaPipe's landmark subset for the blendshape model (face_blendshapes_graph),
 /// verified to reproduce MediaPipe's own scores within 2e-6.
 const BLENDSHAPE_POINTS: [usize; 146] = [
@@ -146,67 +166,30 @@ fn detect(
     let blendshapes_model =
         model_path("face_blendshapes.onnx").context("Face blendshapes are not installed")?;
     let image = &*asset.pixels;
-    let edge = image.width().max(image.height()) as f32;
-    let cx = image.width() as f32 / 2.0;
-    let cy = image.height() as f32 / 2.0;
     let mut candidates = Vec::new();
-    let mut regions = vec![(cx, cy, edge)];
-    if image.width().min(image.height()) > 512 {
-        for fy in [0.25, 0.75] {
-            for fx in [0.25, 0.75] {
-                regions.push((
-                    image.width() as f32 * fx,
-                    image.height() as f32 * fy,
-                    edge * 0.6,
-                ));
-            }
-        }
-    }
-    for (cx, cy, edge) in regions {
+    for (cx, cy, edge) in regions(image.width(), image.height()) {
         anyhow::ensure!(!cancelled(), "Face analysis cancelled");
         let input = sample(image, cx, cy, edge, 0.0, 128, true)?;
         let output = models.infer_all("face_detector", &detector, 128, input)?;
-        anyhow::ensure!(output.len() >= 2, "Face detector returned no boxes");
-        let boxes = &output[0];
-        let scores = &output[1];
-        anyhow::ensure!(
-            boxes.len() == 896 * 16 && scores.len() == 896,
-            "Unexpected BlazeFace output"
-        );
-        let mut index = 0;
-        for (grid, repetitions) in [(16, 2), (8, 6)] {
-            for y in 0..grid {
-                for x in 0..grid {
-                    for _ in 0..repetitions {
-                        let score = sigmoid(scores[index]);
-                        let b = &boxes[index * 16..index * 16 + 16];
-                        if score >= 0.5 {
-                            let center_x = b[0] / 128.0 + (x as f32 + 0.5) / grid as f32;
-                            let center_y = b[1] / 128.0 + (y as f32 + 0.5) / grid as f32;
-                            let size = b[2].max(b[3]) / 128.0 * edge;
-                            if size.is_finite() && size > 4.0 {
-                                candidates.push(Detection {
-                                    score,
-                                    x: (center_x - 0.5) * edge + cx,
-                                    y: (center_y - 0.5) * edge + cy,
-                                    size,
-                                    angle: (b[7] - b[5]).atan2(b[6] - b[4]),
-                                });
-                            }
-                        }
-                        index += 1;
-                    }
-                }
+        for d in decode(&output)? {
+            let size = d.size * edge;
+            if d.score >= 0.5 && size.is_finite() && size > 4.0 {
+                candidates.push(Detection {
+                    x: (d.x - 0.5) * edge + cx,
+                    y: (d.y - 0.5) * edge + cy,
+                    size,
+                    ..d
+                });
             }
         }
     }
     candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
     let mut selected: Vec<Detection> = Vec::new();
     for detection in candidates {
-        if selected.iter().all(|old| overlap(old, &detection) < 0.3) {
+        if selected.iter().all(|old| !same_face(old, &detection)) {
             selected.push(detection);
         }
-        if selected.len() == 10 {
+        if selected.len() == MAX_CANDIDATES {
             break;
         }
     }
@@ -214,6 +197,9 @@ fn detect(
     let mut largest = 0.0;
     for face in selected {
         anyhow::ensure!(!cancelled(), "Face analysis cancelled");
+        if faces.count == 10 {
+            break;
+        }
         let input = sample(
             image,
             face.x,
@@ -238,7 +224,9 @@ fn detect(
             (face.y + face.size / 2.0) / image.height() as f32,
         ];
         // Texture that barely passes in the whole photo rarely looks like a face
-        // once centred and upright; real faces re-detect strongly.
+        // once centred and upright; real faces re-detect strongly. Only a box at
+        // the centre and of about the expected size (half the crop) counts, so a
+        // real face next to the candidate cannot vouch for it.
         let redetect = {
             let input = sample(
                 image,
@@ -250,7 +238,15 @@ fn detect(
                 true,
             )?;
             let output = models.infer_all("face_detector", &detector, 128, input)?;
-            output[1].iter().copied().map(sigmoid).fold(0.0, f32::max)
+            decode(&output)?
+                .into_iter()
+                .filter(|d| {
+                    (d.x - 0.5).abs() < 0.25
+                        && (d.y - 0.5).abs() < 0.25
+                        && (0.25..1.0).contains(&d.size)
+                })
+                .map(|d| d.score)
+                .fold(0.0, f32::max)
         };
         let mut record = |presence: f32, eye_ratios: [f32; 2], blink: [f32; 2], accepted: bool| {
             if let Some(report) = report.as_deref_mut() {
@@ -266,7 +262,7 @@ fn detect(
                 });
             }
         };
-        if sigmoid(presence[0]) < 0.5 || redetect < MIN_REDETECT {
+        if sigmoid(presence[0]) < MIN_PRESENCE || redetect < MIN_REDETECT {
             record(sigmoid(presence[0]), [f32::NAN; 2], [f32::NAN; 2], false);
             continue;
         }
@@ -279,6 +275,27 @@ fn detect(
                 (face.y + u * sin + v * cos) / image.height() as f32,
             ]
         };
+        let mut bbox = [
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        ];
+        for i in 0..landmarks.len() / 3 {
+            let [x, y] = point(i);
+            bbox[0] = bbox[0].min(x);
+            bbox[1] = bbox[1].min(y);
+            bbox[2] = bbox[2].max(x);
+            bbox[3] = bbox[3].max(y);
+        }
+        // Face Mesh can settle two nearby candidates on the same face.
+        if faces.geometry.iter().any(|kept| {
+            let (intersection, _, smaller) = overlap(kept.bbox, bbox);
+            intersection >= 0.5 * smaller
+        }) {
+            record(sigmoid(presence[0]), [f32::NAN; 2], [f32::NAN; 2], false);
+            continue;
+        }
         // The blendshape model expects photo-frame pixel coordinates, as MediaPipe
         // feeds it; it is invariant to translation and scale.
         anyhow::ensure!(
@@ -300,19 +317,6 @@ fn detect(
         );
         let blink =
             [shapes[0][EYE_BLINK_LEFT], shapes[0][EYE_BLINK_RIGHT]].map(|v| v.clamp(0.0, 1.0));
-        let mut bbox = [
-            f32::INFINITY,
-            f32::INFINITY,
-            f32::NEG_INFINITY,
-            f32::NEG_INFINITY,
-        ];
-        for i in 0..landmarks.len() / 3 {
-            let [x, y] = point(i);
-            bbox[0] = bbox[0].min(x);
-            bbox[1] = bbox[1].min(y);
-            bbox[2] = bbox[2].max(x);
-            bbox[3] = bbox[3].max(y);
-        }
         faces.geometry.push(Face {
             bbox,
             eyes: [point(33), point(263)],
@@ -324,8 +328,15 @@ fn detect(
         let right = eye_aspect_ratio(landmarks, [362, 385, 387, 263, 373, 380]);
         record(sigmoid(presence[0]), [left, right], blink, true);
         let ratio = (left + right) / 2.0;
-        if ratio < SHUT_EYE_RATIO
-            || (blink.iter().all(|&b| b >= CLOSED_BLINK) && ratio < CLOSED_EYE_RATIO)
+        let centre = |a: usize, b: usize| {
+            let ([ax, ay], [bx, by]) = (point(a), point(b));
+            [(ax + bx) / 2.0 * width, (ay + by) / 2.0 * height]
+        };
+        let ([ax, ay], [bx, by]) = (centre(33, 133), centre(362, 263));
+        let readable = (ax - bx).hypot(ay - by) >= MIN_EYE_PIXELS;
+        if readable
+            && (ratio < SHUT_EYE_RATIO
+                || (blink.iter().all(|&b| b >= CLOSED_BLINK) && ratio < CLOSED_EYE_RATIO))
         {
             faces.closed_eyes += 1;
         }
@@ -340,6 +351,67 @@ fn detect(
         }
     }
     Ok(faces)
+}
+/// Face Mesh landmarks for `face` measured again on `asset`, a larger rendering
+/// of the photo the face was found in. Landmarks found on a few analysis pixels
+/// are too coarse to align a distant face for recognition. `None` when Face
+/// Mesh no longer sees a face there.
+pub fn refine(
+    models: &mut super::models::Models,
+    asset: &Asset,
+    face: &Face,
+) -> Result<Option<Face>> {
+    let path = model_path("face_landmarks_detector.onnx").context("Face Mesh is not installed")?;
+    let image = &*asset.pixels;
+    let (width, height) = (image.width() as f32, image.height() as f32);
+    let [left, top, right, bottom] = face.bbox;
+    let [[ax, ay], [bx, by]] = face.eyes;
+    let (x, y) = ((left + right) / 2.0 * width, (top + bottom) / 2.0 * height);
+    let size = ((right - left) * width).max((bottom - top) * height);
+    let angle = ((by - ay) * height).atan2((bx - ax) * width);
+    anyhow::ensure!(
+        [x, y, size, angle].iter().all(|v| v.is_finite()) && size > 1.0,
+        "Invalid face geometry"
+    );
+    let input = sample(image, x, y, size * 1.5, angle, 256, false)?;
+    let output = models.infer_all("face_landmarks", &path, 256, input)?;
+    anyhow::ensure!(output.len() >= 2, "Face Mesh returned no landmarks");
+    let (landmarks, presence) = (&output[0], &output[1]);
+    anyhow::ensure!(
+        landmarks.len() >= 468 * 3 && !presence.is_empty(),
+        "Unexpected Face Mesh output"
+    );
+    // The face was already verified on the analysis image; only a clear miss
+    // here drops it.
+    if sigmoid(presence[0]) < 0.5 {
+        return Ok(None);
+    }
+    let (sin, cos) = angle.sin_cos();
+    let points: Vec<[f32; 2]> = (0..landmarks.len() / 3)
+        .map(|i| {
+            let u = (landmarks[i * 3] / 256.0 - 0.5) * size * 1.5;
+            let v = (landmarks[i * 3 + 1] / 256.0 - 0.5) * size * 1.5;
+            [
+                (x + u * cos - v * sin) / width,
+                (y + u * sin + v * cos) / height,
+            ]
+        })
+        .collect();
+    let bbox = points.iter().fold(
+        [
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        ],
+        |b, [x, y]| [b[0].min(*x), b[1].min(*y), b[2].max(*x), b[3].max(*y)],
+    );
+    Ok(Some(Face {
+        bbox,
+        eyes: [points[33], points[263]],
+        landmarks: points,
+        blink: face.blink,
+    }))
 }
 /// One shared face artifact used by Organize, quality, subjects and duplicates.
 /// Existing complete subject records can seed it without another model pass.
@@ -383,16 +455,89 @@ pub fn cached_lazy(
     store.put_faces(&key, &faces)?;
     Ok(faces)
 }
+/// Square detector windows (centre x, centre y, edge) in source pixels: the whole
+/// frame, then overlapping tiles that shrink by `TILE_STEP` down to
+/// `MIN_TILE`. The 128-pixel detector only finds faces that fill a fair part of
+/// its input, so faces of people standing a few metres away need small tiles.
+fn regions(width: u32, height: u32) -> Vec<(f32, f32, f32)> {
+    let (width, height) = (width as f32, height as f32);
+    let long = width.max(height);
+    let mut regions = vec![(width / 2.0, height / 2.0, long)];
+    let mut tile = long * TILE_STEP;
+    while tile >= MIN_TILE {
+        // Half-tile overlap keeps every face whole in at least one tile.
+        let axis = |length: f32| {
+            let count = ((length - tile).max(0.0) / (tile / 2.0)).ceil() as usize + 1;
+            let stride = (length - tile).max(0.0) / (count - 1).max(1) as f32;
+            (0..count).map(move |i| {
+                if count == 1 {
+                    length / 2.0
+                } else {
+                    tile / 2.0 + stride * i as f32
+                }
+            })
+        };
+        for cy in axis(height) {
+            for cx in axis(width) {
+                regions.push((cx, cy, tile));
+            }
+        }
+        tile *= TILE_STEP;
+    }
+    regions
+}
 fn sigmoid(value: f32) -> f32 {
     1.0 / (1.0 + (-value.clamp(-80.0, 80.0)).exp())
 }
-fn overlap(a: &Detection, b: &Detection) -> f32 {
-    let width =
-        (a.x + a.size / 2.0).min(b.x + b.size / 2.0) - (a.x - a.size / 2.0).max(b.x - b.size / 2.0);
-    let height =
-        (a.y + a.size / 2.0).min(b.y + b.size / 2.0) - (a.y - a.size / 2.0).max(b.y - b.size / 2.0);
-    let area = width.max(0.0) * height.max(0.0);
-    area / (a.size * a.size + b.size * b.size - area).max(f32::EPSILON)
+/// Every BlazeFace anchor, with position and size as fractions of the input.
+fn decode(output: &[Vec<f32>]) -> Result<Vec<Detection>> {
+    anyhow::ensure!(output.len() >= 2, "Face detector returned no boxes");
+    let (boxes, scores) = (&output[0], &output[1]);
+    anyhow::ensure!(
+        boxes.len() == 896 * 16 && scores.len() == 896,
+        "Unexpected BlazeFace output"
+    );
+    let mut detections = Vec::with_capacity(896);
+    for (grid, repetitions) in [(16, 2), (8, 6)] {
+        for y in 0..grid {
+            for x in 0..grid {
+                for _ in 0..repetitions {
+                    let index = detections.len();
+                    let b = &boxes[index * 16..index * 16 + 16];
+                    detections.push(Detection {
+                        score: sigmoid(scores[index]),
+                        x: b[0] / 128.0 + (x as f32 + 0.5) / grid as f32,
+                        y: b[1] / 128.0 + (y as f32 + 0.5) / grid as f32,
+                        size: b[2].max(b[3]) / 128.0,
+                        angle: (b[7] - b[5]).atan2(b[6] - b[4]),
+                    });
+                }
+            }
+        }
+    }
+    Ok(detections)
+}
+/// Tiles of different sizes report one face at several scales, so a box mostly
+/// inside another counts as the same face, not only boxes of similar size.
+fn same_face(a: &Detection, b: &Detection) -> bool {
+    let square = |d: &Detection| {
+        let half = d.size / 2.0;
+        [d.x - half, d.y - half, d.x + half, d.y + half]
+    };
+    let (intersection, union, smaller) = overlap(square(a), square(b));
+    intersection >= 0.3 * union || intersection >= 0.5 * smaller
+}
+/// Intersection, union and smaller area of two `[left, top, right, bottom]` boxes.
+fn overlap(a: [f32; 4], b: [f32; 4]) -> (f32, f32, f32) {
+    let area = |r: [f32; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
+    let width = a[2].min(b[2]) - a[0].max(b[0]);
+    let height = a[3].min(b[3]) - a[1].max(b[1]);
+    let intersection = width.max(0.0) * height.max(0.0);
+    (
+        intersection,
+        (area(a) + area(b) - intersection).max(f32::EPSILON),
+        area(a).min(area(b)).max(f32::EPSILON),
+    )
 }
 pub fn eye_aspect_ratio(points: &[f32], indices: [usize; 6]) -> f32 {
     if indices.iter().any(|i| i * 3 + 1 >= points.len()) {
@@ -521,4 +666,62 @@ fn cubic_pixel(image: &image::RgbaImage, x: f32, y: f32, channel: usize) -> u8 {
         }
     }
     value.clamp(0.0, 255.0) as u8
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn every_face_from_28_pixels_fills_an_eighth_of_some_detector_window() {
+        // Phone photos at analysis size, a small screenshot and the SFace group.
+        for (width, height) in [(577, 1024), (1024, 768), (1024, 1024), (512, 267)] {
+            let windows = regions(width, height);
+            let (w, h) = (width as f32, height as f32);
+            for size in [28.0, 40.0, 64.0, 120.0, 200.0, 260.0] {
+                if size > w.min(h) {
+                    continue;
+                }
+                let mut y = 0.0;
+                while y + size <= h {
+                    let mut x = 0.0;
+                    while x + size <= w {
+                        assert!(
+                            windows.iter().any(|&(cx, cy, edge)| {
+                                let half = edge / 2.0;
+                                cx - half <= x
+                                    && cy - half <= y
+                                    && x + size <= cx + half
+                                    && y + size <= cy + half
+                                    && size >= edge / 8.0
+                            }),
+                            "{size}px face at {x},{y} in {width}x{height}"
+                        );
+                        x += 7.0;
+                    }
+                    y += 7.0;
+                }
+            }
+        }
+    }
+    #[test]
+    fn one_face_seen_at_several_scales_is_one_candidate_but_neighbours_are_two() {
+        let detection = |x, y, size| Detection {
+            score: 0.9,
+            x,
+            y,
+            size,
+            angle: 0.0,
+        };
+        let face = detection(100.0, 100.0, 40.0);
+        // The same face from a coarser tile, in a box three times as large.
+        assert!(same_face(&detection(110.0, 90.0, 120.0), &face));
+        assert!(same_face(&detection(102.0, 101.0, 44.0), &face));
+        // Two people cheek to cheek.
+        assert!(!same_face(&detection(136.0, 104.0, 40.0), &face));
+        assert!(!same_face(&detection(300.0, 100.0, 40.0), &face));
+    }
+    #[test]
+    fn a_new_face_recipe_retires_subject_records_that_embed_faces() {
+        assert!(super::super::models::analysis_signature().starts_with(RECIPE));
+        assert!(super::super::models::face_signature().starts_with(RECIPE));
+    }
 }

@@ -960,7 +960,14 @@ impl ImageWorker {
                 old.as_ref().and_then(|f| f.faces.as_ref()),
                 cancelled,
             )?;
-            let recognition = face_groups::describe(&mut self.models, &asset, &faces, cancelled)?;
+            let pipeline = &mut self.pipeline;
+            let recognition = face_groups::describe_detailed(
+                &mut self.models,
+                &asset,
+                &faces,
+                || pipeline.load_neutral_cancellable(item, cancelled),
+                cancelled,
+            )?;
             anyhow::ensure!(
                 !cancelled() && Pipeline::key(item)? == source_key,
                 "Photo changed during face grouping"

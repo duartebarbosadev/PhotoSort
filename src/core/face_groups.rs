@@ -13,6 +13,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
 pub const MODEL: &str = "face_recognition_sface.onnx";
+/// Part of the recognition-cache identity; change it whenever the choice of
+/// source pixels or alignment below changes.
+pub const RECIPE: &str = "sface-detail-v1";
+/// Eye distance of the SFace template. Faces smaller than this in the analysis
+/// image are recognized from the larger display image when one exists, so
+/// distant faces are not upsampled from a few pixels.
+const TEMPLATE_EYES: f64 = 35.;
 /// Deliberately stricter than the upstream pair-verification threshold. This is
 /// a conservative initial grouping policy, not a calibrated probability.
 pub const MIN_SIMILARITY: f32 = 0.5;
@@ -186,6 +193,54 @@ fn aligned_input(
     }
     Ok(Some(input))
 }
+/// Distance between the eye centres in source pixels.
+pub fn eye_distance(asset: &Asset, face: &Face) -> Option<f64> {
+    let lm = &face.landmarks;
+    if lm.len() < 363 {
+        return None;
+    }
+    let (w, h) = (
+        f64::from(asset.pixels.width()),
+        f64::from(asset.pixels.height()),
+    );
+    let midpoint = |a: usize, b: usize| {
+        [
+            f64::from(lm[a][0] + lm[b][0]) / 2. * w,
+            f64::from(lm[a][1] + lm[b][1]) / 2. * h,
+        ]
+    };
+    let ([ax, ay], [bx, by]) = (midpoint(33, 133), midpoint(362, 263));
+    Some((ax - bx).hypot(ay - by))
+}
+/// Like `describe`, but faces too small in `asset` for the SFace template are
+/// recognized from `detail`, a larger rendering of the same photo, which is
+/// only loaded when needed. Face geometry is normalized, so it applies to both.
+pub fn describe_detailed(
+    models: &mut Models,
+    asset: &Asset,
+    faces: &Faces,
+    detail: impl FnOnce() -> Result<Asset>,
+    cancelled: impl Fn() -> bool,
+) -> Result<Recognition> {
+    let small = prominent(faces)
+        .into_iter()
+        .any(|face| eye_distance(asset, face).is_none_or(|eyes| eyes < TEMPLATE_EYES));
+    if small {
+        let detail = detail()?;
+        if detail.pixels.width() > asset.pixels.width() {
+            let mut refined = faces.clone();
+            for face in &mut refined.geometry {
+                anyhow::ensure!(!cancelled(), "Face recognition cancelled");
+                match super::faces::refine(models, &detail, face)? {
+                    Some(better) => *face = better,
+                    None => face.landmarks.clear(),
+                }
+            }
+            return describe(models, &detail, &refined, cancelled);
+        }
+    }
+    describe(models, asset, faces, cancelled)
+}
 pub fn describe(
     models: &mut Models,
     asset: &Asset,
@@ -237,10 +292,52 @@ pub fn describe(
 fn similarity(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
-/// Deterministic, conservative all-member admission. Unlike subject grouping,
-/// this has no geometric pair graph: a compact 128-float descriptor per unique
-/// face is cheaper than storing all candidate edges. Exact descriptors collapse
-/// immediately. Memory is O(n); diverse-library worst-case CPU remains O(n²).
+/// One recognized person while grouping: descriptor indices, their sum, and the
+/// sorted photos they appear in.
+struct Person {
+    members: Vec<usize>,
+    sum: Vec<f32>,
+    photos: Vec<usize>,
+}
+impl Person {
+    fn absorb(&mut self, other: Person) {
+        self.members.extend(other.members);
+        for (total, x) in self.sum.iter_mut().zip(other.sum) {
+            *total += x;
+        }
+        self.photos.extend(other.photos);
+        self.photos.sort_unstable();
+        self.photos.dedup();
+    }
+    fn seen_with(&self, other: &Person) -> bool {
+        let (mut a, mut b) = (
+            self.photos.iter().peekable(),
+            other.photos.iter().peekable(),
+        );
+        while let (Some(x), Some(y)) = (a.peek(), b.peek()) {
+            match x.cmp(y) {
+                std::cmp::Ordering::Less => {
+                    a.next();
+                }
+                std::cmp::Ordering::Greater => {
+                    b.next();
+                }
+                std::cmp::Ordering::Equal => return true,
+            }
+        }
+        false
+    }
+}
+/// Deterministic average-linkage grouping. A face joins the person whose faces
+/// it matches best on average, if that average reaches `MIN_SIMILARITY`; then
+/// people whose faces match each other that well on average are merged, unless
+/// they appear together in a photo. Requiring a match with every member instead
+/// let one poor face (a tiny inset selfie) split a person in two: sunglasses
+/// photos averaged 0.72 with someone's other faces but 0.47 with that one.
+/// Unlike subject grouping, this has no geometric pair graph: a running sum of
+/// 128-float descriptors per person gives the average without pairwise storage.
+/// Exact descriptors collapse immediately. Memory is O(n); diverse-library
+/// worst-case CPU remains O(n²).
 pub fn group(
     records: &[regional::grouping::Record],
     store: &Store,
@@ -291,42 +388,70 @@ pub fn group(
             .find(|c| !c.is_eq())
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    let mut groups = Vec::<Vec<usize>>::new();
-    let mut identity = vec![0; vectors.len()];
+    // Photos each descriptor appears in; people seen together are never merged.
+    let mut photos = vec![Vec::new(); vectors.len()];
+    for (photo, (_, indices)) in faces_by_photo.iter().enumerate() {
+        for &index in indices {
+            photos[index].push(photo);
+        }
+    }
+    let mut groups = Vec::<Person>::new();
     for index in order {
         if cancelled() {
             return Ok(None);
         }
         let vector = &vectors[index];
         let mut best = None;
-        let mut best_score = f32::NEG_INFINITY;
-        for (g, members) in groups.iter().enumerate() {
+        let mut best_score = MIN_SIMILARITY;
+        for (g, person) in groups.iter().enumerate() {
+            let score = similarity(vector, &person.sum) / person.members.len() as f32;
+            if score >= best_score && best.is_none_or(|_| score > best_score) {
+                best = Some(g);
+                best_score = score;
+            }
+        }
+        let face = Person {
+            members: vec![index],
+            sum: vector.clone(),
+            photos: photos[index].clone(),
+        };
+        match best {
+            Some(g) => groups[g].absorb(face),
+            None => groups.push(face),
+        }
+    }
+    // Admission order can still leave one person in two groups; merge the
+    // closest pair that matches on average until none does.
+    loop {
+        let mut best = None;
+        let mut best_score = MIN_SIMILARITY;
+        for (a, first) in groups.iter().enumerate() {
             if cancelled() {
                 return Ok(None);
             }
-            let mut minimum = 1.;
-            for &i in members {
-                if cancelled() {
-                    return Ok(None);
+            for (b, second) in groups.iter().enumerate().skip(a + 1) {
+                let score = similarity(&first.sum, &second.sum)
+                    / (first.members.len() * second.members.len()) as f32;
+                if score >= best_score
+                    && best.is_none_or(|_| score > best_score)
+                    && !first.seen_with(second)
+                {
+                    best = Some((a, b));
+                    best_score = score;
                 }
-                minimum = similarity(vector, &vectors[i]).min(minimum);
-                if minimum < MIN_SIMILARITY || minimum <= best_score {
-                    break;
-                }
-            }
-            if minimum >= MIN_SIMILARITY && minimum > best_score {
-                best = Some(g);
-                best_score = minimum;
             }
         }
-        let group = if let Some(g) = best {
-            groups[g].push(index);
-            g
-        } else {
-            groups.push(vec![index]);
-            groups.len() - 1
+        let Some((a, b)) = best else {
+            break;
         };
-        identity[index] = group + 1;
+        let second = groups.remove(b);
+        groups[a].absorb(second);
+    }
+    let mut identity = vec![0; vectors.len()];
+    for (g, person) in groups.iter().enumerate() {
+        for &index in &person.members {
+            identity[index] = g + 1;
+        }
     }
     let individual_groups = groups.len();
     drop(groups);
