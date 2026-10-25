@@ -85,8 +85,20 @@ pub(super) struct Board {
     /// Planned changes when the board was last arranged: photos and videos
     /// that move or are renamed, and new folders.
     pub(super) changes: usize,
+    /// "Reset changes" is asking for confirmation.
+    pub(super) confirm_reset: bool,
+    /// Faces: who each folder shows and each person's face.
+    pub(super) people: super::people::People,
+    /// The single preview was chosen over the contact sheet for a selection
+    /// of this many photos; another selection shows the sheet again.
+    pub(super) single: Option<usize>,
+    /// The board's search field is open in a narrow header, where it is
+    /// otherwise a magnifier button.
+    pub(super) searching: bool,
 }
 
+/// The space between Organize's panels, and under the bar above them.
+pub(super) const BOARD_GAP: f32 = 10.0;
 const HEADER: f32 = 44.0;
 const TILE: f32 = 160.0;
 
@@ -128,6 +140,8 @@ pub(super) enum FolderAction {
     TrashFolder(PathBuf),
     Remove(String),
     StartOver,
+    /// Grouped by faces: the first folder's person is the second's.
+    SamePerson(String, String),
 }
 fn within(path: &str, folder: &str) -> bool {
     folder.is_empty()
@@ -420,6 +434,7 @@ impl PhotoSortApp {
         self.board.sections = sections;
         self.board.folders = folders;
         self.board.key = Some(key);
+        self.arrange_people();
         if let Some(focus) = &self.board.focus
             && !self.board.folders.iter().any(|f| &f.path == focus)
         {
@@ -512,7 +527,7 @@ impl PhotoSortApp {
     }
     /// The folder draft to edit, created from the current proposal when the
     /// first edit is made.
-    fn board_draft(&mut self) -> Option<&mut Draft> {
+    pub(super) fn board_draft(&mut self) -> Option<&mut Draft> {
         if !self.board_editable() {
             return None;
         }
@@ -524,66 +539,76 @@ impl PhotoSortApp {
         self.board_epoch += 1;
         self.organize_drafts.get_mut(&self.group_mode)
     }
-    /// Moves photos into a proposed folder.
+    /// Moves photos into a proposed folder. Items the grouping leaves where
+    /// they are move too, which is how a missed face or place is corrected;
+    /// moved back to the folder they are in, they are not moving again.
     pub(super) fn board_move(&mut self, ids: &[MediaId], target: &str) {
-        // Items outside the current proposal (videos and ungrouped photos in
-        // the analysis modes) stay where they are and cannot be moved.
-        let movable: Vec<MediaId> = {
-            let generated;
-            let labels = match self.organize_drafts.get(&self.group_mode) {
-                Some(draft) => draft.labels(),
-                None => {
-                    generated = self.organize_labels();
-                    &generated
-                }
-            };
-            ids.iter()
-                .copied()
-                .filter(|id| labels.contains_key(id))
-                .collect()
+        if ids.is_empty() || self.board_draft().is_none() {
+            return;
+        }
+        let initial = self.organize_labels();
+        let title = if target.is_empty() {
+            self.board_root_name()
+        } else {
+            target.to_owned()
         };
-        let staying = ids.len() - movable.len();
-        if movable.is_empty() {
-            self.navigation_notice = Some(if staying == 1 {
-                "This item stays in its current folder in this grouping and cannot be moved".into()
-            } else {
-                format!(
-                    "These {staying} items stay in their current folders in this grouping and cannot be moved"
-                )
-            });
-            return;
-        }
-        if self.board_draft().is_none() {
-            return;
-        }
+        let home =
+            crate::core::operations::folder_destination(std::path::Path::new(&self.output), target);
         // A photo's RAW, JPEG and edit files move together when that is on.
         let selection = crate::core::organize::Selection {
-            files: movable.iter().copied().collect(),
+            files: ids.iter().copied().collect(),
             ..Default::default()
         };
         let Some(draft) = self.organize_drafts.get_mut(&self.group_mode) else {
             return;
         };
-        match draft.move_selection(&selection, target, &self.media, self.companions) {
-            Ok(()) => {
-                let title = if target.is_empty() {
-                    self.board_root_name()
-                } else {
-                    target.to_owned()
-                };
-                let mut notice = format!(
-                    "Moved {} {} to {title}",
-                    movable.len(),
-                    if movable.len() == 1 { "item" } else { "items" }
-                );
-                if staying > 0 {
-                    notice.push_str(&format!(" · {staying} stay in their current folders"));
-                }
-                notice.push_str(STAGED);
-                self.navigation_notice = Some(notice);
-            }
-            Err(error) => self.navigation_notice = Some(error.to_string()),
+        if let Err(error) = draft.move_selection(&selection, target, &self.media, self.companions) {
+            self.navigation_notice = Some(error.to_string());
+            return;
         }
+        let back: HashSet<MediaId> = draft
+            .labels()
+            .iter()
+            .filter(|(id, label)| {
+                label.as_str() == target
+                    && !initial.contains_key(id)
+                    && self
+                        .index
+                        .get(id)
+                        .is_some_and(|&i| self.media[i].path.parent() == Some(home.as_path()))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        draft.keep_in_place(&back, &self.media, false);
+        let what = |n: usize| format!("{n} {}", if n == 1 { "item" } else { "items" });
+        self.navigation_notice = Some(if back.len() >= ids.len() {
+            format!(
+                "{} not moving · already in {title}{STAGED}",
+                what(ids.len())
+            )
+        } else {
+            format!("Moved {} to {title}{STAGED}", what(ids.len()))
+        });
+    }
+    /// Leaves items in the folders they are in now: they join "Not moving".
+    pub(super) fn board_keep_in_place(&mut self, ids: &[MediaId]) {
+        if self.board_draft().is_none() {
+            return;
+        }
+        if let Some(draft) = self.organize_drafts.get_mut(&self.group_mode) {
+            draft.keep_in_place(&ids.iter().copied().collect(), &self.media, self.companions);
+        }
+        self.navigation_notice = Some(format!(
+            "{} {} in {} current {}{STAGED}",
+            ids.len(),
+            if ids.len() == 1 {
+                "item stays"
+            } else {
+                "items stay"
+            },
+            if ids.len() == 1 { "its" } else { "their" },
+            if ids.len() == 1 { "folder" } else { "folders" },
+        ));
     }
     fn board_finish_edit(&mut self) {
         let Some((path, name)) = self.board.editing.take() else {
@@ -593,10 +618,11 @@ impl PhotoSortApp {
         if name.is_empty() || name == leaf(&path) {
             return;
         }
-        let Some(draft) = self.board_draft() else {
+        if self.board_draft().is_none() {
             return;
-        };
-        match draft.rename_folder(&path, &name) {
+        }
+        // Naming a person renames every folder they are in.
+        match self.rename_person(&path, &name) {
             Ok(renamed) => {
                 if let Some(focus) = &self.board.focus
                     && within(focus, &path)
@@ -711,6 +737,22 @@ impl PhotoSortApp {
     pub(super) fn board_folder_list(&mut self, ui: &mut egui::Ui, ids: &[MediaId]) {
         let folders: Vec<String> = self.board.folders.iter().map(|f| f.path.clone()).collect();
         let root = self.board_root_name();
+        // A generated grouping can also leave them where they are.
+        let placed = ids.iter().any(|id| {
+            self.index
+                .get(id)
+                .is_some_and(|&i| self.placement(&self.media[i]).label.is_some())
+        });
+        if self.group_mode != GroupMode::Current && placed {
+            if ui
+                .button(format!("{}  ·  stays in its folder", unplaced_title(None)))
+                .clicked()
+            {
+                self.board_keep_in_place(ids);
+                ui.close();
+            }
+            ui.separator();
+        }
         egui::ScrollArea::vertical()
             .max_height(320.0)
             .show(ui, |ui| {
@@ -868,6 +910,8 @@ impl PhotoSortApp {
     fn board_tree(&mut self, ui: &mut egui::Ui) {
         use egui_phosphor::regular as icon;
         let editable = self.board_editable();
+        // Grouped by faces, rows leave room for a person's face.
+        let faces_mode = self.board.people.signature.is_some();
         let mut action: Option<FolderAction> = None;
         ui.horizontal(|ui| {
             ui.label(caption("Folders"));
@@ -890,7 +934,11 @@ impl PhotoSortApp {
         let root = self.board_root_name();
         let rows = self.board.folders.len();
         // Must equal the height `folder_row` allocates.
-        let row_height = 26.0;
+        let row_height = if faces_mode {
+            super::people::ROW_HEIGHT
+        } else {
+            26.0
+        };
         let mut select: Option<Option<String>> = None;
         let mut drop: Option<(Vec<MediaId>, String)> = None;
         let mut finish = false;
@@ -973,8 +1021,11 @@ impl PhotoSortApp {
                 // item, those staying in place included.
                 let top = path.is_empty();
                 let selected = highlighted.as_deref() == Some(path.as_str());
+                let faces = faces_mode.then(|| self.folder_faces(&path, ui.ctx().pixels_per_point()));
+                let unnamed = editable && self.unnamed_person(&path);
                 let response = folder_row(
                     ui,
+                    row_height,
                     &title,
                     if top {
                         icon::HARD_DRIVES
@@ -987,23 +1038,56 @@ impl PhotoSortApp {
                     if top { self.filtered.len() } else { total },
                     selected,
                     editable && !top,
-                )
-                .on_hover_text(if top {
+                    faces.as_deref(),
+                    unnamed.then_some("Add a name"),
+                );
+                // A person's folder shows their faces larger on hover.
+                let card = if response.hovered() && faces.as_ref().is_some_and(|f| !f.is_empty()) {
+                    self.folder_card(&path, ui.ctx().pixels_per_point())
+                } else {
+                    Vec::new()
+                };
+                let tip = if top {
                     format!("{root} · every item · {direct} directly in it, {total} in its folders")
+                } else if unnamed {
+                    format!(
+                        "{path} · {total} photos · double-click to add a name; it is used for every folder with this person"
+                    )
                 } else {
                     format!(
                         "{path} · {direct} here, {total} including subfolders · drag onto another folder to move it"
                     )
-                });
+                };
+                // Any other folder previews what is inside it.
+                let preview = (card.is_empty() && response.hovered())
+                    .then(|| self.folder_preview(&path, resting(ui)));
+                let response = match (&preview, card.is_empty()) {
+                    (_, false) => response.on_hover_ui(|ui| {
+                        let width = super::people::face_card(ui, &card);
+                        ui.set_max_width(width);
+                        ui.label(RichText::new(&tip).small().color(MUTED));
+                    }),
+                    (Some(preview), true) => response.on_hover_ui(|ui| {
+                        preview_card(ui, preview);
+                        ui.label(RichText::new(&tip).small().color(MUTED));
+                    }),
+                    (None, true) => response.on_hover_text(tip),
+                };
                 if editable && !top && response.drag_started() {
                     response.dnd_set_drag_payload(FolderDrag(path.clone()));
                 }
                 let photos = response
                     .dnd_hover_payload::<super::grouping::PhotoDrag>()
                     .is_some();
+                // A person's folder dropped on another person's: the same person.
+                let same_person = |app: &Self, source: &str| {
+                    app.folder_person(source)
+                        .zip(app.folder_person(&path))
+                        .is_some_and(|(a, b)| a != b)
+                };
                 let folder_here = response
                     .dnd_hover_payload::<FolderDrag>()
-                    .is_some_and(|source| can_nest(&source.0, &path));
+                    .is_some_and(|source| can_nest(&source.0, &path) || same_person(self, &source.0));
                 if editable && (photos || folder_here) {
                     ui.painter().rect_stroke(
                         response.rect,
@@ -1023,9 +1107,12 @@ impl PhotoSortApp {
                 if editable
                     && egui::DragAndDrop::has_payload_of_type::<FolderDrag>(ui.ctx())
                     && let Some(source) = response.dnd_release_payload::<FolderDrag>()
-                    && can_nest(&source.0, &path)
                 {
-                    action = Some(FolderAction::Nest(source.0.clone(), path.clone()));
+                    if same_person(self, &source.0) {
+                        action = Some(FolderAction::SamePerson(source.0.clone(), path.clone()));
+                    } else if can_nest(&source.0, &path) {
+                        action = Some(FolderAction::Nest(source.0.clone(), path.clone()));
+                    }
                 }
                 if response.clicked() {
                     select = Some((!top).then(|| path.clone()));
@@ -1100,6 +1187,24 @@ impl PhotoSortApp {
                 "Rename · double-click",
                 FolderAction::Rename(path.to_owned()),
             );
+            // Two people the grouping told apart may be one.
+            let same = self.same_person_choices(path);
+            if !same.is_empty() {
+                ui.add_enabled_ui(editable, |ui| {
+                    ui.menu_button("Same person as…", |ui| {
+                        for other in same {
+                            choose(
+                                ui,
+                                true,
+                                leaf(&other),
+                                FolderAction::SamePerson(path.to_owned(), other.clone()),
+                            );
+                        }
+                    })
+                    .response
+                    .on_hover_text("Combine their folders · or drag this folder onto the other");
+                });
+            }
         }
         let selected = self.selection.len();
         if selected > 0 && self.library_selection_mode() {
@@ -1235,6 +1340,54 @@ impl PhotoSortApp {
             .map(|&i| self.media[i].id)
             .collect()
     }
+    /// What a folder holds, for its hover preview: its first photos and the
+    /// counts of photos, videos and folders in it. With `load`, thumbnails
+    /// not loaded yet are asked for through the usual thumbnail queue, which
+    /// keeps only a few in flight, so sweeping the pointer over the tree
+    /// cannot flood the decoder; until they arrive they are placeholders, and
+    /// once loaded they stay cached for the next hover.
+    pub(super) fn folder_preview(&mut self, path: &str, load: bool) -> FolderPreview {
+        let mut preview = FolderPreview::default();
+        let mut first = Vec::new();
+        for section in &self.board.sections {
+            if !section.path.as_deref().is_some_and(|p| within(p, path)) {
+                continue;
+            }
+            preview.videos += section.videos;
+            preview.photos += section.range.len() - section.videos;
+            first.extend(
+                self.filtered[section.range.clone()]
+                    .iter()
+                    .map(|&index| &self.media[index])
+                    .filter(|m| m.kind != MediaKind::Video)
+                    .map(|m| m.id)
+                    .take(PREVIEW_THUMBNAILS - first.len()),
+            );
+        }
+        preview.thumbnails = first
+            .into_iter()
+            .map(|id| {
+                let texture = if load {
+                    self.texture(id, false)
+                } else {
+                    self.textures.get(&(id, false)).map(|t| t.handle.clone())
+                };
+                texture.map(|t| (t.id(), t.size_vec2()))
+            })
+            .collect();
+        let depth = if path.is_empty() {
+            0
+        } else {
+            path.matches('/').count() + 1
+        };
+        preview.folders = self
+            .board
+            .folders
+            .iter()
+            .filter(|f| f.depth == depth + 1 && within(&f.path, path))
+            .count();
+        preview
+    }
     pub(super) fn board_folder_action(&mut self, action: FolderAction) {
         match action {
             FolderAction::NewInside(parent) => self.board_new_folder(&parent, &[]),
@@ -1321,6 +1474,12 @@ impl PhotoSortApp {
                     Err(error) => self.navigation_notice = Some(error.to_string()),
                 }
             }
+            FolderAction::SamePerson(from, into) => {
+                self.navigation_notice = Some(match self.same_person(&from, &into) {
+                    Ok(name) => format!("{} is now {name}{STAGED}", leaf(&from)),
+                    Err(error) => error.to_string(),
+                });
+            }
             FolderAction::StartOver => {
                 if self.board_editable() {
                     self.organize_drafts.remove(&self.group_mode);
@@ -1345,6 +1504,10 @@ impl PhotoSortApp {
             });
             return;
         };
+        if self.board_sheet() {
+            self.board_sheet_view(ui, active);
+            return;
+        }
         let media = self.media[self.index[&active]].clone();
         if self
             .board
@@ -1416,11 +1579,14 @@ impl PhotoSortApp {
                         self.end_board_comparison();
                     }
                 } else if self.library_selection_mode() && self.selection.len() > 9 {
-                    ui.label(
-                        RichText::new("Select 2–9 photos to compare")
-                            .small()
-                            .color(MUTED),
-                    );
+                    // The single preview of a large selection: back to all of them.
+                    if ui
+                        .small_button(format!("Show all {}", self.selection.len()))
+                        .on_hover_text("Every selected photo as a contact sheet")
+                        .clicked()
+                    {
+                        self.board.single = None;
+                    }
                 }
             });
         });
@@ -1513,6 +1679,121 @@ impl PhotoSortApp {
             self.review_ratings(ui, active);
         });
     }
+    /// More than nine selected photos show in the preview as a contact
+    /// sheet, unless the single preview was chosen for this selection.
+    pub(super) fn board_sheet(&self) -> bool {
+        self.step == Step::Organize
+            && self.library_selection_mode()
+            && self.selection.len() > 9
+            && self.board.single != Some(self.selection.len())
+    }
+    /// The contact sheet: every selected photo in board order, sized to fit
+    /// the panel where they can, the active one outlined. A click makes a
+    /// photo active; a double-click shows it large, keeping the selection.
+    /// Thumbnails are asked for only as their rows scroll into view.
+    fn board_sheet_view(&mut self, ui: &mut egui::Ui, active: MediaId) {
+        use egui_phosphor::regular as icon;
+        let ids = self.selection.ordered(&self.media, &self.filtered);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("{} selected", ids.len())).font(semibold(13.0)));
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .small_button("Show one")
+                    .on_hover_text("Only the active photo, large · Esc")
+                    .clicked()
+                {
+                    self.board.single = Some(ids.len());
+                }
+                let marked = ids.iter().all(|id| self.decision(*id).rejected);
+                if icon_text_button(
+                    ui,
+                    !self.busy,
+                    marked,
+                    icon::TRASH,
+                    if marked {
+                        "Unmark all"
+                    } else {
+                        "Mark all for Trash"
+                    },
+                )
+                .on_hover_text("Every selected photo · D")
+                .clicked()
+                {
+                    self.toggle_selection_trash();
+                }
+            });
+        });
+        ui.label(
+            RichText::new("Click a photo to make it active · double-click to see it large")
+                .small()
+                .color(MUTED),
+        );
+        ui.add_space(S1);
+        let gap = ui.spacing().item_spacing.x;
+        let width = ui.available_width();
+        let tile = sheet_tile(ids.len(), width, ui.available_height(), gap);
+        let columns = (((width + gap) / (tile + gap)).floor() as usize).max(1);
+        let rows = ids.len().div_ceil(columns);
+        egui::ScrollArea::vertical()
+            .id_salt("organize-sheet")
+            .auto_shrink([false, false])
+            .show_rows(ui, tile, rows, |ui, range| {
+                for row in range {
+                    ui.horizontal(|ui| {
+                        for &id in ids.iter().skip(row * columns).take(columns) {
+                            self.sheet_tile(ui, id, tile, id == active);
+                        }
+                    });
+                }
+            });
+    }
+    fn sheet_tile(&mut self, ui: &mut egui::Ui, id: MediaId, size: f32, active: bool) {
+        let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+        let name = self.media[self.index[&id]].name();
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, &name)
+        });
+        let painter = ui.painter();
+        painter.rect_filled(rect, R_CONTROL, CARD);
+        if let Some(texture) = self.texture(id, false) {
+            // The whole photo, fitted inside the square.
+            let image = texture.size_vec2();
+            let scale = ((size - 4.0) / image.x.max(1.0)).min((size - 4.0) / image.y.max(1.0));
+            let shown = egui::Rect::from_center_size(rect.center(), image * scale);
+            painter.image(
+                texture.id(),
+                shown,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
+        if self.decision(id).rejected {
+            painter.circle_filled(rect.right_top() + egui::vec2(-12.0, 12.0), 9.0, RED);
+            painter.text(
+                rect.right_top() + egui::vec2(-12.0, 12.0),
+                Align2::CENTER_CENTER,
+                egui_phosphor::regular::TRASH,
+                FontId::proportional(11.0),
+                Color32::WHITE,
+            );
+        }
+        if active {
+            painter.rect_stroke(
+                rect,
+                R_CONTROL,
+                Stroke::new(2.0, ACCENT),
+                StrokeKind::Inside,
+            );
+        }
+        let response = response.on_hover_text(name);
+        if response.clicked() {
+            self.set_active(id);
+        }
+        if response.double_clicked() {
+            self.set_active(id);
+            self.board.single = Some(self.selection.len());
+        }
+    }
     /// Columns that show compared photos largest: their typical shape decides
     /// between side by side and stacked in the panel's shape.
     fn preview_columns(&self, ids: &[MediaId], size: Vec2, gap: Vec2) -> usize {
@@ -1598,7 +1879,8 @@ impl PhotoSortApp {
                 }
                 ui.label(RichText::new(icon::IMAGE).size(11.0).color(MUTED));
                 ui.add_space(S3);
-                self.original_button(ui);
+                self.board_filter(ui);
+                self.board_search(ui);
                 ui.add_space(S2);
                 // The selection count only when it fits beside the title.
                 let small = egui::TextStyle::Small.resolve(ui.style());
@@ -1649,31 +1931,164 @@ impl PhotoSortApp {
             });
         });
     }
+    /// Filters the photos on the board by name or folder. A magnifier button
+    /// stands in for the field when the header is narrow; it opens on click
+    /// or Ctrl/Cmd+F and stays open while it has text or focus.
+    fn board_search(&mut self, ui: &mut egui::Ui) {
+        use egui_phosphor::regular as icon;
+        let id = egui::Id::new("library_search");
+        // The title keeps about this much room before the field takes it.
+        let room = ui.available_width() - 160.0;
+        let focused = ui.memory(|m| m.has_focus(id));
+        if room >= 110.0 || focused || self.board.searching || !self.query.is_empty() {
+            // The board is on BG; the field stands out like a tile.
+            let field = self.search_box(ui, room.clamp(100.0, 180.0), ELEVATED);
+            if field.lost_focus() && self.query.is_empty() {
+                self.board.searching = false;
+            }
+        } else if icon_button(ui, icon::MAGNIFYING_GLASS, "Search · Ctrl/Cmd+F").clicked() {
+            self.board.searching = true;
+            ui.memory_mut(|m| m.request_focus(id));
+        }
+    }
+    /// Which photos the board shows: all, unmarked, marked for Trash, rated
+    /// and so on. Highlighted while it hides some.
+    fn board_filter(&mut self, ui: &mut egui::Ui) {
+        use egui_phosphor::regular as icon;
+        let on = self.filter != Filter::All;
+        let button = ui
+            .add(
+                egui::Button::new(RichText::new(icon::FUNNEL).color(if on { ACCENT } else { INK }))
+                    .frame(on)
+                    .selected(on)
+                    .min_size(egui::vec2(28.0, 0.0)),
+            )
+            .on_hover_text(format!("Show: {}", self.filter.title()));
+        let button = named(button, egui::WidgetType::Button, "Show");
+        egui::Popup::menu(&button)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_min_width(180.0);
+                self.filter_choices(ui);
+            });
+    }
     /// Held down, shows the folders as they are on disk now; released, the
-    /// plan again. Backslash does the same.
-    fn original_button(&mut self, ui: &mut egui::Ui) {
+    /// plan again. Backslash does the same. Only the icon in a narrow bar.
+    pub(super) fn original_button(&mut self, ui: &mut egui::Ui, compact: bool) {
         use egui_phosphor::regular as icon;
         let on = self.board.original;
-        // Only the icon when the board is narrow, so the counts stay readable.
-        let text = if ui.available_width() < 440.0 {
+        let text = if compact {
             icon::CLOCK_COUNTER_CLOCKWISE.to_owned()
         } else {
             format!("{}  Show original", icon::CLOCK_COUNTER_CLOCKWISE)
         };
-        let button =
-            egui::Button::new(
-                RichText::new(text)
-                    .small()
-                    .color(if on { ACCENT } else { INK }),
-            )
+        let button = egui::Button::new(RichText::new(text).color(if on { ACCENT } else { INK }))
             .selected(on)
             .sense(Sense::drag());
-        let response = named(ui.add(button), egui::WidgetType::Button, "Show original")
-            .on_hover_text("Hold to see the folders as they are on disk now · or hold \\");
+        // With nothing planned, the plan is the folders on disk.
+        let response = named(
+            ui.add_enabled(self.organize_planned(), button),
+            egui::WidgetType::Button,
+            "Show original",
+        )
+        .on_hover_text("Hold to see the folders as they are on disk now · or hold \\")
+        .on_disabled_hover_text("Nothing planned yet: the folders already look like this on disk");
         let held = response.is_pointer_button_down_on();
         if held != self.board.original_button {
             self.board.original_button = held;
             ui.ctx().request_repaint();
+        }
+    }
+    /// Whether the plan differs from the folders on disk: photos that move
+    /// or are renamed, whether by hand or by the grouping, new folders, and
+    /// folders renamed or moved. Show original and Reset changes both ask.
+    pub(super) fn organize_planned(&self) -> bool {
+        self.board.changes > 0
+            || !self.file_names.is_empty()
+            || self
+                .organize_drafts
+                .get(&self.group_mode)
+                .is_some_and(|draft| {
+                    let edits = draft.directory_edits();
+                    !edits.renamed.is_empty() || !edits.moved_empty.is_empty()
+                })
+    }
+    /// Whether there are planned changes to reset.
+    pub(super) fn organize_resettable(&self) -> bool {
+        self.organize_planned() && self.retry_plan.is_none()
+    }
+    /// Asks before dropping every planned Organize change. Only the icon in
+    /// a narrow bar.
+    pub(super) fn reset_button(&mut self, ui: &mut egui::Ui, compact: bool) {
+        use egui_phosphor::regular as icon;
+        let text = if compact {
+            icon::ARROW_U_UP_LEFT.to_owned()
+        } else {
+            format!("{}  Reset changes", icon::ARROW_U_UP_LEFT)
+        };
+        let response = named(
+            ui.add_enabled(self.organize_resettable(), egui::Button::new(text)),
+            egui::WidgetType::Button,
+            "Reset changes",
+        )
+        .on_hover_text("Discard every planned move, rename and new folder")
+        .on_disabled_hover_text("No planned changes to reset");
+        if response.clicked() {
+            self.board.confirm_reset = true;
+        }
+    }
+    /// Drops every planned Organize change and shows the folders as they are
+    /// on disk. Trash marks, ratings and rotations stay.
+    pub(super) fn reset_organize(&mut self) {
+        self.board.confirm_reset = false;
+        self.set_group_mode(GroupMode::Current);
+        self.discard_organize_changes();
+        self.pending_bookmark = None;
+        self.board.editing = None;
+        self.board.renaming = None;
+        self.board.marquee = None;
+        self.board.focus = None;
+        self.board_epoch += 1;
+        self.navigation_notice = Some("Changes reset · the folders are as they are on disk".into());
+    }
+    pub(super) fn organize_reset_dialog(&mut self, ctx: &egui::Context) {
+        if !self.board.confirm_reset {
+            return;
+        }
+        let changes = self.board.changes;
+        let mut reset = None;
+        let response = modal(egui::Id::new("reset_organize")).show(ctx, |ui| {
+            ui.set_max_width(420.0_f32.min((ctx.content_rect().width() - 60.0).max(180.0)));
+            ui.heading(if changes > 0 {
+                format!(
+                    "Reset {changes} planned {}?",
+                    if changes == 1 { "change" } else { "changes" }
+                )
+            } else {
+                "Reset planned changes?".into()
+            });
+            ui.label(format!(
+                "Every move, rename and new folder planned in Organize is dropped, in every grouping, and Group by goes back to {}. Nothing on disk changes.",
+                GroupMode::Current.title()
+            ));
+            ui.label(RichText::new("Trash marks, ratings and rotations stay.").color(MUTED));
+            ui.add_space(S2);
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Keep changes").clicked() {
+                    reset = Some(false);
+                }
+                if ui.button("Reset changes").clicked() {
+                    reset = Some(true);
+                }
+            });
+        });
+        if response.should_close() && reset.is_none() {
+            reset = Some(false);
+        }
+        match reset {
+            Some(true) => self.reset_organize(),
+            Some(false) => self.board.confirm_reset = false,
+            None => {}
         }
     }
     /// Why the chosen grouping has no result, and the action that starts it.
@@ -1756,7 +2171,8 @@ impl PhotoSortApp {
         let key = ui.input(|i| i.focused && i.key_down(egui::Key::Backslash))
             && !ui.ctx().egui_wants_keyboard_input()
             && !self.modal_active();
-        self.show_original(key || self.board.original_button);
+        // Nothing to compare with while the plan is the folders on disk.
+        self.show_original((key || self.board.original_button) && self.organize_planned());
         self.board.typing = false;
         if self.filter_dirty
             || self.board.key.is_none()
@@ -1765,6 +2181,7 @@ impl PhotoSortApp {
             self.filter_dirty = true;
             self.refilter();
         }
+        self.update_people(ui.ctx());
         egui::Panel::left("organize_folder_panel")
             .resizable(true)
             .default_size(240.0)
@@ -1776,7 +2193,7 @@ impl PhotoSortApp {
                     .inner_margin(S2)
                     .outer_margin(egui::Margin {
                         left: 0,
-                        right: 10,
+                        right: BOARD_GAP as i8,
                         top: 0,
                         bottom: 0,
                     }),
@@ -1798,7 +2215,7 @@ impl PhotoSortApp {
                     .corner_radius(R_SURFACE)
                     .inner_margin(S2)
                     .outer_margin(egui::Margin {
-                        left: 10,
+                        left: BOARD_GAP as i8,
                         right: 0,
                         top: 0,
                         bottom: 0,
@@ -1851,6 +2268,23 @@ impl PhotoSortApp {
         }
         let total = y;
         if rows.is_empty() {
+            if self.filtered.is_empty()
+                && (!self.query.trim().is_empty() || self.filter != Filter::All)
+            {
+                let clear = super::states::notice_card(
+                    ui,
+                    egui_phosphor::regular::MAGNIFYING_GLASS,
+                    "No photos match",
+                    "The search and filter hide every photo here.",
+                    Some(("Clear search and filter", true)),
+                );
+                if clear {
+                    self.query.clear();
+                    self.filter = Filter::All;
+                    self.filter_dirty = true;
+                }
+                return;
+            }
             ui.centered_and_justified(|ui| {
                 ui.label(
                     RichText::new("This folder is empty. Drag photos here from another folder.")
@@ -1897,9 +2331,11 @@ impl PhotoSortApp {
                     .vertical_scroll_offset((top + tile_height - ui.available_height()).max(0.0));
             }
         }
+        let faces_mode = self.board.people.signature.is_some();
         let editable = self.board_editable();
         let root = self.board_root_name();
         let dim = matches!(pending, Some(Pending::Running | Pending::Waiting));
+        let mut keep: Option<Vec<MediaId>> = None;
         let mut drop: Option<(Vec<MediaId>, String)> = None;
         let mut select_section: Option<usize> = None;
         let mut faceless = false;
@@ -2002,6 +2438,13 @@ impl PhotoSortApp {
                 }
                 match row {
                     Row::Header(index) => {
+                        let faces = faces_mode.then(|| {
+                            self.board.sections[*index]
+                                .path
+                                .clone()
+                                .map(|path| self.folder_faces(&path, ui.ctx().pixels_per_point()))
+                                .unwrap_or_default()
+                        });
                         let section = &self.board.sections[*index];
                         let rect = egui::Rect::from_min_size(
                             origin + egui::vec2(0.0, *top),
@@ -2049,6 +2492,7 @@ impl PhotoSortApp {
                             &counts,
                             response.hovered(),
                             pending,
+                            faces.as_deref(),
                         );
                         if let Some(path) = &section.path {
                             if editable
@@ -2068,6 +2512,24 @@ impl PhotoSortApp {
                                     response.dnd_release_payload::<super::grouping::PhotoDrag>()
                             {
                                 drop = Some((payload.0.clone(), path.clone()));
+                            }
+                        } else if editable && pending.is_none() {
+                            // Dropped on "Not moving", items stay where they are.
+                            if response
+                                .dnd_hover_payload::<super::grouping::PhotoDrag>()
+                                .is_some()
+                            {
+                                ui.painter().rect_stroke(
+                                    rect.shrink2(egui::vec2(0.0, 4.0)),
+                                    R_CONTROL,
+                                    Stroke::new(1.5, ACCENT),
+                                    StrokeKind::Inside,
+                                );
+                            }
+                            if let Some(payload) =
+                                response.dnd_release_payload::<super::grouping::PhotoDrag>()
+                            {
+                                keep = Some(payload.0.clone());
                             }
                         }
                         if offer {
@@ -2097,10 +2559,35 @@ impl PhotoSortApp {
                         response.widget_info(|| {
                             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name)
                         });
-                        if response
-                            .on_hover_text("Click to select every item in this folder")
-                            .clicked()
-                        {
+                        let tip = "Click to select every item in this folder";
+                        // A person's folder shows their faces larger on hover.
+                        let path = self.board.sections[*index].path.clone();
+                        let card = match &path {
+                            Some(path)
+                                if response.hovered()
+                                    && faces.as_ref().is_some_and(|f| !f.is_empty()) =>
+                            {
+                                self.folder_card(path, ui.ctx().pixels_per_point())
+                            }
+                            _ => Vec::new(),
+                        };
+                        // Any other folder previews what is inside it.
+                        let preview = path
+                            .filter(|_| card.is_empty() && response.hovered())
+                            .map(|path| self.folder_preview(&path, resting(ui)));
+                        let response = match (&preview, card.is_empty()) {
+                            (_, false) => response.on_hover_ui(|ui| {
+                                let width = super::people::face_card(ui, &card);
+                                ui.set_max_width(width);
+                                ui.label(RichText::new(tip).small().color(MUTED));
+                            }),
+                            (Some(preview), true) => response.on_hover_ui(|ui| {
+                                preview_card(ui, preview);
+                                ui.label(RichText::new(tip).small().color(MUTED));
+                            }),
+                            (None, true) => response.on_hover_text(tip),
+                        };
+                        if response.clicked() {
                             select_section = Some(*index);
                         }
                     }
@@ -2182,6 +2669,9 @@ impl PhotoSortApp {
         if let Some((ids, target)) = drop {
             self.board_move(&ids, &target);
         }
+        if let Some(ids) = keep {
+            self.board_keep_in_place(&ids);
+        }
         if faceless {
             self.change_faceless(crate::core::preferences::Faceless::Folder);
         }
@@ -2189,17 +2679,24 @@ impl PhotoSortApp {
 }
 
 /// One row of the folder tree: indent, icon, name and count.
+/// One sidebar row. With `faces` (grouping by faces) every row keeps a slot
+/// wide enough for two faces, so names line up; a person's folder shows their
+/// face there, others the folder icon. `hint` shows on hover when it fits.
+#[allow(clippy::too_many_arguments)]
 fn folder_row(
     ui: &mut egui::Ui,
+    height: f32,
     title: &str,
     glyph: &str,
     depth: usize,
     count: usize,
     selected: bool,
     draggable: bool,
+    faces: Option<&[super::people::FaceImage]>,
+    hint: Option<&str>,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), 26.0),
+        egui::vec2(ui.available_width(), height),
         if draggable {
             Sense::click_and_drag()
         } else {
@@ -2220,20 +2717,59 @@ fn folder_row(
         painter.rect_filled(rect, R_CONTROL, CARD.gamma_multiply(hover));
     }
     let x = rect.left() + 8.0 + depth as f32 * 14.0;
-    painter.text(
-        egui::pos2(x, rect.center().y),
-        Align2::LEFT_CENTER,
-        glyph,
-        FontId::proportional(14.0),
-        if selected { ACCENT } else { MUTED },
-    );
+    match faces {
+        Some(faces) if !faces.is_empty() => {
+            use super::people::{ROW_FACE, ROW_SLOT};
+            let slot = egui::Rect::from_min_size(
+                egui::pos2(x - 2.0, rect.center().y - ROW_FACE / 2.0),
+                egui::vec2(ROW_SLOT, ROW_FACE),
+            );
+            let behind = if selected {
+                SELECTED
+            } else {
+                lerp_color(PANEL, CARD, hover)
+            };
+            super::people::paint_faces(painter, slot, faces, behind);
+        }
+        _ => {
+            painter.text(
+                egui::pos2(x, rect.center().y),
+                Align2::LEFT_CENTER,
+                glyph,
+                FontId::proportional(14.0),
+                if selected { ACCENT } else { MUTED },
+            );
+        }
+    }
+    let text_x = x + if faces.is_some() {
+        super::people::ROW_SLOT + 4.0
+    } else {
+        22.0
+    };
     let count_galley = painter.layout_no_wrap(count.to_string(), FontId::proportional(10.5), MUTED);
-    let count_x = rect.right() - 8.0 - count_galley.size().x;
+    let mut count_x = rect.right() - 8.0 - count_galley.size().x;
     painter.galley(
         egui::pos2(count_x, rect.center().y - count_galley.size().y / 2.0),
         count_galley,
         MUTED,
     );
+    if let Some(hint) = hint.filter(|_| hover > 0.5) {
+        let galley = painter.layout_no_wrap(hint.to_owned(), FontId::proportional(10.5), ACCENT);
+        let left = count_x - 8.0 - galley.size().x;
+        // Only beside a name that still reads in full.
+        let title_width = painter
+            .layout_no_wrap(title.to_owned(), FontId::proportional(12.0), INK)
+            .size()
+            .x;
+        if left - 8.0 >= text_x + title_width {
+            painter.galley(
+                egui::pos2(left, rect.center().y - galley.size().y / 2.0),
+                galley,
+                ACCENT,
+            );
+            count_x = left;
+        }
+    }
     let mut job = egui::text::LayoutJob::simple_singleline(
         title.to_owned(),
         if selected {
@@ -2243,17 +2779,110 @@ fn folder_row(
         },
         INK,
     );
-    job.wrap = egui::text::TextWrapping::truncate_at_width((count_x - x - 30.0).max(10.0));
+    job.wrap = egui::text::TextWrapping::truncate_at_width((count_x - text_x - 8.0).max(10.0));
     let galley = painter.layout_job(job);
     painter.galley(
-        egui::pos2(x + 22.0, rect.center().y - galley.size().y / 2.0),
+        egui::pos2(text_x, rect.center().y - galley.size().y / 2.0),
         galley,
         INK,
     );
     response
 }
 
+/// The contact sheet's square tile: the largest that fits every photo in
+/// the panel, between a small and a comfortable size; past that the sheet
+/// scrolls.
+pub(super) fn sheet_tile(count: usize, width: f32, height: f32, gap: f32) -> f32 {
+    const SMALLEST: f32 = 72.0;
+    const LARGEST: f32 = 160.0;
+    let fitting = (1..=count.max(1))
+        .map(|columns| {
+            let side = (width - gap * (columns - 1) as f32) / columns as f32;
+            let rows = count.div_ceil(columns) as f32;
+            (side, rows * side + (rows - 1.0) * gap <= height)
+        })
+        .filter(|(_, fits)| *fits)
+        .map(|(side, _)| side)
+        .fold(0.0_f32, f32::max);
+    fitting.clamp(SMALLEST, LARGEST).min(width.max(1.0))
+}
+
+/// Photos shown in a folder's hover preview.
+const PREVIEW_THUMBNAILS: usize = 6;
+const PREVIEW_TILE: f32 = 56.0;
+
+/// A folder's contents for its hover preview.
+#[derive(Default)]
+pub(super) struct FolderPreview {
+    /// The first photos' thumbnails; `None` while one is loading.
+    pub(super) thumbnails: Vec<Option<(egui::TextureId, Vec2)>>,
+    pub(super) photos: usize,
+    pub(super) videos: usize,
+    pub(super) folders: usize,
+}
+impl FolderPreview {
+    /// "12 photos · 2 videos · 3 folders", or "Empty".
+    pub(super) fn counts(&self) -> String {
+        let parts: Vec<String> = [
+            (self.photos, "photo", "photos"),
+            (self.videos, "video", "videos"),
+            (self.folders, "folder", "folders"),
+        ]
+        .into_iter()
+        .filter(|(n, _, _)| *n > 0)
+        .map(|(n, one, many)| format!("{n} {}", if n == 1 { one } else { many }))
+        .collect();
+        if parts.is_empty() {
+            "Empty".into()
+        } else {
+            parts.join(" · ")
+        }
+    }
+}
+/// The pointer has stopped on what it hovers, rather than passing over it:
+/// only then does a hover preview ask for thumbnails.
+fn resting(ui: &egui::Ui) -> bool {
+    let still = ui.input(|i| i.pointer.time_since_last_movement()) >= REST_SECONDS;
+    if !still {
+        // Look again once it has had time to stop.
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f32(REST_SECONDS));
+    }
+    still
+}
+const REST_SECONDS: f32 = 0.12;
+/// A folder's hover preview: its first photos as small square tiles, three
+/// to a row, and what it holds.
+fn preview_card(ui: &mut egui::Ui, preview: &FolderPreview) {
+    let gap = S1;
+    for row in preview.thumbnails.chunks(3) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for thumbnail in row {
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(PREVIEW_TILE), Sense::hover());
+                match thumbnail {
+                    Some((texture, size)) => {
+                        // The middle square of the photo.
+                        let side = size.x.min(size.y).max(1.0);
+                        let uv = egui::Rect::from_center_size(
+                            egui::pos2(0.5, 0.5),
+                            egui::vec2(side / size.x.max(1.0), side / size.y.max(1.0)),
+                        );
+                        ui.painter().image(*texture, rect, uv, Color32::WHITE);
+                    }
+                    // Still loading.
+                    None => {
+                        ui.painter().rect_filled(rect, R_CONTROL, CARD);
+                    }
+                }
+            }
+        });
+    }
+    ui.label(RichText::new(preview.counts()).font(medium(12.0)));
+}
+
 /// A folder's header above its photos: name, parent path and counts.
+#[allow(clippy::too_many_arguments)]
 fn section_header(
     ui: &egui::Ui,
     rect: egui::Rect,
@@ -2262,6 +2891,7 @@ fn section_header(
     counts: &str,
     hovered: bool,
     pending: Option<Pending>,
+    faces: Option<&[super::people::FaceImage]>,
 ) {
     use egui_phosphor::regular as icon;
     let painter = ui.painter_at(rect);
@@ -2286,15 +2916,37 @@ fn section_header(
         ),
     };
     let color = if hovered { INK } else { ACCENT };
-    painter.text(
-        egui::pos2(rect.left() + 2.0, y),
-        Align2::LEFT_CENTER,
-        glyph,
-        FontId::proportional(16.0),
-        color,
-    );
+    match faces {
+        // A person's folder shows their face, a little larger than in the sidebar.
+        Some(faces) if !faces.is_empty() => {
+            use super::people::HEADER_FACE;
+            super::people::paint_faces(
+                &painter,
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.left(), y - HEADER_FACE / 2.0),
+                    egui::vec2(HEADER_FACE * 1.55, HEADER_FACE),
+                ),
+                faces,
+                BG,
+            )
+        }
+        _ => {
+            painter.text(
+                egui::pos2(rect.left() + 2.0, y),
+                Align2::LEFT_CENTER,
+                glyph,
+                FontId::proportional(16.0),
+                color,
+            );
+        }
+    }
     let title = painter.layout_no_wrap(title, semibold(14.0), INK);
-    let mut x = rect.left() + 26.0;
+    let mut x = rect.left()
+        + match faces.map_or(0, <[_]>::len) {
+            0 => 26.0,
+            1 => super::people::HEADER_FACE + 8.0,
+            _ => super::people::HEADER_FACE * 1.55 + 8.0,
+        };
     let title_width = title.size().x;
     painter.galley(egui::pos2(x, y - title.size().y / 2.0), title, INK);
     x += title_width + 10.0;
@@ -2690,6 +3342,12 @@ mod tests {
             assert!(
                 counts.right() <= slider.left(),
                 "counts {counts:?} overlap the slider {slider:?} at {width}"
+            );
+            // Nor under the search and filter beside it.
+            let filter = rect("Show");
+            assert!(
+                counts.right() <= filter.left(),
+                "counts {counts:?} overlap the filter {filter:?} at {width}"
             );
         }
         app.runtime.shutdown();
@@ -3357,6 +4015,1331 @@ mod tests {
         );
         assert!(app.board.renaming.is_none());
         assert!(app.media.iter().all(|m| m.path.exists()));
+        app.runtime.shutdown();
+    }
+
+    /// A left click at `pos`.
+    fn click_at(app: &mut PhotoSortApp, ctx: &egui::Context, size: Vec2, pos: egui::Pos2) {
+        use super::super::compact_cull_tests::frame;
+        for pressed in [true, false] {
+            frame(
+                app,
+                ctx,
+                size,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+    }
+
+    fn found<'a>(nodes: &'a [(String, egui::Rect)], label: &str) -> Vec<&'a egui::Rect> {
+        nodes
+            .iter()
+            .filter(|(s, _)| s == label)
+            .map(|(_, rect)| rect)
+            .collect()
+    }
+
+    #[test]
+    fn reset_changes_asks_then_drops_every_planned_change_but_keeps_marks() {
+        use super::super::compact_cull_tests::{click_label, frame, rendered};
+        let (_temp, mut app) = organize();
+        let ids: Vec<MediaId> = app.filtered.iter().map(|i| app.media[*i].id).collect();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1400.0, 900.0);
+        rendered(&mut app, &ctx, size);
+        // Nothing planned: the button is there but does nothing.
+        assert!(!app.organize_resettable());
+        click_label(&mut app, &ctx, size, "Reset changes");
+        assert!(!app.board.confirm_reset);
+        // A move, a new folder, a rename, edits in another grouping, another
+        // destination, plus a Trash mark and a rating from the other steps.
+        app.board_move(&ids[..2], "B");
+        new_folder(&mut app, "", "Trip");
+        app.file_names.insert(ids[3], "Holiday".into());
+        app.group_mode = GroupMode::Camera;
+        new_folder(&mut app, "", "Picks");
+        app.output = _temp.path().display().to_string();
+        app.stage_manual([ids[4]], crate::core::decisions::Change::Trash(true));
+        app.stage_manual([ids[5]], crate::core::decisions::Change::Rating(2));
+        let decisions = app.decisions.clone();
+        rendered(&mut app, &ctx, size);
+        assert!(app.board.changes > 0 && app.organize_resettable());
+        // Keep changes leaves everything as it was.
+        click_label(&mut app, &ctx, size, "Reset changes");
+        assert!(app.board.confirm_reset && app.modal_active());
+        let nodes = rendered(&mut app, &ctx, size);
+        assert!(shows(&nodes, "Trash marks, ratings and rotations stay."));
+        click_label(&mut app, &ctx, size, "Keep changes");
+        assert!(!app.board.confirm_reset);
+        assert_eq!(app.organize_drafts.len(), 2);
+        assert_eq!(app.group_mode, GroupMode::Camera);
+        // So does Escape.
+        click_label(&mut app, &ctx, size, "Reset changes");
+        frame(
+            &mut app,
+            &ctx,
+            size,
+            key(egui::Key::Escape, Default::default()),
+        );
+        rendered(&mut app, &ctx, size);
+        assert!(!app.board.confirm_reset);
+        assert_eq!(app.organize_drafts.len(), 2);
+        // Confirming drops every planned change, in every grouping.
+        click_label(&mut app, &ctx, size, "Reset changes");
+        let nodes = rendered(&mut app, &ctx, size);
+        let buttons = found(&nodes, "Reset changes");
+        assert_eq!(buttons.len(), 2, "the bar's button and the dialog's");
+        let confirm = buttons
+            .into_iter()
+            .max_by(|a, b| a.top().total_cmp(&b.top()))
+            .unwrap()
+            .center();
+        click_at(&mut app, &ctx, size, confirm);
+        rendered(&mut app, &ctx, size);
+        assert!(!app.board.confirm_reset);
+        assert!(app.organize_drafts.is_empty() && app.file_names.is_empty());
+        assert_eq!(app.group_mode, GroupMode::Current);
+        assert_eq!(app.output, app.root.as_ref().unwrap().display().to_string());
+        assert_eq!(app.board.changes, 0);
+        assert!(!app.organize_resettable());
+        // The other steps' decisions stay, and so does every file.
+        assert_eq!(app.decisions, decisions);
+        assert_eq!(app.staged_change_count(), 2);
+        assert!(app.media.iter().all(|m| m.path.exists()));
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn organize_top_bar_has_no_more_menu_and_fits_every_width() {
+        use super::super::compact_cull_tests::rendered;
+        let (_temp, mut app) = organize();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        for width in [760.0, 900.0, 1000.0, 1100.0, 1280.0, 1440.0, 1800.0] {
+            let size = egui::vec2(width, 800.0);
+            let nodes = rendered(&mut app, &ctx, size);
+            assert!(found(&nodes, "More actions").is_empty(), "at {width}");
+            let bar = [
+                "Show original",
+                "Reset changes",
+                "Analyze library · Ctrl/Cmd+S",
+                "Details",
+            ];
+            let rects: Vec<egui::Rect> = bar
+                .iter()
+                .map(|name| {
+                    let rects = found(&nodes, name);
+                    assert_eq!(rects.len(), 1, "{name} at {width}");
+                    *rects[0]
+                })
+                .collect();
+            for (name, rect) in bar.iter().zip(&rects) {
+                assert!(
+                    rect.left() >= 0.0 && rect.right() <= width,
+                    "{name} {rect:?} outside the window at {width}"
+                );
+            }
+            for pair in rects.windows(2) {
+                assert!(
+                    pair[0].right() <= pair[1].left() + 0.5,
+                    "{pair:?} overlap at {width}"
+                );
+                // One line: no button sits lower than its neighbours.
+                assert!(
+                    (pair[0].center().y - pair[1].center().y).abs() < 1.0,
+                    "{pair:?} out of line at {width}"
+                );
+            }
+            // Search and the photo filter sit over the board, not in the bar.
+            let filter = *found(&nodes, "Show")[0];
+            assert!(filter.top() > rects[0].bottom(), "at {width}");
+        }
+        // The other steps keep their More menu (Cull's is empty while the
+        // analysis it starts runs).
+        for step in [Step::EasyDelete, Step::Rotation, Step::Cull] {
+            app.set_step(step);
+            app.runtime.cancel_analysis();
+            app.analysis_run = None;
+            let nodes = rendered(&mut app, &ctx, egui::vec2(1280.0, 800.0));
+            assert_eq!(found(&nodes, "More actions").len(), 1, "{step:?}");
+            assert!(found(&nodes, "Reset changes").is_empty(), "{step:?}");
+        }
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn board_search_filters_photos_and_stays_open_when_nothing_matches() {
+        use super::super::compact_cull_tests::{click_label, frame, rendered};
+        let search = egui::Id::new("library_search");
+        for width in [900.0, 1440.0] {
+            let (_temp, mut app) = organize();
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            ctx.enable_accesskit();
+            let size = egui::vec2(width, 800.0);
+            let nodes = rendered(&mut app, &ctx, size);
+            // A narrow board shows a magnifier until it is needed.
+            assert_eq!(
+                found(&nodes, "Search · Ctrl/Cmd+F").len(),
+                usize::from(width < 1000.0),
+                "at {width}"
+            );
+            frame(
+                &mut app,
+                &ctx,
+                size,
+                key(egui::Key::F, egui::Modifiers::COMMAND),
+            );
+            rendered(&mut app, &ctx, size);
+            assert_eq!(ctx.memory(|m| m.focused()), Some(search), "at {width}");
+            frame(
+                &mut app,
+                &ctx,
+                size,
+                vec![egui::Event::Text("photo-1".into())],
+            );
+            rendered(&mut app, &ctx, size);
+            assert_eq!(app.query, "photo-1");
+            assert_eq!(app.filtered.len(), 1, "at {width}");
+            // No match keeps the board, the field and its focus.
+            frame(&mut app, &ctx, size, vec![egui::Event::Text("x".into())]);
+            let nodes = rendered(&mut app, &ctx, size);
+            assert!(app.filtered.is_empty());
+            assert!(shows(&nodes, "No photos match"), "at {width}");
+            assert!(shows(&nodes, "Thumbnail size"), "the board stays");
+            assert_eq!(ctx.memory(|m| m.focused()), Some(search), "at {width}");
+            click_label(&mut app, &ctx, size, "Clear search and filter");
+            rendered(&mut app, &ctx, size);
+            assert!(app.query.is_empty());
+            assert_eq!(app.filtered.len(), 9);
+            app.runtime.shutdown();
+        }
+    }
+
+    #[test]
+    fn the_narrow_boards_magnifier_opens_a_focused_field_that_closes_when_left_empty() {
+        use super::super::compact_cull_tests::{click_label, frame, rendered};
+        let search = egui::Id::new("library_search");
+        let (_temp, mut app) = organize();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(900.0, 800.0);
+        click_label(&mut app, &ctx, size, "Search · Ctrl/Cmd+F");
+        rendered(&mut app, &ctx, size);
+        assert_eq!(ctx.memory(|m| m.focused()), Some(search));
+        frame(&mut app, &ctx, size, vec![egui::Event::Text("B".into())]);
+        rendered(&mut app, &ctx, size);
+        assert_eq!(app.query, "B");
+        // Emptied and left, it folds back into the magnifier.
+        frame(
+            &mut app,
+            &ctx,
+            size,
+            key(egui::Key::Backspace, Default::default()),
+        );
+        frame(
+            &mut app,
+            &ctx,
+            size,
+            key(egui::Key::Escape, Default::default()),
+        );
+        let nodes = rendered(&mut app, &ctx, size);
+        assert!(app.query.is_empty() && !app.board.searching);
+        assert_eq!(found(&nodes, "Search · Ctrl/Cmd+F").len(), 1);
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn the_faces_bar_wraps_before_its_buttons_at_every_width() {
+        use super::super::compact_cull_tests::rendered;
+        let (_temp, mut app) = organize();
+        app.group_mode = GroupMode::Faces;
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        for (width, inspector) in [
+            (900.0, false),
+            (1000.0, false),
+            (1100.0, false),
+            (1150.0, false),
+            (1200.0, false),
+            (1280.0, false),
+            (1300.0, true),
+            (1440.0, true),
+        ] {
+            app.inspector = inspector;
+            let nodes = rendered(&mut app, &ctx, egui::vec2(width, 800.0));
+            let original = *found(&nodes, "Show original")[0];
+            for name in ["Keep in their folders", "Organize into"] {
+                let rect = nodes
+                    .iter()
+                    .find(|(s, _)| s.contains(name))
+                    .unwrap_or_else(|| panic!("{name} at {width}"))
+                    .1;
+                assert!(
+                    rect.right() <= original.left()
+                        || rect.top() >= original.bottom()
+                        || rect.bottom() <= original.top(),
+                    "{name} {rect:?} runs under Show original {original:?} at {width}"
+                );
+            }
+        }
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn the_board_filter_shows_marked_photos_and_lights_up_while_it_hides_some() {
+        use super::super::compact_cull_tests::{click_label, rendered};
+        let (_temp, mut app) = organize();
+        let ids: Vec<MediaId> = app.filtered.iter().map(|i| app.media[*i].id).collect();
+        app.stage_manual([ids[2]], crate::core::decisions::Change::Trash(true));
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1400.0, 900.0);
+        click_label(&mut app, &ctx, size, "Show");
+        click_label(&mut app, &ctx, size, Filter::Rejected.title());
+        rendered(&mut app, &ctx, size);
+        assert_eq!(app.filter, Filter::Rejected);
+        assert_eq!(app.filtered.len(), 1);
+        app.runtime.shutdown();
+    }
+
+    /// Organize grouped by `mode` with four photos the grouping leaves
+    /// where they are, which are returned.
+    fn grouped(mode: GroupMode) -> (tempfile::TempDir, PhotoSortApp, Vec<MediaId>) {
+        let (temp, mut app) = organize();
+        let ids: Vec<MediaId> = app.media.iter().map(|m| m.id).collect();
+        match mode {
+            GroupMode::Faces => app.gallery_organize_by_faces(),
+            GroupMode::Visual => {
+                app.visual_groups = Some(
+                    [0, 1, 4, 5, 8]
+                        .into_iter()
+                        .map(|i| (ids[i], i % 2))
+                        .collect(),
+                );
+                app.group_mode = mode;
+            }
+            _ => {
+                app.mixed_labels = Some(
+                    [0, 1, 4, 5, 8]
+                        .into_iter()
+                        .map(|i| (ids[i], format!("2023/Burst {}", i % 2)))
+                        .collect(),
+                );
+                app.group_mode = mode;
+            }
+        }
+        app.filter_dirty = true;
+        app.refilter();
+        let unplaced: Vec<MediaId> = app
+            .media
+            .iter()
+            .filter(|m| app.organize_label(m).is_none())
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(unplaced.len(), 4, "{mode:?}");
+        (temp, app, unplaced)
+    }
+
+    /// The board section an item is shown in; `None` is "Not moving".
+    fn section_of(app: &PhotoSortApp, id: MediaId) -> Option<String> {
+        let position = app
+            .filtered
+            .iter()
+            .position(|&i| app.media[i].id == id)
+            .expect("shown");
+        app.board
+            .sections
+            .iter()
+            .find(|s| s.range.contains(&position))
+            .expect("in a section")
+            .path
+            .clone()
+    }
+
+    /// Drags from one point to another with the pointer, as a person does.
+    fn drag(
+        app: &mut PhotoSortApp,
+        ctx: &egui::Context,
+        size: Vec2,
+        from: egui::Pos2,
+        to: egui::Pos2,
+    ) {
+        use super::super::compact_cull_tests::frame;
+        let pointer = |pos, pressed: Option<bool>| {
+            let mut events = vec![egui::Event::PointerMoved(pos)];
+            if let Some(pressed) = pressed {
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                });
+            }
+            events
+        };
+        frame(app, ctx, size, pointer(from, Some(true)));
+        for t in [0.2, 0.5, 0.8, 1.0] {
+            frame(app, ctx, size, pointer(from.lerp(to, t), None));
+        }
+        frame(app, ctx, size, pointer(to, Some(false)));
+    }
+
+    fn center(nodes: &[(String, egui::Rect)], label: &str) -> egui::Pos2 {
+        nodes
+            .iter()
+            .find(|(l, _)| l == label || l.starts_with(label))
+            .unwrap_or_else(|| {
+                panic!(
+                    "Missing {label}; labels {:?}",
+                    nodes.iter().map(|(l, _)| l).collect::<Vec<_>>()
+                )
+            })
+            .1
+            .center()
+    }
+
+    #[test]
+    fn items_not_moving_move_by_every_path_and_count_as_planned_changes() {
+        use super::super::compact_cull_tests::{click_label, rendered};
+        for mode in [GroupMode::Faces, GroupMode::Visual, GroupMode::Mixed] {
+            let (_temp, mut app, unplaced) = grouped(mode);
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            ctx.enable_accesskit();
+            let size = egui::vec2(1500.0, 1500.0);
+            rendered(&mut app, &ctx, size);
+            let target = app
+                .board
+                .folders
+                .iter()
+                .find(|f| !f.path.is_empty() && f.direct > 0)
+                .unwrap()
+                .path
+                .clone();
+            let name = |app: &PhotoSortApp, id: MediaId| app.media[app.index[&id]].name();
+            // The grouping's own moves come first.
+            let base = app.board.changes;
+            let mut moved = 0;
+            let mut check = |app: &mut PhotoSortApp, id: MediaId, how: &str| {
+                rendered(app, &ctx, size);
+                moved += 1;
+                assert_eq!(section_of(app, id), Some(target.clone()), "{mode:?} {how}");
+                assert_eq!(app.board.unplaced, 4 - moved, "{mode:?} {how}");
+                assert_eq!(app.board.changes, base + moved, "{mode:?} {how}");
+                assert!(app.organize_changes_pending(), "{mode:?} {how}");
+            };
+            // Dragged onto the folder in the sidebar.
+            let nodes = rendered(&mut app, &ctx, size);
+            let row = app.board.folders.iter().find(|f| f.path == target).unwrap();
+            let row = format!("{}  ·  {}", leaf(&row.path), row.total);
+            let (from, to) = (
+                center(&nodes, &name(&app, unplaced[0])),
+                center(&nodes, &row),
+            );
+            drag(&mut app, &ctx, size, from, to);
+            check(&mut app, unplaced[0], "sidebar drag");
+            // Dragged onto the folder's heading on the board.
+            let nodes = rendered(&mut app, &ctx, size);
+            let (from, to) = (
+                center(&nodes, &name(&app, unplaced[1])),
+                center(&nodes, &format!("Folder {target}")),
+            );
+            drag(&mut app, &ctx, size, from, to);
+            check(&mut app, unplaced[1], "heading drag");
+            // The tile's menu.
+            let label = target.replace('/', " / ");
+            let tile = name(&app, unplaced[2]);
+            context_click(&mut app, &ctx, size, &tile);
+            let nodes = rendered(&mut app, &ctx, size);
+            click_at(&mut app, &ctx, size, center(&nodes, "Move item to folder"));
+            click_label(&mut app, &ctx, size, &label);
+            check(&mut app, unplaced[2], "tile menu");
+            // Details' Move to, once the photo's details have loaded in the
+            // background: they push the button down when they arrive.
+            app.inspector = true;
+            app.select_library(unplaced[3], false, false);
+            let started = Instant::now();
+            while !shows(&rendered(&mut app, &ctx, size), "Dimensions") {
+                assert!(started.elapsed().as_secs() < 10, "{mode:?} details");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let nodes = rendered(&mut app, &ctx, size);
+            let move_to = format!("{}  Move to…", egui_phosphor::regular::FOLDER_SIMPLE);
+            click_at(&mut app, &ctx, size, center(&nodes, &move_to));
+            click_label(&mut app, &ctx, size, &label);
+            check(&mut app, unplaced[3], "Details");
+            app.runtime.shutdown();
+        }
+    }
+
+    #[test]
+    fn items_put_back_or_left_in_place_return_to_not_moving() {
+        use super::super::compact_cull_tests::{click_label, frame, rendered};
+        for mode in [GroupMode::Faces, GroupMode::Visual, GroupMode::Mixed] {
+            let (_temp, mut app, unplaced) = grouped(mode);
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            ctx.enable_accesskit();
+            let size = egui::vec2(1500.0, 1500.0);
+            rendered(&mut app, &ctx, size);
+            let target = app
+                .board
+                .folders
+                .iter()
+                .find(|f| !f.path.is_empty() && f.direct > 0)
+                .unwrap()
+                .path
+                .clone();
+            let settle = |app: &mut PhotoSortApp| {
+                rendered(app, &ctx, size);
+            };
+            // The grouping's own moves.
+            let base = app.board.changes;
+            // The sidebar's Move selected here, and moving back to the
+            // folder it is in.
+            app.selection.replace([unplaced[0]]);
+            app.board_folder_action(FolderAction::MoveSelected(target.clone()));
+            settle(&mut app);
+            assert_eq!(
+                section_of(&app, unplaced[0]),
+                Some(target.clone()),
+                "{mode:?}"
+            );
+            let home = app
+                .current_label(&app.media[app.index[&unplaced[0]]])
+                .unwrap();
+            app.board_move(&[unplaced[0]], &home);
+            settle(&mut app);
+            assert_eq!(section_of(&app, unplaced[0]), None, "{mode:?} moved back");
+            assert_eq!(
+                (app.board.unplaced, app.board.changes),
+                (4, base),
+                "{mode:?}"
+            );
+            // The menu's Not moving.
+            app.board_move(&[unplaced[1]], &target);
+            settle(&mut app);
+            let name = app.media[app.index[&unplaced[1]]].name();
+            context_click(&mut app, &ctx, size, &name);
+            let nodes = rendered(&mut app, &ctx, size);
+            click_at(&mut app, &ctx, size, center(&nodes, "Move item to folder"));
+            click_label(&mut app, &ctx, size, "Not moving  ·  stays in its folder");
+            settle(&mut app);
+            assert_eq!(section_of(&app, unplaced[1]), None, "{mode:?} menu");
+            // Dragged onto the Not moving heading.
+            app.board_move(&[unplaced[2]], &target);
+            let nodes = rendered(&mut app, &ctx, size);
+            let name = app.media[app.index[&unplaced[2]]].name();
+            let (from, to) = (center(&nodes, &name), center(&nodes, "Not moving · "));
+            drag(&mut app, &ctx, size, from, to);
+            settle(&mut app);
+            assert_eq!(section_of(&app, unplaced[2]), None, "{mode:?} heading");
+            assert_eq!(
+                (app.board.unplaced, app.board.changes),
+                (4, base),
+                "{mode:?}"
+            );
+            // A new folder made from it, then removed, leaves it in place.
+            app.board_new_folder("", &[unplaced[3]]);
+            app.board.editing = None;
+            settle(&mut app);
+            let made = section_of(&app, unplaced[3]).expect("in the new folder");
+            app.board_folder_action(FolderAction::Remove(made));
+            settle(&mut app);
+            assert_eq!(
+                section_of(&app, unplaced[3]),
+                None,
+                "{mode:?} removed folder"
+            );
+            // Show original, Start over and Reset treat it like any move.
+            app.board_move(&[unplaced[0]], &target);
+            settle(&mut app);
+            frame(
+                &mut app,
+                &ctx,
+                size,
+                vec![egui::Event::Key {
+                    key: egui::Key::Backslash,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }],
+            );
+            settle(&mut app);
+            assert!(app.board.original);
+            assert_eq!(
+                section_of(&app, unplaced[0]),
+                Some(home.clone()),
+                "{mode:?}"
+            );
+            frame(
+                &mut app,
+                &ctx,
+                size,
+                vec![egui::Event::Key {
+                    key: egui::Key::Backslash,
+                    physical_key: None,
+                    pressed: false,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }],
+            );
+            settle(&mut app);
+            assert_eq!(
+                section_of(&app, unplaced[0]),
+                Some(target.clone()),
+                "{mode:?}"
+            );
+            app.board_folder_action(FolderAction::StartOver);
+            settle(&mut app);
+            assert_eq!(section_of(&app, unplaced[0]), None, "{mode:?} start over");
+            app.board_move(&[unplaced[0]], &target);
+            settle(&mut app);
+            assert_eq!(app.board.changes, base + 1);
+            app.reset_organize();
+            settle(&mut app);
+            assert!(app.organize_drafts.is_empty() && app.board.changes == 0);
+            assert!(app.media.iter().all(|m| m.path.exists()));
+            app.runtime.shutdown();
+        }
+    }
+
+    /// Organize grouped by faces: three photos of person 001, two of 002,
+    /// two of both, two of nobody.
+    fn people_board() -> (tempfile::TempDir, PhotoSortApp, Vec<MediaId>) {
+        let (temp, mut app) = organize();
+        let ids: Vec<MediaId> = app.media.iter().map(|m| m.id).collect();
+        let labels = [
+            "Person 001",
+            "Person 001",
+            "Person 001",
+            "People 001 + 002",
+            "Person 002",
+            "Person 002",
+            "People 001 + 002",
+            "",
+            "",
+        ];
+        let mut output = crate::core::regional::grouping::Output {
+            groups: HashMap::new(),
+            folders: HashMap::new(),
+        };
+        for (id, label) in ids.iter().zip(labels) {
+            let group = match label {
+                "" => 0,
+                "Person 001" => 1,
+                "Person 002" => 2,
+                _ => 3,
+            };
+            output.groups.insert(*id, group);
+            output.folders.insert(
+                *id,
+                if label.is_empty() {
+                    "Unassigned"
+                } else {
+                    label
+                }
+                .into(),
+            );
+        }
+        app.face_groups = Some(output);
+        app.set_group_mode(GroupMode::Faces);
+        app.filter_dirty = true;
+        app.refilter();
+        (temp, app, ids)
+    }
+
+    #[test]
+    fn face_folders_show_their_persons_face_and_rows_stay_level() {
+        use super::super::compact_cull_tests::{frame, rendered};
+        let (_temp, mut app, ids) = people_board();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1500.0, 1500.0);
+        rendered(&mut app, &ctx, size);
+        let who = |app: &PhotoSortApp, path: &str| app.board.people.folders.get(path).cloned();
+        assert_eq!(who(&app, "Person 001"), Some(vec!["001".to_owned()]));
+        assert_eq!(
+            who(&app, "People 001 + 002"),
+            Some(vec!["001".to_owned(), "002".to_owned()])
+        );
+        assert_eq!(who(&app, ""), None);
+        // Until a face is known, folders keep their icon.
+        assert!(app.folder_faces("Person 001", 2.0).is_empty());
+        let bbox = [0.3, 0.2, 0.7, 0.6];
+        for (person, id) in [("001", ids[0]), ("002", ids[4])] {
+            app.board.people.portraits.insert(
+                person.into(),
+                vec![super::super::people::Portrait { id, bbox }],
+            );
+        }
+        // Faces appear once the thumbnails they are cut from are in.
+        let started = Instant::now();
+        while app.folder_faces("People 001 + 002", 2.0).len() < 2 {
+            assert!(started.elapsed().as_secs() < 10, "thumbnails");
+            rendered(&mut app, &ctx, size);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(app.folder_faces("Person 002", 2.0).len(), 1);
+        // The hover card: each person by name, with their faces.
+        app.board
+            .people
+            .portraits
+            .get_mut("001")
+            .unwrap()
+            .push(super::super::people::Portrait { id: ids[1], bbox });
+        let started = Instant::now();
+        let card = loop {
+            let card = app.folder_card("People 001 + 002", 2.0);
+            if card.iter().map(|(_, faces)| faces.len()).sum::<usize>() == 3 {
+                break card;
+            }
+            assert!(started.elapsed().as_secs() < 10, "thumbnails");
+            rendered(&mut app, &ctx, size);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let names: Vec<&str> = card.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["Person 001", "Person 002"]);
+        assert_eq!(card[0].1.len(), 2);
+        let nodes = rendered(&mut app, &ctx, size);
+        let face = found(&nodes, "Person 001  ·  3")[0];
+        let library = found(&nodes, "photos  ·  9")[0];
+        assert_eq!(face.height(), library.height(), "rows stay the same height");
+        assert!(shows(&nodes, "Folder Person 001"));
+        // Show original lists the folders on disk, which have no faces.
+        let backslash = |pressed| {
+            vec![egui::Event::Key {
+                key: egui::Key::Backslash,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: Default::default(),
+            }]
+        };
+        frame(&mut app, &ctx, size, backslash(true));
+        rendered(&mut app, &ctx, size);
+        assert!(app.board.people.signature.is_none() && app.board.people.folders.is_empty());
+        frame(&mut app, &ctx, size, backslash(false));
+        rendered(&mut app, &ctx, size);
+        assert_eq!(
+            app.folder_faces("Person 002", 2.0).len(),
+            1,
+            "back with the plan"
+        );
+        // Photos dragged onto a face folder move there.
+        let nodes = rendered(&mut app, &ctx, size);
+        let name = app.media[app.index[&ids[7]]].name();
+        let (from, to) = (center(&nodes, &name), center(&nodes, "Person 002  ·  2"));
+        drag(&mut app, &ctx, size, from, to);
+        rendered(&mut app, &ctx, size);
+        assert_eq!(section_of(&app, ids[7]).as_deref(), Some("Person 002"));
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn naming_a_person_renames_every_folder_the_grouping_named_for_them() {
+        use super::super::compact_cull_tests::rendered;
+        let (_temp, mut app, _ids) = people_board();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1400.0, 900.0);
+        let name = |app: &mut PhotoSortApp, path: &str, to: &str| {
+            app.board_rename_folder(path);
+            app.board.editing.as_mut().unwrap().1 = to.into();
+            app.board_finish_edit();
+            rendered(app, &ctx, size);
+        };
+        let folders = |app: &PhotoSortApp| -> Vec<String> {
+            app.board.folders.iter().map(|f| f.path.clone()).collect()
+        };
+        rendered(&mut app, &ctx, size);
+        // A person's folder still called "Person 002" offers a name on hover.
+        assert!(app.unnamed_person("Person 002") && !app.unnamed_person("People 001 + 002"));
+        name(&mut app, "Person 002", "Ana");
+        assert_eq!(folders(&app), ["", "Ana", "Person 001", "Person 001 + Ana"]);
+        // The face follows the person into the renamed folders.
+        assert_eq!(app.board.people.folders["Ana"], ["002"]);
+        assert_eq!(app.board.people.folders["Person 001 + Ana"], ["001", "002"]);
+        assert!(!app.unnamed_person("Ana"));
+        // All or nothing: a name that would clash changes no folder.
+        new_folder(&mut app, "", "Bo + Ana");
+        rendered(&mut app, &ctx, size);
+        name(&mut app, "Person 001", "Bo");
+        assert!(folders(&app).contains(&"Person 001".to_owned()));
+        assert!(folders(&app).contains(&"Person 001 + Ana".to_owned()));
+        assert!(app.navigation_notice.is_some());
+        app.board_folder_action(FolderAction::Remove("Bo + Ana".into()));
+        rendered(&mut app, &ctx, size);
+        // A name typed for a shared folder is kept.
+        name(&mut app, "Person 001 + Ana", "Family");
+        name(&mut app, "Person 001", "Bo");
+        assert_eq!(folders(&app), ["", "Ana", "Bo", "Family"]);
+        // Nothing on disk changed.
+        assert!(app.media.iter().all(|m| m.path.exists()));
+        app.runtime.shutdown();
+    }
+
+    /// Faces found three people, but 003 is really 001.
+    fn three_people_board() -> (tempfile::TempDir, PhotoSortApp) {
+        let (temp, mut app, ids) = people_board();
+        let groups = app.face_groups.as_mut().unwrap();
+        for (index, label, group) in [(2, "Person 003", 4), (6, "People 002 + 003", 5)] {
+            groups.groups.insert(ids[index], group);
+            groups.folders.insert(ids[index], label.into());
+        }
+        app.filter_dirty = true;
+        app.refilter();
+        (temp, app)
+    }
+
+    #[test]
+    fn two_people_marked_the_same_combine_their_folders_as_a_staged_edit() {
+        use super::super::compact_cull_tests::{frame, rendered};
+        let folders = |app: &PhotoSortApp| -> Vec<String> {
+            app.board.folders.iter().map(|f| f.path.clone()).collect()
+        };
+        let split = [
+            "",
+            "People 001 + 002",
+            "People 002 + 003",
+            "Person 001",
+            "Person 002",
+            "Person 003",
+        ];
+        let joined = ["", "People 001 + 002", "Person 001", "Person 002"];
+        for how in ["menu", "drag"] {
+            let (_temp, mut app) = three_people_board();
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            ctx.enable_accesskit();
+            let size = egui::vec2(1400.0, 1000.0);
+            rendered(&mut app, &ctx, size);
+            assert_eq!(folders(&app), split, "{how}");
+            assert_eq!(
+                app.same_person_choices("Person 003"),
+                ["Person 001", "Person 002"]
+            );
+            assert!(app.same_person_choices("People 001 + 002").is_empty());
+            if how == "menu" {
+                context_click(&mut app, &ctx, size, "Person 003  ·  1");
+                let nodes = rendered(&mut app, &ctx, size);
+                click_at(&mut app, &ctx, size, center(&nodes, "Same person as…"));
+                let nodes = rendered(&mut app, &ctx, size);
+                // The submenu's entry, not the sidebar row of the same name.
+                let entry = nodes
+                    .iter()
+                    .find(|(l, _)| l == "Person 001")
+                    .expect("menu entry")
+                    .1
+                    .center();
+                click_at(&mut app, &ctx, size, entry);
+            } else {
+                let nodes = rendered(&mut app, &ctx, size);
+                let (from, to) = (
+                    center(&nodes, "Person 003  ·  1"),
+                    center(&nodes, "Person 001  ·  2"),
+                );
+                drag(&mut app, &ctx, size, from, to);
+            }
+            rendered(&mut app, &ctx, size);
+            assert_eq!(folders(&app), joined, "{how}");
+            let count = |app: &PhotoSortApp, path: &str| {
+                app.board
+                    .folders
+                    .iter()
+                    .find(|f| f.path == path)
+                    .unwrap()
+                    .total
+            };
+            assert_eq!(count(&app, "Person 001"), 3, "{how}");
+            assert_eq!(count(&app, "People 001 + 002"), 2, "{how}");
+            assert_eq!(app.board.people.folders["Person 001"], ["001"]);
+            assert_eq!(
+                app.board.people.merged.get("003").map(String::as_str),
+                Some("001")
+            );
+            // Show original lists the folders on disk; the plan comes back.
+            let backslash = |pressed| {
+                vec![egui::Event::Key {
+                    key: egui::Key::Backslash,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }]
+            };
+            frame(&mut app, &ctx, size, backslash(true));
+            rendered(&mut app, &ctx, size);
+            assert!(!folders(&app).contains(&"Person 001".to_owned()));
+            frame(&mut app, &ctx, size, backslash(false));
+            rendered(&mut app, &ctx, size);
+            assert_eq!(folders(&app), joined, "{how}");
+            // Start over undoes it with every other folder edit.
+            app.board_folder_action(FolderAction::StartOver);
+            rendered(&mut app, &ctx, size);
+            assert_eq!(folders(&app), split, "{how}");
+            assert!(app.board.people.merged.is_empty());
+            assert!(app.media.iter().all(|m| m.path.exists()));
+            app.runtime.shutdown();
+        }
+    }
+
+    #[test]
+    fn a_named_person_marked_the_same_keeps_the_name_everywhere() {
+        use super::super::compact_cull_tests::rendered;
+        let (_temp, mut app) = three_people_board();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1400.0, 1000.0);
+        let folders = |app: &PhotoSortApp| -> Vec<String> {
+            app.board.folders.iter().map(|f| f.path.clone()).collect()
+        };
+        rendered(&mut app, &ctx, size);
+        app.board_rename_folder("Person 003");
+        app.board.editing.as_mut().unwrap().1 = "Ana".into();
+        app.board_finish_edit();
+        rendered(&mut app, &ctx, size);
+        assert_eq!(
+            folders(&app),
+            [
+                "",
+                "Ana",
+                "People 001 + 002",
+                "Person 001",
+                "Person 002",
+                "Person 002 + Ana"
+            ]
+        );
+        app.board_folder_action(FolderAction::SamePerson("Ana".into(), "Person 001".into()));
+        rendered(&mut app, &ctx, size);
+        assert_eq!(folders(&app), ["", "Ana", "Ana + Person 002", "Person 002"]);
+        let count = |path: &str| {
+            app.board
+                .folders
+                .iter()
+                .find(|f| f.path == path)
+                .unwrap()
+                .total
+        };
+        assert_eq!((count("Ana"), count("Ana + Person 002")), (3, 2));
+        assert!(
+            app.navigation_notice
+                .as_deref()
+                .is_some_and(|n| n.contains("is now Ana"))
+        );
+        // The same person twice, or a shared folder, is refused.
+        app.board_folder_action(FolderAction::SamePerson("Ana".into(), "Ana".into()));
+        assert!(app.navigation_notice.is_some());
+        let before = app.organize_drafts[&GroupMode::Faces].clone();
+        assert!(app.same_person("Ana + Person 002", "Person 002").is_err());
+        assert_eq!(app.organize_drafts[&GroupMode::Faces], before);
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn the_selection_circle_adds_a_photo_and_shift_click_compares_the_range() {
+        use super::super::compact_cull_tests::rendered;
+        let (_temp, mut app) = organize();
+        let ids: Vec<MediaId> = app.filtered.iter().map(|i| app.media[*i].id).collect();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1500.0, 1500.0);
+        let tile = |app: &mut PhotoSortApp, id: MediaId| {
+            let name = app.media[app.index[&id]].name();
+            *found(&rendered(app, &ctx, size), &name)
+                .into_iter()
+                .max_by(|a, b| a.area().total_cmp(&b.area()))
+                .expect("tile")
+        };
+        // egui learns which keys are held from their own event.
+        let click = |app: &mut PhotoSortApp, pos: egui::Pos2, modifiers: egui::Modifiers| {
+            for pressed in [true, false] {
+                super::super::compact_cull_tests::frame(
+                    app,
+                    &ctx,
+                    size,
+                    vec![
+                        egui::Event::ModifiersChanged(modifiers),
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers,
+                        },
+                    ],
+                );
+            }
+            super::super::compact_cull_tests::frame(
+                app,
+                &ctx,
+                size,
+                vec![egui::Event::ModifiersChanged(Default::default())],
+            );
+        };
+        // Shift-click selects the range and compares it in the preview.
+        let first = tile(&mut app, ids[0]).center();
+        click(&mut app, first, Default::default());
+        assert_eq!(app.selection.ordered(&app.media, &app.filtered), [ids[0]]);
+        let last = tile(&mut app, ids[3]).center();
+        click(&mut app, last, egui::Modifiers::SHIFT);
+        assert_eq!(app.selection.ordered(&app.media, &app.filtered), ids[..4]);
+        assert_eq!(app.board_selection_comparison(), Some(ids[..4].to_vec()));
+        rendered(&mut app, &ctx, size);
+        assert_eq!(app.comparison_ids(), ids[..4]);
+        // A click on the body selects only that photo again.
+        click(&mut app, first, Default::default());
+        assert_eq!(app.selection.ordered(&app.media, &app.filtered), [ids[0]]);
+        // The round circle at a tile's corner adds that photo, and again
+        // removes it.
+        let other = tile(&mut app, ids[5]);
+        let circle = egui::pos2(
+            other.right() - 6.0 - S2 - 1.0,
+            other.bottom() - library::CAPTION - S2 - 1.0,
+        );
+        click(&mut app, circle, Default::default());
+        assert_eq!(
+            app.selection.ordered(&app.media, &app.filtered),
+            [ids[0], ids[5]]
+        );
+        click(&mut app, circle, Default::default());
+        assert_eq!(app.selection.ordered(&app.media, &app.filtered), [ids[0]]);
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn a_folder_previews_its_contents_and_counts() {
+        use super::super::compact_cull_tests::rendered;
+        let (_temp, mut app) = organize();
+        let preview = app.folder_preview("A", false);
+        assert_eq!((preview.photos, preview.videos, preview.folders), (4, 0, 1));
+        assert_eq!(preview.counts(), "4 photos · 1 folder");
+        // Nothing is loaded yet: placeholders, and nothing asked for.
+        assert!(preview.thumbnails.iter().all(Option::is_none));
+        let requested = app.requested.len();
+        let _ = app.folder_preview("", false);
+        assert_eq!(app.requested.len(), requested);
+        let all = app.folder_preview("", false);
+        // A and B; the empty folder on disk is not on this board.
+        assert_eq!((all.photos, all.folders), (9, 2));
+        assert_eq!(app.folder_preview("Empty", false).counts(), "Empty");
+        // Once the board has shown them, their thumbnails are used.
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1500.0, 1500.0);
+        let started = Instant::now();
+        while app
+            .folder_preview("B", false)
+            .thumbnails
+            .iter()
+            .flatten()
+            .count()
+            < 5
+        {
+            assert!(started.elapsed().as_secs() < 10, "thumbnails");
+            rendered(&mut app, &ctx, size);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(
+            app.folder_preview("", false).thumbnails.len(),
+            PREVIEW_THUMBNAILS
+        );
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn hovering_a_folder_asks_for_its_first_thumbnails_only_once_it_rests() {
+        let (_temp, mut app) = organize();
+        let in_b: Vec<MediaId> = app
+            .media
+            .iter()
+            .filter(|m| m.path.parent().is_some_and(|p| p.ends_with("B")))
+            .map(|m| m.id)
+            .collect();
+        // Passing over a folder asks for nothing; it shows placeholders.
+        let passing = app.folder_preview("B", false);
+        assert_eq!(passing.thumbnails.len(), 5);
+        assert!(passing.thumbnails.iter().all(Option::is_none));
+        assert!(app.requested.is_empty());
+        // Resting on it asks for its photos, a few at a time.
+        app.folder_preview("B", true);
+        assert!(!app.requested.is_empty());
+        assert!(app.requested.len() <= THUMBNAILS_IN_FLIGHT);
+        assert!(
+            app.requested
+                .iter()
+                .all(|(id, preview)| !preview && in_b.contains(id))
+        );
+        // Once loaded they are shown, and kept for the next hover.
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        let started = Instant::now();
+        while app
+            .folder_preview("B", true)
+            .thumbnails
+            .iter()
+            .any(Option::is_none)
+        {
+            assert!(started.elapsed().as_secs() < 10, "thumbnails");
+            let _ = ctx.run_test(Default::default(), |ui| {
+                let ctx = ui.ctx().clone();
+                app.poll(&ctx);
+            });
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            app.folder_preview("B", false)
+                .thumbnails
+                .iter()
+                .all(Option::is_some)
+        );
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn person_faces_are_cut_sharp_from_the_original_a_few_at_a_time() {
+        use super::super::compact_cull_tests::rendered;
+        let (_temp, mut app, ids) = people_board();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1500.0, 1500.0);
+        rendered(&mut app, &ctx, size);
+        let bbox = [0.25, 0.25, 0.75, 0.75];
+        for (person, id) in [("001", ids[0]), ("002", ids[4])] {
+            app.board.people.portraits.insert(
+                person.into(),
+                vec![super::super::people::Portrait { id, bbox }],
+            );
+        }
+        // The crops arrive from the decoder and are kept.
+        let started = Instant::now();
+        while app.board.people.crops.len() < 2 {
+            assert!(started.elapsed().as_secs() < 10, "sharp crops");
+            rendered(&mut app, &ctx, size);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(app.board.people.crops.keys().any(|(id, _)| *id == ids[0]));
+        // A 16 px photo is never decoded larger than it is.
+        assert!(
+            app.board
+                .people
+                .crops
+                .values()
+                .all(|t| t.size()[0] <= 16 && t.size()[1] <= 16)
+        );
+        // At most a few crops are asked for per frame.
+        for n in 0..9 {
+            app.board
+                .people
+                .wanted
+                .push(crate::core::inspection::Request {
+                    slot: n,
+                    media: app.media[0].clone(),
+                    region: crate::core::inspection::Region::full(16, 16),
+                    output_edge: 16,
+                });
+        }
+        app.inspection_wanted.clear();
+        app.request_sharp_faces();
+        assert_eq!(app.inspection_wanted.len(), 4);
+        assert!(app.board.people.wanted.is_empty());
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn contact_sheet_tiles_fit_the_panel_until_it_has_to_scroll() {
+        // Fourteen photos in a 600 x 850 panel: four columns of 144.
+        let tile = sheet_tile(14, 600.0, 850.0, 8.0);
+        assert_eq!(tile, (600.0 - 3.0 * 8.0) / 4.0);
+        // A few photos stop at a comfortable size; many scroll at the smallest.
+        assert_eq!(sheet_tile(10, 2000.0, 2000.0, 8.0), 160.0);
+        assert_eq!(sheet_tile(400, 600.0, 800.0, 8.0), 72.0);
+        // Never wider than a narrow panel.
+        assert_eq!(sheet_tile(12, 60.0, 800.0, 8.0), 60.0);
+    }
+
+    #[test]
+    fn more_than_nine_selected_show_as_a_contact_sheet_in_the_preview() {
+        use super::super::compact_cull_tests::{click_label, fixture_with, frame, rendered};
+        let (_temp, mut app) = fixture_with(14);
+        app.step = Step::Organize;
+        app.output = app.root.as_ref().unwrap().display().to_string();
+        app.filter_dirty = true;
+        app.refilter();
+        let ids: Vec<MediaId> = app.filtered.iter().map(|i| app.media[*i].id).collect();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1500.0, 1000.0);
+        rendered(&mut app, &ctx, size);
+        // A few selected compare side by side, with no sheet.
+        app.select_library(ids[0], false, false);
+        app.select_library(ids[3], false, true);
+        let nodes = rendered(&mut app, &ctx, size);
+        assert!(!app.board_sheet() && !shows(&nodes, "Mark all for Trash"));
+        assert_eq!(app.comparison_ids().len(), 4);
+        // All fourteen: every one shows in the preview's sheet.
+        app.select_library(ids[13], false, true);
+        assert_eq!(app.selection.len(), 14);
+        let nodes = rendered(&mut app, &ctx, size);
+        assert!(app.board_sheet());
+        assert!(shows(&nodes, "14 selected") && shows(&nodes, "Mark all for Trash"));
+        // The sheet's tiles are the right-most of each name.
+        let names: HashMap<MediaId, String> = app.media.iter().map(|m| (m.id, m.name())).collect();
+        let sheet = |nodes: &[(String, egui::Rect)], id: MediaId| -> egui::Rect {
+            *found(nodes, &names[&id])
+                .into_iter()
+                .max_by(|a, b| a.center().x.total_cmp(&b.center().x))
+                .unwrap()
+        };
+        let panel = sheet(&nodes, ids[0]).left() - 1.0;
+        for id in &ids {
+            let tile = sheet(&nodes, *id);
+            assert!(
+                tile.left() >= panel && tile.bottom() <= size.y,
+                "{id:?} {tile:?}"
+            );
+        }
+        // A click makes a photo active and keeps the selection.
+        click_at(&mut app, &ctx, size, sheet(&nodes, ids[7]).center());
+        assert_eq!(app.active, Some(ids[7]));
+        assert_eq!(app.selection.len(), 14);
+        // D marks every selected photo for Trash, and again unmarks them.
+        frame(&mut app, &ctx, size, key(egui::Key::D, Default::default()));
+        assert!(ids.iter().all(|id| app.decision(*id).rejected));
+        frame(&mut app, &ctx, size, key(egui::Key::D, Default::default()));
+        assert!(ids.iter().all(|id| !app.decision(*id).rejected));
+        // Escape shows the active photo large, still with all selected.
+        frame(
+            &mut app,
+            &ctx,
+            size,
+            key(egui::Key::Escape, Default::default()),
+        );
+        let nodes = rendered(&mut app, &ctx, size);
+        assert!(!app.board_sheet());
+        assert_eq!((app.active, app.selection.len()), (Some(ids[7]), 14));
+        assert!(shows(&nodes, "Show all 14"));
+        click_label(&mut app, &ctx, size, "Show all 14");
+        assert!(app.board_sheet());
+        // Double-click shows that photo large. Frames advance egui's clock
+        // by a sixtieth of a second: let the earlier clicks age, or two more
+        // count as a triple click.
+        for _ in 0..15 {
+            rendered(&mut app, &ctx, size);
+        }
+        let nodes = rendered(&mut app, &ctx, size);
+        let pos = sheet(&nodes, ids[2]).center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        for _ in 0..2 {
+            frame(
+                &mut app,
+                &ctx,
+                size,
+                vec![egui::Event::PointerMoved(pos), press(true), press(false)],
+            );
+        }
+        rendered(&mut app, &ctx, size);
+        assert!(!app.board_sheet());
+        assert_eq!((app.active, app.selection.len()), (Some(ids[2]), 14));
+        assert!(app.media.iter().all(|m| m.path.exists()));
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn show_original_waits_for_a_plan_that_differs_from_disk() {
+        use super::super::compact_cull_tests::{frame, rendered};
+        let (_temp, mut app) = organize();
+        let ids: Vec<MediaId> = app.filtered.iter().map(|i| app.media[*i].id).collect();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1400.0, 900.0);
+        let backslash = |pressed| {
+            vec![egui::Event::Key {
+                key: egui::Key::Backslash,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: Default::default(),
+            }]
+        };
+        let hold = |app: &mut PhotoSortApp| {
+            frame(app, &ctx, size, backslash(true));
+            rendered(app, &ctx, size);
+            let shown = app.board.original;
+            frame(app, &ctx, size, backslash(false));
+            rendered(app, &ctx, size);
+            shown
+        };
+        let held_button = |app: &mut PhotoSortApp| {
+            let nodes = rendered(app, &ctx, size);
+            let pos = center(&nodes, "Show original");
+            let press = |pressed| {
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ]
+            };
+            frame(app, &ctx, size, press(true));
+            rendered(app, &ctx, size);
+            let shown = app.board.original;
+            frame(app, &ctx, size, press(false));
+            rendered(app, &ctx, size);
+            shown
+        };
+        // Current folders, nothing planned: the plan is the disk.
+        rendered(&mut app, &ctx, size);
+        assert!(!app.organize_planned() && !app.organize_resettable());
+        assert!(!hold(&mut app), "the key does nothing");
+        assert!(!held_button(&mut app), "the button is disabled");
+        // A move makes a difference, and both work.
+        app.board_move(&ids[..1], "B");
+        rendered(&mut app, &ctx, size);
+        assert!(app.organize_planned() && app.organize_resettable());
+        assert!(hold(&mut app));
+        assert!(held_button(&mut app));
+        // Back to nothing planned after a reset.
+        app.reset_organize();
+        rendered(&mut app, &ctx, size);
+        assert!(!app.organize_planned() && !hold(&mut app));
+        // A grouping's own proposals differ from disk before any edit.
+        app.set_group_mode(GroupMode::Camera);
+        rendered(&mut app, &ctx, size);
+        assert!(app.organize_drafts.is_empty());
+        assert!(app.organize_planned() && hold(&mut app));
         app.runtime.shutdown();
     }
 }

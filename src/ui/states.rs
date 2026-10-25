@@ -131,6 +131,11 @@ impl PhotoSortApp {
 
     /// The folder has no photos, or this step's view is empty.
     pub(super) fn empty_state(&mut self, ui: &mut egui::Ui) {
+        // Organize's search sits on its board, so the board stays when the
+        // search or filter hides every photo; it says so itself.
+        if self.step == Step::Organize && !self.media.is_empty() {
+            return self.library(ui);
+        }
         let next = self.preferences.neighbor(self.step, true);
         let can_analyze = self.can_start_analysis();
         let mut action = None;

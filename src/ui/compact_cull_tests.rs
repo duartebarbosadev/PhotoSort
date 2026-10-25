@@ -2,12 +2,16 @@ use super::*;
 use crate::test_support::worker_patience;
 
 pub(super) fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
+    fixture_with(9)
+}
+/// [`fixture`] with `count` photos: four in A/Day1, the rest in B.
+pub(super) fn fixture_with(count: usize) -> (tempfile::TempDir, PhotoSortApp) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("photos");
     std::fs::create_dir_all(root.join("A/Day1")).unwrap();
     std::fs::create_dir_all(root.join("B")).unwrap();
     std::fs::create_dir_all(root.join("Empty")).unwrap();
-    for i in 0..9 {
+    for i in 0..count {
         let folder = if i < 4 { "A/Day1" } else { "B" };
         let path = root.join(folder).join(format!("photo-{i}.png"));
         image::RgbaImage::new(16, 16).save(&path).unwrap();

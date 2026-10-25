@@ -307,20 +307,19 @@ impl PhotoSortApp {
         ui.add_space(S1);
         let editable = self.board_editable();
         ui.horizontal_wrapped(|ui| {
-            if label.is_some() {
-                ui.add_enabled_ui(editable, |ui| {
-                    ui.menu_button(format!("{}  Move to…", icon::FOLDER_SIMPLE), |ui| {
-                        self.board_folder_list(ui, &[id]);
-                        ui.separator();
-                        if ui.button("New folder…").clicked() {
-                            self.board_new_folder_with(&[id]);
-                            ui.close();
-                        }
-                    })
-                    .response
-                    .on_hover_text("Choose another folder for this photo")
-                });
-            }
+            // Items not moving can be moved too, to correct the grouping.
+            ui.add_enabled_ui(editable, |ui| {
+                ui.menu_button(format!("{}  Move to…", icon::FOLDER_SIMPLE), |ui| {
+                    self.board_folder_list(ui, &[id]);
+                    ui.separator();
+                    if ui.button("New folder…").clicked() {
+                        self.board_new_folder_with(&[id]);
+                        ui.close();
+                    }
+                })
+                .response
+                .on_hover_text("Choose another folder for this photo")
+            });
             if ui
                 .add_enabled(
                     editable,

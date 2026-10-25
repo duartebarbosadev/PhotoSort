@@ -5,6 +5,9 @@ use super::*;
 pub(super) const STATUS_HEIGHT: f32 = 44.0;
 /// Height of the title bar.
 pub(super) const HEADER_HEIGHT: f32 = 38.0;
+/// Below this toolbar width, Organize's Show original and Reset changes
+/// show only their icons.
+const ORGANIZE_COMPACT: f32 = 1100.0;
 
 impl Step {
     /// The page icon in the bottom step bar.
@@ -644,24 +647,33 @@ impl PhotoSortApp {
     /// The library search field; Ctrl/Cmd+F focuses it.
     pub(super) fn search_field(&mut self, ui: &mut egui::Ui) {
         wrap_before(ui, 150.0 + 2.0 * S3);
+        self.search_box(ui, 150.0, BG);
+    }
+    /// The search text field itself, `width` wide on a `fill` background.
+    pub(super) fn search_box(
+        &mut self,
+        ui: &mut egui::Ui,
+        width: f32,
+        fill: Color32,
+    ) -> egui::Response {
         let mut query = self.query.clone();
-        if ui
-            .add(
-                egui::TextEdit::singleline(&mut query)
-                    .id(egui::Id::new("library_search"))
-                    .hint_text(format!(
-                        "{}  Search",
-                        egui_phosphor::regular::MAGNIFYING_GLASS
-                    ))
-                    .background_color(BG)
-                    .desired_width(150.0),
-            )
-            .changed()
-            && self.allow_review_departure()
-        {
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut query)
+                .id(egui::Id::new("library_search"))
+                .hint_text(format!(
+                    "{}  Search",
+                    egui_phosphor::regular::MAGNIFYING_GLASS
+                ))
+                .background_color(fill)
+                .desired_width(width),
+        );
+        if response.changed() && self.allow_review_departure() {
             self.query = query;
             self.filter_dirty = true;
+            // A saved view waiting to be restored must not undo the typing.
+            self.pending_bookmark = None;
         }
+        response
     }
     /// Which photos the step shows: all, unmarked, marked, rated and so on.
     pub(super) fn filter_combo(&mut self, ui: &mut egui::Ui) {
@@ -670,13 +682,14 @@ impl PhotoSortApp {
             .selected_text(self.filter.title())
             .show_ui(ui, |ui| self.filter_choices(ui));
     }
-    fn filter_choices(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn filter_choices(&mut self, ui: &mut egui::Ui) {
         for f in Filter::ALL {
             if ui.selectable_label(self.filter == f, f.title()).clicked()
                 && self.allow_review_departure()
             {
                 self.filter = f;
                 self.filter_dirty = true;
+                self.pending_bookmark = None;
                 ui.close();
                 if f == Filter::Rated {
                     self.start_metadata_index();
@@ -719,6 +732,8 @@ impl PhotoSortApp {
         // get exactly the width left over and wrap within it.
         let mut row = ui.available_rect_before_wrap();
         row.max.y = row.min.y + ui.spacing().interact_size.y;
+        // Organize's plan buttons show only their icons in a narrow bar.
+        let compact = row.width() < ORGANIZE_COMPACT;
         let right = ui
             .scope_builder(
                 egui::UiBuilder::new()
@@ -735,6 +750,8 @@ impl PhotoSortApp {
                     if self.step != Step::Organize {
                         ui.add_space(S1);
                         self.view_switch(ui);
+                    } else {
+                        self.organize_bar_actions(ui, compact);
                     }
                     if self.step == Step::Cull {
                         self.cull_view_options(ui);
@@ -764,7 +781,8 @@ impl PhotoSortApp {
                     {
                         self.cancel_analysis();
                     }
-                    if self.step != Step::PickBest && self.step != Step::Cull {
+                    // Organize searches from its board, over the photos.
+                    if !matches!(self.step, Step::Organize | Step::PickBest | Step::Cull) {
                         self.search_field(ui);
                     }
                     if !self.step_menu_empty() {
@@ -775,9 +793,12 @@ impl PhotoSortApp {
             .response
             .rect;
         ui.advance_cursor_after_rect(left.union(right));
-        ui.add_space(2.0);
-        self.step_context(ui);
-        ui.add_space(S1);
+        // Organize has no context line, so the bar ends right under its row.
+        if self.step != Step::Organize {
+            ui.add_space(2.0);
+            self.step_context(ui);
+            ui.add_space(S1);
+        }
         let after = (
             self.query.clone(),
             self.filter,
@@ -817,9 +838,39 @@ impl PhotoSortApp {
         }
     }
     /// Cull's More menu holds only Analyze, which is unavailable while an
-    /// analysis runs; every other step always has items.
+    /// analysis runs; every other step always has items. Organize has none:
+    /// its actions sit in the bar and its filter beside the board's search.
     fn step_menu_empty(&self) -> bool {
-        self.step == Step::Cull && self.analysis_run.is_some()
+        self.step == Step::Organize || (self.step == Step::Cull && self.analysis_run.is_some())
+    }
+    /// Organize's buttons at the right of the bar, before Details: Show
+    /// original, Reset changes and Analyze.
+    fn organize_bar_actions(&mut self, ui: &mut egui::Ui, compact: bool) {
+        use egui_phosphor::regular as icon;
+        ui.add_space(S1);
+        // While analysis runs, Cancel analysis takes its place on the left.
+        // A row-high icon, so the bar's buttons stay on one line.
+        if self.analysis_run.is_none() {
+            let button = ui.add_enabled(
+                self.can_start_analysis(),
+                egui::Button::new(RichText::new(icon::SPARKLE).size(15.0))
+                    .frame(false)
+                    .min_size(egui::vec2(28.0, 0.0)),
+            );
+            if named(
+                button,
+                egui::WidgetType::Button,
+                "Analyze library · Ctrl/Cmd+S",
+            )
+            .on_hover_text("Analyze library · Ctrl/Cmd+S\nRuns on this computer")
+            .clicked()
+            {
+                self.analyze_current_workflow();
+            }
+        }
+        ui.add_space(S2);
+        self.reset_button(ui, compact);
+        self.original_button(ui, compact);
     }
     /// One quiet line under the toolbar with what the current photo needs.
     fn step_context(&mut self, ui: &mut egui::Ui) {

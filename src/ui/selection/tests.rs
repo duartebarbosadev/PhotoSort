@@ -150,12 +150,7 @@ fn selection_does_not_act_on_pending_views_busy_mutations_or_other_workflows() {
     app.stage_selection(Change::Rating(5));
     assert!(app.decisions.is_empty());
     app.busy = false;
-    for step in [
-        Step::Organize,
-        Step::EasyDelete,
-        Step::Rotation,
-        Step::PickBest,
-    ] {
+    for step in [Step::EasyDelete, Step::Rotation, Step::PickBest] {
         app.step = step;
         assert!(!app.cull_selection_key(egui::Key::D, egui::Modifiers::NONE));
         app.stage_selection(Change::Trash(true));
@@ -627,4 +622,48 @@ fn digits_pick_within_the_active_photos_group_in_single_view() {
     app.numeric_key(egui::Key::Num7, egui::Modifiers::NONE);
     assert_eq!(app.active, Some(MediaId(1)));
     app.runtime.shutdown();
+}
+
+#[test]
+fn d_marks_every_selected_photo_in_organize_and_cull_and_a_mixed_selection_never_flips() {
+    for step in [Step::Organize, Step::Cull] {
+        let (_dir, mut app) = fixture();
+        settle(&mut app);
+        app.step = step;
+        app.decisions.entry(MediaId(2)).or_default().rejected = true;
+        app.select_library(MediaId(1), false, false);
+        app.select_library(MediaId(4), false, true);
+        assert_eq!(app.selection.len(), 4);
+        // One photo was already marked: D marks the rest instead of unmarking it.
+        assert!(app.cull_selection_key(egui::Key::D, egui::Modifiers::NONE));
+        settle(&mut app);
+        let marked =
+            |app: &PhotoSortApp, i| app.decisions.get(&MediaId(i)).is_some_and(|d| d.rejected);
+        assert!(
+            (1..=4).all(|i| marked(&app, i)),
+            "{step:?}: every selected photo is marked"
+        );
+        assert!(
+            !marked(&app, 0) && !marked(&app, 5),
+            "{step:?}: unselected photos stay"
+        );
+        // All marked: D unmarks them all.
+        assert!(app.cull_selection_key(egui::Key::D, egui::Modifiers::NONE));
+        settle(&mut app);
+        assert!(
+            (1..=4).all(|i| !marked(&app, i)),
+            "{step:?}: D again unmarks them all"
+        );
+        assert!(app.plan.is_none(), "staging must not start file operations");
+    }
+}
+
+#[test]
+fn d_on_one_selected_photo_in_organize_stays_with_the_canvas() {
+    let (_dir, mut app) = fixture();
+    settle(&mut app);
+    app.step = Step::Organize;
+    app.select_library(MediaId(3), false, false);
+    assert!(!app.cull_selection_key(egui::Key::D, egui::Modifiers::NONE));
+    assert!(app.decisions.is_empty());
 }

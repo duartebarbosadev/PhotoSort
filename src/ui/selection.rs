@@ -142,6 +142,19 @@ impl PhotoSortApp {
         let ids = self.selection.ordered(&self.media, &self.filtered);
         self.stage_manual(ids, change);
     }
+    /// D on several selected photos marks them all for Trash, or unmarks them
+    /// all when every one is already marked; a mixed selection never flips
+    /// each photo separately.
+    pub(super) fn toggle_selection_trash(&mut self) {
+        if !self.selection_ready() || self.selection.is_empty() {
+            return;
+        }
+        let (ids, _) = self.selection.snapshot();
+        let all_marked = ids
+            .iter()
+            .all(|id| self.decisions.get(id).is_some_and(|d| d.rejected));
+        self.stage_manual(ids, Change::Trash(!all_marked));
+    }
     pub(super) fn compare_selection(&mut self) {
         if (!self.selection_ready() && !self.scene_selection_ready())
             || !(2..=9).contains(&self.selection.len())
@@ -304,9 +317,23 @@ impl PhotoSortApp {
                     self.select_all_visible();
                     return true;
                 }
+                // Several selected photos are marked together; one photo
+                // keeps the single-photo D handled by the canvas.
+                egui::Key::D
+                    if !modifiers.alt
+                        && !modifiers.command
+                        && !modifiers.ctrl
+                        && self.selection.len() > 1 =>
+                {
+                    self.toggle_selection_trash();
+                    return true;
+                }
                 egui::Key::Escape => {
-                    // A comparison returns to the single preview first.
-                    if self.active.is_some() && self.comparison_ids().len() > 1 {
+                    // The contact sheet and a comparison return to the
+                    // single preview first, keeping the selection.
+                    if self.board_sheet() {
+                        self.board.single = Some(self.selection.len());
+                    } else if self.active.is_some() && self.comparison_ids().len() > 1 {
                         self.end_board_comparison();
                     } else {
                         self.clear_library_selection();
@@ -331,7 +358,7 @@ impl PhotoSortApp {
                     return true;
                 }
                 egui::Key::D if !modifiers.alt => {
-                    self.stage_selection(Change::ToggleTrash);
+                    self.toggle_selection_trash();
                     return true;
                 }
                 egui::Key::R => {

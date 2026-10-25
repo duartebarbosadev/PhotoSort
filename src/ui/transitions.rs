@@ -356,6 +356,23 @@ pub(super) enum OrganizeResolution {
     Review,
 }
 impl PhotoSortApp {
+    /// Drops every planned Organize change: folder edits and new folders in
+    /// every grouping, file renames and another Organize into folder, so the
+    /// folders are as they are on disk. Trash marks, ratings and rotations
+    /// are decisions shared with the other steps and stay.
+    pub(super) fn discard_organize_changes(&mut self) {
+        self.dirty = Some(Instant::now());
+        self.organize_drafts.clear();
+        self.file_names.clear();
+        self.group_mode = GroupMode::Current;
+        self.output = self
+            .root
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        self.organize_preview_requested = false;
+        self.set_review_plan(None);
+    }
     pub(super) fn organize_changes_pending(&self) -> bool {
         if self.step != Step::Organize || self.scanning {
             return false;
@@ -394,21 +411,11 @@ impl PhotoSortApp {
                 self.error = None;
             }
             OrganizeResolution::Discard => {
-                self.dirty = Some(Instant::now());
                 self.runtime.cancel_analysis();
                 self.analysis_run = None;
                 self.organize_run = None;
                 self.progress = None;
-                self.organize_drafts.clear();
-                self.file_names.clear();
-                self.group_mode = GroupMode::Current;
-                self.output = self
-                    .root
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default();
-                self.organize_preview_requested = false;
-                self.set_review_plan(None);
+                self.discard_organize_changes();
                 self.error = None;
                 self.continue_departure(destination);
             }
