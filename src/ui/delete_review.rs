@@ -1,4 +1,9 @@
-use super::review_card::{Badge, CardEvent, CardPhoto, CardState, Fact, GridClick, ReviewCard};
+use super::review_card::{
+    Badge, CardEvent, CardPhoto, CardState, Fact, GridClick, MIN_SLOT, ReviewCard,
+};
+
+/// The photo widths Easy Delete's size slider offers.
+const SLOT_RANGE: std::ops::RangeInclusive<f32> = 140.0..=420.0;
 use super::*;
 use crate::core::delete_review::{self, Category, Entry, FormatChoice, Review};
 
@@ -355,6 +360,7 @@ impl PhotoSortApp {
             .delete_current
             .and_then(|id| subjects.iter().position(|other| *other == id));
         let lengths: Vec<usize> = sections.iter().map(|(_, n)| *n).collect();
+        let app_slot = self.delete_slot.unwrap_or(MIN_SLOT);
         let clicked = ui
             .scope_builder(
                 egui::UiBuilder::new()
@@ -366,6 +372,7 @@ impl PhotoSortApp {
                         "delete",
                         &lengths,
                         2,
+                        app_slot,
                         |app, i| app.delete_card_ratio(subjects[i]),
                         |app, ui, section| {
                             let (category, n) = sections[section];
@@ -429,7 +436,30 @@ impl PhotoSortApp {
         }
     }
 
-    /// One line over the grid: what is staged, and Accept all suggestions.
+    /// The size slider, as in Organize's board header: small image, slider,
+    /// large image. It sets how wide a photo gets before the grid drops a
+    /// column; cards still fill the row.
+    fn delete_size_slider(&mut self, ui: &mut egui::Ui) {
+        use egui_phosphor::regular as icon;
+        ui.label(RichText::new(icon::IMAGE).size(16.0).color(MUTED));
+        let mut slot = self.delete_slot.unwrap_or(MIN_SLOT);
+        ui.spacing_mut().slider_width = 90.0;
+        ui.spacing_mut().interact_size.y = 14.0;
+        if named(
+            ui.add(egui::Slider::new(&mut slot, SLOT_RANGE).show_value(false)),
+            egui::WidgetType::Slider,
+            "Photo size",
+        )
+        .on_hover_text("Photo size")
+        .changed()
+        {
+            self.delete_slot = Some(slot);
+        }
+        ui.label(RichText::new(icon::IMAGE).size(11.0).color(MUTED));
+    }
+
+    /// One line over the grid: what is staged, the photo size, and Accept
+    /// all suggestions.
     fn delete_summary(&mut self, ui: &mut egui::Ui, subjects: &[MediaId]) {
         let candidates = self.delete_candidates(subjects);
         let trash: Vec<MediaId> = candidates
@@ -439,34 +469,24 @@ impl PhotoSortApp {
             .collect();
         let freed: u64 = trash.iter().map(|id| self.delete_bytes(*id)).sum();
         let changed = self.delete_review.changed_count(subjects, &self.decisions);
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!(
-                    "{} going to Trash · frees {} · {} kept",
-                    count(trash.len(), "photo", "photos"),
-                    size_text(freed),
-                    candidates.len() - trash.len()
-                ))
-                .color(INK),
-            );
-            ui.label(
-                RichText::new(if changed > 0 {
-                    format!(
-                        "· {} · nothing changes on disk until you apply Review changes",
-                        if self.preferences.easy_delete_auto {
-                            format!("{} changed by you", count(changed, "card", "cards"))
-                        } else {
-                            format!(
-                                "{} not following the suggestion",
-                                count(changed, "card", "cards")
-                            )
-                        }
-                    )
+        let note = if changed > 0 {
+            format!(
+                " · {} · nothing changes on disk until you apply Review changes",
+                if self.preferences.easy_delete_auto {
+                    format!("{} changed by you", count(changed, "card", "cards"))
                 } else {
-                    "· nothing changes on disk until you apply Review changes".to_owned()
-                })
-                .color(MUTED),
-            );
+                    format!(
+                        "{} not following the suggestion",
+                        count(changed, "card", "cards")
+                    )
+                }
+            )
+        } else {
+            " · nothing changes on disk until you apply Review changes".to_owned()
+        };
+        ui.horizontal(|ui| {
+            // Accept all and the size slider are placed first, from the
+            // right; the summary then gets only the room left and truncates.
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 if ui
                     .add_enabled(
@@ -482,6 +502,26 @@ impl PhotoSortApp {
                 {
                     self.accept_delete_defaults();
                 }
+                ui.add_space(S3);
+                self.delete_size_slider(ui);
+                ui.add_space(S3);
+                ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
+                    let mut job = egui::text::LayoutJob::default();
+                    let body = egui::TextStyle::Body.resolve(ui.style());
+                    job.append(
+                        &format!(
+                            "{} going to Trash · frees {} · {} kept",
+                            count(trash.len(), "photo", "photos"),
+                            size_text(freed),
+                            candidates.len() - trash.len()
+                        ),
+                        0.0,
+                        egui::TextFormat::simple(body.clone(), INK),
+                    );
+                    job.append(&note, 0.0, egui::TextFormat::simple(body, MUTED));
+                    let full = job.text.clone();
+                    ui.add(egui::Label::new(job).truncate()).on_hover_text(full);
+                });
             });
         });
     }
@@ -1427,6 +1467,96 @@ mod tests {
         assert!(!app.delete_panel);
         let shown = super::super::review_card::render_grid(&mut app);
         assert_eq!(shown.matches("Identical copy").count(), 1, "{shown}");
+    }
+    #[test]
+    fn the_size_slider_sets_how_many_cards_fit_at_every_window_width() {
+        let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+        app.media = (1..=12)
+            .map(|n| Media {
+                id: MediaId(n),
+                path: format!("/{n}.jpg").into(),
+                kind: MediaKind::Photo,
+                fingerprint: Fingerprint::default(),
+            })
+            .collect();
+        app.index = app
+            .media
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
+        app.delete_review.replace(
+            (0..6)
+                .map(|i| entry(2 * i + 1, Some(2 * i + 2), Category::Exact))
+                .collect(),
+        );
+        app.view_data_ready.insert(Step::EasyDelete);
+        app.set_step(Step::EasyDelete);
+        app.refilter();
+        app.review = false;
+        // The x of every card title drawn, at a window width.
+        let titles = |app: &mut PhotoSortApp, width: f32| {
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            let output = ctx.run_test(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| app.library(ui));
+                },
+            );
+            let mut xs = Vec::new();
+            fn walk(shape: &egui::Shape, xs: &mut Vec<f32>) {
+                match shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Identical copy" => {
+                        xs.push(text.pos.x)
+                    }
+                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, xs)),
+                    _ => {}
+                }
+            }
+            for clipped in &output.shapes {
+                walk(&clipped.shape, &mut xs);
+            }
+            let text = super::super::review_card::painted_text(&output);
+            xs.sort_by(f32::total_cmp);
+            xs.dedup();
+            (xs, text)
+        };
+        // The default fits three cards in a wide window.
+        let (columns, text) = titles(&mut app, 1600.0);
+        assert_eq!(columns.len(), 3, "{columns:?}");
+        assert!(text.contains("Accept all suggestions"), "{text}");
+        // Smallest: more cards in a row.
+        app.delete_slot = Some(*SLOT_RANGE.start());
+        assert!(titles(&mut app, 1600.0).0.len() >= 4);
+        // Largest: one card a row, still inside the window, even narrow.
+        app.delete_slot = Some(*SLOT_RANGE.end());
+        for width in [1600.0, 700.0] {
+            let (columns, text) = titles(&mut app, width);
+            assert_eq!(columns.len(), 1, "at {width}: {columns:?}");
+            assert!(columns[0] < width, "at {width}");
+            assert!(text.contains("Accept all suggestions"), "at {width}");
+        }
+        // The size survives leaving the step, and the panel and keys work.
+        app.set_step(Step::Cull);
+        app.set_step(Step::EasyDelete);
+        assert_eq!(app.delete_slot, Some(*SLOT_RANGE.end()));
+        app.delete_card_event(MediaId(3), CardEvent::Select(0));
+        let (_, text) = titles(&mut app, 1200.0);
+        assert!(text.matches("Identical copy").count() >= 2, "{text}");
+        // Its suggestion was staged on entry; 1 switches the copy to Keep.
+        assert!(app.decision(MediaId(3)).rejected);
+        key(&mut app, egui::Key::Num1, egui::Modifiers::NONE);
+        assert!(!app.decision(MediaId(3)).rejected);
+        key(&mut app, egui::Key::Enter, egui::Modifiers::NONE);
+        assert_eq!(app.delete_current, Some(MediaId(5)));
+        assert!(app.delete_panel);
     }
     #[test]
     fn the_panel_slides_over_the_grid_without_reflowing_it_every_frame() {

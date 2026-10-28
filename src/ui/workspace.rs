@@ -204,6 +204,9 @@ pub struct PhotoSortApp {
     delete_panel: bool,
     /// The panel's width once the user has seen or resized it.
     delete_panel_width: Option<f32>,
+    /// Photo width chosen with Easy Delete's size slider. Like Organize's,
+    /// it lasts while the app runs, across steps and folders.
+    delete_slot: Option<f32>,
     pick_review: crate::core::pick_review::Review,
     pick_run: Option<u64>,
     pick_focus: bool,
@@ -456,6 +459,7 @@ impl PhotoSortApp {
             delete_run: None,
             delete_panel: false,
             delete_panel_width: None,
+            delete_slot: None,
             pick_review: Default::default(),
             pick_run: None,
             pick_focus: false,

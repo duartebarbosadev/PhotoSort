@@ -158,7 +158,8 @@ pub(super) struct CardLayout {
     pub footer: bool,
 }
 
-const MIN_SLOT: f32 = 200.0;
+/// The narrowest photo slot before a grid drops a column.
+pub(super) const MIN_SLOT: f32 = 200.0;
 const PAD: f32 = S3;
 const HEADER: f32 = 18.0;
 const CAPTION: f32 = 18.0;
@@ -324,6 +325,8 @@ impl PhotoSortApp {
         salt: &str,
         sections: &[usize],
         slots: usize,
+        // The narrowest a photo slot gets before the grid drops a column.
+        min_slot: f32,
         ratio: impl Fn(&Self, usize) -> f32,
         mut header: impl FnMut(&mut Self, &mut egui::Ui, usize),
         mut card: impl FnMut(&mut Self, usize) -> Option<ReviewCard>,
@@ -336,7 +339,7 @@ impl PhotoSortApp {
         let gap = S3;
         ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
         let slots = slots.max(1);
-        let min = 2.0 * PAD + slots as f32 * MIN_SLOT + S2 * (slots - 1) as f32;
+        let min = 2.0 * PAD + slots as f32 * min_slot + S2 * (slots - 1) as f32;
         let width = ui.available_width();
         let columns = ((width + gap) / (min + gap)).floor().max(1.0) as usize;
         let base = CardLayout {
