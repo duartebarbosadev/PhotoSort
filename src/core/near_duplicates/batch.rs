@@ -1,5 +1,5 @@
 //! Candidate review on a policy worker. Images and faces come from the shared image owner.
-use super::{Assessment, Comparator, Gray, Reason, Side};
+use super::{Assessment, Comparator, Gray, Reason, Side, formats};
 use crate::core::{
     faces::Face,
     model::{Media, MediaId},
@@ -19,11 +19,34 @@ pub struct Input {
     pub embedding: Vec<f32>,
     pub sharpness: Option<f64>,
     pub metadata_fields: usize,
+    /// Capture facts for pairing the JPEG and HEIC of one shot.
+    pub shot: Option<formats::Shot>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// Byte-for-byte identical files.
+    Exact,
+    /// Two frames with no visible subject change.
+    Near,
+    /// One capture saved as a JPEG (`discard`) and a HEIC (`keep`). Neither is
+    /// worse: which to keep is the user's choice.
+    Formats,
+}
+/// Why `keep` was suggested over `discard`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Keeper {
+    Sharper,
+    MoreMetadata,
+    LargerFile,
+    /// Nothing tells them apart, or (for formats) nothing is suggested.
+    First,
 }
 #[derive(Clone, Debug)]
 pub struct Pair {
     pub discard: MediaId,
     pub keep: MediaId,
+    pub kind: Kind,
+    pub keeper: Keeper,
     pub assessment: Assessment,
     pub reason: String,
 }
@@ -66,18 +89,24 @@ fn pair(a: &Input, b: &Input, assessment: Assessment) -> Pair {
     let (keep, discard) = if score(a) >= score(b) { (a, b) } else { (b, a) };
     let k = score(keep);
     let d = score(discard);
-    let reason = if k.0 > d.0 {
-        "the sharper photo"
+    let (keeper, reason) = if k.0 > d.0 {
+        (Keeper::Sharper, "the sharper photo")
     } else if k.1 > d.1 {
-        "the copy with more metadata fields"
+        (Keeper::MoreMetadata, "the copy with more metadata fields")
     } else if k.2 > d.2 {
-        "the larger file"
+        (Keeper::LargerFile, "the larger file")
     } else {
-        "the first photo in library order"
+        (Keeper::First, "the first photo in library order")
     };
     Pair {
         discard: discard.media.id,
         keep: keep.media.id,
+        keeper,
+        kind: if assessment.decision == super::Decision::ExactDuplicate {
+            Kind::Exact
+        } else {
+            Kind::Near
+        },
         reason: format!(
             "{} · suggest keeping {reason}",
             if assessment.decision == super::Decision::ExactDuplicate {
@@ -124,6 +153,13 @@ pub fn review(
                 comparator.assess(None, None, true, |_| None, &cancelled),
             ));
         }
+    }
+    let Some(same_shots) = format_pairs(inputs, &assigned, evidence, &cancelled)? else {
+        return Ok(None);
+    };
+    for pair in same_shots {
+        assigned.extend([pair.0, pair.1]);
+        result.push(pair.2);
     }
     let mut groups = BTreeMap::<usize, Vec<usize>>::new();
     for (i, input) in inputs.iter().enumerate() {
@@ -213,6 +249,68 @@ pub fn review(
     } else {
         Ok(Some(result))
     }
+}
+/// The JPEG and HEIC of one capture, before any similarity grouping, so the
+/// pair is never reviewed as two near-duplicate frames. A preview that cannot
+/// be decoded (HEIC in a build without HEIF support) only skips its pair.
+fn format_pairs(
+    inputs: &[Input],
+    assigned: &HashSet<usize>,
+    evidence: &mut impl Evidence,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Option<Vec<(usize, usize, Pair)>>> {
+    let shots: Vec<_> = inputs
+        .iter()
+        .enumerate()
+        .map(|(i, input)| input.shot.as_ref().filter(|_| !assigned.contains(&i)))
+        .collect();
+    let mut previews = std::collections::HashMap::new();
+    let mut stopped = false;
+    let matched = formats::match_shots(&shots, |a, b, any_turn| {
+        if stopped || cancelled() {
+            stopped = true;
+            return None;
+        }
+        for i in [a, b] {
+            // Keep only a small copy: a library can hold thousands of pairs.
+            previews.entry(i).or_insert_with(|| {
+                evidence.image(&inputs[i]).ok().map(|asset| {
+                    let (w, h) = asset.pixels.dimensions();
+                    let scale = 96.0 / f64::from(w.max(h).max(96));
+                    let size = |v: u32| ((f64::from(v) * scale).round() as u32).max(1);
+                    image::imageops::thumbnail(&*asset.pixels, size(w), size(h))
+                })
+            });
+        }
+        formats::compare(previews[&a].as_ref()?, previews[&b].as_ref()?, any_turn)
+    });
+    if stopped || cancelled() {
+        return Ok(None);
+    }
+    Ok(Some(
+        matched
+            .into_iter()
+            .map(|(jpeg, heic, difference)| {
+                let pair = Pair {
+                    discard: inputs[jpeg].media.id,
+                    keep: inputs[heic].media.id,
+                    kind: Kind::Formats,
+                    keeper: Keeper::First,
+                    assessment: Assessment::same_shot(),
+                    reason: format!(
+                        "The same shot saved as JPEG and HEIC · same camera, capture time and size · pixels differ by {:.1}/255{}",
+                        difference.mean,
+                        if difference.turns == 0 {
+                            ""
+                        } else {
+                            " · one file was rotated after capture, so they show turned"
+                        }
+                    ),
+                };
+                (jpeg, heic, pair)
+            })
+            .collect(),
+    ))
 }
 struct Plane {
     pixels: Vec<f32>,

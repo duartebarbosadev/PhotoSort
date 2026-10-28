@@ -181,11 +181,12 @@ fn clear_all_trash_does_not_resurrect_marks_from_confirmed_keep_all_reviews() {
         subject: MediaId(0),
         companion: Some(MediaId(1)),
         category: delete_review::Category::Exact,
+        tag: "Tag".into(),
+        keep_why: String::new(),
         reason: "fixture".into(),
     }]);
     app.delete_review
         .toggle(MediaId(0), MediaId(0), &mut app.decisions);
-    app.delete_review.confirm(MediaId(0), &mut app.decisions);
     app.pick_review.replace(
         vec![pick_review::Cluster {
             key: 1,
@@ -215,7 +216,6 @@ fn clear_all_trash_does_not_resurrect_marks_from_confirmed_keep_all_reviews() {
         },
     );
     assert!(app.decisions.values().all(|d| !d.rejected));
-    app.delete_review.reset_all(&mut app.decisions);
     app.pick_review.reset_all(&mut app.decisions);
     assert!(
         app.decisions.values().all(|d| !d.rejected),
@@ -269,6 +269,8 @@ fn clear_all_trash_shared_action_covers_every_workflow_and_retains_unconfirmed_c
             subject: MediaId(0),
             companion: Some(MediaId(1)),
             category: delete_review::Category::Exact,
+            tag: "Tag".into(),
+            keep_why: String::new(),
             reason: "fixture".into(),
         }]);
         app.delete_review
@@ -305,8 +307,9 @@ fn clear_all_trash_shared_action_covers_every_workflow_and_retains_unconfirmed_c
         assert_eq!(app.active, Some(MediaId(2)));
         assert_eq!(app.comparison, vec![MediaId(2), MediaId(3)]);
         assert_eq!(app.inspection_view.zoom, 2.0);
-        assert!(app.delete_review.unfinished(Some(MediaId(0))));
-        assert!(app.delete_review.keeps(MediaId(0), MediaId(0)));
+        // The card keeps its photo, now unlike its suggestion, with Undo.
+        assert!(app.delete_review.changed(MediaId(0), &app.decisions));
+        assert!(delete_review::Review::keeps(&app.decisions, MediaId(0)));
         assert!(app.pick_review.unfinished());
         assert!(app.pick_review.comparison().unwrap().keep_all());
         assert!(Arc::ptr_eq(&catalog, app.catalog.as_ref().unwrap()));

@@ -116,6 +116,7 @@ impl Snapshot {
         .find(|lens| !lens.is_empty())
         .unwrap_or_default();
         result.captured = self.raw("Exif.Photo.DateTimeOriginal").into();
+        result.captured_subsec_ms = super::subsec_ms(self.raw("Exif.Photo.SubSecTimeOriginal"));
         result.exposure = self.display("Exif.Photo.ExposureTime");
         result.aperture = self.display("Exif.Photo.FNumber");
         result.iso = self.raw("Exif.Photo.ISOSpeedRatings").into();

@@ -212,8 +212,10 @@ impl PhotoSortApp {
         // On short windows, give the photos room and use Previous/Next instead
         // of squeezing both the canvas and a clipped thumbnail strip below it.
         // The strip can sit in a column on the left instead.
-        let side_strip = self.preferences.strip_position
-            == crate::core::preferences::StripPosition::Left
+        // Easy Delete shows this beside its grid, which is its strip.
+        let beside_grid = self.step == Step::EasyDelete;
+        let side_strip = !beside_grid
+            && self.preferences.strip_position == crate::core::preferences::StripPosition::Left
             && ui.available_width() >= 640.0;
         if side_strip {
             egui::Panel::left("review_side_strip")
@@ -228,7 +230,7 @@ impl PhotoSortApp {
                 }))
                 .show(ui, |ui| self.side_strip(ui));
         }
-        let show_filmstrip = !side_strip && ui.available_height() >= 360.0;
+        let show_filmstrip = !side_strip && !beside_grid && ui.available_height() >= 360.0;
         let filmstrip_height = FILMSTRIP + if self.strip_names() { STRIP_NAME } else { 0.0 };
         let short = ui.ctx().content_rect().height() < 760.0;
         let controls_height = match (compact, short) {
@@ -245,9 +247,21 @@ impl PhotoSortApp {
             })
         .max(40.0);
         let ideal_columns = if ids.len() == 4 { 2 } else { 3 };
-        let columns = ((ui.available_width() / 250.0).floor() as usize)
-            .clamp(1, ideal_columns)
-            .min(ids.len());
+        let columns = if beside_grid && ids.len() == 2 {
+            // A narrow panel: side by side or stacked, whichever shows the
+            // photos larger for their shape.
+            let ratio = self
+                .delete_current
+                .map_or(0.75, |id| self.delete_card_ratio(id));
+            let width = ui.available_width();
+            let side_by_side = (width / 2.0).min(height / ratio);
+            let stacked = width.min(height / 2.0 / ratio);
+            if side_by_side >= stacked { 2 } else { 1 }
+        } else {
+            ((ui.available_width() / 250.0).floor() as usize)
+                .clamp(1, ideal_columns)
+                .min(ids.len())
+        };
         let rows = ids.len().div_ceil(columns);
         // A single comparison must fit even in a short window. Minimum row
         // height is useful only when multiple rows need a scrolling viewport.
@@ -350,9 +364,7 @@ impl PhotoSortApp {
                 }
                 if self.step == Step::EasyDelete {
                     for (side, id) in ids.iter().enumerate() {
-                        let keep = self
-                            .delete_current
-                            .is_none_or(|review| self.delete_review.keeps(review, *id));
+                        let keep = !self.decision(*id).rejected;
                         if ui
                             .add(decision_button(side, keep))
                             .on_hover_text(format!("Toggle photo {} · {}", side + 1, side + 1))
@@ -362,7 +374,7 @@ impl PhotoSortApp {
                         }
                     }
                     divider(ui);
-                    self.delete_confirm_button(ui);
+                    self.delete_undo_button(ui);
                 } else if self.step == Step::PickBest {
                     let paths = self
                         .pick_review
@@ -714,7 +726,8 @@ impl PhotoSortApp {
         if count > 1 {
             ui.painter().rect_filled(rect, R_SURFACE, CHROME);
         }
-        if count > 1 && self.focused_slot == slot {
+        // Easy Delete outlines nothing: an outline could be read as Keep or Trash.
+        if count > 1 && self.focused_slot == slot && self.step != Step::EasyDelete {
             ui.painter().rect_stroke(
                 rect,
                 R_SURFACE,
@@ -922,6 +935,15 @@ impl PhotoSortApp {
                 )
             } else {
                 let mut label = named(&(slot + 1).to_string());
+                // Easy Delete shows what tells the two photos apart, as on
+                // its cards, in place of the scores.
+                let facts = (self.step == Step::EasyDelete)
+                    .then(|| self.delete_photo_facts(id))
+                    .flatten();
+                if let Some(facts) = &facts {
+                    label.push_str(" · ");
+                    label.push_str(facts);
+                }
                 // Pick Best ranks by its cluster score; elsewhere show the
                 // photo's quality score once analysis has run.
                 let score = (self.step == Step::PickBest)
@@ -929,10 +951,10 @@ impl PhotoSortApp {
                     .flatten()
                     .and_then(|t| t.cluster.scores.get(&id).copied())
                     .or_else(|| self.analysis.get(&id).map(|a| a.score));
-                if let Some(score) = score {
+                if let Some(score) = score.filter(|_| facts.is_none()) {
                     label.push_str(&format!(" · score {score:.1}"));
                 }
-                if let Some(analysis) = self.analysis.get(&id) {
+                if let Some(analysis) = self.analysis.get(&id).filter(|_| facts.is_none()) {
                     for issue in &analysis.issues {
                         label.push_str(" · ");
                         label.push_str(issue);
@@ -944,7 +966,10 @@ impl PhotoSortApp {
             let pill = matches!(self.step, Step::EasyDelete | Step::PickBest) || d.rejected;
             let mut label_clip = rect;
             if pill {
-                label_clip.max.x -= if self.step == Step::PickBest {
+                // Pick Best and Easy Delete add a Suggested mark beside it.
+                label_clip.max.x -= if self.step == Step::PickBest
+                    || (self.step == Step::EasyDelete && self.delete_suggested_keeper(id))
+                {
                     210.0
                 } else {
                     104.0
@@ -981,17 +1006,25 @@ impl PhotoSortApp {
             let keep = if self.step == Step::PickBest {
                 self.pick_review.comparison().is_none_or(|c| c.keeps(id))
             } else {
-                self.delete_current
-                    .is_none_or(|review| self.delete_review.keeps(review, id))
+                !self.decision(id).rejected
             };
             let pill = decision_pill(ui.painter(), rect, keep);
-            if self.step == Step::PickBest
-                && self
-                    .pick_review
+            let suggested = if self.step == Step::PickBest {
+                self.pick_review
                     .comparison()
                     .is_some_and(|c| c.ai_pick == id)
-            {
-                suggested_badge(ui.painter(), pill);
+            } else {
+                self.delete_suggested_keeper(id)
+            };
+            if suggested {
+                let badge = suggested_badge(ui.painter(), pill);
+                if let Some(why) = (self.step == Step::EasyDelete)
+                    .then(|| self.delete_keep_why(id))
+                    .flatten()
+                {
+                    ui.interact(badge, ui.id().with(("suggested", slot)), Sense::hover())
+                        .on_hover_text(why);
+                }
             }
         } else if pixels && d.rejected {
             decision_pill(ui.painter(), rect, false);
@@ -1165,7 +1198,7 @@ fn decision_pill(painter: &egui::Painter, slot: egui::Rect, keep: bool) -> egui:
     rect
 }
 /// Marks Pick Best's suggested keeper, beside its Keep/Trash pill.
-fn suggested_badge(painter: &egui::Painter, pill: egui::Rect) {
+fn suggested_badge(painter: &egui::Painter, pill: egui::Rect) -> egui::Rect {
     let text = format!("{}  Suggested", egui_phosphor::regular::STAR);
     let galley = painter.layout_no_wrap(text, medium(12.0), ACCENT);
     let size = galley.size() + egui::vec2(16.0, 8.0);
@@ -1178,6 +1211,7 @@ fn suggested_badge(painter: &egui::Painter, pill: egui::Rect) {
         StrokeKind::Inside,
     );
     painter.galley(rect.min + egui::vec2(8.0, 4.0), galley, ACCENT);
+    rect
 }
 
 impl PhotoSortApp {

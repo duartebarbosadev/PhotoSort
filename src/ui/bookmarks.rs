@@ -90,7 +90,8 @@ impl PhotoSortApp {
             self.rotation_review.discard();
         } else {
             self.decisions.clear();
-            self.delete_review.discard_confirmations();
+            // Back to the defaults: Easy Delete stages its suggestions again.
+            self.delete_review.restore_suggested(Default::default());
             self.pick_review.discard_confirmations();
             self.changed();
         }
@@ -103,7 +104,13 @@ impl PhotoSortApp {
         self.library_offset = 0.0;
         if let Some(view) = &self.pending_bookmark {
             self.query = view.query.clone();
-            self.filter = view.filter;
+            // Fix Rotation has no photo filter to show or clear, so a view
+            // saved when it had one restores every photo.
+            self.filter = if self.step == Step::Rotation {
+                Filter::All
+            } else {
+                view.filter
+            };
             self.browse = view.browse.clone();
             self.navigator = view.navigator.clone();
             // Group numbers belong to an analysis run. Resolve the saved member afterwards.

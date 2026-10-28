@@ -1,6 +1,6 @@
 use photosort::core::{
     analysis::{self, Analysis, Thresholds},
-    delete_review::{self, Category, Entry, Review},
+    delete_review::{self, Category, Entry, FormatChoice, Review},
     model::*,
     pipeline::Asset,
 };
@@ -13,19 +13,67 @@ fn entry(n: u64, pair: Option<u64>) -> Entry {
         subject: id(n),
         companion: pair.map(id),
         category: Category::Exact,
+        tag: "Identical copy".into(),
+        keep_why: String::new(),
         reason: "copy".into(),
+    }
+}
+fn formats(jpeg: u64, heic: u64) -> Entry {
+    Entry {
+        category: Category::Formats,
+        tag: "JPEG + HEIC".into(),
+        keep_why: String::new(),
+        ..entry(jpeg, Some(heic))
     }
 }
 fn queue() -> Review {
     let mut r = Review::default();
-    r.replace(vec![entry(1, Some(2)), entry(3, None)]);
+    r.replace(vec![entry(1, Some(2)), entry(3, None), formats(5, 6)]);
     r
 }
 fn rejected(d: &HashMap<MediaId, Decision>, n: u64) -> bool {
     d.get(&id(n)).is_some_and(|d| d.rejected)
 }
 #[test]
-fn choices_are_provisional_and_revoking_restores_prior_marks_without_touching_metadata() {
+fn suggestions_are_staged_as_the_default_decisions() {
+    let mut r = queue();
+    let mut d = HashMap::new();
+    let mut marked = r.stage_new_suggestions(&mut d);
+    marked.sort_by_key(|id| id.0);
+    // The copy and the single problem photo go to Trash; keepers and both
+    // formats of one shot stay.
+    assert_eq!(marked, vec![id(1), id(3)]);
+    assert!(rejected(&d, 1) && rejected(&d, 3));
+    assert!(!rejected(&d, 2) && !rejected(&d, 5) && !rejected(&d, 6));
+    for n in [1, 3, 5] {
+        assert!(
+            !r.changed(id(n), &d),
+            "card {n} differs from its suggestion"
+        );
+    }
+    assert_eq!(r.format_choice(&[id(5)], &d), Some(FormatChoice::Both));
+}
+#[test]
+fn a_photo_is_staged_once_so_later_analyses_keep_the_users_choices() {
+    let mut r = queue();
+    let mut d = HashMap::new();
+    r.stage_new_suggestions(&mut d);
+    // The user keeps the copy; a new analysis brings the same suggestion back.
+    r.toggle(id(1), id(1), &mut d);
+    assert!(!rejected(&d, 1));
+    assert!(r.changed(id(1), &d));
+    r.replace(vec![entry(1, Some(2)), entry(3, None), entry(7, Some(8))]);
+    assert_eq!(r.stage_new_suggestions(&mut d), vec![id(7)]);
+    assert!(!rejected(&d, 1), "a later analysis re-trashed a kept photo");
+    // Persisted with the session, so a restart does not stage it again.
+    let mut restored = Review::default();
+    restored.restore_suggested(r.suggested().clone());
+    restored.replace(vec![entry(1, Some(2))]);
+    assert!(restored.stage_new_suggestions(&mut d).is_empty());
+    assert!(!rejected(&d, 1));
+}
+#[test]
+fn staging_never_unmarks_and_switching_keeps_ratings_and_rotations() {
     let mut r = queue();
     let mut d = HashMap::from([(
         id(2),
@@ -35,103 +83,62 @@ fn choices_are_provisional_and_revoking_restores_prior_marks_without_touching_me
             turns: 2,
         },
     )]);
-    let initial = d.clone();
-    r.toggle(id(1), id(1), &mut d);
-    assert_eq!(d, initial);
-    assert!(r.unfinished(Some(id(1))));
-    assert!(r.confirm(id(1), &mut d));
-    assert!(!rejected(&d, 1));
-    assert!(!rejected(&d, 2));
-    assert_eq!(d[&id(2)].rating, Some(4));
-    assert_eq!(d[&id(2)].turns, 2);
-    assert!(!r.unfinished(Some(id(1))));
-    assert!(!r.confirm(id(1), &mut d));
+    r.stage_new_suggestions(&mut d);
+    // A photo marked elsewhere stays marked, even as the suggested keeper.
     assert!(rejected(&d, 2));
-    assert!(r.unfinished(Some(id(1))));
-    r.reset(id(1), &mut d);
-    assert!(!r.unfinished(Some(id(1))));
-    assert!(rejected(&d, 2));
-}
-#[test]
-fn editing_confirmed_choices_revokes_before_changing_pending_state() {
-    let mut r = queue();
-    let mut d = HashMap::new();
-    r.confirm(id(1), &mut d);
-    assert!(rejected(&d, 1));
+    assert!(r.changed(id(1), &d));
     r.toggle(id(1), id(2), &mut d);
-    assert!(!r.confirmed(id(1)));
-    assert!(!rejected(&d, 1));
     assert!(!rejected(&d, 2));
-    assert!(!r.keeps(id(1), id(2)));
-    r.confirm(id(1), &mut d);
-    assert!(rejected(&d, 1));
-    assert!(rejected(&d, 2));
-}
-#[test]
-fn resetting_overlapping_confirmations_unwinds_in_reverse_order() {
-    let mut r = Review::default();
-    r.replace(vec![entry(1, Some(2)), entry(2, Some(3))]);
-    let mut d = HashMap::from([(
-        id(3),
-        Decision {
-            rejected: true,
-            ..Default::default()
-        },
-    )]);
-    r.confirm(id(1), &mut d);
-    r.confirm(id(2), &mut d);
-    assert!(rejected(&d, 2));
-    assert!(!rejected(&d, 3));
-    r.reset_all(&mut d);
-    assert!(!rejected(&d, 1));
-    assert!(!rejected(&d, 2));
+    assert_eq!((d[&id(2)].rating, d[&id(2)].turns), (Some(4), 2));
+    // Photos outside the card are never switched.
+    r.toggle(id(1), id(3), &mut d);
     assert!(rejected(&d, 3));
-    assert!(!r.confirmed(id(1)));
-    assert!(!r.confirmed(id(2)));
 }
 #[test]
-fn external_decisions_are_not_overwritten_by_stale_review_history() {
+fn undo_and_accept_put_cards_back_to_their_suggestion_only_where_asked() {
     let mut r = queue();
     let mut d = HashMap::new();
-    r.confirm(id(1), &mut d);
-    d.get_mut(&id(1)).unwrap().rejected = false;
-    d.get_mut(&id(2)).unwrap().rejected = true;
-    r.reconcile_external(&d);
-    r.reset_all(&mut d);
-    assert!(!rejected(&d, 1));
-    assert!(rejected(&d, 2));
-    assert!(!r.confirmed(id(1)));
-}
-#[test]
-fn filtered_defaults_leave_other_reviews_alone_and_retain_prebatch_marks() {
-    let mut r = Review::default();
-    r.replace(vec![entry(1, Some(2)), entry(2, Some(3)), entry(4, None)]);
-    let mut d = HashMap::new();
-    r.accept_defaults(&[id(1), id(2)], &mut d);
-    assert!(r.confirmed(id(1)));
-    assert!(r.confirmed(id(2)));
-    assert!(!r.confirmed(id(4)));
-    assert!(rejected(&d, 1));
-    assert!(rejected(&d, 2));
-    assert!(!rejected(&d, 4));
-    // Cancel the second row alone: its prior state predates the entire batch.
-    r.confirm(id(2), &mut d);
-    assert!(!rejected(&d, 2));
-    r.reset_all(&mut d);
-    assert!(d.values().all(Decision::is_empty));
-}
-#[test]
-fn repeating_results_preserves_review_and_discard_forgets_old_undo_history() {
-    let mut r = queue();
-    let mut d = HashMap::new();
-    r.confirm(id(1), &mut d);
-    r.replace(vec![entry(1, Some(2)), entry(3, None)]);
-    assert!(r.confirmed(id(1)));
+    r.stage_new_suggestions(&mut d);
+    r.toggle(id(1), id(1), &mut d);
+    r.toggle(id(1), id(2), &mut d);
+    r.toggle(id(3), id(3), &mut d);
+    assert_eq!(r.changed_count(&[id(1), id(3), id(5)], &d), 2);
+    // A group's bulk action (here the exact copies) leaves other groups alone.
+    r.accept(&[id(1)], &mut d);
+    assert!(rejected(&d, 1) && !rejected(&d, 2));
+    assert!(!rejected(&d, 3));
+    // Accept all suggestions.
+    r.accept(&[id(1), id(3), id(5)], &mut d);
+    assert!(rejected(&d, 3));
+    assert_eq!(r.changed_count(&[id(1), id(3), id(5)], &d), 0);
+    // After Discard every mark is gone, and nothing is staged again.
     d.clear();
-    r.discard_confirmations();
-    r.reset_all(&mut d);
-    assert!(d.is_empty());
-    assert!(!r.confirmed(id(1)));
+    assert!(r.stage_new_suggestions(&mut d).is_empty());
+    assert_eq!(r.changed_count(&[id(1), id(3), id(5)], &d), 2);
+}
+#[test]
+fn one_format_choice_applies_to_every_jpeg_heic_pair() {
+    let mut r = Review::default();
+    r.replace(vec![formats(1, 2), formats(3, 4), entry(5, Some(6))]);
+    let all = [id(1), id(3), id(5)];
+    let mut d = HashMap::new();
+    r.stage_new_suggestions(&mut d);
+    assert_eq!(r.format_choice(&all, &d), Some(FormatChoice::Both));
+    r.choose_formats(&all, FormatChoice::Heic, &mut d);
+    assert!(rejected(&d, 1) && rejected(&d, 3));
+    assert!(!rejected(&d, 2) && !rejected(&d, 4));
+    // Only the format pairs: the exact copy keeps its own decision.
+    assert!(rejected(&d, 5) && !rejected(&d, 6));
+    assert_eq!(r.format_choice(&all, &d), Some(FormatChoice::Heic));
+    r.choose_formats(&all, FormatChoice::Jpeg, &mut d);
+    assert!(!rejected(&d, 1) && rejected(&d, 2) && rejected(&d, 4));
+    assert_eq!(r.format_choice(&all, &d), Some(FormatChoice::Jpeg));
+    // One pair changed by hand (back to both): no single choice is selected.
+    r.toggle(id(1), id(2), &mut d);
+    assert_eq!(r.format_choice(&all, &d), None);
+    assert!(!r.changed(id(1), &d) && r.changed(id(3), &d));
+    r.choose_formats(&all, FormatChoice::Both, &mut d);
+    assert!(!r.changed(id(1), &d) && !r.changed(id(3), &d));
 }
 fn media(n: u64) -> Media {
     Media {
@@ -153,6 +160,8 @@ fn pair(discard: MediaId, keep: MediaId) -> photosort::core::near_duplicates::ba
             || false,
         ),
         reason: "Exact copy".into(),
+        kind: photosort::core::near_duplicates::batch::Kind::Exact,
+        keeper: photosort::core::near_duplicates::batch::Keeper::First,
     }
 }
 #[test]
@@ -185,9 +194,37 @@ fn duplicate_pairs_outrank_quality_issues_and_invalid_pairs_are_rejected() {
     assert!(
         rows[0]
             .reason
-            .ends_with("· the suggested discard is also possibly soft"),
+            .ends_with(" The suggested discard is also possibly soft."),
         "{}",
         rows[0].reason
+    );
+}
+#[test]
+fn two_formats_of_one_shot_become_their_own_group_keeping_both() {
+    let media: Vec<_> = (1..=4).map(media).collect();
+    let a = media.iter().map(|m| (m.id, Analysis::default())).collect();
+    let mut formats = pair(id(1), id(2));
+    formats.kind = photosort::core::near_duplicates::batch::Kind::Formats;
+    let mut near = pair(id(3), id(4));
+    near.reason = "No visible subject change detected · suggest keeping the sharper photo".into();
+    near.kind = photosort::core::near_duplicates::batch::Kind::Near;
+    near.keeper = photosort::core::near_duplicates::batch::Keeper::Sharper;
+    let rows = delete_review::from_analysis(&media, &a, &HashMap::new(), &[near, formats]);
+    assert_eq!(
+        rows.iter().map(|e| e.category).collect::<Vec<_>>(),
+        vec![Category::Formats, Category::Near]
+    );
+    assert_eq!((rows[0].subject, rows[0].companion), (id(1), Some(id(2))));
+    assert_eq!(rows[0].suggestion(), vec![true, true]);
+    assert_eq!(rows[1].tag, "Sharper kept");
+    // The keeper's mark explains itself; both formats are kept, so no mark.
+    assert_eq!(rows[1].keep_why, "It is the sharper photo of the two.");
+    assert!(rows[0].keep_why.is_empty());
+    assert_eq!(rows[1].suggestion(), vec![false, true]);
+    // Every sentence of the reason starts with a capital letter.
+    assert_eq!(
+        rows[1].reason,
+        "No visible subject change detected. Suggest keeping the sharper photo."
     );
 }
 #[test]

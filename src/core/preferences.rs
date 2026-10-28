@@ -12,6 +12,9 @@ pub struct Preferences {
     pub show_shortcuts: bool,
     pub updates: super::updates::Preferences,
     pub easy_delete: super::analysis::Thresholds,
+    /// Easy Delete stages its suggestions as the user's choices; off, every
+    /// photo stays kept until the user accepts suggestions.
+    pub easy_delete_auto: bool,
     pub cache: super::cache::Limits,
     pub metadata_writes: super::metadata::WritePolicy,
     pub processing: super::processing::Preferences,
@@ -62,6 +65,7 @@ impl Default for Preferences {
             show_shortcuts: true,
             updates: Default::default(),
             easy_delete: Default::default(),
+            easy_delete_auto: true,
             cache: Default::default(),
             processing: Default::default(),
             metadata_writes: Default::default(),

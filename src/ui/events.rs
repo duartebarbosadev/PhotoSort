@@ -194,6 +194,7 @@ impl PhotoSortApp {
         self.manual_groups = session.manual_groups;
         self.scene_groups = session.scene_groups;
         self.decisions = session.decisions;
+        self.delete_review.restore_suggested(session.suggested);
         if let Some(intent) = session.organize {
             self.organize_drafts = intent.drafts;
             self.file_names = intent.names;
@@ -733,6 +734,8 @@ impl PhotoSortApp {
             session.apply_verified_identities(&report.relocated);
         }
         self.decisions = session.decisions.clone();
+        self.delete_review
+            .restore_suggested(session.suggested.clone());
         self.manual_groups = session.manual_groups.clone();
         self.scene_groups = session.scene_groups.clone();
         self.rotation_review

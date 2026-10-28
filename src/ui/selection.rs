@@ -36,7 +36,8 @@ impl PhotoSortApp {
         let pick_before = self.pick_review.comparison().map(|c| c.paths.clone());
         let changed = decisions::clear_trash_marks(&mut self.decisions);
         let count = changed.len();
-        self.delete_review.clear_prior_trash_marks();
+        // Easy Delete stages its suggestions again the next time it opens.
+        self.delete_review.restore_suggested(Default::default());
         self.pick_review.clear_prior_trash_marks();
         self.pending_bookmark = None;
         // A closed preview is a derived snapshot; unfinished recovery stays guarded.

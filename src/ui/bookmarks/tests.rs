@@ -199,6 +199,8 @@ fn empty_guided_bookmark_focuses_new_results_without_restarting_analysis() {
                                 subject: ids[1],
                                 companion: Some(ids[2]),
                                 category: crate::core::delete_review::Category::Exact,
+                                tag: "Tag".into(),
+                                keep_why: String::new(),
                                 reason: "identical".into(),
                             }])
                     }
@@ -216,7 +218,12 @@ fn empty_guided_bookmark_focuses_new_results_without_restarting_analysis() {
             }
             app.refilter();
             app.restore_bookmark();
-            assert_eq!(app.active.is_some(), has_results, "{step:?}");
+            // Easy Delete waits for the user to pick a card.
+            assert_eq!(
+                app.active.is_some(),
+                has_results && step != Step::EasyDelete,
+                "{step:?}"
+            );
             if let Some(active) = app.active {
                 assert!(app.comparison_ids().contains(&active));
             }
@@ -322,6 +329,8 @@ fn guided_views_restore_position_and_pair_without_confirmations_or_decisions() {
             subject: ids[1],
             companion: Some(ids[2]),
             category: crate::core::delete_review::Category::Near,
+            tag: "Tag".into(),
+            keep_why: String::new(),
             reason: String::new(),
         }]);
     app.view_data_ready.insert(Step::EasyDelete);
@@ -338,7 +347,11 @@ fn guided_views_restore_position_and_pair_without_confirmations_or_decisions() {
     settle(&mut app);
     assert_eq!(app.active, Some(ids[2]));
     assert_eq!(app.delete_current, Some(ids[1]));
-    assert!(!app.delete_review.confirmed(ids[1]));
+    // Restoring the view changes no decision: opening Easy Delete only
+    // stages its suggestion, the copy to Trash and its keeper kept.
+    assert!(app.decision(ids[1]).rejected && !app.decision(ids[2]).rejected);
+    assert_eq!(app.decisions.values().filter(|d| !d.is_empty()).count(), 1);
+    let staged = app.decisions.clone();
     app.saved_views.bookmarks.insert(
         Step::Rotation,
         Bookmark {
@@ -351,5 +364,5 @@ fn guided_views_restore_position_and_pair_without_confirmations_or_decisions() {
     settle(&mut app);
     assert_eq!(app.active, Some(ids[2]));
     assert!(app.rotation_review.pending().is_empty());
-    assert!(app.decisions.is_empty() && app.requested.is_empty());
+    assert!(app.decisions == staged && app.requested.is_empty());
 }

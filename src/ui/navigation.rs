@@ -264,6 +264,9 @@ impl PhotoSortApp {
         }
         self.start_ready_analysis();
         self.prepare_bookmark();
+        if step == Step::EasyDelete {
+            self.stage_delete_suggestions();
+        }
         if step == Step::Cull || self.metadata_organize_mode() {
             self.start_metadata_index();
         }
@@ -697,23 +700,6 @@ impl PhotoSortApp {
             }
         }
     }
-    /// Analysis runs on its own when a guided step opens; running it again
-    /// is a secondary action, kept in the step's More menu.
-    fn analysis_menu_item(&mut self, ui: &mut egui::Ui) {
-        let label = if self.step == Step::Rotation {
-            "Detect rotations again · Ctrl/Cmd+S"
-        } else {
-            "Analyze library · Ctrl/Cmd+S"
-        };
-        if ui
-            .add_enabled(self.can_start_analysis(), egui::Button::new(label))
-            .on_hover_text("Runs on this computer")
-            .clicked()
-        {
-            self.analyze_current_workflow();
-            ui.close();
-        }
-    }
     pub(super) fn toolbar(&mut self, ui: &mut egui::Ui) {
         let before = (
             self.query.clone(),
@@ -732,7 +718,7 @@ impl PhotoSortApp {
         // get exactly the width left over and wrap within it.
         let mut row = ui.available_rect_before_wrap();
         row.max.y = row.min.y + ui.spacing().interact_size.y;
-        // Organize's plan buttons show only their icons in a narrow bar.
+        // The bar's text buttons show only their icons in a narrow bar.
         let compact = row.width() < ORGANIZE_COMPACT;
         let right = ui
             .scope_builder(
@@ -746,15 +732,27 @@ impl PhotoSortApp {
                     {
                         self.inspector ^= true;
                     }
-                    // Organize previews the clicked photo beside its folders.
-                    if self.step != Step::Organize {
-                        ui.add_space(S1);
-                        self.view_switch(ui);
-                    } else {
+                    // No step has a More menu: Analyze and the step's own
+                    // actions sit in the bar. Organize previews the clicked
+                    // photo beside its folders, Easy Delete the clicked card
+                    // beside its grid, so neither has a view switch.
+                    if self.step == Step::Organize {
                         self.organize_bar_actions(ui, compact);
+                    } else {
+                        ui.add_space(S1);
+                        self.analyze_icon_button(ui);
+                        if self.step != Step::EasyDelete {
+                            ui.add_space(S1);
+                            self.view_switch(ui);
+                        }
                     }
-                    if self.step == Step::Cull {
-                        self.cull_view_options(ui);
+                    match self.step {
+                        Step::Cull => self.cull_view_options(ui),
+                        Step::Rotation => {
+                            ui.add_space(S1);
+                            self.rotation_confirm_all_button(ui, compact);
+                        }
+                        _ => {}
                     }
                 },
             )
@@ -785,16 +783,14 @@ impl PhotoSortApp {
                     if !matches!(self.step, Step::Organize | Step::PickBest | Step::Cull) {
                         self.search_field(ui);
                     }
-                    if !self.step_menu_empty() {
-                        more_menu(ui, "More actions", |ui| self.step_menu(ui));
-                    }
                 },
             )
             .response
             .rect;
         ui.advance_cursor_after_rect(left.union(right));
-        // Organize has no context line, so the bar ends right under its row.
-        if self.step != Step::Organize {
+        // Organize and Easy Delete have no context line, so the bar ends
+        // right under its row.
+        if !matches!(self.step, Step::Organize | Step::EasyDelete) {
             ui.add_space(2.0);
             self.step_context(ui);
             ui.add_space(S1);
@@ -815,67 +811,43 @@ impl PhotoSortApp {
             self.pending_bookmark = None;
         }
     }
-    /// The step's secondary actions, behind the toolbar's More button.
-    fn step_menu(&mut self, ui: &mut egui::Ui) {
-        match self.step {
-            Step::EasyDelete => self.delete_menu(ui),
-            Step::Rotation => self.rotation_menu(ui),
-            Step::PickBest => self.pick_menu(ui),
-            _ => {}
-        }
-        if self.step != Step::Cull && self.step != Step::PickBest {
-            ui.menu_button(format!("Show: {}", self.filter.title()), |ui| {
-                self.filter_choices(ui)
-            });
-        }
-        if self.analysis_run.is_none() {
-            // Cull's menu starts with this item; elsewhere it follows the
-            // step's own actions.
-            if self.step != Step::Cull {
-                ui.separator();
-            }
-            self.analysis_menu_item(ui);
-        }
-    }
-    /// Cull's More menu holds only Analyze, which is unavailable while an
-    /// analysis runs; every other step always has items. Organize has none:
-    /// its actions sit in the bar and its filter beside the board's search.
-    fn step_menu_empty(&self) -> bool {
-        self.step == Step::Organize || (self.step == Step::Cull && self.analysis_run.is_some())
-    }
     /// Organize's buttons at the right of the bar, before Details: Show
     /// original, Reset changes and Analyze.
     fn organize_bar_actions(&mut self, ui: &mut egui::Ui, compact: bool) {
-        use egui_phosphor::regular as icon;
         ui.add_space(S1);
-        // While analysis runs, Cancel analysis takes its place on the left.
-        // A row-high icon, so the bar's buttons stay on one line.
-        if self.analysis_run.is_none() {
-            let button = ui.add_enabled(
-                self.can_start_analysis(),
-                egui::Button::new(RichText::new(icon::SPARKLE).size(15.0))
-                    .frame(false)
-                    .min_size(egui::vec2(28.0, 0.0)),
-            );
-            if named(
-                button,
-                egui::WidgetType::Button,
-                "Analyze library · Ctrl/Cmd+S",
-            )
-            .on_hover_text("Analyze library · Ctrl/Cmd+S\nRuns on this computer")
-            .clicked()
-            {
-                self.analyze_current_workflow();
-            }
-        }
+        self.analyze_icon_button(ui);
         ui.add_space(S2);
         self.reset_button(ui, compact);
         self.original_button(ui, compact);
     }
+    /// Analyze as a row-high icon in the bar, so its buttons stay on one
+    /// line. While analysis runs, Cancel analysis takes its place on the left.
+    fn analyze_icon_button(&mut self, ui: &mut egui::Ui) {
+        if self.analysis_run.is_some() {
+            return;
+        }
+        let button = ui.add_enabled(
+            self.can_start_analysis(),
+            egui::Button::new(RichText::new(egui_phosphor::regular::SPARKLE).size(15.0))
+                .frame(false)
+                .min_size(egui::vec2(28.0, 0.0)),
+        );
+        // Fix Rotation's analysis detects the photos' orientation.
+        let name = if self.step == Step::Rotation {
+            "Detect rotations again · Ctrl/Cmd+S"
+        } else {
+            "Analyze library · Ctrl/Cmd+S"
+        };
+        if named(button, egui::WidgetType::Button, name)
+            .on_hover_text(name)
+            .clicked()
+        {
+            self.analyze_current_workflow();
+        }
+    }
     /// One quiet line under the toolbar with what the current photo needs.
     fn step_context(&mut self, ui: &mut egui::Ui) {
         match self.step {
-            Step::EasyDelete => self.delete_context(ui),
             Step::Rotation => self.rotation_context(ui),
             Step::PickBest => self.pick_context(ui),
             Step::Cull => self.cull_filter_notice(ui),
@@ -1260,5 +1232,131 @@ mod cull_navigation_tests {
         assert_eq!(app.active, Some(MediaId(0)));
         assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
         assert!(app.requested.is_empty() && app.analysis_run.is_none());
+    }
+}
+
+#[cfg(test)]
+mod step_bar_tests {
+    use super::super::compact_cull_tests::{click_label, fixture, rendered};
+    use super::*;
+    use crate::core::models::RotationSuggestion;
+    use crate::core::pick_review::Cluster;
+
+    fn found<'a>(nodes: &'a [(String, egui::Rect)], label: &str) -> Vec<&'a egui::Rect> {
+        nodes
+            .iter()
+            .filter(|(s, _)| s == label)
+            .map(|(_, rect)| rect)
+            .collect()
+    }
+    /// Real photos with two rotation suggestions, the second uncertain,
+    /// and one Pick Best group, so no step starts an analysis on entry.
+    fn app() -> (tempfile::TempDir, PhotoSortApp, Vec<MediaId>) {
+        let (temp, mut app) = fixture();
+        let ids: Vec<MediaId> = app.media.iter().map(|m| m.id).collect();
+        for (id, turns, uncertain) in [(ids[0], 1, false), (ids[1], 3, true)] {
+            app.rotations.insert(
+                id,
+                RotationSuggestion {
+                    turns,
+                    confidence: 0.9,
+                    uncertain,
+                    views: 3,
+                },
+            );
+        }
+        app.finish_rotation_detection();
+        app.pick_review.replace(
+            vec![Cluster {
+                key: 1,
+                ordered: vec![ids[2], ids[3]],
+                scores: HashMap::from([(ids[2], 10.), (ids[3], 20.)]),
+            }],
+            &mut app.decisions,
+        );
+        (temp, app, ids)
+    }
+    #[test]
+    fn rotation_pick_and_cull_bars_hold_their_actions_without_a_more_menu() {
+        let (_temp, mut app, _) = app();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        for step in [Step::Rotation, Step::PickBest, Step::Cull] {
+            app.set_step(step);
+            assert!(app.analysis_run.is_none(), "{step:?}");
+            let analyze = if step == Step::Rotation {
+                "Detect rotations again · Ctrl/Cmd+S"
+            } else {
+                "Analyze library · Ctrl/Cmd+S"
+            };
+            let mut bar = Vec::new();
+            if step == Step::Rotation {
+                bar.push("Confirm all suggestions");
+            }
+            bar.extend([analyze, "Details"]);
+            for width in [760.0, 1000.0, 1280.0, 1800.0] {
+                let nodes = rendered(&mut app, &ctx, egui::vec2(width, 800.0));
+                assert!(
+                    found(&nodes, "More actions").is_empty(),
+                    "{step:?} at {width}"
+                );
+                let rects: Vec<egui::Rect> = bar
+                    .iter()
+                    .map(|name| {
+                        let rects = found(&nodes, name);
+                        assert_eq!(rects.len(), 1, "{name} in {step:?} at {width}");
+                        *rects[0]
+                    })
+                    .collect();
+                for (name, rect) in bar.iter().zip(&rects) {
+                    assert!(
+                        rect.left() >= 0.0 && rect.right() <= width,
+                        "{name} {rect:?} outside the window in {step:?} at {width}"
+                    );
+                }
+                for pair in rects.windows(2) {
+                    assert!(
+                        pair[0].right() <= pair[1].left() + 0.5,
+                        "{pair:?} overlap in {step:?} at {width}"
+                    );
+                    assert!(
+                        (pair[0].center().y - pair[1].center().y).abs() < 1.0,
+                        "{pair:?} out of line in {step:?} at {width}"
+                    );
+                }
+            }
+            // While an analysis runs, Cancel analysis takes Analyze's place.
+            app.analysis_run = Some(1);
+            let nodes = rendered(&mut app, &ctx, egui::vec2(1280.0, 800.0));
+            assert!(found(&nodes, analyze).is_empty(), "{step:?}");
+            assert_eq!(found(&nodes, "Cancel analysis").len(), 1, "{step:?}");
+            app.analysis_run = None;
+        }
+        app.runtime.shutdown();
+    }
+    #[test]
+    fn confirm_all_in_the_bar_confirms_certain_rotations_and_shrinks_to_its_icon() {
+        let (_temp, mut app, ids) = app();
+        app.set_step(Step::Rotation);
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let width = |app: &mut PhotoSortApp, window: f32| {
+            let nodes = rendered(app, &ctx, egui::vec2(window, 800.0));
+            found(&nodes, "Confirm all suggestions")[0].width()
+        };
+        assert!(width(&mut app, 900.0) < width(&mut app, 1440.0));
+        click_label(
+            &mut app,
+            &ctx,
+            egui::vec2(1440.0, 800.0),
+            "Confirm all suggestions",
+        );
+        let pending = app.rotation_review.pending();
+        assert_eq!(pending.len(), 1, "the uncertain photo stays open");
+        assert_eq!(pending[&ids[0]].turns, 1);
+        assert!(!app.rotation_review.choice(ids[1]).unwrap().confirmed);
+        app.runtime.shutdown();
     }
 }

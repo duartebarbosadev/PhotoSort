@@ -64,9 +64,10 @@ anything moves. RAW + JPEG pairs and their sidecars always move together.
 
 ### Easy Delete
 
-Get rid of the obvious rejects first. PhotoSort finds exact and near duplicates, blurry
-shots and photos that are too dark or too bright, and shows each one next to its better
-match. Keep or trash each with one key, or accept all the suggestions at once.
+Get rid of the obvious rejects first. PhotoSort finds exact and near duplicates, the JPEG
+and HEIC a phone saves of the same shot, blurry shots and photos that are too dark or too
+bright, and shows each one next to its better match. Its suggestions are staged as your
+choices: change only the ones you disagree with, with one key or one click per group.
 
 [![Easy Delete comparing a photo with a near duplicate](assets/screenshots/easy-delete.webp)](assets/screenshots/easy-delete.webp)
 

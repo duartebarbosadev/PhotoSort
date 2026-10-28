@@ -181,7 +181,6 @@ impl PhotoSortApp {
         let unfinished = match self.step {
             Step::PickBest => self.pick_review.unfinished(),
             Step::Rotation => self.rotation_review.unfinished(self.active),
-            Step::EasyDelete => self.delete_review.unfinished(self.delete_current),
             _ => false,
         };
         if unfinished {
@@ -306,8 +305,6 @@ impl PhotoSortApp {
                     (Step::PickBest, 3 | 4) => self.reset_pick(action == 4),
                     (Step::Rotation, 2) => self.confirm_rotation(),
                     (Step::Rotation, 3 | 4) => self.reset_rotation(action == 4),
-                    (Step::EasyDelete, 2) => self.confirm_delete(),
-                    (Step::EasyDelete, 3 | 4) => self.reset_delete(action == 4),
                     _ => {}
                 }
             }

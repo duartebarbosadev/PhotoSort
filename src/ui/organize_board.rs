@@ -4165,14 +4165,19 @@ mod tests {
             let filter = *found(&nodes, "Show")[0];
             assert!(filter.top() > rects[0].bottom(), "at {width}");
         }
-        // The other steps keep their More menu (Cull's is empty while the
-        // analysis it starts runs).
-        for step in [Step::EasyDelete, Step::Rotation, Step::Cull] {
+        // No step has a More menu: Analyze is an icon in every bar.
+        for step in [Step::EasyDelete, Step::Rotation, Step::PickBest, Step::Cull] {
             app.set_step(step);
             app.runtime.cancel_analysis();
             app.analysis_run = None;
             let nodes = rendered(&mut app, &ctx, egui::vec2(1280.0, 800.0));
-            assert_eq!(found(&nodes, "More actions").len(), 1, "{step:?}");
+            assert!(found(&nodes, "More actions").is_empty(), "{step:?}");
+            let analyze = if step == Step::Rotation {
+                "Detect rotations again · Ctrl/Cmd+S"
+            } else {
+                "Analyze library · Ctrl/Cmd+S"
+            };
+            assert_eq!(found(&nodes, analyze).len(), 1, "{step:?}");
             assert!(found(&nodes, "Reset changes").is_empty(), "{step:?}");
         }
         app.runtime.shutdown();

@@ -560,34 +560,6 @@ mod playback_tests {
         app.runtime.shutdown();
     }
 
-    /// Staged Easy Delete choices that are neither confirmed nor reset.
-    fn unfinished_easy_delete(app: &mut PhotoSortApp, _: &std::path::Path) {
-        use crate::core::delete_review::{Category, Entry};
-        app.media = (1..=3)
-            .map(|n| Media {
-                id: MediaId(n),
-                path: format!("/{n}.jpg").into(),
-                kind: MediaKind::Photo,
-                fingerprint: Fingerprint::default(),
-            })
-            .collect();
-        app.index = app
-            .media
-            .iter()
-            .enumerate()
-            .map(|(i, m)| (m.id, i))
-            .collect();
-        app.delete_review.replace(vec![Entry {
-            subject: MediaId(1),
-            companion: Some(MediaId(2)),
-            category: Category::Exact,
-            reason: "copy".into(),
-        }]);
-        app.set_step(Step::EasyDelete);
-        app.refilter();
-        app.toggle_delete_candidate(1);
-        assert!(app.delete_review.unfinished(app.delete_current));
-    }
     /// A folder renamed on the Organize board but not applied.
     fn unapplied_folder_edit(app: &mut PhotoSortApp, dir: &std::path::Path) {
         let root = dir.canonicalize().unwrap();
@@ -616,7 +588,7 @@ mod playback_tests {
     fn every_quit_prompt_stops_the_intro_instead_of_waiting_under_it() {
         type Setup = fn(&mut PhotoSortApp, &std::path::Path);
         type Asked = fn(&PhotoSortApp) -> bool;
-        let cases: [(&str, Setup, Asked); 4] = [
+        let cases: [(&str, Setup, Asked); 3] = [
             (
                 "staged choices",
                 |app, _| {
@@ -635,9 +607,6 @@ mod playback_tests {
                 |app, _| app.retry_plan = Some(Plan::default()),
                 |app| app.after_apply.is_some() && app.plan_open,
             ),
-            ("unfinished review", unfinished_easy_delete, |app| {
-                app.review_notice == Some(Step::EasyDelete)
-            }),
             ("folder edits", unapplied_folder_edit, |app| {
                 app.organize_departure.is_some()
             }),

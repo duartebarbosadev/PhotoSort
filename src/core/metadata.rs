@@ -43,6 +43,24 @@ impl Dates {
     }
 }
 
+/// EXIF SubSecTime digits are a decimal fraction of a second: "4" is 400 ms.
+fn subsec_ms(raw: &str) -> Option<u16> {
+    let digits = raw.trim().trim_end_matches('\0').trim();
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let mut ms = 0;
+    for (place, digit) in digits
+        .bytes()
+        .chain(std::iter::repeat(b'0'))
+        .take(3)
+        .enumerate()
+    {
+        ms += u16::from(digit - b'0') * [100, 10, 1][place];
+    }
+    Some(ms)
+}
+
 pub fn sidecar(path: &Path) -> PathBuf {
     let upper = path.with_extension("XMP");
     if upper.is_file() {
@@ -460,4 +478,50 @@ pub(crate) fn replace_verified(
     verify()?;
     super::replace::persist(staged, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod subsec_tests {
+    use super::*;
+    #[test]
+    fn sub_second_digits_are_a_decimal_fraction() {
+        assert_eq!(subsec_ms("4"), Some(400));
+        assert_eq!(subsec_ms("45"), Some(450));
+        assert_eq!(subsec_ms(" 123 "), Some(123));
+        assert_eq!(subsec_ms("123456"), Some(123));
+        assert_eq!(subsec_ms("007"), Some(7));
+        assert_eq!(subsec_ms(""), None);
+        assert_eq!(subsec_ms("1a"), None);
+    }
+    /// Prints what the app reads from each photo in PHOTOSORT_SAMPLE_DIR, to
+    /// check the facts the same-shot format pairing depends on.
+    #[test]
+    #[ignore = "read-only diagnostic requiring PHOTOSORT_SAMPLE_DIR"]
+    fn sample_capture_facts() {
+        let root = PathBuf::from(std::env::var_os("PHOTOSORT_SAMPLE_DIR").expect("sample dir"));
+        let mut paths: Vec<_> = walkdir::WalkDir::new(root)
+            .into_iter()
+            .filter_map(Result::ok)
+            .map(|e| e.into_path())
+            .filter(|p| {
+                p.extension().is_some_and(|e| {
+                    ["jpg", "jpeg", "heic"].contains(&e.to_ascii_lowercase().to_str().unwrap())
+                })
+            })
+            .collect();
+        paths.sort();
+        for path in paths {
+            let m = read(&path);
+            println!(
+                "{} | {} | {:?} | {:?} | {}x{} | o{}",
+                path.file_name().unwrap().to_string_lossy(),
+                m.camera,
+                m.captured_ms,
+                m.captured_subsec_ms,
+                m.width,
+                m.height,
+                m.orientation
+            );
+        }
+    }
 }

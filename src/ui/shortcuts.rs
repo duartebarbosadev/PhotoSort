@@ -229,13 +229,19 @@ impl PhotoSortApp {
     }
 
     fn delete_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
+        // Keys that change a card act on the one shown beside the grid.
+        let shown = self.delete_panel;
         match pressed {
-            egui::Key::ArrowLeft | egui::Key::Num1 => self.toggle_delete_candidate(0),
-            egui::Key::ArrowRight | egui::Key::Num2 => self.toggle_delete_candidate(1),
-            egui::Key::R => self.reset_delete(modifiers.shift),
+            egui::Key::ArrowLeft | egui::Key::Num1 if shown => self.toggle_delete_candidate(0),
+            egui::Key::ArrowRight | egui::Key::Num2 if shown => self.toggle_delete_candidate(1),
+            egui::Key::ArrowLeft | egui::Key::ArrowRight | egui::Key::Num1 | egui::Key::Num2 => {}
+            egui::Key::R if modifiers.shift => self.accept_delete_defaults(),
+            egui::Key::R if shown => self.undo_delete(),
+            egui::Key::R => {}
             egui::Key::Enter if modifiers.shift => self.review_changes(),
-            egui::Key::Enter => self.confirm_delete(),
+            egui::Key::Enter => self.next_delete_card(),
             egui::Key::A => self.accept_delete_defaults(),
+            egui::Key::Escape if self.delete_panel => self.delete_panel = false,
             _ => return false,
         }
         true
@@ -269,6 +275,10 @@ impl PhotoSortApp {
         self.navigate_axis(direction, modifiers.shift, command, horizontal);
         if self.step == Step::Organize {
             self.board_follow_active();
+        }
+        // Easy Delete shows the selected card beside its grid.
+        if self.step == Step::EasyDelete {
+            self.delete_panel = self.delete_current.is_some();
         }
     }
 

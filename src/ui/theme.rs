@@ -89,22 +89,6 @@ pub(super) fn caption(text: &str) -> egui::RichText {
         .font(semibold(10.0))
         .color(MUTED)
 }
-/// A "More" button that opens a menu of secondary actions, so a toolbar
-/// shows only what is used most. The tooltip is also its accessible name.
-pub(super) fn more_menu(
-    ui: &mut egui::Ui,
-    tooltip: &str,
-    add: impl FnOnce(&mut egui::Ui),
-) -> egui::Response {
-    let response = icon_button(ui, egui_phosphor::regular::DOTS_THREE, tooltip);
-    egui::Popup::menu(&response)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .show(|ui| {
-            ui.set_min_width(200.0);
-            add(ui);
-        });
-    response
-}
 /// A frameless icon button. Its tooltip is also its accessible name, so
 /// assistive technology never reads the icon font's private-use glyph.
 pub(super) fn icon_button(ui: &mut egui::Ui, icon: &str, tooltip: &str) -> egui::Response {
