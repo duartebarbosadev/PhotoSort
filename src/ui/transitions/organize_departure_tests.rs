@@ -736,6 +736,7 @@ fn external_output_retry_preserves_earlier_moves_and_existing_destination_marks(
             },
         )]),
         fingerprints: HashMap::from([(existing.id, existing.fingerprint)]),
+        suggested: Default::default(),
     }
     .save(&output)
     .unwrap();

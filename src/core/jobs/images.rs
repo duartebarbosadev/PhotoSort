@@ -1338,6 +1338,7 @@ impl ImageWorker {
                 .is_finite()
                 .then_some(technical.sharpness),
             metadata_fields: metadata.metadata_fields,
+            shot: near_duplicates::formats::Shot::new(&it.media.path, metadata),
         });
         Ok(())
     }

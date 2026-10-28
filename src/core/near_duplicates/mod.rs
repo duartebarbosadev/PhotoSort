@@ -8,6 +8,7 @@ pub use comparator::{Assessment, Comparator, Decision, Reason, Side};
 mod alignment;
 pub use alignment::{Aligned, Aligner};
 mod faces;
+pub mod formats;
 mod raster;
 pub use faces::{FaceMotion, face_motion};
 mod signals;

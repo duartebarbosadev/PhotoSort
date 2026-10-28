@@ -47,6 +47,7 @@ fn fixture() -> (tempfile::TempDir, Catalog, Saved) {
 fn views_round_trip_separately_from_decisions_and_drain_across_navigation() {
     let (dir, catalog, saved) = fixture();
     let session = Session {
+        suggested: Default::default(),
         organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),
@@ -204,6 +205,7 @@ fn older_decision_sessions_migrate_without_losing_user_choices() {
     let mut old = m.fingerprint;
     old.identity = [0; 4];
     let mut session = Session {
+        suggested: Default::default(),
         organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),

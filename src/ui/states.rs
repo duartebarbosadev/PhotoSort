@@ -202,18 +202,18 @@ impl PhotoSortApp {
                 ui,
                 icon::BROOM,
                 if hidden {
-                    "All suggestions are hidden"
+                    "No suggestions match"
                 } else {
                     "Nothing to clean up yet"
                 },
                 if hidden {
-                    "Turn a category back on to see its suggestions."
+                    "The search or the selected group hides every suggestion."
                 } else {
                     "Easy Delete looks for exact duplicates, near-duplicates, and blurry or badly exposed shots. Analyze the library to find them."
                 },
                 |ui| {
                     if hidden {
-                        if ui.add(primary("Show every category")).clicked() {
+                        if ui.add(primary("Show all suggestions")).clicked() {
                             action = Some(Empty::ShowAllCategories);
                         }
                     } else if ui
@@ -248,19 +248,9 @@ impl PhotoSortApp {
                 }
             }
             Some(Empty::ShowAllCategories) => {
-                if self.allow_review_departure() {
-                    for category in Category::ALL {
-                        if self
-                            .delete_review
-                            .entries()
-                            .iter()
-                            .any(|e| e.category == category)
-                        {
-                            self.delete_categories.insert(category);
-                        }
-                    }
-                    self.filter_dirty = true;
-                }
+                self.delete_categories = Category::ALL.into_iter().collect();
+                self.query.clear();
+                self.filter_dirty = true;
             }
             Some(Empty::ClearFilters) => self.clear_browse_filters(),
             Some(Empty::Continue(step)) => self.switch_step(step),

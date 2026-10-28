@@ -279,6 +279,7 @@ fn real_application_reopen_restores_groups_and_bookmark_without_ai() {
         scene_groups: Default::default(),
         decisions: Default::default(),
         fingerprints: fingerprints.clone(),
+        suggested: Default::default(),
     }
     .save(&catalog.root)
     .unwrap();

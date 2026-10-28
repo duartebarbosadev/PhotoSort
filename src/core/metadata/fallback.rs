@@ -39,6 +39,7 @@ pub(super) fn read(path: &Path, result: &mut Metadata, dates: &mut Dates) {
             result.lens = crate::core::details::lens_specification(&values).unwrap_or_default();
         }
         result.captured = text(exif::Tag::DateTimeOriginal);
+        result.captured_subsec_ms = super::subsec_ms(&text(exif::Tag::SubSecTimeOriginal));
         dates.assign(0, Some(&result.captured));
         dates.assign(2, Some(&text(exif::Tag::DateTime)));
         result.exposure = text(exif::Tag::ExposureTime);

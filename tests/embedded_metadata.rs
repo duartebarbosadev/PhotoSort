@@ -468,6 +468,7 @@ fn embedded_rotation_preserves_unapplied_ratings_and_saved_focus_across_reload()
         WritePolicy::EmbedWhenSupported,
     );
     let mut session = Session {
+        suggested: Default::default(),
         organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),

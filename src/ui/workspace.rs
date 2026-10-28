@@ -200,6 +200,10 @@ pub struct PhotoSortApp {
     delete_current: Option<MediaId>,
     delete_categories: HashSet<crate::core::delete_review::Category>,
     delete_run: Option<u64>,
+    /// The clicked card's photos, large, in a panel beside Easy Delete's grid.
+    delete_panel: bool,
+    /// The panel's width once the user has seen or resized it.
+    delete_panel_width: Option<f32>,
     pick_review: crate::core::pick_review::Review,
     pick_run: Option<u64>,
     pick_focus: bool,
@@ -450,6 +454,8 @@ impl PhotoSortApp {
                 .into_iter()
                 .collect(),
             delete_run: None,
+            delete_panel: false,
+            delete_panel_width: None,
             pick_review: Default::default(),
             pick_run: None,
             pick_focus: false,
@@ -550,6 +556,7 @@ impl PhotoSortApp {
             manual_groups: self.manual_groups.clone(),
             scene_groups: self.scene_groups.clone(),
             decisions: self.decisions.clone(),
+            suggested: self.delete_review.suggested().clone(),
             organize: self.catalog.as_ref().and_then(|catalog| {
                 crate::core::organize::Intent::capture(
                     catalog,
@@ -661,6 +668,7 @@ impl PhotoSortApp {
         self.delete_review = Default::default();
         self.delete_current = None;
         self.delete_run = None;
+        self.delete_panel = false;
         self.pick_review = Default::default();
         self.pick_run = None;
         self.pick_focus = false;
@@ -724,7 +732,6 @@ impl PhotoSortApp {
     }
     fn changed_items(&mut self, ids: impl IntoIterator<Item = MediaId>) {
         self.pick_review.reconcile_external(&self.decisions);
-        self.delete_review.reconcile_external(&self.decisions);
         if self.browse_ready {
             self.runtime
                 .browsing
@@ -735,7 +742,6 @@ impl PhotoSortApp {
     }
     fn changed(&mut self) {
         self.pick_review.reconcile_external(&self.decisions);
-        self.delete_review.reconcile_external(&self.decisions);
         self.review_changed();
     }
     fn review_changed(&mut self) {
@@ -880,8 +886,12 @@ impl PhotoSortApp {
             let key = self
                 .textures
                 .iter()
-                .filter(|(k, _)| {
+                .filter(|(k, t)| {
                     !(k.1 && (Some(k.0) == self.active || self.comparison.contains(&k.0)))
+                        // On screen in the last frame: evicting it would only
+                        // load it again, over and over, when a page of large
+                        // previews outgrows the budget.
+                        && t.used + 1 < self.tick
                 })
                 .min_by_key(|(_, t)| t.used)
                 .map(|(k, _)| *k);
@@ -943,7 +953,9 @@ impl PhotoSortApp {
             .enumerate()
             .filter(|(_, m)| {
                 (query.is_empty() || m.path.to_string_lossy().to_lowercase().contains(&query))
-                    && self.filter.matches(
+                    // Easy Delete's tabs choose its cards; a Trash filter
+                    // would hide each card the moment its suggestion is staged.
+                    && (self.step == Step::EasyDelete || self.filter.matches(
                         self.decision(m.id).rejected,
                         crate::core::browsing::rating(m.id, &self.decisions, &self.metadata),
                         self.analysis
@@ -951,7 +963,7 @@ impl PhotoSortApp {
                             .is_some_and(|a| !a.issues.is_empty()),
                         self.duplicates.contains_key(&m.id)
                             || self.near_duplicates.contains_key(&m.id),
-                    )
+                    ))
             })
             .map(|(i, _)| i)
             .collect();
@@ -991,15 +1003,13 @@ impl PhotoSortApp {
                 .collect();
             self.filtered
                 .sort_by_key(|i| order.get(&self.media[*i].id).copied().unwrap_or(usize::MAX));
+            // No card is selected until the user picks one; a card hidden by
+            // the tab or search stops being selected.
             if self
                 .delete_current
-                .is_none_or(|id| !self.filtered.iter().any(|i| self.media[*i].id == id))
+                .is_some_and(|id| !self.filtered.iter().any(|i| self.media[*i].id == id))
             {
-                if !self.allow_review_departure() {
-                    return;
-                }
-                self.delete_current = self.filtered.first().map(|i| self.media[*i].id);
-                self.active = self.delete_current;
+                self.deselect_delete_card();
             }
             self.filter_dirty = false;
             return;
@@ -1592,9 +1602,9 @@ impl PhotoSortApp {
         self.restore_bookmark();
         self.intro_keys(ctx);
         self.keyboard(ctx);
-        // Organize has no separate Review: its board shows the clicked
-        // photo in a preview panel beside the folders and thumbnails.
-        if self.step == Step::Organize {
+        // Organize and Easy Delete have no separate Review: they show the
+        // clicked photo or card in a panel beside their board or grid.
+        if matches!(self.step, Step::Organize | Step::EasyDelete) {
             self.review = false;
         }
         self.sync_playback(ctx);
@@ -1649,8 +1659,9 @@ impl PhotoSortApp {
                     // The step's controls sit on a panel strip above the photos.
                     egui::Frame::new()
                         .fill(PANEL)
-                        // Organize's bar has no context line: as much room below as above.
-                        .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: if self.step == Step::Organize { 6 } else { 2 } })
+                        // Organize's and Easy Delete's bars have no context line:
+                        // as much room below as above.
+                        .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: if matches!(self.step, Step::Organize | Step::EasyDelete) { 6 } else { 2 } })
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             if self.group_task.is_some() {
@@ -1750,8 +1761,12 @@ impl PhotoSortApp {
 /// part of the application API.
 #[doc(hidden)]
 impl PhotoSortApp {
+    /// Opens a step at once: the seeded suggestions are staged, and
+    /// screenshots never stop at the prompt to resolve them.
     pub fn gallery_step(&mut self, step: Step) {
-        self.switch_step(step);
+        if self.step != step && self.preferences.visible(step) {
+            self.set_step(step);
+        }
     }
     /// Seeds Easy Delete, Fix Rotation and Pick Best with synthetic
     /// suggestions from the scanned photos, so screenshots need no models.
@@ -1775,7 +1790,9 @@ impl PhotoSortApp {
                 subject: copy,
                 companion: Some(original),
                 category: Category::Exact,
-                reason: "Byte-for-byte identical to the photo beside it".into(),
+                tag: "Identical copy".into(),
+                keep_why: "The two files are identical, so either can go. This one keeps its place in the library.".into(),
+                reason: "Byte-for-byte identical to the photo beside it.".into(),
             });
         }
         if let (Some(copy), Some(original)) = (id("GAB00915 (2).jpg"), id("GAB00915.jpg")) {
@@ -1783,7 +1800,9 @@ impl PhotoSortApp {
                 subject: copy,
                 companion: Some(original),
                 category: Category::Near,
-                reason: "Near-duplicate of the photo beside it · slightly softer".into(),
+                tag: "Sharper kept".into(),
+                keep_why: "It is the sharper photo of the two.".into(),
+                reason: "No visible subject change detected. PhotoSort suggests keeping the sharper photo.".into(),
             });
         }
         if let Some(blurry) = id("GAB02000-2.jpg") {
@@ -1791,19 +1810,22 @@ impl PhotoSortApp {
                 subject: blurry,
                 companion: None,
                 category: Category::Blur,
-                reason: "Blurry · out of focus across the frame".into(),
+                tag: Category::Blur.title().into(),
+                keep_why: String::new(),
+                reason: "Out of focus across the frame. PhotoSort suggests moving it to Trash."
+                    .into(),
             });
         }
         for (name, category, reason) in [
             (
                 "DSC01310.jpg",
                 Category::Dark,
-                "Very dark · sharpness 3.2 · brightness 21.4/255",
+                "Very dark: sharpness 3.2, brightness 21.4/255. PhotoSort suggests moving it to Trash.",
             ),
             (
                 "DSC01320.jpg",
                 Category::Bright,
-                "Overexposed · sharpness 6.8 · brightness 238.9/255",
+                "Overexposed: sharpness 6.8, brightness 238.9/255. PhotoSort suggests moving it to Trash.",
             ),
         ] {
             if let Some(subject) = id(name) {
@@ -1811,12 +1833,16 @@ impl PhotoSortApp {
                     subject,
                     companion: None,
                     category,
+                    tag: category.title().into(),
+                    keep_why: String::new(),
                     reason: reason.into(),
                 });
             }
         }
         if !entries.is_empty() {
             self.delete_review.replace(entries);
+            self.delete_review
+                .stage_new_suggestions(&mut self.decisions);
             self.view_data_ready.insert(Step::EasyDelete);
             self.delete_categories = Category::ALL.into_iter().collect();
         }
@@ -1970,8 +1996,20 @@ impl PhotoSortApp {
             crate::core::preferences::StripPosition::Bottom
         };
     }
+    /// Review, or in Easy Delete the comparison panel beside the grid.
     pub fn gallery_review(&mut self, review: bool) {
-        self.review = review;
+        if self.step == Step::EasyDelete {
+            // Easy Delete opens with no card selected: show the first one.
+            if review && self.delete_current.is_none() {
+                self.refilter();
+                if let Some(first) = self.filtered.first().map(|i| self.media[*i].id) {
+                    self.set_active(first);
+                }
+            }
+            self.delete_panel = review;
+        } else {
+            self.review = review;
+        }
     }
     /// Compares the first `count` shown photos.
     pub fn gallery_compare(&mut self, count: usize) {

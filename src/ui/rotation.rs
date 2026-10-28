@@ -152,7 +152,7 @@ impl PhotoSortApp {
     }
     /// The review scope and the apply action. Rotating and confirming a
     /// photo live under the photos in Review and on each card in the grid;
-    /// bulk actions in More.
+    /// Confirm all at the right of the bar.
     pub(super) fn rotation_controls(&mut self, ui: &mut egui::Ui) {
         let mut queue_only = self.rotation_queue_only;
         if ui
@@ -178,29 +178,29 @@ impl PhotoSortApp {
             self.review_rotations();
         }
     }
-    pub(super) fn rotation_menu(&mut self, ui: &mut egui::Ui) {
-        if ui
-            .add_enabled(
-                !self.rotation_review.ids().is_empty(),
-                egui::Button::new("Confirm all suggestions"),
-            )
-            .on_hover_text("Confirms every certain suggestion; uncertain photos stay open")
-            .clicked()
-            && self.allow_review_departure()
-        {
-            self.rotation_review.confirm_all();
-            ui.close();
+    /// Confirms every certain suggestion at once, in the bar before the
+    /// view switch. Only the icon in a narrow bar.
+    pub(super) fn rotation_confirm_all_button(&mut self, ui: &mut egui::Ui, compact: bool) {
+        use egui_phosphor::regular as icon;
+        let text = if compact {
+            icon::CHECKS.to_owned()
+        } else {
+            format!("{}  Confirm all", icon::CHECKS)
+        };
+        let suggested = !self.rotation_review.ids().is_empty();
+        let enabled = !self.busy && self.rotation_run.is_none() && suggested;
+        let mut response = named(
+            ui.add_enabled(enabled, egui::Button::new(text)),
+            egui::WidgetType::Button,
+            "Confirm all suggestions",
+        )
+        .on_hover_text("Confirm every certain suggestion; uncertain photos stay open");
+        if !suggested {
+            response = response.on_disabled_hover_text("No rotation suggestions to confirm");
         }
-        ui.add_enabled_ui(self.active.is_some(), |ui| {
-            if ui.button("Reset this photo · R").clicked() {
-                self.reset_rotation(false);
-                ui.close();
-            }
-            if ui.button("Reset all · Shift+R").clicked() {
-                self.reset_rotation(true);
-                ui.close();
-            }
-        });
+        if response.clicked() && self.allow_review_departure() {
+            self.rotation_review.confirm_all();
+        }
     }
     /// Rotate and confirm the current photo, under the comparison.
     pub(super) fn rotation_confirm_buttons(&mut self, ui: &mut egui::Ui) {
@@ -311,6 +311,10 @@ impl PhotoSortApp {
             suggested: false,
             caption: name,
             name: format!("{path} · original"),
+            facts: Vec::new(),
+            dim: false,
+            toggle: None,
+            suggested_hover: None,
         }];
         if turns != 0 {
             photos.push(CardPhoto {
@@ -324,6 +328,10 @@ impl PhotoSortApp {
                 suggested: false,
                 caption: "Corrected preview".into(),
                 name: format!("{path} · {}", turn_label(turns).to_lowercase()),
+                facts: Vec::new(),
+                dim: false,
+                toggle: None,
+                suggested_hover: None,
             });
         }
         let (note, warning) = match choice {
@@ -412,6 +420,9 @@ impl PhotoSortApp {
                     .trailing(),
             ],
             current: self.active == Some(id),
+            title_hover: None,
+            shown: false,
+            undo: None,
         }
     }
 
@@ -441,6 +452,8 @@ impl PhotoSortApp {
             }
             CardEvent::Button(3) => self.confirm_rotation(),
             CardEvent::Button(_) => self.reset_rotation(false),
+            // Rotation cards have neither pill switches nor Undo.
+            CardEvent::Toggle(_) | CardEvent::Undo => {}
         }
     }
 }

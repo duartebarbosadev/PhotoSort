@@ -173,6 +173,9 @@ pub struct Metadata {
     pub location: Option<super::geography::Location>,
     #[serde(default)]
     pub details: Details,
+    /// Milliseconds after `captured_ms`'s second, from EXIF SubSecTimeOriginal.
+    #[serde(default)]
+    pub captured_subsec_ms: Option<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

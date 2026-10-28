@@ -27,6 +27,7 @@ fn input(n: u64) -> Input {
         embedding: vec![2., 0.],
         sharpness: Some(100.),
         metadata_fields: 0,
+        shot: None,
     }
 }
 #[derive(Default)]
@@ -276,4 +277,105 @@ fn scene_corrections_change_candidate_pairs_without_repeating_cached_evidence() 
         (2, 2),
         "Only the first candidate comparison needs pixels/faces; regrouping reuses it"
     );
+}
+
+/// A JPEG or HEIC input with the capture facts the camera wrote.
+fn shot(n: u64, name: &str, ms: i64, subsec: Option<u16>) -> Input {
+    let mut i = input(n);
+    i.media.path = format!("/photos/{name}").into();
+    i.hash = format!("hash{n}");
+    let metadata = Metadata {
+        camera: "Galaxy S24 Ultra".into(),
+        captured_ms: Some(ms),
+        captured_subsec_ms: subsec,
+        width: 4000,
+        height: 2252,
+        ..Default::default()
+    };
+    i.shot = near_duplicates::formats::Shot::new(&i.media.path, &metadata);
+    i
+}
+#[test]
+fn a_jpeg_and_heic_of_one_shot_pair_as_two_formats_before_near_review() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::new(root.path().into(), false).unwrap();
+    let inputs = [
+        shot(1, "20251025_154337.jpeg", 1_761_360_217_000, Some(631)),
+        // A different name: only the capture facts and pixels pair it.
+        shot(2, "IMG_0042.heic", 1_761_360_217_000, Some(631)),
+    ];
+    let mut source = Source::default();
+    let pairs = batch::review(&inputs, &store, &mut source, || false, |_, _| {})
+        .unwrap()
+        .unwrap();
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs[0].kind, batch::Kind::Formats);
+    assert_eq!((pairs[0].discard, pairs[0].keep), (MediaId(1), MediaId(2)));
+    // Paired before the near pass: no face work, and never a Near pair.
+    assert_eq!(source.faces, 0);
+}
+#[test]
+fn a_shared_name_with_another_capture_time_or_other_pixels_is_not_two_formats() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::new(root.path().into(), false).unwrap();
+    let kinds = |inputs: &[Input], source: &mut Source| {
+        batch::review(inputs, &store, source, || false, |_, _| {})
+            .unwrap()
+            .unwrap()
+            .into_iter()
+            .map(|p| p.kind)
+            .collect::<Vec<_>>()
+    };
+    // Same name, a second apart: two shots, reviewed as near frames at most.
+    let later = [
+        shot(1, "same.jpeg", 1_761_360_217_000, None),
+        shot(2, "same.heic", 1_761_360_218_000, None),
+    ];
+    assert!(!kinds(&later, &mut Source::default()).contains(&batch::Kind::Formats));
+    // Same name and second, another sub-second: a burst.
+    let burst = [
+        shot(1, "same.jpeg", 1_761_360_217_000, Some(15)),
+        shot(2, "same.heic", 1_761_360_217_000, Some(631)),
+    ];
+    assert!(!kinds(&burst, &mut Source::default()).contains(&batch::Kind::Formats));
+    // Same name and capture, different pixels: never the same shot.
+    let edited = [
+        shot(1, "same.jpeg", 1_761_360_217_000, Some(631)),
+        shot(2, "same.heic", 1_761_360_217_000, Some(631)),
+    ];
+    let mut source = Source {
+        changed: true,
+        ..Default::default()
+    };
+    assert!(!kinds(&edited, &mut source).contains(&batch::Kind::Formats));
+}
+/// A HEIC that cannot be decoded (a build without HEIF) skips only its pair.
+#[test]
+fn an_undecodable_twin_skips_the_pair_without_failing_the_review() {
+    struct Failing;
+    impl Evidence for Failing {
+        fn image(&mut self, i: &Input) -> anyhow::Result<Asset> {
+            anyhow::ensure!(i.media.id != MediaId(2), "Cannot decode HEIC");
+            Source::default().image(i)
+        }
+        fn faces(&mut self, _: &Input) -> Option<Vec<Face>> {
+            Some(Vec::new())
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::new(root.path().into(), false).unwrap();
+    let mut inputs = vec![
+        shot(1, "a.jpeg", 1_761_360_217_000, Some(631)),
+        shot(2, "a.heic", 1_761_360_217_000, Some(631)),
+        input(3),
+        input(4),
+    ];
+    inputs[1].group = 2; // Out of the near pass, which would need its pixels.
+    inputs[0].group = 3;
+    let pairs = batch::review(&inputs, &store, &mut Failing, || false, |_, _| {})
+        .unwrap()
+        .unwrap();
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs[0].kind, batch::Kind::Near);
+    assert_eq!((pairs[0].discard, pairs[0].keep), (MediaId(4), MediaId(3)));
 }

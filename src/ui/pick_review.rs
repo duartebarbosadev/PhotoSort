@@ -60,7 +60,6 @@ impl PhotoSortApp {
         self.pick_changed();
     }
     fn pick_changed(&mut self) {
-        self.delete_review.reconcile_external(&self.decisions);
         self.review_changed();
     }
     pub(super) fn sync_pick_view(&mut self) {
@@ -316,31 +315,6 @@ impl PhotoSortApp {
             self.sync_pick_view();
         }
     }
-    pub(super) fn pick_menu(&mut self, ui: &mut egui::Ui) {
-        let ready = self.pick_review.current().is_some() && self.pick_run.is_none();
-        ui.add_enabled_ui(ready, |ui| {
-            if ui
-                .button("Keep all in this round · K")
-                .on_hover_text("Keep every photo shown and move on")
-                .clicked()
-            {
-                self.confirm_pick(true);
-                ui.close();
-            }
-            if ui
-                .button("Reset this round · R")
-                .on_hover_text("Back to the suggestion")
-                .clicked()
-            {
-                self.reset_pick(false);
-                ui.close();
-            }
-            if ui.button("Reset all groups").clicked() {
-                self.reset_pick(true);
-                ui.close();
-            }
-        });
-    }
     /// The suggestion and how alike the photos are, in one quiet line.
     pub(super) fn pick_context(&mut self, ui: &mut egui::Ui) {
         if self.pick_run.is_some() {
@@ -549,6 +523,10 @@ impl PhotoSortApp {
                         .get(id)
                         .map(|i| self.media[*i].path.display().to_string())
                         .unwrap_or_default(),
+                    facts: Vec::new(),
+                    dim: false,
+                    toggle: None,
+                    suggested_hover: None,
                 })
                 .collect(),
             note: format!(
@@ -558,6 +536,9 @@ impl PhotoSortApp {
             warning: false,
             buttons,
             current,
+            title_hover: None,
+            shown: false,
+            undo: None,
         }
     }
 
@@ -591,6 +572,8 @@ impl PhotoSortApp {
             CardEvent::Button(button) if button == paths.len() => self.confirm_pick(false),
             CardEvent::Button(button) if button == paths.len() + 1 => self.confirm_pick(true),
             CardEvent::Button(_) => self.reset_pick(false),
+            // Pick Best cards have neither pill switches nor Undo.
+            CardEvent::Toggle(_) | CardEvent::Undo => {}
         }
     }
 }

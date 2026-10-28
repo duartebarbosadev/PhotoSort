@@ -53,6 +53,13 @@ impl Assessment {
             face_min_crop_similarity: None,
         }
     }
+    /// One capture saved in two formats, established by `formats`.
+    pub fn same_shot() -> Self {
+        Self {
+            decision: Decision::SafeNearDuplicate,
+            ..Self::unknown(Reason::NormalViewEquivalent)
+        }
+    }
     pub fn accepted(&self) -> bool {
         matches!(
             self.decision,

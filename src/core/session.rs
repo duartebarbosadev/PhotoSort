@@ -2,7 +2,7 @@ use super::{metadata::atomic_write, model::*};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -66,6 +66,11 @@ pub struct Session {
     pub organize: Option<super::organize::Intent>,
     pub decisions: HashMap<MediaId, Decision>,
     pub fingerprints: HashMap<MediaId, Fingerprint>,
+    /// Photos whose Easy Delete suggestion was already staged. A later analysis
+    /// never stages it again, so a photo the user chose to keep stays kept.
+    /// Discarding staged choices forgets it, so the suggestions return.
+    #[serde(default, rename = "staged_suggestions")]
+    pub suggested: HashSet<MediaId>,
 }
 fn session_path(root: &Path) -> PathBuf {
     // Equivalent trailing separators must not create different session stores.
@@ -110,6 +115,11 @@ impl Session {
             std::sync::Arc::make_mut(groups).relocate(changes);
         }
         remap_media_ids(&mut self.decisions, changes);
+        for (old, new, _) in changes {
+            if self.suggested.remove(old) {
+                self.suggested.insert(*new);
+            }
+        }
         // Fingerprints come from the executor, not from the old entries. Remove
         // every old key first so a later source cannot erase a newly inserted key.
         for (old, _, _) in changes {
@@ -131,6 +141,7 @@ impl Session {
             std::sync::Arc::make_mut(groups).merge(incoming);
         }
         self.decisions.extend(other.decisions);
+        self.suggested.extend(other.suggested);
         self.fingerprints.extend(other.fingerprints);
     }
     pub fn reconcile(&mut self, media: &[Media]) {
@@ -152,6 +163,13 @@ impl Session {
                     .is_some_and(|(a, b)| a == b)
             });
         }
+        // An edited file is a new photo: its suggestion may be staged again.
+        self.suggested.retain(|id| {
+            self.fingerprints
+                .get(id)
+                .zip(fingerprints.get(id))
+                .is_some_and(|(a, b)| a == b)
+        });
         fingerprints.extend(
             supporting
                 .iter()

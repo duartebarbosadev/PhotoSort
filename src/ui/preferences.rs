@@ -93,9 +93,13 @@ impl PhotoSortApp {
             self.runtime.raw_look.set(next.raw_look);
             self.reload_raw_previews();
         }
+        let auto_on = next.easy_delete_auto && !self.preferences.easy_delete_auto;
         self.preferences = next;
         self.navigation_notice = None;
         self.save_preferences();
+        if auto_on && self.step == Step::EasyDelete {
+            self.stage_delete_suggestions();
+        }
         if !self.preferences.visible(self.step)
             && let Some(next) = self.preferences.neighbor(self.step, true)
         {
@@ -296,6 +300,10 @@ impl PhotoSortApp {
                         });
                         ui.add(Switch::new(&mut draft.show_filenames, "Show file names under thumbnails"));
                         settings_note(ui, "Applies to every step's grid, photo strip and Review. Cull's View options change the same settings.");
+                    ui.separator();
+                    settings_heading(ui, "Easy Delete suggestions");
+                    ui.add(Switch::new(&mut draft.easy_delete_auto, "Apply suggestions automatically"));
+                    settings_note(ui, "On: what Easy Delete suggests is staged as your choice, and you change only the ones you disagree with. Off: every photo stays kept until you accept suggestions. Nothing changes on disk until you apply Review changes.");
                     ui.separator();
                     settings_heading(ui, "Easy Delete sensitivity");
                     ui.add(egui::Slider::new(&mut draft.easy_delete.blur,10.0..=1000.0).text("Blur threshold"));
@@ -532,13 +540,13 @@ pub(super) fn workflow_hint(step: Step) -> &'static str {
             "Alt+1–5 · Grouping mode   Arrows · Browse   Shift+arrows · Compare   F2 · Rename   Hold \\ · Original   Shift+Enter · Review changes"
         }
         Step::EasyDelete => {
-            "1/Left, 2/Right · Keep/Trash   Up/Down · Browse   Enter · Confirm   R · Reset   Shift+R · Reset all   A · Accept defaults"
+            "1/Left, 2/Right · Keep/Trash   Up/Down · Browse   Enter · Next   R · Undo   A · Accept all suggestions   Esc · Close photos   Shift+Enter · Review changes"
         }
         Step::Rotation => {
             "1/2 · Original/Correction   Q/E · Rotate   Enter · Confirm   R · Reset   Shift+R · Reset all   Shift+Enter · Apply confirmed"
         }
         Step::PickBest => {
-            "1/2 · Keep/Trash   Left/Right · Group   Up/Down · Round   C · Focus   K · Keep all   Enter · Confirm   R · Reset"
+            "1/2 · Keep/Trash   Left/Right · Group   Up/Down · Round   C · Focus   K · Keep all   Enter · Confirm   R · Reset   Shift+R · Reset all"
         }
         Step::Cull => {
             "Left/Right · Cycle   Up/Down · Browse   Ctrl/Cmd+arrows · Bypass movement filters   D · Mark   R · Rotate   Ctrl/Cmd+0–5 · Rate   Shift+Enter · Review"
