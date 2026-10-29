@@ -1,5 +1,4 @@
-#[path = "../src/test_support.rs"]
-mod test_support;
+use crate::test_support;
 use photosort::core::{
     models::Models,
     processing::{self, Control, Mode, Preferences},
@@ -30,26 +29,6 @@ fn allocation_modes_follow_available_processors_and_reference_rounding() {
             assert_eq!(p.threads(available), requested.clamp(1, available));
         }
     }
-}
-#[test]
-fn existing_preferences_gain_balanced_mode_and_custom_choice_survives_restart() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("preferences.json");
-    std::fs::write(&path, b"[1,{}]").unwrap();
-    let mut p = photosort::core::preferences::Preferences::load(&path).unwrap();
-    assert_eq!(p.processing.mode, Mode::Balanced);
-    p.processing = Preferences {
-        mode: Mode::Custom,
-        custom_threads: processing::available(),
-        ..Default::default()
-    };
-    p.save(&path).unwrap();
-    assert_eq!(
-        photosort::core::preferences::Preferences::load(&path)
-            .unwrap()
-            .processing,
-        p.processing
-    );
 }
 #[test]
 fn configuration_coalesces_without_workers_or_eager_model_loading() {

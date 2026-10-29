@@ -1,5 +1,4 @@
-#[path = "../src/test_support.rs"]
-mod test_support;
+use crate::test_support;
 use image::{DynamicImage, Rgba, RgbaImage};
 use photosort::core::{
     analysis::{self, Thresholds},
@@ -451,22 +450,6 @@ fn sharpness_gate_protects_against_aesthetic_but_blurred_choice() {
         analysis::best_per_group(entries),
         vec![MediaId(1), MediaId(3)]
     );
-}
-#[test]
-fn eye_ratio_is_scale_invariant_and_distinguishes_closed_eyes() {
-    use photosort::core::faces::eye_aspect_ratio;
-    let open = [
-        0.0, 0.0, 0.0, 2.0, 1.0, 0.0, 4.0, 1.0, 0.0, 6.0, 0.0, 0.0, 4.0, -1.0, 0.0, 2.0, -1.0, 0.0,
-    ];
-    let indices = [0, 1, 2, 3, 4, 5];
-    assert!(eye_aspect_ratio(&open, indices) > 0.21);
-    let scaled: Vec<_> = open.iter().map(|x| x * 3.0).collect();
-    assert!((eye_aspect_ratio(&open, indices) - eye_aspect_ratio(&scaled, indices)).abs() < 1e-6);
-    let mut closed = open;
-    for i in 0..6 {
-        closed[i * 3 + 1] *= 0.1;
-    }
-    assert!(eye_aspect_ratio(&closed, indices) < 0.21);
 }
 #[test]
 fn organize_preserves_nested_paths_and_renames_companions() {

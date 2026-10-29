@@ -67,24 +67,6 @@ fn preferences_report_corruption_and_unknown_versions_without_replacing_them() {
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
     }
 }
-#[test]
-fn the_intro_is_remembered_once_shown_and_older_files_have_not_seen_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("preferences.json");
-    // Written before the intro existed: the field is missing.
-    std::fs::write(&path, br#"[1, {"show_shortcuts": false}]"#).unwrap();
-    let older = Preferences::load(&path).unwrap();
-    assert!(!older.intro_shown && !older.show_shortcuts);
-    assert!(!Preferences::default().intro_shown);
-    Preferences {
-        intro_shown: true,
-        ..older
-    }
-    .save(&path)
-    .unwrap();
-    let saved = Preferences::load(&path).unwrap();
-    assert!(saved.intro_shown && !saved.show_shortcuts);
-}
 fn parse(args: &[&str]) -> Result<Options, String> {
     Options::parse(args.iter().map(OsString::from))
 }
@@ -123,40 +105,6 @@ fn startup_keeps_non_unicode_folder_paths_intact() {
             .folder,
         Some(path.into())
     );
-}
-
-#[test]
-fn older_preferences_gain_default_detection_settings_and_round_trip_new_values() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("preferences.json");
-    std::fs::write(&path, br#"[1,{"show_shortcuts":false}]"#).unwrap();
-    let mut p = Preferences::load(&path).unwrap();
-    assert_eq!(p.easy_delete.blur, 100.0);
-    assert!(!p.show_shortcuts);
-    p.easy_delete.blur = 250.0;
-    p.easy_delete.dark = 8.0;
-    p.easy_delete.bright = 252.0;
-    p.save(&path).unwrap();
-    assert_eq!(Preferences::load(&path).unwrap(), p);
-}
-
-#[test]
-fn navigation_preferences_persist_without_changing_visible_filters() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("prefs.json");
-    std::fs::write(&path, b"[1,{}]").unwrap();
-    let mut p = Preferences::load(&path).unwrap();
-    assert_eq!(p.navigation, Default::default());
-    p.navigation = photosort::core::navigation::Preferences {
-        rating: Some(4),
-        skip_singletons: true,
-        cycle_similarity: true,
-    };
-    p.save(&path).unwrap();
-    assert_eq!(Preferences::load(&path).unwrap(), p);
-    p.navigation.rating = Some(9);
-    p.normalize();
-    assert_eq!(p.navigation.rating, None);
 }
 
 #[test]
@@ -211,62 +159,55 @@ fn smoke_startup_validates_delay_and_preserves_folder_selection() {
 }
 
 #[test]
-fn location_layout_defaults_for_old_preferences_and_round_trips_all_levels() {
-    use photosort::core::geography::Layout;
+fn older_preference_files_gain_defaults_and_every_newer_setting_round_trips() {
+    use photosort::core::{geography::Layout, preferences::StripPosition, processing};
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("preferences.json");
-    std::fs::write(&path, b"[1, {}]").unwrap();
-    let mut preferences = Preferences::load(&path).unwrap();
-    assert_eq!(preferences.location_layout, Layout::CountryRegionCity);
+    // Written before any of the settings below existed.
+    std::fs::write(&path, br#"[1, {"show_shortcuts": false}]"#).unwrap();
+    let mut p = Preferences::load(&path).unwrap();
+    assert!(!p.show_shortcuts);
+    assert!(!p.intro_shown);
+    assert_eq!(p.easy_delete.blur, 100.0);
+    assert_eq!(p.navigation, Default::default());
+    assert_eq!(p.location_layout, Layout::CountryRegionCity);
+    assert!(
+        p.keep_companions,
+        "files saved before the setting keep companions together"
+    );
+    assert_eq!(p.strip_position, StripPosition::Bottom);
+    assert!(p.show_filenames);
+    assert_eq!(p.processing.mode, processing::Mode::Balanced);
+    p.intro_shown = true;
+    p.easy_delete.blur = 250.0;
+    p.easy_delete.dark = 8.0;
+    p.easy_delete.bright = 252.0;
+    p.navigation = photosort::core::navigation::Preferences {
+        rating: Some(4),
+        skip_singletons: true,
+        cycle_similarity: true,
+    };
+    p.keep_companions = false;
+    p.strip_position = StripPosition::Left;
+    p.show_filenames = false;
+    p.processing = processing::Preferences {
+        mode: processing::Mode::Custom,
+        custom_threads: processing::available(),
+        ..Default::default()
+    };
     for layout in [
         Layout::Country,
         Layout::CountryCity,
         Layout::CountryRegionCity,
     ] {
-        preferences.location_layout = layout;
-        preferences.save(&path).unwrap();
-        assert_eq!(Preferences::load(&path).unwrap().location_layout, layout);
+        p.location_layout = layout;
+        p.save(&path).unwrap();
+        assert_eq!(Preferences::load(&path).unwrap(), p);
     }
-}
-
-#[test]
-fn companion_moves_default_on_and_survive_a_save() {
-    let old: photosort::core::preferences::Preferences = serde_json::from_str("{}").unwrap();
-    assert!(
-        old.keep_companions,
-        "files saved before the setting keep companions together"
-    );
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("preferences.json");
-    let mut preferences = old;
-    preferences.keep_companions = false;
-    preferences.save(&path).unwrap();
-    assert!(
-        !photosort::core::preferences::Preferences::load(&path)
-            .unwrap()
-            .keep_companions
-    );
-}
-#[test]
-fn strip_and_filename_preferences_round_trip_and_default_for_older_files() {
-    use photosort::core::preferences::StripPosition;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("preferences.json");
-    // A file written before the strip and filename options existed.
-    std::fs::write(&path, br#"[1, {"show_shortcuts": false}]"#).unwrap();
-    let old = Preferences::load(&path).unwrap();
-    assert!(!old.show_shortcuts);
-    assert_eq!(old.strip_position, StripPosition::Bottom);
-    assert!(old.show_filenames);
-    let p = Preferences {
-        strip_position: StripPosition::Left,
-        show_filenames: false,
-        ..Default::default()
-    };
-    p.save(&path).unwrap();
-    let loaded = Preferences::load(&path).unwrap();
-    assert_eq!(loaded.strip_position, StripPosition::Left);
-    assert!(!loaded.show_filenames);
+    // A rating the filters do not offer is dropped.
+    p.navigation.rating = Some(9);
+    p.normalize();
+    assert_eq!(p.navigation.rating, None);
 }
 #[test]
 fn the_cull_only_strip_preference_becomes_the_global_one() {

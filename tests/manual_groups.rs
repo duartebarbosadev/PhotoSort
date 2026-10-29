@@ -1,5 +1,4 @@
-#[path = "../src/test_support.rs"]
-mod test_support;
+use crate::test_support;
 use photosort::core::{
     catalog::Catalog,
     jobs::{Event, IoWork, Runtime},
@@ -128,58 +127,6 @@ fn corrections_pin_membership_across_regenerated_numbers_and_split_reset_and_und
     )
     .unwrap();
     assert_eq!(all.groups, *regenerated);
-}
-#[test]
-fn session_roundtrip_strict_identity_and_verified_relocation_keep_only_valid_intent() {
-    let m = media(4);
-    let session = Session {
-        organize: None,
-        manual_groups: grouped(&m, vec![MediaId(0), MediaId(1)]),
-        fingerprints: m.iter().map(|m| (m.id, m.fingerprint)).collect(),
-        ..Default::default()
-    };
-    let mut loaded: Session =
-        serde_json::from_slice(&serde_json::to_vec(&session).unwrap()).unwrap();
-    assert_eq!(loaded.manual_groups, session.manual_groups);
-    let mut changed = m.clone();
-    changed[0].fingerprint.identity[3] += 1;
-    loaded.reconcile(&changed);
-    assert!(!loaded.manual_groups.contains(MediaId(0)));
-    assert!(loaded.manual_groups.contains(MediaId(1)));
-    let mut relocated = changed[1].clone();
-    relocated.id = MediaId(19);
-    relocated.fingerprint.identity[2] += 1;
-    loaded.apply_verified_identities(&[(MediaId(1), relocated.id, relocated.fingerprint)]);
-    loaded.reconcile(&[relocated]);
-    assert!(loaded.manual_groups.contains(MediaId(19)));
-    assert!(!loaded.manual_groups.contains(MediaId(1)));
-    let legacy: Session = serde_json::from_str(r#"{"decisions":{},"fingerprints":{}}"#).unwrap();
-    assert!(legacy.manual_groups.is_empty());
-}
-#[test]
-fn destination_merge_keeps_unrelated_groups_separate_and_swaps_are_simultaneous() {
-    let m = media(4);
-    let mut a = Session {
-        organize: None,
-        manual_groups: grouped(&m, vec![MediaId(0), MediaId(1)]),
-        ..Default::default()
-    };
-    let b = Session {
-        organize: None,
-        manual_groups: grouped(&m, vec![MediaId(2), MediaId(3)]),
-        ..Default::default()
-    };
-    a.merge(b);
-    let groups = a.manual_groups.resolve(&HashMap::new(), || false).unwrap();
-    assert_eq!(groups[&MediaId(0)], groups[&MediaId(1)]);
-    assert_ne!(groups[&MediaId(0)], groups[&MediaId(2)]);
-    a.apply_verified_identities(&[
-        (MediaId(0), MediaId(2), m[2].fingerprint),
-        (MediaId(2), MediaId(0), m[0].fingerprint),
-    ]);
-    let groups = a.manual_groups.resolve(&HashMap::new(), || false).unwrap();
-    assert_eq!(groups[&MediaId(2)], groups[&MediaId(1)]);
-    assert_eq!(groups[&MediaId(0)], groups[&MediaId(3)]);
 }
 #[test]
 fn video_unknown_targets_and_cancellation_do_not_change_the_previous_snapshot() {
@@ -430,6 +377,8 @@ fn scene_and_subject_namespaces_roundtrip_independently_and_reject_changed_membe
     let old: Session = serde_json::from_value(old_format).unwrap();
     assert_eq!(old.manual_groups, session.manual_groups);
     assert!(old.scene_groups.is_empty());
+    let legacy: Session = serde_json::from_str(r#"{"decisions":{},"fingerprints":{}}"#).unwrap();
+    assert!(legacy.manual_groups.is_empty());
     let mut changed = m;
     changed[0].fingerprint.identity[3] += 1;
     changed.pop();

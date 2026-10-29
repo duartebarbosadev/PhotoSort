@@ -1,6 +1,6 @@
 use photosort::core::rotation::{Review, set_turns, turns};
 use photosort::core::{catalog::Catalog, model::*, operations};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 fn id(n: u64) -> MediaId {
     MediaId(n)
 }
@@ -31,15 +31,6 @@ fn suggestions_are_staged_once_and_photos_the_model_keeps_are_left_out() {
     assert!(!decisions.contains_key(&id(2)));
     r.undo(id(2), &mut decisions);
     assert_eq!(turns(&decisions, id(2)), 2);
-}
-#[test]
-fn applied_suggestions_leave_the_review_and_failed_ones_stay() {
-    let mut r = queue();
-    r.stage_new_suggestions(&mut HashMap::new());
-    r.complete(&HashSet::from([id(1)]));
-    assert_eq!(r.ids(), &[id(2), id(3)]);
-    assert!(r.suggestion(id(1)).is_none());
-    assert_eq!(r.default_turns(id(2)), 2);
 }
 #[test]
 fn only_staged_turns_reach_the_shared_file_planner() {

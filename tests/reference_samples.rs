@@ -1,7 +1,6 @@
 //! Opt-in real-camera regression tests. Originals are read-only; edits use copies.
-//! PHOTOSORT_SAMPLE_DIR=tests/samples cargo test --release --test reference_samples -- --ignored --nocapture
-#[path = "../src/test_support.rs"]
-mod test_support;
+//! PHOTOSORT_SAMPLE_DIR=tests/samples cargo test --release --test integration reference_samples:: -- --ignored --nocapture
+use crate::test_support;
 use photosort::core::{
     catalog::Catalog, metadata, model::*, models::Models, operations, pipeline::Pipeline,
 };

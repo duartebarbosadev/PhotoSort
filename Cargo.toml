@@ -9,6 +9,8 @@ authors = ["Duarte Barbosa"]
 repository = "https://github.com/duartebarbosadev/PhotoSort"
 readme = "README.md"
 publish = false
+# One integration test binary (tests/integration.rs lists the files) links much faster than one per file.
+autotests = false
 
 [dependencies]
 photosort-imaging-vips = { path = "crates/imaging-vips", optional = true }
@@ -60,6 +62,11 @@ tracing-appender = { version = "0.2.5", default-features = false }
 debug = "line-tables-only"
 incremental = false
 
+# Pixel work in dependencies (image, moxcms, half, miniz_oxide) is 10x+ slower
+# unoptimized, which dominated test time. PhotoSort itself stays at opt-level 0.
+[profile.dev.package."*"]
+opt-level = 1
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
@@ -105,6 +112,10 @@ wgpu = { version = "30", default-features = false, features = ["dx12", "wgsl"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["vulkan", "gles", "wgsl"] }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [dev-dependencies]
 photosort = { path = ".", default-features = false, features = ["test-isolation"] }
