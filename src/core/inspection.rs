@@ -43,8 +43,59 @@ impl Default for View {
     }
 }
 impl View {
+    /// The floor for 1:1 zoom before the viewport is known. Fit-relative zoom
+    /// never goes below 1, which is Fit.
     pub const MIN_ZOOM: f32 = 0.05;
     pub const MAX_ZOOM: f32 = 32.0;
+    /// The 1:1 zoom at which the photo exactly fits the viewport. Above 1 for
+    /// a photo smaller than the view, which Fit enlarges.
+    pub fn fit_zoom(source: [u32; 2], viewport: [f32; 2], turns: u8, pixels_per_point: f32) -> f32 {
+        let fit = Self::default().scale(source, viewport, turns, pixels_per_point);
+        let native = Self {
+            actual_size: true,
+            ..Self::default()
+        }
+        .scale(source, viewport, turns, pixels_per_point);
+        fit / native
+    }
+    /// The lowest zoom for this view: Fit, except that 1:1 stays reachable for
+    /// a photo smaller than the view. `fit_zoom` is unknown before the photo
+    /// has been laid out.
+    pub fn min_zoom(self, fit_zoom: Option<f32>) -> f32 {
+        if !self.actual_size {
+            1.0
+        } else {
+            fit_zoom.map_or(Self::MIN_ZOOM, |fit| fit.min(1.0))
+        }
+    }
+    /// Whether the whole photo is on screen, so there is nothing to pan to.
+    pub fn shows_whole_photo(self, fit_zoom: Option<f32>) -> bool {
+        if self.actual_size {
+            fit_zoom.is_some_and(|fit| self.zoom <= fit)
+        } else {
+            self.zoom <= 1.0
+        }
+    }
+    /// The view with zoom kept between Fit and the maximum. Zooming a 1:1 view
+    /// out to Fit becomes Fit itself, so it keeps fitting when the view is
+    /// resized. Whenever the whole photo is on screen it is centred.
+    pub fn clamped(self, fit_zoom: Option<f32>) -> Self {
+        let mut view = self;
+        view.zoom = view.zoom.clamp(self.min_zoom(fit_zoom), Self::MAX_ZOOM);
+        // Repeated steps such as 1.25 x 0.8 land a hair off 1.0.
+        let at_fit = if view.actual_size {
+            fit_zoom.is_some_and(|fit| fit < 1.0 && view.zoom < 1.0 && view.zoom < fit * 1.0001)
+        } else {
+            view.zoom < 1.001
+        };
+        if at_fit {
+            return Self::default();
+        }
+        if view.shows_whole_photo(fit_zoom) {
+            view.pan = [0.0; 2];
+        }
+        view
+    }
     pub fn scale(
         self,
         source: [u32; 2],
