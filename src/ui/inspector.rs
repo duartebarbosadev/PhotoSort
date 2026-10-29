@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::details::Row;
 
 impl PhotoSortApp {
     pub(super) fn inspector(&mut self, ui: &mut egui::Ui) {
@@ -68,11 +69,6 @@ impl PhotoSortApp {
                 self.compare_with(other);
                 self.review = true;
             }
-        }
-        if self.step == Step::Organize {
-            ui.add_space(12.0);
-            ui.separator();
-            self.organize_destination(ui, &media);
         }
         if let Some(warning) = self.image_warnings.get(&id) {
             ui.add_space(10.0);
@@ -167,8 +163,9 @@ impl PhotoSortApp {
             });
     }
 
-    /// Metadata tables for the active photo, or one column per photo while a
-    /// comparison is open. Values come from the shared metadata index.
+    /// Metadata for the active photo as soft cards of icon, label and value,
+    /// or every compared photo: side by side, one column per photo, when the
+    /// panel is wide enough, otherwise stacked with shared values said once.
     fn details_tables(&self, ui: &mut egui::Ui, active: MediaId) {
         let mut ids = self.comparison_ids();
         if ids.len() < 2 || !ids.contains(&active) {
@@ -185,153 +182,306 @@ impl PhotoSortApp {
         let sections = crate::core::details::sections(&items);
         if items.len() < 2 {
             for section in &sections {
-                ui.add_space(S3);
-                section_title(ui, section.title);
-                for row in &section.rows {
-                    detail_row(ui, row.label, |ui| {
-                        ui.add(egui::Label::new(&row.values[0]).wrap());
-                    });
-                }
+                ui.add_space(S2);
+                details_card(ui, |ui| {
+                    section_title(ui, section.title);
+                    let tiles: Vec<&Row> = section
+                        .rows
+                        .iter()
+                        .filter(|row| EXPOSURE.contains(&row.label))
+                        .collect();
+                    let mut tiled = false;
+                    for row in &section.rows {
+                        if !EXPOSURE.contains(&row.label) {
+                            ui.horizontal_top(|ui| {
+                                ui.spacing_mut().item_spacing.x = COLUMN_GAP;
+                                field_label(ui, row.label);
+                                value_cell(ui, ui.available_width(), &row.values[0], INK);
+                            });
+                        } else if !tiled {
+                            tiled = true;
+                            exposure_tiles(ui, &tiles);
+                        }
+                    }
+                });
             }
             return;
         }
-        // Stacked rather than tabular so any number of photos fits the panel:
-        // shared values take one line, differing values get one line per photo.
         ui.add_space(S3);
         section_title(ui, "Compare details");
         for (n, (media, _)) in items.iter().enumerate() {
             ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(format!("{}", n + 1))
-                        .font(semibold(12.0))
-                        .color(ACCENT),
-                );
+                ui.spacing_mut().item_spacing.x = S2;
+                number_badge(ui, n);
                 ui.add(egui::Label::new(media.name()).truncate())
                     .on_hover_text(media.path.display().to_string());
             });
         }
+        let names: Vec<String> = items.iter().map(|(media, _)| media.name()).collect();
+        // Decided once from the panel width, before any cell is laid out, so
+        // long values wrap inside their column and never widen the panel.
+        let column = table_column_width(ui.available_width() - 2.0 * CARD_MARGIN_X, names.len());
         for section in &sections {
-            ui.add_space(S3);
-            section_title(ui, section.title);
-            for row in &section.rows {
-                let differs = row.values.iter().any(|v| *v != row.values[0]);
-                detail_row(ui, row.label, |ui| {
-                    if !differs {
-                        ui.add(egui::Label::new(&row.values[0]).wrap());
-                        return;
-                    }
-                    for (n, value) in row.values.iter().enumerate() {
+            ui.add_space(S2);
+            // A section every photo agrees on reads as one plain list.
+            let column = column.filter(|_| section.rows.iter().any(Row::differs));
+            details_card(ui, |ui| match column {
+                Some(column) => {
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = COLUMN_GAP;
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(LABEL_WIDTH, 0.0),
+                            egui::Layout::top_down(Align::Min),
+                            |ui| {
+                                ui.set_width(LABEL_WIDTH);
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(section.title).font(medium(12.5)).color(INK),
+                                    )
+                                    .truncate(),
+                                );
+                            },
+                        );
+                        for (n, name) in names.iter().enumerate() {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(column, 0.0),
+                                egui::Layout::left_to_right(Align::Center),
+                                |ui| {
+                                    ui.set_width(column);
+                                    number_badge(ui, n).on_hover_text(name);
+                                },
+                            );
+                        }
+                    });
+                    for row in &section.rows {
                         ui.horizontal_top(|ui| {
-                            ui.spacing_mut().item_spacing.x = S2;
-                            ui.label(RichText::new(format!("{}", n + 1)).small().color(FAINT));
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(if value.is_empty() { "-" } else { value })
-                                        .color(ACCENT),
-                                )
-                                .wrap(),
+                            ui.spacing_mut().item_spacing.x = COLUMN_GAP;
+                            field_label(ui, row.label);
+                            if !row.differs() {
+                                value_cell(ui, ui.available_width(), &row.values[0], INK);
+                                return;
+                            }
+                            for (value, name) in row.values.iter().zip(&names) {
+                                value_cell(ui, column, value, ACCENT).on_hover_text(name);
+                            }
+                        });
+                    }
+                }
+                None => {
+                    section_title(ui, section.title);
+                    for row in &section.rows {
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing.x = COLUMN_GAP;
+                            field_label(ui, row.label);
+                            if !row.differs() {
+                                value_cell(ui, ui.available_width(), &row.values[0], INK);
+                                return;
+                            }
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(ui.available_width(), 0.0),
+                                egui::Layout::top_down(Align::Min),
+                                |ui| {
+                                    for (value, photos) in row.groups() {
+                                        ui.horizontal_top(|ui| {
+                                            ui.spacing_mut().item_spacing.x = 3.0;
+                                            for &n in &photos {
+                                                number_badge(ui, n).on_hover_text(&names[n]);
+                                            }
+                                            ui.add_space(S1);
+                                            value_cell(ui, ui.available_width(), value, ACCENT);
+                                        });
+                                    }
+                                },
                             );
                         });
                     }
-                });
-            }
-        }
-    }
-}
-
-/// One label/value line with a fixed label column; the value wraps in the
-/// remaining width instead of being clipped by a grid column.
-fn detail_row(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::Ui)) {
-    const LABEL: f32 = 96.0;
-    ui.horizontal_top(|ui| {
-        ui.allocate_ui_with_layout(
-            egui::vec2(LABEL, 0.0),
-            egui::Layout::top_down(Align::Min),
-            |ui| {
-                ui.set_width(LABEL);
-                ui.add(egui::Label::new(RichText::new(label).color(MUTED)).wrap());
-            },
-        );
-        ui.allocate_ui_with_layout(
-            egui::vec2(ui.available_width(), 0.0),
-            egui::Layout::top_down(Align::Min),
-            value,
-        );
-    });
-}
-
-/// Sentence-case section heading for the Details panel.
-impl PhotoSortApp {
-    /// Where this photo goes in the current folder proposal, in one line,
-    /// and the two things you can do about it: move it elsewhere or rename it.
-    fn organize_destination(&mut self, ui: &mut egui::Ui, media: &Media) {
-        use egui_phosphor::regular as icon;
-        let id = media.id;
-        let Placement {
-            label,
-            moves,
-            folder,
-        } = self.placement(media);
-        let name = self.file_names.get(&id).map(|stem| {
-            crate::core::organize::renamed_file_name(&media.path, std::ffi::OsStr::new(stem))
-                .to_string_lossy()
-                .into_owned()
-        });
-        let heading = if moves { "Will move to" } else { "Stays in" };
-        section_title(ui, heading);
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(if moves {
-                    icon::ARROW_RIGHT
-                } else {
-                    icon::FOLDER_SIMPLE
-                })
-                .color(if moves { ACCENT } else { MUTED }),
-            );
-            ui.add(egui::Label::new(RichText::new(&folder).color(INK)).wrap());
-        });
-        if label.is_none() {
-            ui.label(
-                RichText::new(format!("Not moving · {}", self.unplaced_reason(media)))
-                    .small()
-                    .color(MUTED),
-            );
-        }
-        if let Some(name) = &name {
-            ui.label(
-                RichText::new(format!("Renamed to {name}"))
-                    .small()
-                    .color(MUTED),
-            );
-        }
-        ui.add_space(S1);
-        let editable = self.board_editable();
-        ui.horizontal_wrapped(|ui| {
-            // Items not moving can be moved too, to correct the grouping.
-            ui.add_enabled_ui(editable, |ui| {
-                ui.menu_button(format!("{}  Move to…", icon::FOLDER_SIMPLE), |ui| {
-                    self.board_folder_list(ui, &[id]);
-                    ui.separator();
-                    if ui.button("New folder…").clicked() {
-                        self.board_new_folder_with(&[id]);
-                        ui.close();
-                    }
-                })
-                .response
-                .on_hover_text("Choose another folder for this photo")
+                }
             });
-            if ui
-                .add_enabled(
-                    editable,
-                    egui::Button::new(format!("{}  Rename…", icon::PENCIL_SIMPLE)),
-                )
-                .on_hover_text("Rename this photo · F2")
-                .clicked()
-            {
-                self.board_rename_photo(id);
+        }
+    }
+}
+
+/// Label column of the Details grids, icon included.
+const LABEL_WIDTH: f32 = 96.0;
+/// Narrowest photo column before a comparison stacks instead.
+const MIN_COLUMN: f32 = 56.0;
+const COLUMN_GAP: f32 = S2;
+const CARD_MARGIN_X: f32 = 10.0;
+const ICON_SIZE: f32 = 14.0;
+/// Camera settings shown as tiles for a single photo.
+const EXPOSURE: [&str; 4] = ["Focal length", "Aperture", "Shutter", "ISO"];
+
+/// Width of each photo column when `photos` compared photos fit side by side
+/// in `width` after the label column, or `None` when they should stack.
+fn table_column_width(width: f32, photos: usize) -> Option<f32> {
+    let photos = photos.max(1) as f32;
+    let column = (width - LABEL_WIDTH - photos * COLUMN_GAP) / photos;
+    (column >= MIN_COLUMN).then_some(column)
+}
+
+/// The glyph drawn before a Details label, from the app's icon font.
+fn field_icon(label: &str) -> &'static str {
+    use egui_phosphor::regular as icon;
+    match label {
+        "Format" => icon::FILE_IMAGE,
+        "Size" => icon::HARD_DRIVE,
+        "Created" => icon::CALENDAR_BLANK,
+        "Location" => icon::MAP_PIN,
+        "Source" => icon::CAMERA,
+        "Lens" => icon::TARGET,
+        "Focal length" => icon::ARROWS_IN_LINE_HORIZONTAL,
+        "Aperture" => icon::APERTURE,
+        "Shutter" => icon::TIMER,
+        "ISO" => icon::GAUGE,
+        "Flash" => icon::LIGHTNING,
+        "Dimensions" => icon::FRAME_CORNERS,
+        "Megapixels" => icon::GRID_FOUR,
+        "Orientation" => icon::DEVICE_ROTATE,
+        "Bit depth" => icon::STACK,
+        "Duration" => icon::CLOCK,
+        "Frame rate" => icon::FILM_STRIP,
+        "Codec" => icon::FILE_VIDEO,
+        "Bitrate" => icon::WAVEFORM,
+        "Audio" => icon::SPEAKER_HIGH,
+        "Color space" => icon::PALETTE,
+        "White balance" => icon::THERMOMETER_SIMPLE,
+        "Metering" => icon::SCAN,
+        "Exposure mode" => icon::SLIDERS_HORIZONTAL,
+        "Exposure comp." => icon::PLUS_MINUS,
+        "Scene" => icon::SUN_HORIZON,
+        "Software" => icon::MAGIC_WAND,
+        _ => icon::INFO,
+    }
+}
+
+/// A glyph painted rather than added as a label, so screen readers hear the
+/// field name next to it and not the icon's code point.
+fn paint_icon(ui: &mut egui::Ui, icon: &str, size: egui::Vec2, color: Color32) {
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(ICON_SIZE),
+        color,
+    );
+}
+
+/// Icon and field name in the fixed label column; long names wrap.
+fn field_label(ui: &mut egui::Ui, label: &str) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(LABEL_WIDTH, 0.0),
+        egui::Layout::left_to_right(Align::Min),
+        |ui| {
+            ui.set_width(LABEL_WIDTH);
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let height = ui.text_style_height(&egui::TextStyle::Body);
+            paint_icon(ui, field_icon(label), egui::vec2(16.0, height), MUTED);
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), 0.0),
+                egui::Layout::top_down(Align::Min),
+                |ui| ui.add(egui::Label::new(RichText::new(label).color(MUTED)).wrap()),
+            );
+        },
+    );
+}
+
+/// One value in a column of `width`; a missing value reads as a faint dash.
+fn value_cell(ui: &mut egui::Ui, width: f32, value: &str, color: Color32) -> egui::Response {
+    let text = if value.is_empty() {
+        RichText::new("-").color(FAINT)
+    } else {
+        RichText::new(value).color(color)
+    };
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 0.0),
+        egui::Layout::top_down(Align::Min),
+        |ui| {
+            ui.set_width(width);
+            ui.add(egui::Label::new(text).wrap())
+        },
+    )
+    .inner
+}
+
+/// The small numbered chip that names compared photo `n` (0-based) as "1", "2"...
+fn number_badge(ui: &mut egui::Ui, n: usize) -> egui::Response {
+    let text = (n + 1).to_string();
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.clone(), semibold(10.5), INK);
+    let height = ui.text_style_height(&egui::TextStyle::Body);
+    let size = egui::vec2((galley.size().x + 8.0).max(16.0), height.min(16.0));
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size.x, height), egui::Sense::hover());
+    let pill = egui::Rect::from_center_size(rect.center(), size);
+    ui.painter().rect_filled(pill, 5.0, SELECTED);
+    ui.painter()
+        .galley(pill.center() - galley.size() / 2.0, galley, INK);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &text));
+    response
+}
+
+/// A soft rounded card that groups one Details section.
+fn details_card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(ELEVATED)
+        .corner_radius(R_TILE)
+        .inner_margin(egui::Margin::symmetric(CARD_MARGIN_X as i8, S2 as i8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 6.0;
+            add(ui);
+        });
+}
+
+/// Focal length, aperture, shutter and ISO as small tiles, the way a camera
+/// shows them, wrapping onto a second line in a narrow panel.
+fn exposure_tiles(ui: &mut egui::Ui, rows: &[&Row]) {
+    const GAP: f32 = 6.0;
+    const MIN_TILE: f32 = 58.0;
+    let width = ui.available_width();
+    let fit = (((width + GAP) / (MIN_TILE + GAP)).floor() as usize).clamp(1, rows.len());
+    // Even lines, two and two rather than three and one.
+    let per_line = rows.len().div_ceil(rows.len().div_ceil(fit));
+    let tile = (width - GAP * (per_line - 1) as f32) / per_line as f32;
+    for line in rows.chunks(per_line) {
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            for row in line {
+                let value = row.values[0].as_str();
+                let value = if row.label == "ISO" {
+                    value.trim_start_matches("ISO ")
+                } else {
+                    value
+                };
+                egui::Frame::new()
+                    .fill(CARD_HOVER)
+                    .corner_radius(R_CONTROL)
+                    .inner_margin(egui::Margin::symmetric(4, 6))
+                    .show(ui, |ui| {
+                        ui.set_width(tile - 8.0);
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.vertical_centered(|ui| {
+                            paint_icon(ui, field_icon(row.label), egui::vec2(16.0, 16.0), MUTED);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(value).font(semibold(12.5)).color(INK),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(row.label);
+                            ui.add(
+                                egui::Label::new(RichText::new(row.label).size(10.5).color(FAINT))
+                                    .truncate(),
+                            );
+                        });
+                    });
             }
         });
     }
+}
+
+impl PhotoSortApp {
     /// Where an item goes in the current folder proposal, edits included.
     pub(super) fn placement(&self, media: &Media) -> Placement {
         let label = match self.organize_drafts.get(&self.group_mode) {
@@ -399,7 +549,81 @@ pub(super) fn readable_path(path: &std::path::Path) -> String {
     }
     path.display().to_string()
 }
+/// Sentence-case section heading for the Details panel.
 fn section_title(ui: &mut egui::Ui, title: &str) {
     ui.label(RichText::new(title).font(medium(12.5)).color(INK));
     ui.add_space(2.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compared_photos_sit_side_by_side_only_when_every_column_stays_readable() {
+        // Card widths inside the Details panel at its default 300 px, at
+        // 440 px and at its widest 560 px.
+        let (default, wider, widest) = (232.0, 372.0, 492.0);
+        assert!(table_column_width(default, 2).is_some());
+        assert_eq!(table_column_width(default, 3), None);
+        assert!(table_column_width(wider, 4).is_some());
+        assert_eq!(table_column_width(wider, 5), None);
+        let column = table_column_width(widest, 4).unwrap();
+        assert!(column >= MIN_COLUMN);
+        assert!((LABEL_WIDTH + 4.0 * (column + COLUMN_GAP) - widest).abs() < 0.01);
+        assert_eq!(table_column_width(0.0, 0), None);
+    }
+
+    #[test]
+    fn every_details_field_has_its_own_icon() {
+        use crate::core::model::{Details, Media, MediaId, MediaKind, Metadata};
+        use crate::core::video_info::VideoInfo;
+        let media = Media {
+            id: MediaId(1),
+            path: "photo.jpg".into(),
+            kind: MediaKind::Photo,
+            fingerprint: Default::default(),
+        };
+        let meta = Metadata {
+            width: 4,
+            height: 3,
+            orientation: 6,
+            camera: "Camera".into(),
+            lens: "Lens".into(),
+            captured: "2025".into(),
+            exposure: "1/250".into(),
+            aperture: "f/2".into(),
+            iso: "100".into(),
+            gps: Some((1.0, 2.0)),
+            details: Details {
+                focal_length_mm: Some(50.0),
+                flash: Some(0),
+                bit_depth: Some(8),
+                color_space: Some(1),
+                white_balance: Some(0),
+                metering: Some(5),
+                exposure_mode: Some(0),
+                exposure_bias_ev: Some(0.0),
+                scene: Some(0),
+                software: Some("App".into()),
+                video: Some(VideoInfo {
+                    duration_s: 1.0,
+                    frame_rate: Some(25.0),
+                    codec: Some("H.264".into()),
+                    bitrate: Some(1),
+                    audio: true,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let labels: Vec<&str> = crate::core::details::sections(&[(&media, &meta)])
+            .iter()
+            .flat_map(|section| section.rows.iter().map(|row| row.label))
+            .collect();
+        assert!(labels.len() >= 27, "{labels:?}");
+        for label in labels {
+            assert_ne!(field_icon(label), egui_phosphor::regular::INFO, "{label}");
+        }
+    }
 }
