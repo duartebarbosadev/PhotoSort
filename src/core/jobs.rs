@@ -123,6 +123,8 @@ pub enum Event {
     DuplicatePairs {
         run: u64,
         pairs: Vec<super::near_duplicates::batch::Pair>,
+        /// Photos with closed eyes and the other shots of their moment.
+        blinks: Vec<super::eyes::Blink>,
     },
     SubjectStarted {
         run: u64,

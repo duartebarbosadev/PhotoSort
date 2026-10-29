@@ -498,21 +498,33 @@ impl PhotoSortApp {
         self.board.people.wanted.extend(sidebar);
         card
     }
-    /// The region of the original photo, in its shown orientation, that a
-    /// face's circle covers, and the request that decodes it at the card's
-    /// size. `None` for a video or before the photo's size is known.
+    /// The request that decodes the region of the original photo, in its
+    /// shown orientation, that a face's circle covers, at the card's size.
+    /// `None` for a video or before the photo's size is known.
     fn crop_request(&self, portrait: Portrait, points: f32) -> Option<InspectionRequest> {
-        let media = &self.media[*self.index.get(&portrait.id)?];
-        let meta = self.metadata.get(&portrait.id)?;
+        let (w, h) = self.shown_size(portrait.id)?;
+        let uv = face_uv(portrait.bbox, egui::vec2(w as f32, h as f32));
+        self.region_request(portrait.id, uv, CARD_FACE * points)
+    }
+    /// A photo's size in original pixels, in its shown orientation. `None`
+    /// for a video or before the size is known.
+    pub(super) fn shown_size(&self, id: MediaId) -> Option<(u32, u32)> {
+        let media = &self.media[*self.index.get(&id)?];
+        let meta = self.metadata.get(&id)?;
         if media.kind == MediaKind::Video || meta.width == 0 || meta.height == 0 {
             return None;
         }
-        let (w, h) = if (5..=8).contains(&meta.orientation) {
+        Some(if (5..=8).contains(&meta.orientation) {
             (meta.height, meta.width)
         } else {
             (meta.width, meta.height)
-        };
-        let uv = face_uv(portrait.bbox, egui::vec2(w as f32, h as f32));
+        })
+    }
+    /// The request that decodes `uv`, a normalized region of the photo in
+    /// its shown orientation, with its long side `edge` pixels at most.
+    fn region_request(&self, id: MediaId, uv: egui::Rect, edge: f32) -> Option<InspectionRequest> {
+        let media = &self.media[*self.index.get(&id)?];
+        let (w, h) = self.shown_size(id)?;
         let x = ((uv.min.x * w as f32).floor() as u32).min(w - 1);
         let y = ((uv.min.y * h as f32).floor() as u32).min(h - 1);
         let region = inspection::Region {
@@ -521,15 +533,15 @@ impl PhotoSortApp {
             width: ((uv.width() * w as f32).round() as u32).clamp(1, w - x),
             height: ((uv.height() * h as f32).round() as u32).clamp(1, h - y),
         };
-        // Decoded at the card's size, never larger than the photo has.
-        let output_edge = ((CARD_FACE * points).ceil() as u32)
+        // Decoded at the requested size, never larger than the photo has.
+        let output_edge = (edge.ceil() as u32)
             .min(region.width.max(region.height))
             .max(1);
         let mut hasher = std::hash::DefaultHasher::new();
         std::hash::Hash::hash(
             &(
                 "face-crop",
-                portrait.id.0,
+                id.0,
                 x,
                 y,
                 region.width,
@@ -550,8 +562,22 @@ impl PhotoSortApp {
     /// as its decode, asked for here and done off the UI thread, arrives.
     pub(super) fn sharp_face(&mut self, portrait: Portrait, points: f32) -> Option<FaceImage> {
         let request = self.crop_request(portrait, points)?;
+        self.sharp_crop(portrait.id, request)
+    }
+    /// Any normalized region of a photo cut sharp from the original, as
+    /// `sharp_face`, with its long side `edge` pixels at most.
+    pub(super) fn sharp_region(
+        &mut self,
+        id: MediaId,
+        uv: egui::Rect,
+        edge: f32,
+    ) -> Option<FaceImage> {
+        let request = self.region_request(id, uv, edge)?;
+        self.sharp_crop(id, request)
+    }
+    fn sharp_crop(&mut self, id: MediaId, request: InspectionRequest) -> Option<FaceImage> {
         let r = request.region;
-        let key = (portrait.id, [r.x, r.y, r.width, r.height]);
+        let key = (id, [r.x, r.y, r.width, r.height]);
         let texture = if let Some(texture) = self.board.people.crops.get(&key) {
             texture.clone()
         } else if let Some(texture) = self

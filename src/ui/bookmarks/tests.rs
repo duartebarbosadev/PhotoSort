@@ -201,6 +201,8 @@ fn empty_guided_bookmark_focuses_new_results_without_restarting_analysis() {
                                 category: crate::core::delete_review::Category::Exact,
                                 tag: "Tag".into(),
                                 keep_why: String::new(),
+                                eyes: Vec::new(),
+                                extra: Vec::new(),
                                 reason: "identical".into(),
                             }])
                     }
@@ -331,6 +333,8 @@ fn guided_views_restore_position_and_pair_without_confirmations_or_decisions() {
             category: crate::core::delete_review::Category::Near,
             tag: "Tag".into(),
             keep_why: String::new(),
+            eyes: Vec::new(),
+            extra: Vec::new(),
             reason: String::new(),
         }]);
     app.view_data_ready.insert(Step::EasyDelete);

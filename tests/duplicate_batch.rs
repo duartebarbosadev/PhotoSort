@@ -28,6 +28,9 @@ fn input(n: u64) -> Input {
         sharpness: Some(100.),
         metadata_fields: 0,
         shot: None,
+        camera: String::new(),
+        captured_ms: None,
+        faces: 0,
     }
 }
 #[derive(Default)]

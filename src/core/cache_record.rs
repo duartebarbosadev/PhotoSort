@@ -21,6 +21,8 @@ pub(crate) enum Kind {
     Duplicate = 8,
     Rotation = 9,
     Metadata = 10,
+    /// Each person's eyes, judged for Easy Delete (`core::eyes`).
+    Eyes = 12,
     #[cfg(any(test, all(feature = "onnx", target_os = "macos")))]
     Compiled = 11,
 }

@@ -68,7 +68,9 @@ impl PhotoSortApp {
                 groups,
             } => self.on_general_groups(run, automatic, choices, groups),
             Event::DuplicateStarted { run } => self.on_duplicate_started(run),
-            Event::DuplicatePairs { run, pairs } => self.on_duplicate_pairs(run, pairs),
+            Event::DuplicatePairs { run, pairs, blinks } => {
+                self.on_duplicate_pairs(run, pairs, blinks)
+            }
             Event::SubjectStarted { run } => self.on_subject_started(run),
             Event::FaceGroups { run, groups } => self.on_face_groups(run, groups),
             Event::SubjectGroups { run, groups } => self.on_subject_groups(run, groups),
@@ -521,9 +523,11 @@ impl PhotoSortApp {
         &mut self,
         run: u64,
         pairs: Vec<crate::core::near_duplicates::batch::Pair>,
+        blinks: Vec<crate::core::eyes::Blink>,
     ) {
         if self.analysis_run == Some(run) && self.delete_run == Some(run) {
             self.delete_pairs = pairs;
+            self.delete_blinks = blinks;
         }
     }
 

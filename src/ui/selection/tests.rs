@@ -183,6 +183,8 @@ fn clear_all_trash_does_not_resurrect_marks_from_confirmed_keep_all_reviews() {
         category: delete_review::Category::Exact,
         tag: "Tag".into(),
         keep_why: String::new(),
+        eyes: Vec::new(),
+        extra: Vec::new(),
         reason: "fixture".into(),
     }]);
     app.delete_review
@@ -271,6 +273,8 @@ fn clear_all_trash_shared_action_covers_every_workflow_and_retains_unconfirmed_c
             category: delete_review::Category::Exact,
             tag: "Tag".into(),
             keep_why: String::new(),
+            eyes: Vec::new(),
+            extra: Vec::new(),
             reason: "fixture".into(),
         }]);
         app.delete_review

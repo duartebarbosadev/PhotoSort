@@ -196,6 +196,8 @@ pub struct PhotoSortApp {
     duplicates: HashMap<MediaId, MediaId>,
     near_duplicates: HashMap<MediaId, MediaId>,
     delete_pairs: Vec<crate::core::near_duplicates::batch::Pair>,
+    /// Photos with closed eyes and the other shots of their moment.
+    delete_blinks: Vec<crate::core::eyes::Blink>,
     rotations: HashMap<MediaId, crate::core::models::RotationSuggestion>,
     rotation_review: crate::core::rotation::Review,
     rotation_run: Option<u64>,
@@ -456,6 +458,7 @@ impl PhotoSortApp {
             duplicates: HashMap::new(),
             near_duplicates: HashMap::new(),
             delete_pairs: Vec::new(),
+            delete_blinks: Vec::new(),
             rotations: HashMap::new(),
             rotation_review: Default::default(),
             rotation_run: None,
@@ -694,6 +697,7 @@ impl PhotoSortApp {
         self.duplicates.clear();
         self.near_duplicates.clear();
         self.delete_pairs.clear();
+        self.delete_blinks.clear();
         self.rotations.clear();
         self.delete_review = Default::default();
         self.delete_current = None;
@@ -1825,6 +1829,8 @@ impl PhotoSortApp {
                 category: Category::Exact,
                 tag: "Identical copy".into(),
                 keep_why: "The two files are identical, so either can go. This one keeps its place in the library.".into(),
+                eyes: Vec::new(),
+                extra: Vec::new(),
                 reason: "Byte-for-byte identical to the photo beside it.".into(),
             });
         }
@@ -1835,6 +1841,8 @@ impl PhotoSortApp {
                 category: Category::Near,
                 tag: "Sharper kept".into(),
                 keep_why: "It is the sharper photo of the two.".into(),
+                eyes: Vec::new(),
+                extra: Vec::new(),
                 reason: "No visible subject change detected. PhotoSort suggests keeping the sharper photo.".into(),
             });
         }
@@ -1845,6 +1853,8 @@ impl PhotoSortApp {
                 category: Category::Blur,
                 tag: Category::Blur.title().into(),
                 keep_why: String::new(),
+                eyes: Vec::new(),
+                extra: Vec::new(),
                 reason: "Out of focus across the frame. PhotoSort suggests moving it to Trash."
                     .into(),
             });
@@ -1868,6 +1878,8 @@ impl PhotoSortApp {
                     category,
                     tag: category.title().into(),
                     keep_why: String::new(),
+                    eyes: Vec::new(),
+                    extra: Vec::new(),
                     reason: reason.into(),
                 });
             }

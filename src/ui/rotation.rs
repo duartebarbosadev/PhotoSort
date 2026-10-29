@@ -315,6 +315,7 @@ impl PhotoSortApp {
             dim: false,
             toggle: None,
             suggested_hover: None,
+            inset: None,
         }];
         if turns != 0 {
             photos.push(CardPhoto {
@@ -332,6 +333,7 @@ impl PhotoSortApp {
                 dim: false,
                 toggle: None,
                 suggested_hover: None,
+                inset: None,
             });
         }
         let (note, warning) = match choice {
