@@ -746,7 +746,10 @@ fn a_similarity_group_comparison_keeps_d_on_the_current_photo() {
 }
 
 /// Real frames: a click on a compared photo picks it for D, and a click
-/// between the photos lets go of it.
+/// between the photos lets go of it. Cull ignores selection keys while a
+/// background query runs, and any frame can start one (a mark, or a preview
+/// worker's late result), so D goes straight to the key handler once the
+/// query is done rather than through a frame.
 #[test]
 fn clicking_a_compared_photo_picks_it_for_d_and_empty_space_lets_go() {
     use super::super::compact_cull_tests::{fixture as files, frame, rendered};
@@ -773,6 +776,7 @@ fn clicking_a_compared_photo_picks_it_for_d_and_empty_space_lets_go() {
         }
         assert_eq!(app.comparison_ids(), [ids[0], ids[2]], "{step:?}");
         let click = |app: &mut PhotoSortApp, pos: egui::Pos2| {
+            settle(app);
             for pressed in [true, false] {
                 frame(
                     app,
@@ -795,28 +799,20 @@ fn clicking_a_compared_photo_picks_it_for_d_and_empty_space_lets_go() {
             }
         };
         let press_d = |app: &mut PhotoSortApp| {
-            frame(
-                app,
-                &ctx,
-                size,
-                vec![egui::Event::Key {
-                    key: egui::Key::D,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: Default::default(),
-                }],
+            settle(app);
+            assert!(app.selection_ready(), "{step:?}: D would be ignored");
+            assert!(
+                app.cull_selection_key(egui::Key::D, egui::Modifiers::NONE),
+                "{step:?}: D goes to the selection"
             );
+            settle(app);
         };
         let nodes = rendered(&mut app, &ctx, size);
-        let canvas = |slot: usize| {
-            nodes
-                .iter()
-                .find(|(label, _)| label.starts_with(&format!("Photo {slot}: ")))
-                .unwrap_or_else(|| panic!("{step:?}: no canvas {slot}"))
-                .1
-        };
-        let (first, second) = (canvas(1), canvas(2));
+        let second = nodes
+            .iter()
+            .find(|(label, _)| label.starts_with("Photo 2: "))
+            .unwrap_or_else(|| panic!("{step:?}: no canvas 2"))
+            .1;
         assert!(
             nodes.iter().any(|(l, _)| l.contains("Mark all for Trash")),
             "{step:?}"
@@ -832,7 +828,18 @@ fn clicking_a_compared_photo_picks_it_for_d_and_empty_space_lets_go() {
         press_d(&mut app);
         assert!(app.decision(ids[2]).rejected, "{step:?}");
         assert!(!app.decision(ids[0]).rejected, "{step:?}");
-        // Click between the photos: D marks both.
+        // Click between the photos: D marks both. The photos are read again
+        // from a settled frame.
+        settle(&mut app);
+        let nodes = rendered(&mut app, &ctx, size);
+        let canvas = |slot: usize| {
+            nodes
+                .iter()
+                .find(|(label, _)| label.starts_with(&format!("Photo {slot}: ")))
+                .unwrap_or_else(|| panic!("{step:?}: no canvas {slot}"))
+                .1
+        };
+        let (first, second) = (canvas(1), canvas(2));
         let gap = if second.left() > first.right() {
             egui::pos2((first.right() + second.left()) / 2.0, first.center().y)
         } else {
