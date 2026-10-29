@@ -36,6 +36,9 @@ pub const SELECTED: Color32 = rgb(0x3A3A40);
 pub const ACCENT_SOFT: Color32 = Color32::from_rgba_premultiplied(58, 34, 15, 64);
 pub const RED: Color32 = rgb(0xE5554F);
 pub const GREEN: Color32 = rgb(0x5DBE7E);
+/// The red edge around a photo marked for Trash. The photo itself stays at
+/// full brightness, so it can still be judged against the keeper.
+pub const TRASH_EDGE: f32 = 3.0;
 
 /// Spacing scale (points).
 pub const S1: f32 = 4.0;

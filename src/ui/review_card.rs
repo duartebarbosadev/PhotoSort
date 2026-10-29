@@ -21,8 +21,8 @@ pub(super) struct CardPhoto {
     pub name: String,
     /// Deciding facts in one line under it, when the layout has room.
     pub facts: Vec<Fact>,
-    /// Drawn dimmed and red-edged: it goes to Trash.
-    pub dim: bool,
+    /// Edged in red: it goes to Trash.
+    pub trash: bool,
     /// Makes the pill a Keep/Trash switch, with this tooltip.
     pub toggle: Option<String>,
     /// Why it is the suggested keeper, over its Suggested mark.
@@ -775,8 +775,9 @@ impl PhotoSortApp {
     }
 
     /// A card's photo, fitted to its slot on a dark well, with its pill.
-    /// A photo going to Trash is dimmed and edged in red, so a page of
-    /// cards can be scanned at a glance. Returns the pill's rect.
+    /// A photo going to Trash is edged in red, so a page of cards can be
+    /// scanned at a glance, and stays at full brightness so it can still be
+    /// compared with the keeper. Returns the pill's rect.
     fn card_photo(
         &mut self,
         ui: &egui::Ui,
@@ -800,13 +801,10 @@ impl PhotoSortApp {
         if texture.is_none() || shown < 1.0 {
             painter.rect_filled(slot, RADIUS, WELL);
         }
-        let dim = ui
+        let trash = ui
             .ctx()
-            .animate_bool_responsive(ui.id().with(("dim", id, photo.turns)), photo.dim);
+            .animate_bool_responsive(ui.id().with(("trash", id, photo.turns)), photo.trash);
         if let Some(texture) = texture {
-            let light = shown * (1.0 - 0.6 * dim);
-            let alpha = (shown * 255.0) as u8;
-            let gray = (light * 255.0) as u8;
             let drawn = paint_image_tinted(
                 ui,
                 &texture,
@@ -814,7 +812,7 @@ impl PhotoSortApp {
                 1.0,
                 Vec2::ZERO,
                 photo.turns,
-                Color32::from_rgba_premultiplied(gray, gray, gray, alpha),
+                Color32::from_white_alpha((shown * 255.0) as u8),
             );
             round_corners(painter, drawn, RADIUS, BG);
             round_corners(painter, slot, RADIUS, fill);
@@ -833,11 +831,11 @@ impl PhotoSortApp {
                 FAINT,
             );
         }
-        if dim > 0.0 {
+        if trash > 0.0 {
             painter.rect_stroke(
-                slot.shrink(1.0),
+                slot,
                 RADIUS,
-                Stroke::new(2.0, RED.gamma_multiply(0.85 * dim)),
+                Stroke::new(TRASH_EDGE, RED.gamma_multiply(trash)),
                 egui::StrokeKind::Inside,
             );
         }
@@ -1125,6 +1123,49 @@ pub(super) fn painted_text(output: &egui::FullOutput) -> String {
         collect(&shape.shape, &mut out);
     }
     out
+}
+
+/// Checks how a frame drew a photo marked for Trash: `texture` at full
+/// brightness, nothing filled over its middle afterwards, and a red edge.
+#[cfg(test)]
+pub(super) fn assert_trash_drawn_bright(output: &egui::FullOutput, texture: egui::TextureId) {
+    fn flatten<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| flatten(s, out)),
+            shape => out.push(shape),
+        }
+    }
+    let mut shapes = Vec::new();
+    for clipped in &output.shapes {
+        flatten(&clipped.shape, &mut shapes);
+    }
+    let at = shapes
+        .iter()
+        .position(|s| matches!(s, egui::Shape::Mesh(m) if m.texture_id == texture))
+        .expect("the photo was drawn");
+    let egui::Shape::Mesh(mesh) = shapes[at] else {
+        unreachable!()
+    };
+    assert!(
+        mesh.vertices.iter().all(|v| v.color == Color32::WHITE),
+        "the photo was tinted {:?}",
+        mesh.vertices[0].color
+    );
+    let middle = mesh.calc_bounds().center();
+    assert!(
+        !shapes[at + 1..].iter().any(|s| matches!(
+            s,
+            egui::Shape::Rect(r) if r.fill.a() > 0 && r.rect.contains(middle)
+        )),
+        "something was filled over the photo"
+    );
+    assert!(
+        shapes.iter().any(|s| matches!(
+            s,
+            egui::Shape::Rect(r) if r.stroke.color == RED && r.stroke.width >= TRASH_EDGE
+        )),
+        "no red edge"
+    );
 }
 
 /// Draws one frame of a guided step's grid, as the workspace would.

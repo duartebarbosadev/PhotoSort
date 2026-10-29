@@ -1018,20 +1018,18 @@ impl PhotoSortApp {
             )
             .on_hover_text(warning);
         }
+        // A photo going to Trash is edged in red, as on the grid, and stays
+        // at full brightness so it can still be compared with the keeper.
+        if pixels && d.rejected {
+            ui.painter().with_clip_rect(rect).rect_stroke(
+                rect,
+                R_TILE,
+                Stroke::new(TRASH_EDGE, RED),
+                egui::StrokeKind::Inside,
+            );
+        }
         if pixels && matches!(self.step, Step::EasyDelete | Step::PickBest) {
-            let keep = !self.decision(id).rejected;
-            // A photo going to Trash is dimmed and edged in red, as on the
-            // grid's cards; its pill stays bright.
-            if !keep {
-                let painter = ui.painter().with_clip_rect(rect);
-                painter.rect_filled(content, 0.0, Color32::from_black_alpha(140));
-                painter.rect_stroke(
-                    rect.shrink(1.0),
-                    R_TILE,
-                    Stroke::new(2.0, RED.gamma_multiply(0.85)),
-                    egui::StrokeKind::Inside,
-                );
-            }
+            let keep = !d.rejected;
             let pill = decision_pill(ui.painter(), rect, keep);
             let suggested = if self.step == Step::PickBest {
                 self.pick_review
