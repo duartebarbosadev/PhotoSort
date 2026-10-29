@@ -350,6 +350,8 @@ impl PhotoSortApp {
             if let Some(&id) = ids.get(digit - 1) {
                 self.active = Some(id);
                 self.focused_slot = (digit - 1) as u64;
+                // Like a click: D now marks only this compared photo.
+                self.comparison_focus = Some(id);
             }
         } else if self.step == Step::Cull
             && let Some(group) = self
