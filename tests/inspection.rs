@@ -84,6 +84,102 @@ fn fit_preserves_the_entire_source_for_every_rotation() {
     }
 }
 #[test]
+fn fit_zoom_is_the_one_to_one_zoom_that_fits_the_viewport() {
+    // 6000x4000 into 600x500 points at 2x: Fit shows 0.1 point per source
+    // pixel, 1:1 shows 0.5, so Fit is 1:1 zoomed to 0.2.
+    let fit = View::fit_zoom([6000, 4000], [600.0, 500.0], 0, 2.0);
+    assert!((fit - 0.2).abs() < 1e-6, "{fit}");
+    // A quarter turn swaps the photo's sides.
+    let turned = View::fit_zoom([6000, 4000], [600.0, 500.0], 1, 2.0);
+    assert!((turned - 1.0 / 6.0).abs() < 1e-6, "{turned}");
+    // A small photo fits enlarged, above 1:1.
+    assert!(View::fit_zoom([100, 100], [600.0, 500.0], 0, 1.0) > 1.0);
+}
+#[test]
+fn zoom_never_goes_below_fit() {
+    let fit = View::default();
+    // Fit-relative zoom stops at Fit, recentred, and clears float drift.
+    for zoom in [0.05, 0.5, 0.999, 1.0, 1.25 * 0.8] {
+        assert_eq!(
+            View {
+                zoom,
+                pan: [30.0, 10.0],
+                ..fit
+            }
+            .clamped(None),
+            fit,
+            "{zoom}"
+        );
+    }
+    let zoomed = View {
+        zoom: 2.0,
+        pan: [30.0, 10.0],
+        ..fit
+    };
+    assert_eq!(zoomed.clamped(None), zoomed);
+    assert_eq!(View { zoom: 1e6, ..fit }.clamped(None).zoom, View::MAX_ZOOM);
+    assert_eq!(fit.min_zoom(Some(0.2)), 1.0);
+    let one = View {
+        actual_size: true,
+        ..fit
+    };
+    // A large photo at 1:1 zooms out to its Fit and then is Fit, so it keeps
+    // fitting when the view is resized.
+    assert_eq!(one.min_zoom(Some(0.2)), 0.2);
+    assert_eq!(one.clamped(Some(0.2)), one);
+    for zoom in [0.01, 0.1, 0.2, 0.200001] {
+        assert_eq!(View { zoom, ..one }.clamped(Some(0.2)), fit, "{zoom}");
+    }
+    let between = View {
+        zoom: 0.5,
+        pan: [30.0, 10.0],
+        ..one
+    };
+    assert_eq!(between.clamped(Some(0.2)), between);
+    // A photo smaller than the view keeps 1:1: its minimum is 1:1, not the
+    // larger Fit, and the whole photo is centred until zoomed past Fit.
+    assert_eq!(one.min_zoom(Some(3.0)), 1.0);
+    assert_eq!(
+        View {
+            zoom: 0.4,
+            pan: [30.0, 10.0],
+            ..one
+        }
+        .clamped(Some(3.0)),
+        one
+    );
+    assert_eq!(
+        View {
+            zoom: 2.0,
+            pan: [30.0, 10.0],
+            ..one
+        }
+        .clamped(Some(3.0))
+        .pan,
+        [0.0; 2]
+    );
+    // Exactly 1:1 never turns into Fit, even when the two nearly match.
+    assert_eq!(one.clamped(Some(0.99999)), one);
+    // Before the photo is laid out, 1:1 keeps only the absolute floor.
+    assert_eq!(
+        View { zoom: 1e-6, ..one }.clamped(None).zoom,
+        View::MIN_ZOOM
+    );
+}
+#[test]
+fn only_a_photo_larger_than_the_view_can_be_panned() {
+    let fit = View::default();
+    assert!(fit.shows_whole_photo(None));
+    assert!(!View { zoom: 1.5, ..fit }.shows_whole_photo(None));
+    let one = View {
+        actual_size: true,
+        ..fit
+    };
+    assert!(!one.shows_whole_photo(Some(0.2)));
+    assert!(one.shows_whole_photo(Some(3.0)));
+    assert!(!one.shows_whole_photo(None));
+}
+#[test]
 fn original_detail_retains_native_pixels_and_reuses_preview_decode_across_steps() {
     let root = tempfile::tempdir().unwrap();
     let cache = tempfile::tempdir().unwrap();

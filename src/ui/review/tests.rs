@@ -145,12 +145,8 @@ fn zoom_controls_report_the_same_limits_and_values_as_keyboard_and_wheel() {
         let mut app =
             PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, cache.path().into()), None);
         app.step = step;
-        for (factor, expected) in [
-            (0.075, 0.075),
-            (20.0, 20.0),
-            (1000.0, 32.0),
-            (0.00001, 0.05),
-        ] {
+        // Zooming out stops at Fit, the slider's lowest position.
+        for (factor, expected) in [(0.075, 1.0), (20.0, 20.0), (1000.0, 32.0), (0.00001, 1.0)] {
             app.fit_view();
             app.zoom_view(factor);
             let ctx = egui::Context::default();
@@ -167,10 +163,7 @@ fn zoom_controls_report_the_same_limits_and_values_as_keyboard_and_wheel() {
                 .find(|node| node.role() == egui::accesskit::Role::Slider)
                 .unwrap();
             assert_eq!(slider.numeric_value(), Some(f64::from(expected)));
-            assert_eq!(
-                slider.min_numeric_value(),
-                Some(f64::from(InspectionView::MIN_ZOOM))
-            );
+            assert_eq!(slider.min_numeric_value(), Some(1.0));
             assert_eq!(
                 slider.max_numeric_value(),
                 Some(f64::from(InspectionView::MAX_ZOOM))
@@ -505,6 +498,345 @@ fn details_panel_compares_every_open_photo_and_returns_to_one_photo() {
     app.runtime.shutdown();
 }
 
+/// An app showing photos of the given pixel sizes, none of them decodable,
+/// so the canvas lays each out from its metadata alone.
+fn sized_photos(sizes: &[[u32; 2]]) -> (tempfile::TempDir, PhotoSortApp, Vec<MediaId>) {
+    let cache = tempfile::tempdir().unwrap();
+    let mut app = PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, cache.path().into()), None);
+    let ids: Vec<MediaId> = (0..sizes.len() as u64).map(|n| MediaId(n + 1)).collect();
+    for (n, (&id, &[width, height])) in ids.iter().zip(sizes).enumerate() {
+        app.media.push(Media {
+            id,
+            path: format!("/missing-photo-{n}.jpg").into(),
+            kind: MediaKind::Photo,
+            fingerprint: Fingerprint::default(),
+        });
+        app.index.insert(id, n);
+        app.metadata.insert(
+            id,
+            Metadata {
+                width,
+                height,
+                orientation: 1,
+                ..Default::default()
+            },
+        );
+    }
+    app.active = Some(ids[0]);
+    (cache, app, ids)
+}
+/// One frame of `ids` side by side on canvases of `size`. The first canvas
+/// sits near the top left, so its centre is close to `size / 2`.
+fn canvases(
+    app: &mut PhotoSortApp,
+    ctx: &egui::Context,
+    ids: &[MediaId],
+    size: Vec2,
+    events: Vec<egui::Event>,
+) {
+    let _ = ctx.run_test(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(size.x * ids.len() as f32 + 100.0, size.y + 100.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (slot, id) in ids.iter().enumerate() {
+                        app.photo_canvas(ui, *id, slot as u64, size, false);
+                    }
+                });
+            });
+        },
+    );
+}
+fn wheel(y: f32) -> egui::Event {
+    egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, y),
+        phase: egui::TouchPhase::Move,
+        modifiers: Default::default(),
+    }
+}
+#[test]
+fn sync_is_offered_only_when_there_is_more_than_one_photo() {
+    let labels = |app: &mut PhotoSortApp| {
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let output = ctx.run_test(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.review_view_controls(ui));
+        });
+        output
+            .platform_output
+            .accesskit_update
+            .unwrap()
+            .nodes
+            .into_iter()
+            .filter_map(|(_, node)| node.label().map(str::to_owned))
+            .collect::<Vec<_>>()
+    };
+    let (_temp, mut app) = comparison_fixture(Step::Cull);
+    assert!(labels(&mut app).iter().any(|l| l == "Sync"));
+    app.comparison = vec![MediaId(0)];
+    let single = labels(&mut app);
+    assert!(single.iter().any(|l| l == "Fit") && single.iter().all(|l| l != "Sync"));
+    // Fix Rotation compares the original with its correction.
+    app.step = Step::Rotation;
+    assert!(labels(&mut app).iter().any(|l| l == "Sync"));
+    app.runtime.shutdown();
+}
+#[test]
+fn zooming_out_stops_at_fit_on_every_input_path() {
+    for step in Step::ALL {
+        let (_cache, mut app, ids) = sized_photos(&[[6000, 4000]]);
+        app.step = step;
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        let size = egui::vec2(640.0, 400.0);
+        let pointer = egui::pos2(size.x / 2.0 + 40.0, size.y / 2.0 + 30.0);
+        canvases(&mut app, &ctx, &ids, size, vec![]);
+        // Keyboard, as Ctrl/Cmd+- does.
+        for _ in 0..10 {
+            app.zoom_view(0.8);
+        }
+        assert_eq!(app.view_for(0), InspectionView::default(), "{step:?}");
+        // Trackpad pinch.
+        for _ in 0..3 {
+            canvases(
+                &mut app,
+                &ctx,
+                &ids,
+                size,
+                vec![egui::Event::PointerMoved(pointer), egui::Event::Zoom(0.5)],
+            );
+            assert_eq!(app.view_for(0), InspectionView::default(), "{step:?}");
+        }
+        // The scroll wheel zooms in, then out no further than Fit.
+        for _ in 0..5 {
+            canvases(
+                &mut app,
+                &ctx,
+                &ids,
+                size,
+                vec![egui::Event::PointerMoved(pointer), wheel(200.0)],
+            );
+        }
+        assert!(
+            app.view_for(0).zoom > 1.0,
+            "{step:?}: the wheel reached the canvas"
+        );
+        for _ in 0..40 {
+            canvases(
+                &mut app,
+                &ctx,
+                &ids,
+                size,
+                vec![egui::Event::PointerMoved(pointer), wheel(-400.0)],
+            );
+        }
+        assert_eq!(app.view_for(0), InspectionView::default(), "{step:?}");
+        // A drag at Fit leaves the photo where it is and decides nothing.
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: Default::default(),
+        };
+        let end = pointer + egui::vec2(120.0, 60.0);
+        canvases(
+            &mut app,
+            &ctx,
+            &ids,
+            size,
+            vec![
+                egui::Event::PointerMoved(pointer),
+                button(pointer, true),
+                egui::Event::PointerMoved(pointer + egui::vec2(30.0, 15.0)),
+            ],
+        );
+        canvases(
+            &mut app,
+            &ctx,
+            &ids,
+            size,
+            vec![egui::Event::PointerMoved(end), button(end, false)],
+        );
+        canvases(&mut app, &ctx, &ids, size, vec![]);
+        assert_eq!(app.view_for(0), InspectionView::default(), "{step:?}");
+        assert!(app.decisions.is_empty(), "{step:?}: the drag clicked");
+        app.runtime.shutdown();
+    }
+}
+#[test]
+fn one_to_one_zooms_out_to_fit_but_a_small_photo_keeps_one_to_one() {
+    let size = egui::vec2(640.0, 400.0);
+    let pointer = egui::pos2(size.x / 2.0, size.y / 2.0);
+    let pinch_out = || vec![egui::Event::PointerMoved(pointer), egui::Event::Zoom(0.5)];
+    let slider_min = |app: &mut PhotoSortApp, id| {
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let output = ctx.run_test(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.review_ratings(ui, id));
+        });
+        output
+            .platform_output
+            .accesskit_update
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|(_, node)| node.role() == egui::accesskit::Role::Slider)
+            .and_then(|(_, node)| node.min_numeric_value())
+            .unwrap()
+    };
+    // A large photo: 1:1 zooms out through its Fit and then is Fit.
+    let (_cache, mut app, ids) = sized_photos(&[[6000, 4000]]);
+    app.step = Step::Cull;
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    app.actual_size();
+    canvases(&mut app, &ctx, &ids, size, vec![]);
+    let fit = app.fit_zooms[&0];
+    assert!(fit < 0.2, "{fit}");
+    // The slider's lowest position is this photo's Fit.
+    assert!((slider_min(&mut app, ids[0]) - f64::from(fit)).abs() < 1e-6);
+    canvases(&mut app, &ctx, &ids, size, pinch_out());
+    let view = app.view_for(0);
+    assert!(view.actual_size && view.zoom == 0.5, "{view:?}");
+    for _ in 0..4 {
+        canvases(&mut app, &ctx, &ids, size, pinch_out());
+    }
+    assert_eq!(app.view_for(0), InspectionView::default());
+    // Once Fit, the slider is fit-relative again.
+    assert_eq!(slider_min(&mut app, ids[0]), 1.0);
+    app.actual_size();
+    for _ in 0..6 {
+        app.zoom_view(0.5);
+    }
+    assert_eq!(app.view_for(0), InspectionView::default());
+    app.runtime.shutdown();
+
+    // A photo smaller than the view: Fit enlarges it, so zooming out of 1:1
+    // stays at 1:1 rather than growing to Fit.
+    let (_cache, mut app, ids) = sized_photos(&[[200, 100]]);
+    app.step = Step::Cull;
+    app.actual_size();
+    canvases(&mut app, &ctx, &ids, size, vec![]);
+    assert!(app.fit_zooms[&0] > 1.0);
+    assert_eq!(slider_min(&mut app, ids[0]), 1.0);
+    for _ in 0..3 {
+        canvases(&mut app, &ctx, &ids, size, pinch_out());
+        app.zoom_view(0.8);
+    }
+    let one = InspectionView {
+        actual_size: true,
+        ..InspectionView::default()
+    };
+    assert_eq!(app.view_for(0), one);
+    // The whole photo is on screen, so a drag does not move it.
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        pressed,
+        button: egui::PointerButton::Primary,
+        modifiers: Default::default(),
+    };
+    let end = pointer + egui::vec2(100.0, 50.0);
+    canvases(
+        &mut app,
+        &ctx,
+        &ids,
+        size,
+        vec![
+            egui::Event::PointerMoved(pointer),
+            button(pointer, true),
+            egui::Event::PointerMoved(end),
+        ],
+    );
+    canvases(&mut app, &ctx, &ids, size, vec![button(end, false)]);
+    assert_eq!(app.view_for(0), one);
+    app.runtime.shutdown();
+}
+#[test]
+fn resizing_keeps_fit_and_snaps_a_view_below_the_new_fit() {
+    let small = egui::vec2(640.0, 400.0);
+    let large = egui::vec2(1600.0, 1000.0);
+    for synced in [true, false] {
+        let (_cache, mut app, ids) = sized_photos(&[[6000, 4000]]);
+        app.step = Step::Cull;
+        app.sync_views = synced;
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        // Fit stays Fit, and a fit-relative zoom stays relative to the new Fit.
+        for zoom in [1.0, 2.0] {
+            app.fit_view();
+            app.zoom_view(zoom);
+            let before = app.view_for(0);
+            for size in [small, large, small] {
+                canvases(&mut app, &ctx, &ids, size, vec![]);
+                assert_eq!(app.view_for(0), before, "synced {synced}");
+            }
+        }
+        // 1:1 zoomed out to just above the small view's Fit is below the
+        // large view's Fit, so growing the window snaps it to Fit.
+        app.actual_size();
+        canvases(&mut app, &ctx, &ids, small, vec![]);
+        app.zoom_view(0.15);
+        let zoomed = app.view_for(0);
+        assert!(zoomed.actual_size && zoomed.zoom == 0.15, "{zoomed:?}");
+        canvases(&mut app, &ctx, &ids, small, vec![]);
+        assert_eq!(app.view_for(0), zoomed, "synced {synced}");
+        canvases(&mut app, &ctx, &ids, large, vec![]);
+        assert_eq!(
+            app.view_for(0),
+            InspectionView::default(),
+            "synced {synced}"
+        );
+        // And it keeps fitting when the window shrinks again.
+        canvases(&mut app, &ctx, &ids, small, vec![]);
+        assert_eq!(
+            app.view_for(0),
+            InspectionView::default(),
+            "synced {synced}"
+        );
+        app.runtime.shutdown();
+    }
+}
+#[test]
+fn synced_views_follow_the_focused_photo_and_settle() {
+    // Landscape and portrait: at 1:1 zoom 0.08 the landscape photo is below
+    // its Fit and the portrait one above.
+    let (_cache, mut app, ids) = sized_photos(&[[6000, 4000], [4000, 6000]]);
+    app.step = Step::Cull;
+    app.comparison = ids.clone();
+    app.sync_views = true;
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    let size = egui::vec2(640.0, 400.0);
+    let zoomed = InspectionView {
+        zoom: 0.08,
+        actual_size: true,
+        ..InspectionView::default()
+    };
+    app.inspection_view = zoomed;
+    app.focused_slot = 1;
+    for _ in 0..3 {
+        canvases(&mut app, &ctx, &ids, size, vec![]);
+        assert_eq!(app.view_for(0), zoomed);
+        assert_eq!(app.view_for(1), zoomed);
+    }
+    app.focused_slot = 0;
+    for _ in 0..3 {
+        canvases(&mut app, &ctx, &ids, size, vec![]);
+        assert_eq!(app.view_for(0), InspectionView::default());
+        assert_eq!(app.view_for(1), InspectionView::default());
+    }
+    app.runtime.shutdown();
+}
 #[test]
 fn wheel_zoom_keeps_the_point_under_the_pointer_and_fit_recentres() {
     let cache = tempfile::tempdir().unwrap();
