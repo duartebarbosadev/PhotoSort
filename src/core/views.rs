@@ -156,9 +156,9 @@ impl Bookmark {
             if !v.zoom.is_finite() || v.pan.iter().any(|n| !n.is_finite()) {
                 *v = Default::default();
             }
-            v.zoom = v
-                .zoom
-                .clamp(inspection::View::MIN_ZOOM, inspection::View::MAX_ZOOM);
+            // A view saved zoomed out past Fit comes back at Fit. 1:1 views
+            // are limited when their photo is laid out again.
+            *v = v.clamped(None);
         }
         clean(&mut self.view);
         self.independent_views.retain(|slot, v| {

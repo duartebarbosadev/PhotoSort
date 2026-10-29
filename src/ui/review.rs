@@ -167,21 +167,18 @@ impl PhotoSortApp {
         self.zoom_view_at(factor, egui::Vec2::ZERO);
     }
     /// Zooms keeping the image point at `anchor` (relative to the slot's
-    /// centre) under the pointer. Back at fit or smaller, the image recentres.
+    /// centre) under the pointer. Zooming out stops at Fit, recentred.
     pub(super) fn zoom_view_at(&mut self, factor: f32, anchor: egui::Vec2) {
+        let fit = self.fit_zooms.get(&self.focused_slot).copied();
         let mut view = self.view_for(self.focused_slot);
         let old = view.zoom;
-        view.zoom = (old * factor).clamp(InspectionView::MIN_ZOOM, InspectionView::MAX_ZOOM);
+        view.zoom = (old * factor).clamp(view.min_zoom(fit), InspectionView::MAX_ZOOM);
         let ratio = view.zoom / old.max(f32::EPSILON);
-        if !view.actual_size && view.zoom <= 1.0 {
-            view.pan = [0.0, 0.0];
-        } else {
-            view.pan = [
-                anchor.x - (anchor.x - view.pan[0]) * ratio,
-                anchor.y - (anchor.y - view.pan[1]) * ratio,
-            ];
-        }
-        self.set_view(self.focused_slot, view);
+        view.pan = [
+            anchor.x - (anchor.x - view.pan[0]) * ratio,
+            anchor.y - (anchor.y - view.pan[1]) * ratio,
+        ];
+        self.set_view(self.focused_slot, view.clamped(fit));
     }
     pub(super) fn toggle_sync(&mut self) {
         if self.sync_views {
@@ -520,30 +517,34 @@ impl PhotoSortApp {
         {
             self.actual_size();
         }
-        if ui
-            .selectable_label(self.sync_views, "Sync")
-            .on_hover_text("Synchronize pan and zoom across the comparison (F3)")
-            .clicked()
+        // A single photo has nothing to sync with. Fix Rotation always shows
+        // the original beside its correction.
+        let several = self.step == Step::Rotation || self.comparison_ids().len() > 1;
+        if several
+            && ui
+                .selectable_label(self.sync_views, "Sync")
+                .on_hover_text("Synchronize pan and zoom across the comparison (F3)")
+                .clicked()
         {
             self.toggle_sync();
         }
         let mut view = self.view_for(self.focused_slot);
+        let fit = self.fit_zooms.get(&self.focused_slot).copied();
+        let lowest = view.min_zoom(fit);
         ui.spacing_mut().slider_width = 60.0;
         // A small handle suits the floating bar.
         ui.spacing_mut().interact_size.y = 14.0;
+        // The slider's lowest position is Fit.
         if ui
             .add(
-                egui::Slider::new(
-                    &mut view.zoom,
-                    InspectionView::MIN_ZOOM..=InspectionView::MAX_ZOOM,
-                )
-                .logarithmic(true)
-                .text("Zoom")
-                .show_value(false),
+                egui::Slider::new(&mut view.zoom, lowest..=InspectionView::MAX_ZOOM)
+                    .logarithmic(true)
+                    .text("Zoom")
+                    .show_value(false),
             )
             .changed()
         {
-            self.set_view(self.focused_slot, view);
+            self.set_view(self.focused_slot, view.clamped(fit));
         }
         ui.label(
             RichText::new(format!("{:.0}%", view.zoom * 100.0))
@@ -706,9 +707,13 @@ impl PhotoSortApp {
             self.active = Some(id);
             self.focused_slot = slot;
             let mut view = self.view_for(slot);
-            view.pan[0] += delta.x;
-            view.pan[1] += delta.y;
-            self.set_view(slot, view);
+            // At Fit the whole photo is on screen: a drag still counts as a
+            // pan, so it never clicks, but the photo stays put.
+            if !view.shows_whole_photo(self.fit_zooms.get(&slot).copied()) {
+                view.pan[0] += delta.x;
+                view.pan[1] += delta.y;
+                self.set_view(slot, view);
+            }
             ui.ctx().request_repaint();
         }
         let texture = self
@@ -743,7 +748,7 @@ impl PhotoSortApp {
             rect.min + egui::vec2(8.0, 28.0),
             rect.max - egui::vec2(8.0, 8.0),
         );
-        let view = self.view_for(slot);
+        let mut view = self.view_for(slot);
         let turns = if !corrected {
             0
         } else {
@@ -773,6 +778,21 @@ impl PhotoSortApp {
         if let Some(source) = source {
             let ppp = ui.ctx().pixels_per_point();
             let viewport = [content.width(), content.height()];
+            let fit = InspectionView::fit_zoom(source, viewport, turns, ppp);
+            self.fit_zooms.insert(slot, fit);
+            // After a resize a view at Fit still fits, and one now below the
+            // new Fit snaps to it. Synced views follow the focused photo, so
+            // photos of different shapes cannot pull the shared view apart.
+            let limited = view.clamped(Some(fit));
+            if limited != view && (!self.sync_views || slot == self.focused_slot) {
+                view = limited;
+                if self.sync_views {
+                    self.inspection_view = view;
+                } else {
+                    self.independent_views.insert(slot, view);
+                }
+                ui.ctx().request_repaint();
+            }
             let scale = view.scale(source, viewport, turns, ppp);
             if let Some(texture) = texture.as_ref() {
                 paint_region(
