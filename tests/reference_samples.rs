@@ -639,6 +639,7 @@ fn duplicate_worker_shares_models_cache_and_previews_on_disposable_samples() -> 
                     Event::DuplicatePairs {
                         run: found,
                         pairs: found_pairs,
+                        ..
                     } if found == run => pairs = Some(found_pairs),
                     Event::AnalysisDone { run: found, stats } if found == run => {
                         let pairs = pairs.expect("Completion preceded final pair publication");
