@@ -38,6 +38,51 @@ impl Selection {
             self.ids.insert(id);
         }
     }
+    /// Ctrl/Cmd-click on a group, such as a folder: removes it when every
+    /// one of `ids` is selected, otherwise adds them all. Adding anchors
+    /// ranges at the group's first item. Returns whether they were added.
+    pub fn toggle_group(&mut self, ids: &[MediaId]) -> bool {
+        if !ids.is_empty() && ids.iter().all(|id| self.ids.contains(id)) {
+            for id in ids {
+                self.ids.remove(id);
+            }
+            if self
+                .anchor
+                .is_some_and(|anchor| !self.ids.contains(&anchor))
+            {
+                self.anchor = None;
+            }
+            return false;
+        }
+        self.ids.extend(ids.iter().copied());
+        if let Some(&first) = ids.first() {
+            self.anchor = Some(first);
+        }
+        true
+    }
+    pub fn anchor(&self) -> Option<MediaId> {
+        self.anchor
+    }
+    /// Selects the `span` of positions in `order`, added to the selection
+    /// with `toggle` or replacing it. The anchor stays, as with a Shift-click
+    /// on one item; without one, the span's first item becomes it.
+    pub fn select_span(
+        &mut self,
+        span: std::ops::Range<usize>,
+        media: &[Media],
+        order: &[usize],
+        toggle: bool,
+    ) {
+        if !toggle {
+            self.ids.clear();
+        }
+        let first = order.get(span.start).map(|i| media[*i].id);
+        let span = order.get(span).unwrap_or_default().iter();
+        self.ids.extend(span.map(|i| media[*i].id));
+        if self.anchor.is_none_or(|anchor| !self.ids.contains(&anchor)) {
+            self.anchor = first;
+        }
+    }
     pub fn single(&mut self, id: MediaId) {
         self.clear();
         self.ids.insert(id);
@@ -233,5 +278,39 @@ mod range_tests {
         select_positions(&mut folders, None, 1, items, true, false);
         assert!(!folders.contains(&1));
         assert_eq!(visits.get(), 10);
+    }
+
+    #[test]
+    fn groups_toggle_whole_and_spans_keep_the_anchor() {
+        let media: Vec<Media> = (0..8)
+            .map(|i| Media {
+                id: MediaId(i),
+                path: format!("{i}.jpg").into(),
+                kind: super::super::model::MediaKind::Photo,
+                fingerprint: Default::default(),
+            })
+            .collect();
+        let order: Vec<usize> = (0..8).collect();
+        let ids = |range: std::ops::Range<u64>| range.map(MediaId).collect::<Vec<_>>();
+        let mut selection = Selection::default();
+        selection.replace(ids(0..3));
+        // A partly selected group is added whole, anchored at its start.
+        assert!(selection.toggle_group(&ids(2..5)));
+        assert_eq!(selection.ordered(&media, &order), ids(0..5));
+        assert_eq!(selection.anchor(), Some(MediaId(2)));
+        // A whole group is removed, and the anchor with it.
+        assert!(!selection.toggle_group(&ids(2..5)));
+        assert_eq!(selection.ordered(&media, &order), ids(0..2));
+        assert_eq!(selection.anchor(), None);
+        // A span without an anchor anchors at its start; with one, keeps it.
+        selection.select_span(5..7, &media, &order, true);
+        assert_eq!(
+            selection.ordered(&media, &order),
+            [ids(0..2), ids(5..7)].concat()
+        );
+        assert_eq!(selection.anchor(), Some(MediaId(5)));
+        selection.select_span(3..8, &media, &order, false);
+        assert_eq!(selection.ordered(&media, &order), ids(3..8));
+        assert_eq!(selection.anchor(), Some(MediaId(5)));
     }
 }

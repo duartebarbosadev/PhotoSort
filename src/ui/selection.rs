@@ -10,6 +10,55 @@ pub(super) fn clear_trash_shortcut(key: egui::Key, modifiers: egui::Modifiers) -
         && !modifiers.shift
 }
 
+const TRASH_LABELS: [&str; 4] = [
+    "Unmark all",
+    "Mark all for Trash",
+    "Marked for Trash",
+    "Trash",
+];
+
+/// The Trash button's label and hover: for every selected photo (`all`) or
+/// for one photo, marked or not. `several` photos shown can be clicked to
+/// pick one.
+pub(super) fn trash_button_text(
+    all: bool,
+    rejected: bool,
+    several: bool,
+) -> (&'static str, String) {
+    let label = TRASH_LABELS[match (all, rejected) {
+        (true, true) => 0,
+        (true, false) => 1,
+        (false, true) => 2,
+        (false, false) => 3,
+    }];
+    let hover = match (all, rejected) {
+        (true, _) if several => format!(
+            "Every selected photo · D\nClick a photo to {} only that one",
+            if rejected { "unmark" } else { "mark" }
+        ),
+        (true, _) => "Every selected photo · D".to_owned(),
+        (false, true) => "Unmark · D".to_owned(),
+        (false, false) => "Mark for Trash · D".to_owned(),
+    };
+    (label, hover)
+}
+/// The widest Trash label's button width, so switching between them never
+/// moves the controls beside it. Without `all`, only the one-photo labels.
+pub(super) fn trash_button_width(ui: &egui::Ui, all: bool) -> f32 {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    TRASH_LABELS[if all { 0 } else { 2 }..]
+        .iter()
+        .map(|label| {
+            let text = format!("{}  {label}", egui_phosphor::regular::TRASH);
+            ui.painter()
+                .layout_no_wrap(text, font.clone(), INK)
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max)
+        + 2.0 * ui.spacing().button_padding.x
+}
+
 impl PhotoSortApp {
     pub(super) fn clear_trash_menu_item(&mut self, ui: &mut egui::Ui) {
         if ui.add_enabled(self.can_clear_trash_marks(), egui::Button::new("Clear all Trash marks · Alt+D"))
@@ -91,6 +140,7 @@ impl PhotoSortApp {
             return;
         }
         self.pending_bookmark = None;
+        self.comparison_focus = None;
         if self.selection.is_empty()
             && extend
             && let Some(active) = self.active
@@ -123,6 +173,7 @@ impl PhotoSortApp {
             return;
         }
         self.selection.all(&self.media, &self.filtered);
+        self.comparison_focus = None;
         if self.active.is_none()
             && let Some(&i) = self.filtered.first()
         {
@@ -132,6 +183,7 @@ impl PhotoSortApp {
     fn clear_library_selection(&mut self) {
         self.selection.clear();
         self.comparison.clear();
+        self.comparison_focus = None;
         self.active = None;
     }
     fn stage_selection(&mut self, change: Change) {
@@ -156,6 +208,60 @@ impl PhotoSortApp {
             .all(|id| self.decisions.get(id).is_some_and(|d| d.rejected));
         self.stage_manual(ids, Change::Trash(!all_marked));
     }
+    /// Whether the photos shown side by side (or on Organize's contact sheet)
+    /// are the selection itself, so D can mark them all together.
+    pub(super) fn selection_compared(&self) -> bool {
+        if self.selection.len() < 2 {
+            return false;
+        }
+        match self.step {
+            Step::Organize => self.library_selection_mode(),
+            Step::Cull => {
+                self.review
+                    && self.comparison.len() == self.selection.len()
+                    && self
+                        .comparison
+                        .iter()
+                        .all(|id| self.selection.contains(*id))
+            }
+            _ => false,
+        }
+    }
+    /// The photo clicked among compared selected photos, while it is shown.
+    pub(super) fn focused_comparison_photo(&self) -> Option<MediaId> {
+        let id = self.comparison_focus?;
+        if !self.selection_compared() || !self.selection.contains(id) {
+            return None;
+        }
+        (self.board_sheet() || self.comparison_ids().contains(&id)).then_some(id)
+    }
+    /// D beside compared selected photos: the clicked photo alone, otherwise
+    /// every selected photo together.
+    pub(super) fn trash_compared(&mut self) {
+        match self.focused_comparison_photo() {
+            Some(id) => self.reject(id),
+            None => self.toggle_selection_trash(),
+        }
+    }
+    /// The Trash button next to a preview or comparison: whether it acts on
+    /// every selected photo, and whether the photos it acts on are marked.
+    pub(super) fn trash_button_state(&self, active: MediaId) -> (bool, bool) {
+        if !self.selection_compared() {
+            return (false, self.decision(active).rejected);
+        }
+        if let Some(id) = self.focused_comparison_photo() {
+            return (false, self.decision(id).rejected);
+        }
+        let (ids, _) = self.selection.snapshot();
+        (true, ids.iter().all(|id| self.decision(*id).rejected))
+    }
+    pub(super) fn trash_button_clicked(&mut self, active: MediaId) {
+        if self.selection_compared() {
+            self.trash_compared();
+        } else {
+            self.reject(active);
+        }
+    }
     pub(super) fn compare_selection(&mut self) {
         if (!self.selection_ready() && !self.scene_selection_ready())
             || !(2..=9).contains(&self.selection.len())
@@ -163,6 +269,7 @@ impl PhotoSortApp {
             return;
         }
         self.comparison = self.selection.ordered(&self.media, &self.filtered);
+        self.comparison_focus = None;
         // Organize compares in its preview panel and keeps the board.
         self.review = self.step != Step::Organize;
         if let Some(id) = self
@@ -188,6 +295,7 @@ impl PhotoSortApp {
             return;
         }
         self.comparison = members;
+        self.comparison_focus = None;
         self.single_view_stash.clear();
         self.review = true;
         if let Some(first) = self.comparison.first().copied() {
@@ -318,21 +426,25 @@ impl PhotoSortApp {
                     self.select_all_visible();
                     return true;
                 }
-                // Several selected photos are marked together; one photo
-                // keeps the single-photo D handled by the canvas.
+                // Several selected photos are marked together, or only the
+                // one clicked in the preview; one photo keeps the
+                // single-photo D handled by the canvas.
                 egui::Key::D
                     if !modifiers.alt
                         && !modifiers.command
                         && !modifiers.ctrl
                         && self.selection.len() > 1 =>
                 {
-                    self.toggle_selection_trash();
+                    self.trash_compared();
                     return true;
                 }
                 egui::Key::Escape => {
-                    // The contact sheet and a comparison return to the
-                    // single preview first, keeping the selection.
-                    if self.board_sheet() {
+                    // A clicked photo lets go first, then the contact sheet
+                    // and a comparison return to the single preview, keeping
+                    // the selection.
+                    if self.focused_comparison_photo().is_some() {
+                        self.comparison_focus = None;
+                    } else if self.board_sheet() {
                         self.board.single = Some(self.selection.len());
                     } else if self.active.is_some() && self.comparison_ids().len() > 1 {
                         self.end_board_comparison();
@@ -377,6 +489,20 @@ impl PhotoSortApp {
                         self.stage_selection(Change::Trash(true));
                         self.review_changes();
                     }
+                    return true;
+                }
+                _ => {}
+            }
+        } else if self.selection_compared() && !modifiers.alt && !command {
+            // A comparison of selected photos marks them together, or only
+            // the one clicked; Escape lets go of that photo first.
+            match key {
+                egui::Key::D => {
+                    self.trash_compared();
+                    return true;
+                }
+                egui::Key::Escape if self.focused_comparison_photo().is_some() => {
+                    self.comparison_focus = None;
                     return true;
                 }
                 _ => {}

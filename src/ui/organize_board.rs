@@ -499,10 +499,90 @@ impl PhotoSortApp {
             if self.library_selection_mode() {
                 self.selection.single(id);
                 self.comparison.clear();
+                self.comparison_focus = None;
             }
             self.set_active(id);
         }
         self.library_reveal = false;
+    }
+    /// A click on a folder's header selects every item in it. Ctrl/Cmd adds
+    /// them to the selection, or removes them when all are already selected;
+    /// Shift selects from the anchor through the folder, as with photos.
+    pub(super) fn board_select_section(&mut self, index: usize, modifiers: egui::Modifiers) {
+        let Some(range) = self.board.sections.get(index).map(|s| s.range.clone()) else {
+            return;
+        };
+        let ids: Vec<MediaId> = self
+            .filtered
+            .get(range.clone())
+            .unwrap_or_default()
+            .iter()
+            .map(|i| self.media[*i].id)
+            .collect();
+        let toggle = modifiers.command || modifiers.ctrl;
+        self.pending_bookmark = None;
+        self.comparison.clear();
+        self.comparison_focus = None;
+        // An empty folder has nothing to add; a plain click still clears.
+        if ids.is_empty() {
+            if !toggle && !modifiers.shift {
+                self.selection.clear();
+            }
+            return;
+        }
+        let anchor = if modifiers.shift {
+            self.board_anchor_span()
+        } else {
+            None
+        };
+        let added = if let Some(anchor) = anchor {
+            let span = anchor.start.min(range.start)..anchor.end.max(range.end);
+            self.selection
+                .select_span(span, &self.media, &self.filtered, toggle);
+            false
+        } else if toggle {
+            self.selection.toggle_group(&ids)
+        } else {
+            self.selection.replace(ids.iter().copied());
+            true
+        };
+        // The preview follows the folder just added; otherwise it keeps a
+        // photo that is still selected.
+        let next = if added {
+            ids.first().copied()
+        } else {
+            self.active
+                .filter(|id| self.selection.contains(*id))
+                .or_else(|| {
+                    self.selection
+                        .ordered(&self.media, &self.filtered)
+                        .first()
+                        .copied()
+                })
+        };
+        match next {
+            Some(id) => self.set_active(id),
+            None => self.active = None,
+        }
+    }
+    /// Where a Shift-click range starts: the anchor photo, or its whole
+    /// folder when the anchor came from clicking that folder's header.
+    fn board_anchor_span(&self) -> Option<std::ops::Range<usize>> {
+        let anchor = self.selection.anchor()?;
+        let index = *self.index.get(&anchor)?;
+        let at = self.filtered.iter().position(|i| *i == index)?;
+        let whole = self
+            .board
+            .sections
+            .iter()
+            .find(|s| s.range.start == at)
+            .map(|s| s.range.clone())
+            .filter(|range| {
+                self.filtered[range.clone()]
+                    .iter()
+                    .all(|i| self.selection.contains(self.media[*i].id))
+            });
+        Some(whole.unwrap_or(at..at + 1))
     }
     /// After the arrow keys move past the shown folder's last (or first)
     /// photo, the sidebar follows to the folder now holding it.
@@ -673,6 +753,7 @@ impl PhotoSortApp {
     /// Back to the single preview: keeps only the active photo selected.
     pub(super) fn end_board_comparison(&mut self) {
         self.comparison.clear();
+        self.comparison_focus = None;
         if let Some(active) = self.active {
             self.selection.single(active);
         }
@@ -1496,6 +1577,22 @@ impl PhotoSortApp {
     /// useful size, with its name, folder and the usual mark, rating and zoom
     /// controls. Scroll to zoom, drag to pan, double-click for 1:1.
     fn board_preview(&mut self, ui: &mut egui::Ui) {
+        // A click on the preview's empty space lets go of a clicked photo,
+        // so D marks every selected photo again. Registered first, so every
+        // photo and control drawn over it keeps its clicks.
+        let background = self.selection_compared().then(|| {
+            ui.interact(
+                ui.max_rect(),
+                ui.id().with("preview-background"),
+                Sense::click(),
+            )
+        });
+        self.board_preview_contents(ui);
+        if background.is_some_and(|response| response.clicked()) {
+            self.comparison_focus = None;
+        }
+    }
+    fn board_preview_contents(&mut self, ui: &mut egui::Ui) {
         use egui_phosphor::regular as icon;
         let ids = self.comparison_ids();
         let Some(active) = self.active.filter(|id| self.index.contains_key(id)) else {
@@ -1662,26 +1759,20 @@ impl PhotoSortApp {
             }
         };
         row(ui, &mut |ui| {
-            let rejected = self.decision(active).rejected;
-            if icon_text_button(
-                ui,
-                true,
-                rejected,
-                icon::TRASH,
-                if rejected {
-                    "Marked for Trash"
-                } else {
-                    "Trash"
-                },
-            )
-            .on_hover_text(if rejected {
-                "Unmark · D"
+            let (all, rejected) = self.trash_button_state(active);
+            let (label, hover) = super::selection::trash_button_text(all, rejected, ids.len() > 1);
+            // Compared selected photos give every label the widest one's
+            // width, so picking a photo never moves the controls beside it.
+            let wide = if self.selection_compared() {
+                super::selection::trash_button_width(ui, true)
             } else {
-                "Mark for Trash · D"
-            })
-            .clicked()
+                0.0
+            };
+            if icon_text_button_min(ui, true, rejected, icon::TRASH, label, wide)
+                .on_hover_text(hover)
+                .clicked()
             {
-                self.reject(active);
+                self.trash_button_clicked(active);
             }
             self.review_ratings(ui, active);
         });
@@ -1695,8 +1786,8 @@ impl PhotoSortApp {
             && self.board.single != Some(self.selection.len())
     }
     /// The contact sheet: every selected photo in board order, sized to fit
-    /// the panel where they can, the active one outlined. A click makes a
-    /// photo active; a double-click shows it large, keeping the selection.
+    /// the panel where they can. A click makes a photo active and the only
+    /// one D marks; a double-click shows it large, keeping the selection.
     /// Thumbnails are asked for only as their rows scroll into view.
     fn board_sheet_view(&mut self, ui: &mut egui::Ui, active: MediaId) {
         use egui_phosphor::regular as icon;
@@ -1723,7 +1814,11 @@ impl PhotoSortApp {
                         "Mark all for Trash"
                     },
                 )
-                .on_hover_text("Every selected photo · D")
+                .on_hover_text(if self.focused_comparison_photo().is_some() {
+                    "Every selected photo\nD marks only the outlined photo · Esc lets go of it"
+                } else {
+                    "Every selected photo · D"
+                })
                 .clicked()
                 {
                     self.toggle_selection_trash();
@@ -1731,7 +1826,7 @@ impl PhotoSortApp {
             });
         });
         ui.label(
-            RichText::new("Click a photo to make it active · double-click to see it large")
+            RichText::new("Click a photo so D marks only that one · double-click to see it large")
                 .small()
                 .color(MUTED),
         );
@@ -1745,16 +1840,26 @@ impl PhotoSortApp {
             .id_salt("organize-sheet")
             .auto_shrink([false, false])
             .show_rows(ui, tile, rows, |ui, range| {
+                let focus = self.focused_comparison_photo();
                 for row in range {
                     ui.horizontal(|ui| {
                         for &id in ids.iter().skip(row * columns).take(columns) {
-                            self.sheet_tile(ui, id, tile, id == active);
+                            self.sheet_tile(ui, id, tile, id == active, focus);
                         }
                     });
                 }
             });
     }
-    fn sheet_tile(&mut self, ui: &mut egui::Ui, id: MediaId, size: f32, active: bool) {
+    /// One contact sheet photo. The outline shows what D acts on: every
+    /// photo until one is clicked, then that photo alone.
+    fn sheet_tile(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: MediaId,
+        size: f32,
+        active: bool,
+        focus: Option<MediaId>,
+    ) {
         let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
         let name = self.media[self.index[&id]].name();
         response.widget_info(|| {
@@ -1784,17 +1889,17 @@ impl PhotoSortApp {
                 Color32::WHITE,
             );
         }
-        if active {
-            painter.rect_stroke(
-                rect,
-                R_CONTROL,
-                Stroke::new(2.0, ACCENT),
-                StrokeKind::Inside,
-            );
+        let outline = match focus {
+            Some(focus) => (focus == id).then_some(Stroke::new(3.0, ACCENT)),
+            None => Some(Stroke::new(1.5, ACCENT.gamma_multiply(0.85))),
+        };
+        if let Some(stroke) = outline {
+            painter.rect_stroke(rect, R_CONTROL, stroke, StrokeKind::Inside);
         }
         let response = response.on_hover_text(name);
         if response.clicked() {
             self.set_active(id);
+            self.comparison_focus = Some(id);
         }
         if response.double_clicked() {
             self.set_active(id);
@@ -2344,7 +2449,7 @@ impl PhotoSortApp {
         let dim = matches!(pending, Some(Pending::Running | Pending::Waiting));
         let mut keep: Option<Vec<MediaId>> = None;
         let mut drop: Option<(Vec<MediaId>, String)> = None;
-        let mut select_section: Option<usize> = None;
+        let mut select_section: Option<(usize, egui::Modifiers)> = None;
         let mut faceless = false;
         let active_position = self
             .active
@@ -2566,7 +2671,7 @@ impl PhotoSortApp {
                         response.widget_info(|| {
                             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name)
                         });
-                        let tip = "Click to select every item in this folder";
+                        let tip = "Click to select every item in this folder\nCtrl/Cmd-click adds it to the selection, or removes it\nShift-click selects everything from the last click through it";
                         // A person's folder shows their faces larger on hover.
                         let path = self.board.sections[*index].path.clone();
                         let card = match &path {
@@ -2595,7 +2700,7 @@ impl PhotoSortApp {
                             (None, true) => response.on_hover_text(tip),
                         };
                         if response.clicked() {
-                            select_section = Some(*index);
+                            select_section = Some((*index, ui.input(|i| i.modifiers)));
                         }
                     }
                     Row::Tiles(index, start) => {
@@ -2636,6 +2741,7 @@ impl PhotoSortApp {
         if let Some((_, ids)) = marquee {
             self.selection.replace(ids.iter().copied());
             self.comparison.clear();
+            self.comparison_focus = None;
             if !ui.input(|i| i.pointer.any_down()) {
                 self.board.marquee = None;
                 // The preview follows: the active photo stays when selected.
@@ -2657,21 +2763,10 @@ impl PhotoSortApp {
         if self.board.reveal_current {
             ui.ctx().request_repaint(); // The sidebar was drawn first.
         }
-        if let Some(index) = select_section
+        if let Some((index, modifiers)) = select_section
             && self.library_selection_mode()
         {
-            let range = self.board.sections[index].range.clone();
-            let ids: Vec<MediaId> = self
-                .filtered
-                .get(range)
-                .unwrap_or_default()
-                .iter()
-                .map(|i| self.media[*i].id)
-                .collect();
-            self.selection.replace(ids.iter().copied());
-            if let Some(first) = ids.first() {
-                self.set_active(*first);
-            }
+            self.board_select_section(index, modifiers);
         }
         if let Some((ids, target)) = drop {
             self.board_move(&ids, &target);
@@ -5029,6 +5124,113 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_or_cmd_click_on_folder_names_adds_and_removes_their_photos() {
+        use super::super::compact_cull_tests::{frame, rendered};
+        let (_temp, mut app, _) = grouped(GroupMode::Mixed);
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1500.0, 1500.0);
+        rendered(&mut app, &ctx, size);
+        let sections: Vec<(String, Vec<MediaId>)> = app
+            .board
+            .sections
+            .iter()
+            .map(|s| {
+                let title = match s.path.as_deref() {
+                    Some(path) => format!("Folder {path}"),
+                    None => "Not moving".into(),
+                };
+                let ids = app.filtered[s.range.clone()]
+                    .iter()
+                    .map(|i| app.media[*i].id)
+                    .collect();
+                (title, ids)
+            })
+            .collect();
+        assert!(sections.len() >= 3, "{:?}", sections);
+        let click = |app: &mut PhotoSortApp, title: &str, modifiers: egui::Modifiers| {
+            let pos = center(&rendered(app, &ctx, size), title);
+            // egui learns which keys are held from their own event.
+            for pressed in [true, false] {
+                frame(
+                    app,
+                    &ctx,
+                    size,
+                    vec![
+                        egui::Event::ModifiersChanged(modifiers),
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers,
+                        },
+                    ],
+                );
+            }
+            frame(
+                app,
+                &ctx,
+                size,
+                vec![egui::Event::ModifiersChanged(Default::default())],
+            );
+            for _ in 0..30 {
+                frame(app, &ctx, size, Vec::new());
+            }
+        };
+        let selected = |app: &PhotoSortApp| app.selection.ordered(&app.media, &app.filtered);
+        let union = |parts: &[usize]| -> Vec<MediaId> {
+            let mut ids: Vec<MediaId> = parts
+                .iter()
+                .flat_map(|i| sections[*i].1.iter().copied())
+                .collect();
+            ids.sort_by_key(|id| board_position(&sections, *id));
+            ids
+        };
+        let (a, b, c) = (&sections[0].0, &sections[1].0, &sections[2].0);
+        // A plain click selects that folder alone.
+        click(&mut app, a, Default::default());
+        assert_eq!(selected(&app), union(&[0]));
+        // Cmd (macOS) or Ctrl adds another folder, and removes it again.
+        click(&mut app, b, egui::Modifiers::COMMAND);
+        assert_eq!(selected(&app), union(&[0, 1]));
+        assert_eq!(app.active, sections[1].1.first().copied());
+        click(&mut app, a, egui::Modifiers::CTRL);
+        assert_eq!(selected(&app), union(&[1]));
+        assert!(app.active.is_some_and(|id| app.selection.contains(id)));
+        click(&mut app, a, egui::Modifiers::COMMAND);
+        assert_eq!(selected(&app), union(&[0, 1]));
+        // A plain click still selects just that folder.
+        click(&mut app, b, Default::default());
+        assert_eq!(selected(&app), union(&[1]));
+        // Shift selects from the last folder clicked through this one, in
+        // either direction, keeping both folders whole.
+        click(&mut app, a, Default::default());
+        click(&mut app, c, egui::Modifiers::SHIFT);
+        assert_eq!(selected(&app), union(&[0, 1, 2]));
+        click(&mut app, c, Default::default());
+        click(&mut app, b, egui::Modifiers::SHIFT);
+        assert_eq!(selected(&app), union(&[1, 2]));
+        // Shift after a photo click runs from that photo, as photos do.
+        app.select_library(sections[2].1[1], false, false);
+        click(&mut app, b, egui::Modifiers::SHIFT);
+        let mut expected = union(&[1]);
+        expected.extend(&sections[2].1[..2]);
+        assert_eq!(selected(&app), expected);
+        app.runtime.shutdown();
+    }
+
+    /// Where `id` sits on the board, by the sections it was read from.
+    fn board_position(sections: &[(String, Vec<MediaId>)], id: MediaId) -> usize {
+        sections
+            .iter()
+            .flat_map(|(_, ids)| ids)
+            .position(|other| *other == id)
+            .unwrap()
+    }
+
+    #[test]
     fn a_folder_previews_its_contents_and_counts() {
         use super::super::compact_cull_tests::rendered;
         let (_temp, mut app) = organize();
@@ -5199,7 +5401,7 @@ mod tests {
         app.select_library(ids[0], false, false);
         app.select_library(ids[3], false, true);
         let nodes = rendered(&mut app, &ctx, size);
-        assert!(!app.board_sheet() && !shows(&nodes, "Mark all for Trash"));
+        assert!(!app.board_sheet() && !shows(&nodes, "Show one"));
         assert_eq!(app.comparison_ids().len(), 4);
         // All fourteen: every one shows in the preview's sheet.
         app.select_library(ids[13], false, true);
@@ -5223,11 +5425,28 @@ mod tests {
                 "{id:?} {tile:?}"
             );
         }
-        // A click makes a photo active and keeps the selection.
+        // A click makes a photo active and keeps the selection; D then marks
+        // only that photo.
         click_at(&mut app, &ctx, size, sheet(&nodes, ids[7]).center());
         assert_eq!(app.active, Some(ids[7]));
         assert_eq!(app.selection.len(), 14);
-        // D marks every selected photo for Trash, and again unmarks them.
+        frame(&mut app, &ctx, size, key(egui::Key::D, Default::default()));
+        let marked: Vec<_> = ids
+            .iter()
+            .filter(|id| app.decision(**id).rejected)
+            .collect();
+        assert_eq!(marked, [&ids[7]]);
+        frame(&mut app, &ctx, size, key(egui::Key::D, Default::default()));
+        assert!(ids.iter().all(|id| !app.decision(*id).rejected));
+        // Escape lets go of it: D marks every selected photo, and again
+        // unmarks them.
+        frame(
+            &mut app,
+            &ctx,
+            size,
+            key(egui::Key::Escape, Default::default()),
+        );
+        assert!(app.board_sheet());
         frame(&mut app, &ctx, size, key(egui::Key::D, Default::default()));
         assert!(ids.iter().all(|id| app.decision(*id).rejected));
         frame(&mut app, &ctx, size, key(egui::Key::D, Default::default()));
