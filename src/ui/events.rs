@@ -210,6 +210,18 @@ impl PhotoSortApp {
         self.catalog = Some(catalog);
         self.initialize_browse();
         self.scanning = false;
+        // A folder chosen in place of another opens with clean views, even
+        // ones it saved itself; reopening or reloading the same folder keeps
+        // them. Its staged changes come from its session either way.
+        let views = if self
+            .switched_from
+            .take()
+            .is_some_and(|previous| self.root.as_ref() != Some(&previous))
+        {
+            Default::default()
+        } else {
+            views
+        };
         self.load_bookmarks(views);
         if let Some(mut review) = self.rotation_reload.take() {
             review.retain(|id| self.index.contains_key(&id));

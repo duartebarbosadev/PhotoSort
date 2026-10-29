@@ -154,6 +154,11 @@ pub struct PhotoSortApp {
     model_issue: Option<crate::core::model_assets::Issue>,
     model_retry: Option<model_setup::Retry>,
     saved_views: crate::core::views::Saved,
+    /// The library open before the user chose another folder. Its views
+    /// must not carry over: the new folder opens with clean views.
+    switched_from: Option<PathBuf>,
+    /// Every scroll position returns to the top on the next frame.
+    forget_scroll: bool,
     pending_bookmark: Option<crate::core::views::Bookmark>,
     view_data_ready: HashSet<Step>,
     resume_started: bool,
@@ -408,6 +413,8 @@ impl PhotoSortApp {
             model_issue: None,
             model_retry: None,
             saved_views: Default::default(),
+            switched_from: None,
+            forget_scroll: false,
             pending_bookmark: None,
             view_data_ready: [Step::Organize, Step::Cull, Step::Rotation]
                 .into_iter()
@@ -612,11 +619,26 @@ impl PhotoSortApp {
         }
         self.checkpoint_bookmarks();
         self.save_session();
+        let previous = self
+            .catalog
+            .as_ref()
+            .map(|catalog| catalog.root.clone())
+            .or_else(|| self.root.clone());
+        let switching = previous
+            .as_ref()
+            .is_some_and(|root| !root.components().eq(folder.components()));
         self.scan_folder(folder);
+        // Another spelling of the same folder (a link, say) is only known to
+        // be the same once the scan resolves it; it then gets its views back.
+        if switching {
+            self.reset_folder_views();
+            self.switched_from = previous;
+        }
     }
     // Reload after an apply has already queued its reconciled session save.
     // Saving the old catalog again would overwrite migrated fingerprints.
     fn scan_folder(&mut self, folder: PathBuf) {
+        self.switched_from = None;
         self.browse_filters_open = false;
         self.clear_model_retry();
         self.runtime.next_epoch();
@@ -1599,6 +1621,9 @@ impl PhotoSortApp {
             set_reduce_motion(ctx, reduce);
         }
         self.check_updates_at_startup();
+        if std::mem::take(&mut self.forget_scroll) {
+            ctx.data_mut(|d| d.remove_by_type::<egui::scroll_area::State>());
+        }
         self.tick += 1;
         self.poll(ctx);
         self.check_board();
@@ -2288,6 +2313,10 @@ mod organize_tests;
 #[cfg(test)]
 #[path = "folder_open_tests.rs"]
 mod folder_open_tests;
+
+#[cfg(test)]
+#[path = "folder_switch_tests.rs"]
+mod folder_switch_tests;
 
 impl PhotoSortApp {
     fn accept_image_warning(&mut self, id: MediaId, warning: Option<String>) {
