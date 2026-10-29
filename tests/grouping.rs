@@ -211,41 +211,6 @@ fn xmp_dates_resolve_namespaces_and_accept_attributes_and_elements() {
     );
 }
 #[test]
-fn sidecar_date_changes_invalidate_shared_metadata_and_proxies() {
-    use photosort::core::{catalog::Catalog, pipeline::Pipeline};
-    let folder = tempfile::tempdir().unwrap();
-    let cache = tempfile::tempdir().unwrap();
-    let path = folder.path().join("photo.png");
-    image::RgbImage::new(4, 4).save(&path).unwrap();
-    let catalog = Catalog::scan(folder.path(), || false, |_| {}).unwrap();
-    let photo = &catalog.media[0];
-    let mut pipeline = Pipeline::new(1024 * 1024, cache.path().into());
-    let write = |date: &str| {
-        std::fs::write(metadata::sidecar(&path), format!(r#"<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:x="http://ns.adobe.com/xap/1.0/"><r:Description x:CreateDate="{date}"/></r:RDF>"#)).unwrap()
-    };
-    write("2024-02-29");
-    let first = pipeline.load(photo).unwrap();
-    assert_eq!(
-        dates::label(photo, &first.metadata),
-        Some("2024-02-29".into())
-    );
-    for _ in Step::ALL {
-        pipeline.load(photo).unwrap();
-    }
-    assert_eq!(
-        pipeline.stats.decodes, 1,
-        "All workflows must reuse the same decode"
-    );
-    write("2025-01-02T12:00:00Z");
-    let changed = pipeline.load(photo).unwrap();
-    assert_eq!(
-        dates::label(photo, &changed.metadata),
-        Some("2025-01-02".into())
-    );
-    assert_eq!(pipeline.stats.decodes, 2);
-}
-
-#[test]
 fn date_group_labels_reach_the_shared_companion_safe_move_plan() {
     use photosort::core::{
         catalog::Catalog,

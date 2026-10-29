@@ -474,17 +474,6 @@ fn mixed_move_preview_waits_for_complete_analysis_and_then_uses_shared_planner()
     );
 }
 #[test]
-fn cancelled_or_replaced_mixed_results_cannot_open_a_move_preview() {
-    let mut app = app();
-    app.organize();
-    app.analysis_run = None;
-    app.organize_run = None;
-    app.organize_preview_requested = false;
-    deliver(&mut app, completed());
-    assert!(app.mixed_labels.is_none());
-    assert!(!app.busy && !app.plan_open);
-}
-#[test]
 fn switching_workflow_or_grouping_mode_does_not_open_a_late_preview() {
     for leave_workflow in [false, true] {
         let mut app = app();

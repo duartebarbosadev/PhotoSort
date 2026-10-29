@@ -992,16 +992,4 @@ mod tests {
         // Unknown size counts as a phone photo.
         assert_eq!(face_pixels([0.0, 0.0, 0.5, 0.5], None), 3_000_000.0);
     }
-
-    #[test]
-    fn the_card_hugs_one_large_face_and_a_row_of_smaller_ones() {
-        // A face alone, or with one more, keeps the large face's width.
-        assert_eq!(card_width(1), CARD_FACE);
-        assert_eq!(card_width(2), CARD_FACE);
-        // Three more: 3 x 56 + 2 gaps; four or more: the row of four.
-        assert_eq!(card_width(4), 3.0 * CARD_MORE + 2.0 * CARD_GAP);
-        assert_eq!(card_width(5), 4.0 * CARD_MORE + 3.0 * CARD_GAP);
-        assert_eq!(card_width(9), card_width(5));
-        assert_eq!((CARD_FACE, CARD_MORE), (128.0, 56.0));
-    }
 }

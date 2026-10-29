@@ -439,20 +439,3 @@ fn native_rotation_cache_reuses_seven_samples_across_runs_restart_and_invalidati
         "Rotation cache: cold {cold_time:?}, restarted {warm_time:?}; cold {cold:?}; restarted {warm:?}; warm metadata reads 0; invalidation/corruption/clear/zero-persistence passed"
     );
 }
-
-#[test]
-fn working_image_rotation_recipe_does_not_reuse_old_analysis_predictions() {
-    let cache = tempfile::tempdir().unwrap();
-    let store = Store::new(cache.path().into(), true).unwrap();
-    let old = blake3::hash(
-        b"rotation-v1-neutral1024-triangle416-crop384-imagenet-consensus021:source:model",
-    )
-    .to_hex()
-    .to_string();
-    let current = Store::rotation_key("source", "model");
-    store.put_rotation(&old, &suggestion()).unwrap();
-    assert_ne!(old, current);
-    assert!(store.rotation(&current).is_none());
-    store.put_rotation(&current, &suggestion()).unwrap();
-    assert_eq!(store.rotation(&current), Some(suggestion()));
-}

@@ -3,6 +3,7 @@ use crate::core::{
     operations::{Action, Report},
     organize::Draft,
 };
+use crate::test_support::worker_patience;
 
 fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
     fixture_in("Before")
@@ -37,13 +38,6 @@ fn edit(app: &mut PhotoSortApp) {
 /// as soon as the worker reports, so this only bounds a failure. On Windows each
 /// file replacement may retry for up to 5 s (`core::replace`), and shared CI
 /// runners can pause every thread for seconds, so CI gets a much longer bound.
-fn worker_patience() -> Duration {
-    Duration::from_secs(if std::env::var_os("CI").is_some() {
-        120
-    } else {
-        15
-    })
-}
 fn settle(app: &mut PhotoSortApp) {
     let until = Instant::now() + worker_patience();
     loop {
@@ -1444,61 +1438,56 @@ fn shown_window_leaves_quit_to_the_frame_after_its_input() {
     assert!(commands.is_empty() && !app.close_authorized && app.smoke_exit.is_some());
 }
 #[test]
-fn native_quit_in_a_hidden_window_closes_or_brings_the_prompt_forward() {
+fn quit_or_close_of_a_hidden_window_closes_or_brings_the_prompt_forward() {
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    let input = hidden_input(true);
     let (_dir, mut app) = fixture();
-    let commands = logic_frame(&ctx, &input, |ctx| app.update_hidden(ctx, true));
+    let commands = logic_frame(&ctx, &hidden_input(true), |ctx| {
+        app.update_hidden(ctx, true)
+    });
     assert!(app.close_authorized);
     assert!(commands.contains(&egui::ViewportCommand::Close));
-
-    let (_dir, mut app) = fixture();
-    let id = app.media[0].id;
-    app.decisions.insert(
-        id,
-        Decision {
-            rating: Some(4),
-            ..Default::default()
-        },
-    );
-    let commands = logic_frame(&ctx, &input, |ctx| app.update_hidden(ctx, true));
-    assert!(matches!(app.departure, Some(Destination::Close)) && !app.close_authorized);
-    assert!(!commands.contains(&egui::ViewportCommand::Close));
-    assert!(commands.contains(&egui::ViewportCommand::Minimized(false)));
-    assert!(commands.contains(&egui::ViewportCommand::Focus));
-    assert_eq!(app.decisions[&id].rating, Some(4));
-    // Without a new request, a hidden window with an open prompt stays put.
-    let commands = logic_frame(&ctx, &input, |ctx| app.update_hidden(ctx, false));
-    assert!(!commands.contains(&egui::ViewportCommand::Focus));
-}
-#[test]
-fn window_close_of_a_minimized_window_with_staged_changes_restores_the_prompt() {
-    let ctx = egui::Context::default();
-    theme_install(&ctx);
-    let (_dir, mut app) = fixture();
-    let id = app.media[0].id;
-    app.decisions.insert(
-        id,
-        Decision {
-            rating: Some(4),
-            ..Default::default()
-        },
-    );
-    let mut input = hidden_input(true);
-    input
-        .viewports
-        .get_mut(&egui::ViewportId::ROOT)
-        .unwrap()
-        .events
-        .push(egui::ViewportEvent::Close);
-    let commands = logic_frame(&ctx, &input, |ctx| app.update_hidden(ctx, false));
-    assert!(matches!(app.departure, Some(Destination::Close)) && !app.close_authorized);
-    assert!(commands.contains(&egui::ViewportCommand::CancelClose));
-    assert!(!commands.contains(&egui::ViewportCommand::Close));
-    assert!(commands.contains(&egui::ViewportCommand::Minimized(false)));
-    assert!(commands.contains(&egui::ViewportCommand::Focus));
-    assert_eq!(app.decisions[&id].rating, Some(4));
+    // A native quit, or the window's close button, with staged changes.
+    for native in [true, false] {
+        let fresh = egui::Context::default();
+        theme_install(&fresh);
+        let ctx = if native { &ctx } else { &fresh };
+        let (_dir, mut app) = fixture();
+        let id = app.media[0].id;
+        app.decisions.insert(
+            id,
+            Decision {
+                rating: Some(4),
+                ..Default::default()
+            },
+        );
+        let mut input = hidden_input(true);
+        if !native {
+            input
+                .viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .events
+                .push(egui::ViewportEvent::Close);
+        }
+        let commands = logic_frame(ctx, &input, |ctx| app.update_hidden(ctx, native));
+        assert!(
+            matches!(app.departure, Some(Destination::Close)) && !app.close_authorized,
+            "native={native}"
+        );
+        if !native {
+            assert!(commands.contains(&egui::ViewportCommand::CancelClose));
+        }
+        assert!(!commands.contains(&egui::ViewportCommand::Close));
+        assert!(commands.contains(&egui::ViewportCommand::Minimized(false)));
+        assert!(commands.contains(&egui::ViewportCommand::Focus));
+        assert_eq!(app.decisions[&id].rating, Some(4));
+        if native {
+            // Without a new request, a hidden window with an open prompt stays put.
+            let commands = logic_frame(ctx, &input, |ctx| app.update_hidden(ctx, false));
+            assert!(!commands.contains(&egui::ViewportCommand::Focus));
+        }
+    }
 }
 #[test]
 fn hidden_window_keeps_receiving_worker_results() {

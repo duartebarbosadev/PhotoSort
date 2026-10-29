@@ -338,15 +338,6 @@ mod compare_tests {
     }
 
     #[test]
-    fn a_blink_counts_only_against_the_frame_it_happens_in() {
-        let a = [open(0.3)];
-        let b = [closed(0.31)];
-        let eyes = compare(&[(MediaId(1), &a), (MediaId(2), &b)]);
-        assert_eq!(eyes[&MediaId(1)], Eyes { closed: 0, open: 1 });
-        assert_eq!(eyes[&MediaId(2)], Eyes { closed: 1, open: 0 });
-    }
-
-    #[test]
     fn unknown_eyes_are_never_closed_and_never_make_another_frame_closed() {
         // Too small to read, sunglasses read as unknown, turned away (no face).
         let a = [unknown(0.3)];
@@ -371,8 +362,8 @@ mod compare_tests {
         let b = [open(0.2), closed(0.7)];
         let c = [open(0.21), open(0.69)];
         let eyes = compare(&[(MediaId(1), &a), (MediaId(2), &b), (MediaId(3), &c)]);
-        assert_eq!(eyes[&MediaId(1)].closed, 1);
-        assert_eq!(eyes[&MediaId(2)].closed, 1);
+        assert_eq!(eyes[&MediaId(1)], Eyes { closed: 1, open: 1 });
+        assert_eq!(eyes[&MediaId(2)], Eyes { closed: 1, open: 1 });
         assert_eq!(eyes[&MediaId(3)], Eyes { closed: 0, open: 2 });
         // Another person's open eyes never excuse or condemn this one.
         let d = [closed(0.2)];

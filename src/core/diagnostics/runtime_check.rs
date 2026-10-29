@@ -309,7 +309,9 @@ mod tests {
     }
     #[test]
     fn runtime_success_requires_real_second_pass_session_reuse() {
-        for reuse in [true, false] {
+        // Initializations after the first and second pass: seven models, or
+        // seven plus one accelerator replaced by a CPU fallback in the first pass.
+        for (first, second, reuse) in [(7, 7, true), (7, 14, false), (8, 8, true), (8, 9, false)] {
             let mut calls = 0;
             let report = run(
                 report(),
@@ -317,14 +319,14 @@ mod tests {
                     calls += 1;
                     Outcome {
                         result: Ok("valid".into()),
-                        initializations: if reuse || calls <= 5 { 7 } else { 14 },
+                        initializations: if calls <= 5 { first } else { second },
                         inferences: calls * 2,
                     }
                 },
                 &|| false,
             );
             assert_eq!(calls, 10);
-            assert_eq!(report.passed, reuse);
+            assert_eq!(report.passed, reuse, "{first} then {second}");
             assert_eq!(report.sessions_reused, reuse);
             assert_eq!(report.diagnostics.runtime.load_verified, reuse);
         }
@@ -424,28 +426,6 @@ mod backend_checks {
             assert_eq!(engine.models.cpu_threads(), 1);
             assert!(engine.control.status().is_empty());
             assert!(Arc::ptr_eq(&engine.asset.pixels, &engine.asset.thumbnail));
-        }
-    }
-
-    #[test]
-    fn runtime_backend_fallback_in_first_pass_must_be_reused_in_second() {
-        for reinitialize in [false, true] {
-            let mut calls = 0;
-            let report = run(
-                super::tests::report(),
-                |_| {
-                    calls += 1;
-                    Outcome {
-                        result: Ok("valid after CPU fallback".into()),
-                        // Seven models plus replacement of one failed accelerator.
-                        initializations: if reinitialize && calls > 5 { 9 } else { 8 },
-                        inferences: calls * 2 + 1,
-                    }
-                },
-                &|| false,
-            );
-            assert_eq!(report.passed, !reinitialize);
-            assert_eq!(report.sessions_reused, !reinitialize);
         }
     }
 

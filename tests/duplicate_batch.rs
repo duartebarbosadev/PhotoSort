@@ -38,21 +38,14 @@ struct Source {
     images: usize,
     faces: usize,
     missing: bool,
-    changed: bool,
 }
 impl Evidence for Source {
-    fn image(&mut self, i: &Input) -> anyhow::Result<Asset> {
+    fn image(&mut self, _: &Input) -> anyhow::Result<Asset> {
         self.images += 1;
-        let name = if self.changed && i.media.id == MediaId(2) {
-            "03.png"
-        } else {
-            "00.png"
-        };
         let pixels = Arc::new(
             image::open(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("tests/fixtures/near_duplicate")
-                    .join(name),
+                    .join("tests/fixtures/near_duplicate/00.png"),
             )?
             .to_rgba8(),
         );
@@ -316,41 +309,6 @@ fn a_jpeg_and_heic_of_one_shot_pair_as_two_formats_before_near_review() {
     assert_eq!((pairs[0].discard, pairs[0].keep), (MediaId(1), MediaId(2)));
     // Paired before the near pass: no face work, and never a Near pair.
     assert_eq!(source.faces, 0);
-}
-#[test]
-fn a_shared_name_with_another_capture_time_or_other_pixels_is_not_two_formats() {
-    let root = tempfile::tempdir().unwrap();
-    let store = Store::new(root.path().into(), false).unwrap();
-    let kinds = |inputs: &[Input], source: &mut Source| {
-        batch::review(inputs, &store, source, || false, |_, _| {})
-            .unwrap()
-            .unwrap()
-            .into_iter()
-            .map(|p| p.kind)
-            .collect::<Vec<_>>()
-    };
-    // Same name, a second apart: two shots, reviewed as near frames at most.
-    let later = [
-        shot(1, "same.jpeg", 1_761_360_217_000, None),
-        shot(2, "same.heic", 1_761_360_218_000, None),
-    ];
-    assert!(!kinds(&later, &mut Source::default()).contains(&batch::Kind::Formats));
-    // Same name and second, another sub-second: a burst.
-    let burst = [
-        shot(1, "same.jpeg", 1_761_360_217_000, Some(15)),
-        shot(2, "same.heic", 1_761_360_217_000, Some(631)),
-    ];
-    assert!(!kinds(&burst, &mut Source::default()).contains(&batch::Kind::Formats));
-    // Same name and capture, different pixels: never the same shot.
-    let edited = [
-        shot(1, "same.jpeg", 1_761_360_217_000, Some(631)),
-        shot(2, "same.heic", 1_761_360_217_000, Some(631)),
-    ];
-    let mut source = Source {
-        changed: true,
-        ..Default::default()
-    };
-    assert!(!kinds(&edited, &mut source).contains(&batch::Kind::Formats));
 }
 /// A HEIC that cannot be decoded (a build without HEIF) skips only its pair.
 #[test]

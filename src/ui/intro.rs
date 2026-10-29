@@ -485,22 +485,41 @@ mod playback_tests {
     }
 
     #[test]
-    fn a_due_intro_waits_for_an_open_dialog_and_yields_to_a_departure() {
-        let root = tempfile::tempdir().unwrap();
-        let mut app = first_launch(root.path());
-        let ctx = egui::Context::default();
-        theme_install(&ctx);
-        app.about = true;
-        frame(&mut app, &ctx, vec![]);
-        assert!(matches!(app.intro, Intro::Due(_)));
-        assert!(!app.preferences.intro_shown);
-        app.about = false;
-        frame(&mut app, &ctx, vec![]);
-        assert!(app.intro.playing());
-        app.departure = Some(Destination::Close);
-        app.intro_overlay(&ctx);
-        assert!(matches!(app.intro, Intro::Off));
-        app.runtime.shutdown();
+    fn a_due_intro_waits_for_an_open_dialog_or_error_and_yields_to_a_departure() {
+        type Toggle = fn(&mut PhotoSortApp, bool);
+        type Shown = fn(&PhotoSortApp) -> bool;
+        let cases: [(&str, Toggle, Shown); 2] = [
+            (
+                "about dialog",
+                |app, open| app.about = open,
+                |app| app.about,
+            ),
+            (
+                "error window",
+                |app, open| app.error = open.then(|| "Folder is no longer available".into()),
+                |app| app.error.is_some(),
+            ),
+        ];
+        for (name, show, shown) in cases {
+            let root = tempfile::tempdir().unwrap();
+            let mut app = first_launch(root.path());
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            show(&mut app, true);
+            for _ in 0..2 {
+                frame(&mut app, &ctx, vec![]);
+                assert!(matches!(app.intro, Intro::Due(_)), "{name}");
+                assert!(shown(&app), "{name}: the intro closed it");
+                assert!(!app.preferences.intro_shown, "{name}");
+            }
+            show(&mut app, false);
+            frame(&mut app, &ctx, vec![]);
+            assert!(app.intro.playing(), "{name}");
+            app.departure = Some(Destination::Close);
+            app.intro_overlay(&ctx);
+            assert!(matches!(app.intro, Intro::Off), "{name}");
+            app.runtime.shutdown();
+        }
     }
 
     /// One frame of an intro with nothing else drawn.
@@ -537,24 +556,6 @@ mod playback_tests {
         // Shutdown finishes every queued write.
         app.runtime.shutdown();
         assert_eq!(std::fs::read(&path).unwrap(), unreadable);
-    }
-
-    #[test]
-    fn a_due_intro_waits_for_the_error_window_to_be_dismissed() {
-        let root = tempfile::tempdir().unwrap();
-        let mut app = first_launch(root.path());
-        let ctx = egui::Context::default();
-        theme_install(&ctx);
-        app.error = Some("Folder is no longer available".into());
-        for _ in 0..2 {
-            frame(&mut app, &ctx, vec![]);
-            assert!(matches!(app.intro, Intro::Due(_)));
-            assert!(app.error.is_some() && !app.preferences.intro_shown);
-        }
-        app.error = None;
-        frame(&mut app, &ctx, vec![]);
-        assert!(app.intro.playing());
-        app.runtime.shutdown();
     }
 
     /// A folder renamed on the Organize board but not applied.

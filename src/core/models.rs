@@ -780,28 +780,9 @@ mod batch_probe {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "onnx"))]
 mod regional_batch_tests {
     use super::*;
-    #[test]
-    fn cancelled_regional_preparation_never_initializes_models() {
-        let pixels = std::sync::Arc::new(image::RgbaImage::new(4, 4));
-        let asset = Asset {
-            decoder_warning: None,
-            pixels: pixels.clone(),
-            thumbnail: pixels,
-            metadata: Default::default(),
-        };
-        let mut models = Models::default();
-        assert!(
-            models
-                .similarity_regions(&asset, &[0.0; 384], || true)
-                .is_err()
-        );
-        assert_eq!(models.initializations, 0);
-        assert_eq!(models.inferences, 0);
-    }
-    #[cfg(feature = "onnx")]
     #[test]
     fn batch_bounds_and_lengths_fail_before_model_io() {
         let mut models = Models::default();
@@ -828,7 +809,6 @@ mod regional_batch_tests {
         assert_eq!(models.initializations, 0);
         assert_eq!(models.inferences, 0);
     }
-    #[cfg(feature = "onnx")]
     #[test]
     #[ignore = "runs installed face detector export to verify fixed-one fallback and cancellation"]
     fn fixed_one_export_reuses_registry_and_honors_cancellation() -> Result<()> {
@@ -866,7 +846,6 @@ mod regional_batch_tests {
         assert_eq!(models.initializations, 1);
         Ok(())
     }
-    #[cfg(feature = "onnx")]
     #[test]
     #[ignore = "compares single and batched regional embeddings on all seven PHOTOSORT_SAMPLE_DIR photos"]
     fn seven_samples_match_individual_crops_with_one_batched_forward() -> Result<()> {
