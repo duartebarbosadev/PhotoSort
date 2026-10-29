@@ -71,6 +71,10 @@ pub struct Session {
     /// Discarding staged choices forgets it, so the suggestions return.
     #[serde(default, rename = "staged_suggestions")]
     pub suggested: HashSet<MediaId>,
+    /// The same for Pick Best's suggestions, kept apart: a photo Easy Delete
+    /// kept can still be one Pick Best suggests moving to Trash.
+    #[serde(default, rename = "staged_pick_suggestions")]
+    pub pick_suggested: HashSet<MediaId>,
 }
 fn session_path(root: &Path) -> PathBuf {
     // Equivalent trailing separators must not create different session stores.
@@ -116,8 +120,10 @@ impl Session {
         }
         remap_media_ids(&mut self.decisions, changes);
         for (old, new, _) in changes {
-            if self.suggested.remove(old) {
-                self.suggested.insert(*new);
+            for suggested in [&mut self.suggested, &mut self.pick_suggested] {
+                if suggested.remove(old) {
+                    suggested.insert(*new);
+                }
             }
         }
         // Fingerprints come from the executor, not from the old entries. Remove
@@ -142,6 +148,7 @@ impl Session {
         }
         self.decisions.extend(other.decisions);
         self.suggested.extend(other.suggested);
+        self.pick_suggested.extend(other.pick_suggested);
         self.fingerprints.extend(other.fingerprints);
     }
     pub fn reconcile(&mut self, media: &[Media]) {
@@ -164,12 +171,14 @@ impl Session {
             });
         }
         // An edited file is a new photo: its suggestion may be staged again.
-        self.suggested.retain(|id| {
-            self.fingerprints
-                .get(id)
-                .zip(fingerprints.get(id))
-                .is_some_and(|(a, b)| a == b)
-        });
+        for suggested in [&mut self.suggested, &mut self.pick_suggested] {
+            suggested.retain(|id| {
+                self.fingerprints
+                    .get(id)
+                    .zip(fingerprints.get(id))
+                    .is_some_and(|(a, b)| a == b)
+            });
+        }
         fingerprints.extend(
             supporting
                 .iter()

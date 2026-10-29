@@ -982,17 +982,6 @@ impl PhotoSortApp {
     }
 }
 
-/// The Keep/Trash toggle's label for one side, as on Review's bar.
-pub(super) fn decision_label(side: usize, keep: bool) -> String {
-    use egui_phosphor::regular as icon;
-    format!(
-        "{}  {}  {}",
-        side + 1,
-        if keep { icon::CHECK } else { icon::TRASH },
-        if keep { "Keep" } else { "Trash" }
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

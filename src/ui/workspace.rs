@@ -209,7 +209,12 @@ pub struct PhotoSortApp {
     delete_slot: Option<f32>,
     pick_review: crate::core::pick_review::Review,
     pick_run: Option<u64>,
-    pick_focus: bool,
+    /// A photo of the selected Pick Best group, the one the keyboard acts on.
+    pick_current: Option<MediaId>,
+    /// The selected group's photos, large, in a panel beside Pick Best's grid.
+    pick_panel: bool,
+    /// The panel's width once the user has seen or resized it.
+    pick_panel_width: Option<f32>,
     embeddings: HashMap<MediaId, Arc<Vec<f32>>>,
     rotation_plan: bool,
     rotation_reload: Option<crate::core::rotation::Review>,
@@ -462,7 +467,9 @@ impl PhotoSortApp {
             delete_slot: None,
             pick_review: Default::default(),
             pick_run: None,
-            pick_focus: false,
+            pick_current: None,
+            pick_panel: false,
+            pick_panel_width: None,
             embeddings: HashMap::new(),
             rotation_plan: false,
             rotation_reload: None,
@@ -561,6 +568,7 @@ impl PhotoSortApp {
             scene_groups: self.scene_groups.clone(),
             decisions: self.decisions.clone(),
             suggested: self.delete_review.suggested().clone(),
+            pick_suggested: self.pick_review.suggested().clone(),
             organize: self.catalog.as_ref().and_then(|catalog| {
                 crate::core::organize::Intent::capture(
                     catalog,
@@ -675,7 +683,8 @@ impl PhotoSortApp {
         self.delete_panel = false;
         self.pick_review = Default::default();
         self.pick_run = None;
-        self.pick_focus = false;
+        self.pick_current = None;
+        self.pick_panel = false;
         self.embeddings.clear();
         self.rotation_review = Default::default();
         self.rotation_run = None;
@@ -735,7 +744,6 @@ impl PhotoSortApp {
         self.changed_items([id]);
     }
     fn changed_items(&mut self, ids: impl IntoIterator<Item = MediaId>) {
-        self.pick_review.reconcile_external(&self.decisions);
         if self.browse_ready {
             self.runtime
                 .browsing
@@ -745,7 +753,6 @@ impl PhotoSortApp {
         self.filter_dirty = true;
     }
     fn changed(&mut self) {
-        self.pick_review.reconcile_external(&self.decisions);
         self.review_changed();
     }
     fn review_changed(&mut self) {
@@ -768,7 +775,9 @@ impl PhotoSortApp {
     }
     fn reject(&mut self, id: MediaId) {
         if self.step == Step::PickBest {
-            self.toggle_pick(id);
+            if self.pick_review.group_of(id).is_some() {
+                self.toggle_pick(id);
+            }
             return;
         }
         if self.step == Step::EasyDelete {
@@ -814,14 +823,19 @@ impl PhotoSortApp {
     fn set_active(&mut self, id: MediaId) {
         self.navigation_notice = None;
         if self.step == Step::PickBest
-            && let Some(slot) = self
-                .pick_review
-                .comparison()
-                .and_then(|c| c.paths.iter().position(|p| *p == id))
+            && let Some(cluster) = self.pick_review.cluster_of(id)
         {
+            let slot = cluster.ordered.iter().position(|p| *p == id).unwrap_or(0);
+            let group = self.pick_group();
             self.library_reveal |= self.active != Some(id);
+            self.pick_current = Some(id);
             self.active = Some(id);
-            self.focused_slot = if self.pick_focus { 0 } else { slot as u64 };
+            self.focused_slot = slot as u64;
+            // Another group starts at fit, like a new photo.
+            if group != self.pick_review.group_of(id) {
+                self.inspection_view = InspectionView::default();
+                self.independent_views.clear();
+            }
             self.view_started = Instant::now();
             return;
         }
@@ -937,16 +951,19 @@ impl PhotoSortApp {
             return;
         }
         if self.step == Step::PickBest {
+            // One entry per group: its suggested photo, in capture order.
             self.filtered = self
                 .pick_review
-                .comparison()
-                .map(|c| {
-                    c.paths
-                        .iter()
-                        .filter_map(|id| self.index.get(id).copied())
-                        .collect()
-                })
-                .unwrap_or_default();
+                .clusters()
+                .iter()
+                .filter_map(|c| self.index.get(&c.best()).copied())
+                .collect();
+            if self
+                .pick_current
+                .is_some_and(|id| self.pick_review.group_of(id).is_none())
+            {
+                self.deselect_pick_group();
+            }
             self.filter_dirty = false;
             return;
         }
@@ -1145,13 +1162,6 @@ impl PhotoSortApp {
         }
         if self.step == Step::Rotation {
             self.review_rotations();
-            return;
-        }
-        if self.step == Step::PickBest && !self.pick_review.any_completed() {
-            self.set_workflow_status(
-                Step::PickBest,
-                "Complete every comparison in at least one cluster before applying.".into(),
-            );
             return;
         }
         // Organize's moves, renames and new folders are one plan; staged
@@ -1435,7 +1445,7 @@ impl PhotoSortApp {
             return;
         }
         if self.step == Step::PickBest {
-            self.navigate_pick(delta, false);
+            self.navigate_pick(delta);
             return;
         }
         if self.filtered.is_empty() || !self.allow_review_departure() {
@@ -1606,9 +1616,12 @@ impl PhotoSortApp {
         self.restore_bookmark();
         self.intro_keys(ctx);
         self.keyboard(ctx);
-        // Organize and Easy Delete have no separate Review: they show the
-        // clicked photo or card in a panel beside their board or grid.
-        if matches!(self.step, Step::Organize | Step::EasyDelete) {
+        // Organize, Easy Delete and Pick Best have no separate Review: they
+        // show the clicked photo or card in a panel beside their board or grid.
+        if matches!(
+            self.step,
+            Step::Organize | Step::EasyDelete | Step::PickBest
+        ) {
             self.review = false;
         }
         self.sync_playback(ctx);
@@ -1663,9 +1676,9 @@ impl PhotoSortApp {
                     // The step's controls sit on a panel strip above the photos.
                     egui::Frame::new()
                         .fill(PANEL)
-                        // Organize's and Easy Delete's bars have no context line:
-                        // as much room below as above.
-                        .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: if matches!(self.step, Step::Organize | Step::EasyDelete) { 6 } else { 2 } })
+                        // Organize's, Easy Delete's and Pick Best's bars have no
+                        // context line: as much room below as above.
+                        .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: if matches!(self.step, Step::Organize | Step::EasyDelete | Step::PickBest) { 6 } else { 2 } })
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             if self.group_task.is_some() {
@@ -1862,8 +1875,8 @@ impl PhotoSortApp {
             );
             self.finish_rotation_detection();
         }
-        // DSC01231 is the sharp frame; the first round compares it with the
-        // slightly soft DSC01232.
+        // DSC01231 is the sharp frame, suggested over the slightly soft
+        // DSC01232 and DSC01233.
         let burst: Vec<(MediaId, f64)> = [
             ("DSC01232.jpg", 6.1),
             ("DSC01231.jpg", 8.4),
@@ -1873,12 +1886,13 @@ impl PhotoSortApp {
         .filter_map(|(name, score)| id(name).map(|id| (id, score)))
         .collect();
         if burst.len() >= 2 {
-            let cluster = crate::core::pick_review::Cluster {
-                key: 1,
-                ordered: burst.iter().map(|(id, _)| *id).collect(),
-                scores: burst.into_iter().collect(),
-            };
-            self.pick_review.replace(vec![cluster], &mut self.decisions);
+            let cluster = crate::core::pick_review::Cluster::new(
+                1,
+                burst.iter().map(|(id, _)| *id).collect(),
+                burst.into_iter().collect(),
+            );
+            self.pick_review.replace(vec![cluster]);
+            self.pick_review.stage_new_suggestions(&mut self.decisions);
             self.view_data_ready.insert(Step::PickBest);
         }
         self.filter_dirty = true;
@@ -2011,6 +2025,15 @@ impl PhotoSortApp {
                 }
             }
             self.delete_panel = review;
+        } else if self.step == Step::PickBest {
+            // So does Pick Best.
+            if review && self.pick_current.is_none() {
+                self.refilter();
+                if let Some(first) = self.filtered.first().map(|i| self.media[*i].id) {
+                    self.set_active(first);
+                }
+            }
+            self.pick_panel = review;
         } else {
             self.review = review;
         }

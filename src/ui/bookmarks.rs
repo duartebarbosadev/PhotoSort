@@ -4,10 +4,7 @@ use crate::core::views::{Bookmark, Saved};
 impl PhotoSortApp {
     pub(super) fn capture_bookmark(&self) -> Bookmark {
         let comparison = if self.step == Step::PickBest {
-            self.pick_review
-                .comparison()
-                .map(|c| c.paths.clone())
-                .unwrap_or_default()
+            Vec::new()
         } else {
             self.comparison.clone()
         };
@@ -38,7 +35,7 @@ impl PhotoSortApp {
             delete_current: self.delete_current,
             delete_categories: categories,
             rotation_queue_only: self.rotation_queue_only,
-            pick_focus: self.pick_focus,
+            pick_focus: false,
             view: self.inspection_view,
             independent_views: self.independent_views.clone(),
             sync_views: self.sync_views,
@@ -90,9 +87,10 @@ impl PhotoSortApp {
             self.rotation_review.discard();
         } else {
             self.decisions.clear();
-            // Back to the defaults: Easy Delete stages its suggestions again.
+            // Back to the defaults: Easy Delete and Pick Best stage their
+            // suggestions again.
             self.delete_review.restore_suggested(Default::default());
-            self.pick_review.discard_confirmations();
+            self.pick_review.restore_suggested(Default::default());
             self.changed();
         }
     }
@@ -199,8 +197,10 @@ impl PhotoSortApp {
             }
         }
         if self.step == Step::PickBest {
-            self.pick_review.restore_pair(view.active, &view.comparison);
-            self.sync_pick_view();
+            // The group of the saved photo, if it is still one.
+            self.pick_current = view
+                .active
+                .filter(|id| self.pick_review.group_of(*id).is_some());
         } else if self.step == Step::EasyDelete {
             if let Some(id) = view.delete_current.filter(|id| {
                 self.delete_review.entry(*id).is_some()
@@ -245,9 +245,6 @@ impl PhotoSortApp {
                     None
                 }
             });
-        if self.step == Step::PickBest {
-            self.pick_focus = view.pick_focus;
-        }
         self.focused_slot = self
             .active
             .and_then(|id| self.comparison_ids().iter().position(|p| *p == id))

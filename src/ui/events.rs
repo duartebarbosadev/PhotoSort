@@ -195,6 +195,7 @@ impl PhotoSortApp {
         self.scene_groups = session.scene_groups;
         self.decisions = session.decisions;
         self.delete_review.restore_suggested(session.suggested);
+        self.pick_review.restore_suggested(session.pick_suggested);
         if let Some(intent) = session.organize {
             self.organize_drafts = intent.drafts;
             self.file_names = intent.names;
@@ -736,6 +737,8 @@ impl PhotoSortApp {
         self.decisions = session.decisions.clone();
         self.delete_review
             .restore_suggested(session.suggested.clone());
+        self.pick_review
+            .restore_suggested(session.pick_suggested.clone());
         self.manual_groups = session.manual_groups.clone();
         self.scene_groups = session.scene_groups.clone();
         self.rotation_review

@@ -14,11 +14,52 @@ pub struct Faces {
 }
 /// Lightweight review evidence. Detailed landmarks stay in the shared artifact
 /// cache instead of being retained by every UI analysis row.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FaceSummary {
     pub count: usize,
     pub closed_eyes: usize,
     pub primary: Option<[f32; 4]>,
+    /// Each face's eyes, for comparing one person across similar photos.
+    #[serde(default)]
+    pub eyes: Vec<FaceEyes>,
+}
+
+/// Whether a face's eyes are open, closed, or cannot be judged. Unknown is
+/// never closed: faces too small to read, and legacy records without blink
+/// scores, count as neither.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EyeState {
+    Open,
+    Closed,
+    Unknown,
+}
+
+/// One face's eyes and where the face is, in normalized source coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FaceEyes {
+    pub centre: [f32; 2],
+    /// The face box's width and height.
+    pub size: [f32; 2],
+    pub state: EyeState,
+    /// Mean eye aspect ratio, higher when more open; `None` when unknown.
+    pub ratio: Option<f32>,
+}
+
+/// The rule `detect` counts closed eyes with: clearly shut by eye aspect
+/// ratio, or both blink scores high and the ratio agrees. Eyes closer than
+/// `MIN_EYE_PIXELS` apart are not judged.
+pub fn eye_state(ratio: f32, blink: [f32; 2], eye_pixels: f32) -> EyeState {
+    // Written so NaN distances and ratios fall to Unknown.
+    if !(eye_pixels >= MIN_EYE_PIXELS && ratio.is_finite()) {
+        return EyeState::Unknown;
+    }
+    if ratio < SHUT_EYE_RATIO
+        || (blink.iter().all(|&b| b >= CLOSED_BLINK) && ratio < CLOSED_EYE_RATIO)
+    {
+        EyeState::Closed
+    } else {
+        EyeState::Open
+    }
 }
 impl Faces {
     pub fn complete(&self) -> bool {
@@ -36,11 +77,18 @@ impl Faces {
                         .all(|v| v.is_finite())
             })
     }
-    pub fn summary(&self) -> FaceSummary {
+    /// The summary for review. `width` and `height` are the pixels the faces
+    /// were detected on, which the eye rule's minimum size is measured in.
+    pub fn summary(&self, width: u32, height: u32) -> FaceSummary {
         FaceSummary {
             count: self.count,
             closed_eyes: self.closed_eyes,
             primary: self.primary,
+            eyes: self
+                .geometry
+                .iter()
+                .map(|face| face.eyes(width, height))
+                .collect(),
         }
     }
 }
@@ -58,6 +106,42 @@ pub struct Face {
     #[serde(default)]
     pub blink: Option<[f32; 2]>,
 }
+impl Face {
+    /// This face's eyes, judged again from its stored landmarks and blink
+    /// scores on a `width` × `height` frame, by the rule `detect` used.
+    pub fn eyes(&self, width: u32, height: u32) -> FaceEyes {
+        let [left, top, right, bottom] = self.bbox;
+        let (w, h) = (width as f32, height as f32);
+        let point = |i: usize| self.landmarks.get(i).map(|[x, y]| [x * w, y * h]);
+        let ratio = |indices: [usize; 6]| -> Option<f32> {
+            let points: Vec<[f32; 2]> = indices.iter().map(|&i| point(i)).collect::<Option<_>>()?;
+            Some(aspect_ratio(|i| points[i]))
+        };
+        let centre = |a: usize, b: usize| -> Option<[f32; 2]> {
+            let ([ax, ay], [bx, by]) = (point(a)?, point(b)?);
+            Some([(ax + bx) / 2.0, (ay + by) / 2.0])
+        };
+        let measured = (|| {
+            let blink = self.blink?;
+            let mean = (ratio(LEFT_EYE)? + ratio(RIGHT_EYE)?) / 2.0;
+            let ([ax, ay], [bx, by]) = (centre(33, 133)?, centre(362, 263)?);
+            Some((mean, blink, (ax - bx).hypot(ay - by)))
+        })();
+        let (state, ratio) = match measured {
+            Some((ratio, blink, pixels)) => (eye_state(ratio, blink, pixels), Some(ratio)),
+            None => (EyeState::Unknown, None),
+        };
+        FaceEyes {
+            centre: [(left + right) / 2.0, (top + bottom) / 2.0],
+            size: [right - left, bottom - top],
+            state,
+            ratio: ratio.filter(|_| state != EyeState::Unknown),
+        }
+    }
+}
+/// Face Mesh points around each eye, for the eye aspect ratio.
+const LEFT_EYE: [usize; 6] = [33, 160, 158, 133, 153, 144];
+const RIGHT_EYE: [usize; 6] = [362, 385, 387, 263, 373, 380];
 #[derive(Clone)]
 struct Detection {
     score: f32,
@@ -324,8 +408,8 @@ fn detect(
             blink: Some(blink),
         });
         faces.count += 1;
-        let left = eye_aspect_ratio(landmarks, [33, 160, 158, 133, 153, 144]);
-        let right = eye_aspect_ratio(landmarks, [362, 385, 387, 263, 373, 380]);
+        let left = eye_aspect_ratio(landmarks, LEFT_EYE);
+        let right = eye_aspect_ratio(landmarks, RIGHT_EYE);
         record(sigmoid(presence[0]), [left, right], blink, true);
         let ratio = (left + right) / 2.0;
         let centre = |a: usize, b: usize| {
@@ -333,11 +417,7 @@ fn detect(
             [(ax + bx) / 2.0 * width, (ay + by) / 2.0 * height]
         };
         let ([ax, ay], [bx, by]) = (centre(33, 133), centre(362, 263));
-        let readable = (ax - bx).hypot(ay - by) >= MIN_EYE_PIXELS;
-        if readable
-            && (ratio < SHUT_EYE_RATIO
-                || (blink.iter().all(|&b| b >= CLOSED_BLINK) && ratio < CLOSED_EYE_RATIO))
-        {
+        if eye_state(ratio, blink, (ax - bx).hypot(ay - by)) == EyeState::Closed {
             faces.closed_eyes += 1;
         }
         if face.size > largest {
@@ -543,10 +623,14 @@ pub fn eye_aspect_ratio(points: &[f32], indices: [usize; 6]) -> f32 {
     if indices.iter().any(|i| i * 3 + 1 >= points.len()) {
         return 0.0;
     }
+    aspect_ratio(|i| [points[indices[i] * 3], points[indices[i] * 3 + 1]])
+}
+/// Eye height over width from six points around the eye: the corners
+/// (0 and 3), then the upper (1, 2) and lower (5, 4) lids.
+fn aspect_ratio(point: impl Fn(usize) -> [f32; 2]) -> f32 {
     let distance = |a: usize, b: usize| {
-        ((points[indices[a] * 3] - points[indices[b] * 3]).powi(2)
-            + (points[indices[a] * 3 + 1] - points[indices[b] * 3 + 1]).powi(2))
-        .sqrt()
+        let ([ax, ay], [bx, by]) = (point(a), point(b));
+        (ax - bx).hypot(ay - by)
     };
     (distance(1, 5) + distance(2, 4)) / (2.0 * distance(0, 3)).max(f32::EPSILON)
 }
@@ -670,6 +754,86 @@ fn cubic_pixel(image: &image::RgbaImage, x: f32, y: f32, channel: usize) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A face whose eyes, in a `width` × `height` frame, are `gap` pixels
+    /// apart and open to `ratio` (lid gap over eye width).
+    fn face(width: u32, height: u32, gap: f32, ratio: f32, blink: Option<[f32; 2]>) -> Face {
+        let (w, h) = (width as f32, height as f32);
+        let mut landmarks = vec![[0.5, 0.5]; 478];
+        let eye = 0.4 * gap;
+        for (indices, centre) in [
+            (LEFT_EYE, 500.0 - gap / 2.0),
+            (RIGHT_EYE, 500.0 + gap / 2.0),
+        ] {
+            // Corners, upper lids, lower lids, in source pixels.
+            let points = [
+                [centre - eye / 2.0, 400.0],
+                [centre - eye / 6.0, 400.0 - ratio * eye / 2.0],
+                [centre + eye / 6.0, 400.0 - ratio * eye / 2.0],
+                [centre + eye / 2.0, 400.0],
+                [centre + eye / 6.0, 400.0 + ratio * eye / 2.0],
+                [centre - eye / 6.0, 400.0 + ratio * eye / 2.0],
+            ];
+            for (i, [x, y]) in indices.iter().zip(points) {
+                landmarks[*i] = [x / w, y / h];
+            }
+        }
+        Face {
+            bbox: [0.3, 0.3, 0.6, 0.6],
+            eyes: [landmarks[33], landmarks[263]],
+            landmarks,
+            blink,
+        }
+    }
+    #[test]
+    fn stored_faces_are_judged_by_the_rule_detect_counts_with() {
+        let open = Some([0.1, 0.1]);
+        let blinking = Some([0.8, 0.7]);
+        // Non-square frames: the ratio is measured in pixels, not normalized.
+        for (width, height) in [(1024, 768), (577, 1024)] {
+            let eyes =
+                |gap, ratio, blink| face(width, height, gap, ratio, blink).eyes(width, height);
+            let wide = eyes(60.0, 0.3, open);
+            assert_eq!(wide.state, EyeState::Open);
+            assert!((wide.ratio.unwrap() - 0.3).abs() < 1e-3, "{wide:?}");
+            assert_eq!(eyes(60.0, 0.05, open).state, EyeState::Closed, "shut");
+            assert_eq!(eyes(60.0, 0.13, blinking).state, EyeState::Closed, "blink");
+            assert_eq!(
+                eyes(60.0, 0.13, open).state,
+                EyeState::Open,
+                "narrow, not blinking"
+            );
+            assert_eq!(
+                eyes(60.0, 0.2, blinking).state,
+                EyeState::Open,
+                "blink score alone"
+            );
+            // Unknown is never closed: too small to read, or a legacy record.
+            let small = eyes(15.0, 0.02, blinking);
+            assert_eq!((small.state, small.ratio), (EyeState::Unknown, None));
+            assert_eq!(eyes(60.0, 0.02, None).state, EyeState::Unknown);
+        }
+        let mut legacy = face(1024, 768, 60.0, 0.3, open);
+        legacy.landmarks.clear();
+        assert_eq!(legacy.eyes(1024, 768).state, EyeState::Unknown);
+        assert_eq!(eye_state(f32::NAN, [1.0, 1.0], 100.0), EyeState::Unknown);
+        assert_eq!(eye_state(0.01, [1.0, 1.0], f32::NAN), EyeState::Unknown);
+    }
+    #[test]
+    fn the_summary_carries_each_faces_eyes() {
+        let faces = Faces {
+            count: 2,
+            closed_eyes: 1,
+            primary: None,
+            geometry: vec![
+                face(1024, 768, 60.0, 0.05, Some([0.9, 0.9])),
+                face(1024, 768, 60.0, 0.3, Some([0.0, 0.0])),
+            ],
+        };
+        let summary = faces.summary(1024, 768);
+        let states: Vec<_> = summary.eyes.iter().map(|e| e.state).collect();
+        assert_eq!(states, vec![EyeState::Closed, EyeState::Open]);
+        assert_eq!(summary.closed_eyes, 1);
+    }
     #[test]
     fn every_face_from_28_pixels_fills_an_eighth_of_some_detector_window() {
         // Phone photos at analysis size, a small screenshot and the SFace group.

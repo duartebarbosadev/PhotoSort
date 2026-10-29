@@ -141,15 +141,19 @@ impl Review {
     }
     /// Stages the suggested Trash marks of photos seen for the first time.
     /// Never unmarks anything, and never repeats for a photo: a later
-    /// analysis leaves the user's choices alone. Returns the photos marked.
+    /// analysis leaves the user's choices alone. A card whose suggested
+    /// keeper is already marked for Trash (by Pick Best or by hand) is left
+    /// as it is, so both photos never go to Trash on their own. Returns the
+    /// photos marked.
     pub fn stage_new_suggestions(
         &mut self,
         decisions: &mut HashMap<MediaId, Decision>,
     ) -> Vec<MediaId> {
         let mut marked = Vec::new();
         for entry in &self.entries {
+            let keeper_kept = entry.companion.is_none_or(|id| kept(decisions, id));
             for (id, keep) in entry.candidates().into_iter().zip(entry.suggestion()) {
-                if self.suggested.insert(id) && !keep {
+                if self.suggested.insert(id) && !keep && keeper_kept {
                     marked.push(id);
                 }
             }

@@ -179,7 +179,6 @@ impl PhotoSortApp {
     }
     pub(super) fn allow_review_departure(&mut self) -> bool {
         let unfinished = match self.step {
-            Step::PickBest => self.pick_review.unfinished(),
             Step::Rotation => self.rotation_review.unfinished(self.active),
             _ => false,
         };
@@ -301,8 +300,6 @@ impl PhotoSortApp {
             if action > 0 {
                 self.review_notice = None;
                 match (step, action) {
-                    (Step::PickBest, 2) => self.confirm_pick(false),
-                    (Step::PickBest, 3 | 4) => self.reset_pick(action == 4),
                     (Step::Rotation, 2) => self.confirm_rotation(),
                     (Step::Rotation, 3 | 4) => self.reset_rotation(action == 4),
                     _ => {}

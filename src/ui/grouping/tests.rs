@@ -85,15 +85,13 @@ fn correction_updates_every_layout_and_saved_session_without_image_work_or_losin
 #[test]
 fn undo_reset_and_regrouping_preserve_filtered_focus_and_existing_pick_review() {
     let (_dir, mut app) = fixture();
-    app.pick_review.replace(
-        vec![crate::core::pick_review::Cluster {
-            key: 1,
-            ordered: vec![MediaId(0), MediaId(1)],
-            scores: HashMap::from([(MediaId(0), 1.), (MediaId(1), 2.)]),
-        }],
-        &mut app.decisions,
-    );
-    let pair = app.pick_review.comparison().unwrap().paths.clone();
+    app.pick_review
+        .replace(vec![crate::core::pick_review::Cluster::new(
+            1,
+            vec![MediaId(0), MediaId(1)],
+            HashMap::from([(MediaId(0), 1.), (MediaId(1), 2.)]),
+        )]);
+    let groups = app.pick_review.clusters().to_vec();
     app.selection.single(MediaId(0));
     app.active = Some(MediaId(0));
     app.browse.group = Some(1);
@@ -103,7 +101,7 @@ fn undo_reset_and_regrouping_preserve_filtered_focus_and_existing_pick_review() 
     settle(&mut app);
     assert_eq!(app.browse.group, app.cull_groups.get(&MediaId(0)).copied());
     assert_eq!(app.active, Some(MediaId(0)));
-    assert_eq!(app.pick_review.comparison().unwrap().paths, pair);
+    assert_eq!(app.pick_review.clusters(), groups);
     let undo = app.group_undo.clone().unwrap();
     app.edit_groups(Edit::Replace(undo), false);
     settle(&mut app);
@@ -211,13 +209,8 @@ fn fresh_pick_review_uses_corrected_members_after_async_completion() {
     app.resolve_groups(app.automatic_groups.clone(), Edit::Resolve, Some(42), false);
     settle(&mut app);
     assert!(app.pick_run.is_none());
-    let cluster = app
-        .pick_review
-        .tournaments()
-        .iter()
-        .find(|t| t.cluster.ordered.contains(&MediaId(0)))
-        .unwrap();
-    assert!(cluster.cluster.ordered.contains(&MediaId(2)));
+    let cluster = app.pick_review.cluster_of(MediaId(0)).unwrap();
+    assert!(cluster.ordered.contains(&MediaId(2)));
 }
 #[test]
 fn group_target_picker_virtualizes_large_libraries_at_compact_and_wide_sizes() {
@@ -280,6 +273,7 @@ fn real_application_reopen_restores_groups_and_bookmark_without_ai() {
         decisions: Default::default(),
         fingerprints: fingerprints.clone(),
         suggested: Default::default(),
+        pick_suggested: Default::default(),
     }
     .save(&catalog.root)
     .unwrap();

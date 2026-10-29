@@ -259,13 +259,13 @@ impl PhotoSortApp {
         self.review = step != Step::Organize;
         self.fit_view();
         self.view_started = Instant::now();
-        if step == Step::PickBest {
-            self.sync_pick_view();
-        }
         self.start_ready_analysis();
         self.prepare_bookmark();
         if step == Step::EasyDelete {
             self.stage_delete_suggestions();
+        }
+        if step == Step::PickBest {
+            self.stage_pick_suggestions();
         }
         if step == Step::Cull || self.metadata_organize_mode() {
             self.start_metadata_index();
@@ -711,7 +711,7 @@ impl PhotoSortApp {
             self.group_mode,
             self.delete_categories.clone(),
             self.rotation_queue_only,
-            self.pick_focus,
+            self.pick_current,
         );
         use egui_phosphor::regular as icon;
         // Right group first (view switch, Details); the step's controls then
@@ -734,14 +734,14 @@ impl PhotoSortApp {
                     }
                     // No step has a More menu: Analyze and the step's own
                     // actions sit in the bar. Organize previews the clicked
-                    // photo beside its folders, Easy Delete the clicked card
-                    // beside its grid, so neither has a view switch.
+                    // photo beside its folders, Easy Delete and Pick Best the
+                    // clicked card beside their grid, so none has a view switch.
                     if self.step == Step::Organize {
                         self.organize_bar_actions(ui, compact);
                     } else {
                         ui.add_space(S1);
                         self.analyze_icon_button(ui);
-                        if self.step != Step::EasyDelete {
+                        if !matches!(self.step, Step::EasyDelete | Step::PickBest) {
                             ui.add_space(S1);
                             self.view_switch(ui);
                         }
@@ -770,7 +770,7 @@ impl PhotoSortApp {
                         Step::Organize => self.organize_controls(ui),
                         Step::EasyDelete => self.delete_controls(ui),
                         Step::Rotation => self.rotation_controls(ui),
-                        Step::PickBest => self.pick_controls(ui),
+                        Step::PickBest => {}
                         Step::Cull => self.browse_controls(ui),
                     }
                     if self.analysis_run.is_some()
@@ -788,9 +788,12 @@ impl PhotoSortApp {
             .response
             .rect;
         ui.advance_cursor_after_rect(left.union(right));
-        // Organize and Easy Delete have no context line, so the bar ends
-        // right under its row.
-        if !matches!(self.step, Step::Organize | Step::EasyDelete) {
+        // Organize, Easy Delete and Pick Best have no context line, so the
+        // bar ends right under its row.
+        if !matches!(
+            self.step,
+            Step::Organize | Step::EasyDelete | Step::PickBest
+        ) {
             ui.add_space(2.0);
             self.step_context(ui);
             ui.add_space(S1);
@@ -805,7 +808,7 @@ impl PhotoSortApp {
             self.group_mode,
             self.delete_categories.clone(),
             self.rotation_queue_only,
-            self.pick_focus,
+            self.pick_current,
         );
         if before != after {
             self.pending_bookmark = None;
@@ -849,7 +852,6 @@ impl PhotoSortApp {
     fn step_context(&mut self, ui: &mut egui::Ui) {
         match self.step {
             Step::Rotation => self.rotation_context(ui),
-            Step::PickBest => self.pick_context(ui),
             Step::Cull => self.cull_filter_notice(ui),
             _ => {}
         }
@@ -1266,14 +1268,11 @@ mod step_bar_tests {
             );
         }
         app.finish_rotation_detection();
-        app.pick_review.replace(
-            vec![Cluster {
-                key: 1,
-                ordered: vec![ids[2], ids[3]],
-                scores: HashMap::from([(ids[2], 10.), (ids[3], 20.)]),
-            }],
-            &mut app.decisions,
-        );
+        app.pick_review.replace(vec![Cluster::new(
+            1,
+            vec![ids[2], ids[3]],
+            HashMap::from([(ids[2], 10.), (ids[3], 20.)]),
+        )]);
         (temp, app, ids)
     }
     #[test]
