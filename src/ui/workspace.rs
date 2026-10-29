@@ -202,6 +202,13 @@ pub struct PhotoSortApp {
     rotation_review: crate::core::rotation::Review,
     rotation_run: Option<u64>,
     rotation_queue_only: bool,
+    /// The clicked card's photos, large, in a panel beside Fix Rotation's grid.
+    rotation_panel: bool,
+    /// The panel's width once the user has seen or resized it.
+    rotation_panel_width: Option<f32>,
+    /// Photo width chosen with Fix Rotation's size slider, kept while the
+    /// app runs.
+    rotation_slot: Option<f32>,
     review_notice: Option<Step>,
     delete_review: crate::core::delete_review::Review,
     delete_current: Option<MediaId>,
@@ -466,6 +473,9 @@ impl PhotoSortApp {
             rotation_review: Default::default(),
             rotation_run: None,
             rotation_queue_only: false,
+            rotation_panel: false,
+            rotation_panel_width: None,
+            rotation_slot: None,
             review_notice: None,
             delete_review: Default::default(),
             delete_current: None,
@@ -579,6 +589,7 @@ impl PhotoSortApp {
             scene_groups: self.scene_groups.clone(),
             decisions: self.decisions.clone(),
             suggested: self.delete_review.suggested().clone(),
+            rotations_staged: self.rotation_review.staged().clone(),
             organize: self.catalog.as_ref().and_then(|catalog| {
                 crate::core::organize::Intent::capture(
                     catalog,
@@ -714,6 +725,7 @@ impl PhotoSortApp {
         self.rotation_review = Default::default();
         self.rotation_run = None;
         self.rotation_queue_only = false;
+        self.rotation_panel = false;
         self.active = None;
         self.comparison.clear();
         self.inspection_wanted.clear();
@@ -794,11 +806,7 @@ impl PhotoSortApp {
     }
     // Decoded textures stay canonical; every surface applies this display-only transform.
     fn preview_turns(&self, id: MediaId) -> u8 {
-        if self.step == Step::Rotation {
-            self.rotation_review.choice(id).map_or(0, |c| c.turns())
-        } else {
-            self.decision(id).turns
-        }
+        self.decision(id).turns
     }
     fn reject(&mut self, id: MediaId) {
         if self.step == Step::PickBest {
@@ -836,8 +844,10 @@ impl PhotoSortApp {
             .is_some_and(|m| m.kind != MediaKind::Video)
         {
             if self.step == Step::Rotation {
-                self.ensure_rotation_choice(id);
-                self.rotation_review.rotate(id, turns);
+                // Back to how it is on disk, nothing stays staged.
+                let staged = crate::core::rotation::turns(&self.decisions, id);
+                crate::core::rotation::set_turns(&mut self.decisions, id, staged + turns);
+                self.pending_bookmark = None;
             } else {
                 self.stage_manual([id], crate::core::decisions::Change::Rotate(turns));
                 return;
@@ -1009,22 +1019,9 @@ impl PhotoSortApp {
             self.arrange_board();
         }
         if self.step == Step::Rotation {
-            self.filtered.retain(|i| {
-                self.media[*i].kind != MediaKind::Video
-                    && (!self.rotation_queue_only
-                        || self.rotation_review.choice(self.media[*i].id).is_some())
-            });
-            if self.rotation_queue_only {
-                let order: HashMap<_, _> = self
-                    .rotation_review
-                    .ids()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, id)| (*id, i))
-                    .collect();
-                self.filtered
-                    .sort_by_key(|i| order.get(&self.media[*i].id).copied().unwrap_or(usize::MAX));
-            }
+            self.refilter_rotations();
+            self.filter_dirty = false;
+            return;
         }
         if self.step == Step::EasyDelete {
             self.filtered.retain(|i| {
@@ -1175,10 +1172,6 @@ impl PhotoSortApp {
             return;
         }
         if !self.allow_review_departure() {
-            return;
-        }
-        if self.step == Step::Rotation {
-            self.review_rotations();
             return;
         }
         if self.step == Step::PickBest && !self.pick_review.any_completed() {
@@ -1647,9 +1640,13 @@ impl PhotoSortApp {
         self.restore_bookmark();
         self.intro_keys(ctx);
         self.keyboard(ctx);
-        // Organize and Easy Delete have no separate Review: they show the
-        // clicked photo or card in a panel beside their board or grid.
-        if matches!(self.step, Step::Organize | Step::EasyDelete) {
+        // Organize, Easy Delete and Fix Rotation have no separate Review:
+        // they show the clicked photo or card in a panel beside their board
+        // or grid.
+        if matches!(
+            self.step,
+            Step::Organize | Step::EasyDelete | Step::Rotation
+        ) {
             self.review = false;
         }
         self.sync_playback(ctx);
@@ -1706,7 +1703,7 @@ impl PhotoSortApp {
                         .fill(PANEL)
                         // Organize's and Easy Delete's bars have no context line:
                         // as much room below as above.
-                        .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: if matches!(self.step, Step::Organize | Step::EasyDelete) { 6 } else { 2 } })
+                        .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: if matches!(self.step, Step::Organize | Step::EasyDelete | Step::Rotation) { 6 } else { 2 } })
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             if self.group_task.is_some() {
@@ -2060,6 +2057,14 @@ impl PhotoSortApp {
                 }
             }
             self.delete_panel = review;
+        } else if self.step == Step::Rotation {
+            if review && self.active.is_none() {
+                self.refilter();
+                if let Some(first) = self.filtered.first().map(|i| self.media[*i].id) {
+                    self.set_active(first);
+                }
+            }
+            self.rotation_panel = review;
         } else {
             self.review = review;
         }

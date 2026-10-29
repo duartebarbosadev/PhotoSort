@@ -385,8 +385,10 @@ fn a_single_comparison_row_fits_the_short_canvas_without_clipping() {
         fingerprint: Fingerprint::default(),
     });
     app.index.insert(MediaId(1), 0);
-    app.active = Some(MediaId(1));
     app.set_step(Step::Rotation);
+    // A staged turn: the photo as it is beside it turned.
+    crate::core::rotation::set_turns(&mut app.decisions, MediaId(1), 1);
+    app.active = Some(MediaId(1));
     let ctx = egui::Context::default();
     theme_install(&ctx);
     let output = ctx.run_test(

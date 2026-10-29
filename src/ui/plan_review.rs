@@ -19,9 +19,11 @@ pub(super) struct Rows {
     trash: Vec<Item>,
     updates: Vec<Item>,
     renamed_folders: Vec<usize>,
-    /// The plain view laid out for `columns` thumbnails per row.
+    /// The plain view laid out for `columns` thumbnails per row, or
+    /// `pair_columns` before-and-after pairs in a list with rotations.
     layout: Vec<Placed>,
     columns: usize,
+    pair_columns: usize,
     width: f32,
 }
 
@@ -94,6 +96,10 @@ const SOURCE_HEAD: f32 = 26.0;
 const TILE: egui::Vec2 = egui::vec2(104.0, 78.0);
 const CAPTION: f32 = 20.0;
 const THUMB_ROW: f32 = TILE.y + CAPTION + S2;
+/// The gap a "before → after" arrow sits in between a pair's two tiles.
+const ARROW: f32 = 28.0;
+/// A rotation reads as the photo as it is, an arrow, then the photo turned.
+const PAIR: f32 = 2.0 * TILE.x + ARROW;
 const TEXT_ROW: f32 = 30.0;
 const TIDY_HEIGHT: f32 = 48.0;
 /// Space above each card, part of its first piece so pieces stay touching.
@@ -186,6 +192,7 @@ impl Rows {
         self.renamed_folders.clear();
         self.layout.clear();
         self.columns = 0;
+        self.pair_columns = 0;
         self.width = 0.0;
         self.summary = Summary::default();
         let Some(plan) = plan else {
@@ -338,9 +345,19 @@ impl Rows {
     /// Returns the total height.
     fn lay_out(&mut self, width: f32) -> f32 {
         if self.width != width || self.layout.is_empty() {
-            let columns = (((width - 2.0 * S3 + S2) / (TILE.x + S2)).floor() as usize).max(1);
-            self.columns = columns;
+            let fit = |slot: f32| (((width - 2.0 * S3 + S2) / (slot + S2)).floor() as usize).max(1);
+            self.columns = fit(TILE.x);
+            self.pair_columns = fit(PAIR);
             self.width = width;
+            let pairs = self.summary.rotated > 0;
+            let (columns, pair_columns) = (self.columns, self.pair_columns);
+            let columns = |list: List| {
+                if pairs && list == List::Updates {
+                    pair_columns
+                } else {
+                    columns
+                }
+            };
             let mut layout = Vec::new();
             let mut top = 0.0;
             let mut place = |block, height, card_top, card_bottom| {
@@ -358,6 +375,7 @@ impl Rows {
                           len: usize,
                           first: bool,
                           last: bool| {
+                let columns = columns(list);
                 let rows = len.div_ceil(columns);
                 for row in 0..rows {
                     let height = THUMB_ROW + if first && row == 0 { CARD_GAP } else { 0.0 };
@@ -429,6 +447,14 @@ impl Rows {
             self.layout = layout;
         }
         self.layout.last().map_or(0.0, |p| p.top + p.height)
+    }
+    /// How wide one photo's place in `list` is: a pair where rotations are.
+    fn slot(&self, list: List) -> f32 {
+        if self.summary.rotated > 0 && list == List::Updates {
+            PAIR
+        } else {
+            TILE.x
+        }
     }
 }
 
@@ -512,6 +538,11 @@ fn update_text(rating: Option<u8>, orientation: Option<u8>, pixels: bool) -> Str
     }
     text
 }
+/// The clockwise quarter turns from one orientation to another, when a
+/// turn alone gets there (not a mirror).
+fn turns_between(from: u8, to: u8) -> Option<u8> {
+    (0..4).find(|&turns| crate::core::metadata::rotate_orientation(from, turns) == to)
+}
 /// The orientation that clockwise quarter `turns` give an upright photo.
 fn turned(turns: u8) -> Option<u8> {
     match turns % 4 {
@@ -530,6 +561,7 @@ struct Thumb {
     name: String,
     hover: String,
     extras: String,
+    /// Quarter turns shown beside the photo as it is now, "before → after".
     turns: u8,
 }
 
@@ -655,6 +687,7 @@ impl PhotoSortApp {
                 if list == List::Updates {
                     thumb.caption = update_text(rating, turned(turns), false);
                     thumb.turns = turns;
+                    thumb.hover = format!("{}: {}", thumb.name, thumb.caption);
                 }
                 Some(thumb)
             }
@@ -699,10 +732,23 @@ impl PhotoSortApp {
                     target,
                     ..
                 } => {
-                    let mut thumb = blank(MediaId::for_path(&source.path), file_name(&source.path));
+                    let id = MediaId::for_path(&source.path);
+                    let mut thumb = blank(id, file_name(&source.path));
+                    // Said as a turn of the photo as it looks now, not as
+                    // the orientation tag it ends with.
+                    let from = self.metadata.get(&id).map(|m| m.orientation);
+                    thumb.turns = from
+                        .zip(*orientation)
+                        .and_then(|(from, to)| turns_between(from, to))
+                        .unwrap_or(0);
+                    let orientation = if thumb.turns == 0 {
+                        *orientation
+                    } else {
+                        turned(thumb.turns)
+                    };
                     thumb.caption = update_text(
                         *rating,
-                        *orientation,
+                        orientation,
                         *target == crate::core::metadata::WriteTarget::Pixels,
                     );
                     thumb.hover = format!("{}: {}", thumb.name, thumb.caption);
@@ -877,7 +923,12 @@ impl PhotoSortApp {
                 );
             }
             Block::Thumbs(list, start) => {
-                let end = (start + rows.columns).min(rows.items(list).len());
+                let columns = if rows.slot(list) == PAIR {
+                    rows.pair_columns
+                } else {
+                    rows.columns
+                };
+                let end = (start + columns).min(rows.items(list).len());
                 let top = rect.top() + if placed.card_top { CARD_GAP + S2 } else { 0.0 };
                 self.thumb_row(ui, plan, rows, list, start, end, inner.left(), top);
             }
@@ -1032,13 +1083,14 @@ impl PhotoSortApp {
         left: f32,
         top: f32,
     ) {
+        let slot = rows.slot(list);
         for k in start..end {
             let item = rows.items(list)[k];
             let column = (k - start) as f32;
             let tile =
-                egui::Rect::from_min_size(egui::pos2(left + column * (TILE.x + S2), top), TILE);
+                egui::Rect::from_min_size(egui::pos2(left + column * (slot + S2), top), TILE);
             if let Some(thumb) = self.thumb(plan, item, list) {
-                self.paint_thumb(ui, &thumb, tile, (list, k));
+                self.paint_thumb(ui, &thumb, tile, slot, (list, k));
             }
         }
     }
@@ -1048,43 +1100,21 @@ impl PhotoSortApp {
         ui: &mut egui::Ui,
         thumb: &Thumb,
         tile: egui::Rect,
+        slot: f32,
         key: (List, usize),
     ) {
         let painter = ui.painter().clone();
-        let radius = R_CONTROL as f32;
-        painter.rect_filled(tile, radius, BG);
-        let texture = (!thumb.folder)
-            .then(|| self.texture(thumb.id, false))
-            .flatten();
-        if let Some(texture) = texture {
-            let drawn = paint_image_tinted(
-                ui,
-                &texture,
-                tile,
-                1.0,
-                Vec2::ZERO,
-                thumb.turns,
-                Color32::WHITE,
-            );
-            round_corners(&painter, drawn, radius, BG);
-            round_corners(&painter, tile, radius, CARD);
-        } else if self.requested.contains(&(thumb.id, false)) {
-            shimmer(ui, tile);
-        } else {
-            let glyph = if thumb.folder {
-                icon::FOLDER
-            } else if self.failures.contains_key(&thumb.id) {
-                icon::IMAGE_BROKEN
-            } else {
-                icon::IMAGE
-            };
+        self.paint_tile(ui, thumb, tile, 0);
+        if thumb.turns != 0 {
+            let after = tile.translate(egui::vec2(TILE.x + ARROW, 0.0));
             painter.text(
-                tile.center(),
+                egui::pos2(tile.right() + ARROW / 2.0, tile.center().y),
                 Align2::CENTER_CENTER,
-                glyph,
-                FontId::proportional(22.0),
-                FAINT,
+                icon::ARROW_RIGHT,
+                FontId::proportional(16.0),
+                MUTED,
             );
+            self.paint_tile(ui, thumb, after, thumb.turns);
         }
         if !thumb.extras.is_empty() {
             let galley = painter.layout_no_wrap(
@@ -1107,10 +1137,10 @@ impl PhotoSortApp {
                 ..Default::default()
             },
         );
-        job.wrap = egui::text::TextWrapping::truncate_at_width(TILE.x);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(slot);
         let galley = painter.layout_job(job);
         painter.galley(egui::pos2(tile.left(), tile.bottom() + 4.0), galley, MUTED);
-        let area = tile.with_max_y(tile.bottom() + CAPTION);
+        let area = egui::Rect::from_min_size(tile.min, egui::vec2(slot, TILE.y + CAPTION));
         let response = ui.interact(area, ui.id().with(("thumb", key)), Sense::hover());
         let spoken = if thumb.name.ends_with(&thumb.caption) {
             thumb.name.clone()
@@ -1119,6 +1149,39 @@ impl PhotoSortApp {
         };
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &spoken));
         response.on_hover_text(&thumb.hover);
+    }
+
+    /// One photo tile, turned `turns` quarter turns from how it is now.
+    fn paint_tile(&mut self, ui: &mut egui::Ui, thumb: &Thumb, tile: egui::Rect, turns: u8) {
+        let painter = ui.painter().clone();
+        let radius = R_CONTROL as f32;
+        painter.rect_filled(tile, radius, BG);
+        let texture = (!thumb.folder)
+            .then(|| self.texture(thumb.id, false))
+            .flatten();
+        if let Some(texture) = texture {
+            let drawn =
+                paint_image_tinted(ui, &texture, tile, 1.0, Vec2::ZERO, turns, Color32::WHITE);
+            round_corners(&painter, drawn, radius, BG);
+            round_corners(&painter, tile, radius, CARD);
+        } else if self.requested.contains(&(thumb.id, false)) {
+            shimmer(ui, tile);
+        } else {
+            let glyph = if thumb.folder {
+                icon::FOLDER
+            } else if self.failures.contains_key(&thumb.id) {
+                icon::IMAGE_BROKEN
+            } else {
+                icon::IMAGE
+            };
+            painter.text(
+                tile.center(),
+                Align2::CENTER_CENTER,
+                glyph,
+                FontId::proportional(22.0),
+                FAINT,
+            );
+        }
     }
 }
 

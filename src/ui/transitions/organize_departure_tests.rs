@@ -75,7 +75,7 @@ fn folder_trash_discard_preserves_unrelated_organization_intent() {
 }
 #[cfg(feature = "metadata-native")]
 #[test]
-fn embedded_rotation_plan_keeps_its_destination_and_unapplied_rating_after_reload() {
+fn staged_rotation_and_rating_apply_together_and_keep_the_reviewed_destination() {
     let (dir, mut app) = fixture();
     let path = dir.path().join("Before/a.jpg");
     std::fs::copy(
@@ -96,11 +96,11 @@ fn embedded_rotation_plan_keeps_its_destination_and_unapplied_rating_after_reloa
             ..Default::default()
         },
     );
-    app.rotation_review.ensure(id, 1);
-    app.rotation_review.confirm(id);
-    app.review_rotations();
+    // A staged turn goes through Review changes with the rating.
+    crate::core::rotation::set_turns(&mut app.decisions, id, 1);
+    app.review_changes();
     settle(&mut app);
-    assert!(app.plan_open && app.rotation_plan, "{:?}", app.error);
+    assert!(app.plan_open && !app.rotation_plan, "{:?}", app.error);
     assert!(matches!(
         app.plan.as_ref().unwrap().actions[0],
         Action::Metadata {
@@ -112,11 +112,13 @@ fn embedded_rotation_plan_keeps_its_destination_and_unapplied_rating_after_reloa
     app.apply_reviewed_plan();
     settle(&mut app);
     assert!(app.error.is_none(), "{:?}", app.error);
-    assert_eq!(app.decisions[&id].rating, Some(2));
+    assert!(
+        !app.decisions.contains_key(&id),
+        "applied, so no longer staged"
+    );
     let meta = crate::core::metadata::read(&path);
-    assert_eq!((meta.rating, meta.orientation), (4, 3));
+    assert_eq!((meta.rating, meta.orientation), (2, 3));
     assert!(!crate::core::metadata::sidecar(&path).exists());
-    assert_eq!(app.rotation_review.pending_count(), 0);
 }
 fn smoke_frame(app: &mut PhotoSortApp, ctx: &egui::Context, now: Instant) -> egui::FullOutput {
     ctx.run_test(egui::RawInput::default(), |ui| {
@@ -288,16 +290,15 @@ fn native_quit_cannot_interrupt_file_operations_or_bypass_open_plans() {
     assert!(app.close_authorized);
 }
 #[test]
-fn native_quit_preserves_unfinished_rotation_and_routes_organize_drafts() {
+fn native_quit_asks_about_staged_rotations_and_routes_organize_drafts() {
     let (dir, mut app) = fixture();
     let id = app.media[0].id;
     app.step = Step::Rotation;
-    app.rotation_review.ensure(id, 1);
-    app.rotation_review.rotate(id, 1);
+    crate::core::rotation::set_turns(&mut app.decisions, id, 1);
     close_request(&mut app, true);
-    assert!(app.review_notice == Some(Step::Rotation) && !app.close_authorized);
-    app.review_notice = None;
-    app.rotation_review = Default::default();
+    assert!(matches!(app.departure, Some(Destination::Close)) && !app.close_authorized);
+    app.departure = None;
+    app.decisions.clear();
     app.step = Step::Organize;
     edit(&mut app);
     close_request(&mut app, true);
@@ -737,6 +738,7 @@ fn external_output_retry_preserves_earlier_moves_and_existing_destination_marks(
         )]),
         fingerprints: HashMap::from([(existing.id, existing.fingerprint)]),
         suggested: Default::default(),
+        rotations_staged: Default::default(),
     }
     .save(&output)
     .unwrap();
@@ -1321,13 +1323,9 @@ fn durable_quit_never_drops_unsaved_organization_or_rotation_choices() {
     app.save_plan_and_quit();
     assert!(!app.busy && !app.close_authorized);
     app.organize_drafts.clear();
+    // Staged turns are decisions: the saved session keeps them.
     let id = app.media[0].id;
-    app.rotation_review.ensure(id, 1);
-    app.rotation_review.confirm(id);
-    assert!(app.has_unsaved_plan_extras());
-    app.save_plan_and_quit();
-    assert!(!app.busy && !app.close_authorized);
-    app.rotation_review.discard();
+    crate::core::rotation::set_turns(&mut app.decisions, id, 1);
     assert!(!app.has_unsaved_plan_extras());
     app.save_plan_and_quit();
     settle(&mut app);
