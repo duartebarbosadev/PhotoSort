@@ -30,6 +30,8 @@ mod organize;
 mod organize_board;
 #[path = "people.rs"]
 mod people;
+#[path = "photo_rows.rs"]
+mod photo_rows;
 #[path = "pick_review.rs"]
 mod pick_review;
 #[path = "plan_review.rs"]
@@ -206,9 +208,6 @@ pub struct PhotoSortApp {
     rotation_panel: bool,
     /// The panel's width once the user has seen or resized it.
     rotation_panel_width: Option<f32>,
-    /// Photo width chosen with Fix Rotation's size slider, kept while the
-    /// app runs.
-    rotation_slot: Option<f32>,
     delete_review: crate::core::delete_review::Review,
     delete_current: Option<MediaId>,
     delete_categories: HashSet<crate::core::delete_review::Category>,
@@ -217,9 +216,6 @@ pub struct PhotoSortApp {
     delete_panel: bool,
     /// The panel's width once the user has seen or resized it.
     delete_panel_width: Option<f32>,
-    /// Photo width chosen with Easy Delete's size slider. Like Organize's,
-    /// it lasts while the app runs, across steps and folders.
-    delete_slot: Option<f32>,
     pick_review: crate::core::pick_review::Review,
     pick_run: Option<u64>,
     /// A photo of the selected Pick Best group, the one the keyboard acts on.
@@ -479,7 +475,6 @@ impl PhotoSortApp {
             rotation_queue_only: false,
             rotation_panel: false,
             rotation_panel_width: None,
-            rotation_slot: None,
             delete_review: Default::default(),
             delete_current: None,
             delete_categories: crate::core::delete_review::Category::ALL
@@ -488,7 +483,6 @@ impl PhotoSortApp {
             delete_run: None,
             delete_panel: false,
             delete_panel_width: None,
-            delete_slot: None,
             pick_review: Default::default(),
             pick_run: None,
             pick_current: None,

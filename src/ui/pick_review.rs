@@ -221,15 +221,7 @@ impl PhotoSortApp {
             &mut self.pick_panel_width,
         );
         let groups = self.pick_review.clusters().len();
-        let slots = self
-            .pick_review
-            .clusters()
-            .iter()
-            .map(|c| c.ordered.len().min(CARD_PHOTOS))
-            .max()
-            .unwrap_or(2);
         let current = self.pick_group();
-        let slot = self.delete_slot.unwrap_or(super::review_card::MIN_SLOT);
         let clicked = ui
             .scope_builder(
                 egui::UiBuilder::new()
@@ -240,9 +232,8 @@ impl PhotoSortApp {
                         ui,
                         "pick",
                         groups,
-                        slots,
-                        slot,
-                        |app, i| app.pick_card_ratio(i),
+                        |app, i| app.pick_card_aspects(i),
+                        |_, _| true,
                         |app, i| Some(app.pick_card(i)),
                         current,
                     )
@@ -314,7 +305,7 @@ impl PhotoSortApp {
                     self.accept_pick_defaults();
                 }
                 ui.add_space(S3);
-                super::review_card::size_slider(ui, &mut self.delete_slot);
+                self.size_slider(ui);
                 ui.add_space(S3);
                 ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
                     let mut job = egui::text::LayoutJob::default();
@@ -376,18 +367,14 @@ impl PhotoSortApp {
             )
     }
 
-    /// The slot height over width a card's photos need.
-    fn pick_card_ratio(&self, group: usize) -> f32 {
+    /// Each photo's width over its height on a group's card, in order.
+    fn pick_card_aspects(&self, group: usize) -> Vec<f32> {
         self.pick_review.clusters()[group]
             .ordered
             .iter()
             .take(CARD_PHOTOS)
-            .map(|id| {
-                self.metadata.get(id).map_or(0.75, |m| {
-                    super::review_card::slot_ratio(m.width, m.height, m.orientation)
-                })
-            })
-            .fold(0.0, f32::max)
+            .map(|id| self.photo_aspect(*id, 0))
+            .collect()
     }
 
     /// Why PhotoSort suggests keeping the group's best photo, for its

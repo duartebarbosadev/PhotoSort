@@ -290,11 +290,8 @@ impl PhotoSortApp {
         self.library_offset = view.scroll;
         self.library_reveal = true;
         // Organize's sidebar focus, preview, "Show original", renames and
-        // face merges belong to the folder; the thumbnail size does not.
-        self.board = organize_board::Board {
-            tile: self.board.tile,
-            ..Default::default()
-        };
+        // face merges belong to the folder.
+        self.board = Default::default();
         self.forget_scroll = true;
         self.filter_dirty = true;
     }
