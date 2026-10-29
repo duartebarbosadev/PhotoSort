@@ -218,10 +218,10 @@ fn empty_guided_bookmark_focuses_new_results_without_restarting_analysis() {
             }
             app.refilter();
             app.restore_bookmark();
-            // Easy Delete waits for the user to pick a card.
+            // Easy Delete and Fix Rotation wait for the user to pick a card.
             assert_eq!(
                 app.active.is_some(),
-                has_results && step != Step::EasyDelete,
+                has_results && step == Step::PickBest,
                 "{step:?}"
             );
             if let Some(active) = app.active {
@@ -363,6 +363,5 @@ fn guided_views_restore_position_and_pair_without_confirmations_or_decisions() {
     app.set_step(Step::Rotation);
     settle(&mut app);
     assert_eq!(app.active, Some(ids[2]));
-    assert!(app.rotation_review.pending().is_empty());
     assert!(app.decisions == staged && app.requested.is_empty());
 }

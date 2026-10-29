@@ -86,15 +86,13 @@ impl PhotoSortApp {
         if self.pending_bookmark.is_none() {
             self.pending_bookmark = self.saved_views.bookmarks.get(&self.step).cloned();
         }
-        if self.rotation_review.pending_count() > 0 {
-            self.rotation_review.discard();
-        } else {
-            self.decisions.clear();
-            // Back to the defaults: Easy Delete stages its suggestions again.
-            self.delete_review.restore_suggested(Default::default());
-            self.pick_review.discard_confirmations();
-            self.changed();
-        }
+        self.decisions.clear();
+        // Back to the defaults: Easy Delete and Fix Rotation stage their
+        // suggestions again.
+        self.delete_review.restore_suggested(Default::default());
+        self.rotation_review.restore_staged(Default::default());
+        self.pick_review.discard_confirmations();
+        self.changed();
     }
     pub(super) fn prepare_bookmark(&mut self) {
         self.pending_bookmark = self.saved_views.bookmarks.get(&self.step).cloned();
@@ -238,7 +236,6 @@ impl PhotoSortApp {
                 if view.active.is_some()
                     || view.missing_focus
                     || matches!(self.step, Step::EasyDelete | Step::PickBest)
-                    || (self.step == Step::Rotation && self.rotation_queue_only)
                 {
                     candidates.first().copied()
                 } else {

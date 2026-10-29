@@ -157,12 +157,12 @@ impl PhotoSortApp {
                 ui,
                 icon::ARROW_CLOCKWISE,
                 if detected {
-                    "No rotation suggestions left"
+                    "Every photo looks upright"
                 } else {
                     "Find sideways photos"
                 },
                 if detected {
-                    "Every suggested photo has been reviewed. You can still turn any photo by hand."
+                    "PhotoSort found no photo to turn. Show all photos to turn any of them by hand."
                 } else {
                     "Detect rotations checks each photo's orientation on this computer and lists the ones that look sideways or upside down."
                 },

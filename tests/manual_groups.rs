@@ -521,6 +521,7 @@ fn identity_chains_and_in_place_updates_preserve_all_intent_and_verified_fingerp
     let mut session = Session {
         organize: None,
         suggested: Default::default(),
+        rotations_staged: Default::default(),
         manual_groups: grouped(&m, vec![MediaId(0), MediaId(1)]),
         scene_groups: grouped(&m, vec![MediaId(1), MediaId(2)]),
         decisions: m

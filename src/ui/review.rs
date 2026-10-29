@@ -200,7 +200,7 @@ impl PhotoSortApp {
             return;
         };
         let ids = if self.step == Step::Rotation {
-            vec![active, active]
+            self.rotation_canvas_ids(active)
         } else {
             self.comparison_ids()
         };
@@ -212,8 +212,9 @@ impl PhotoSortApp {
         // On short windows, give the photos room and use Previous/Next instead
         // of squeezing both the canvas and a clipped thumbnail strip below it.
         // The strip can sit in a column on the left instead.
-        // Easy Delete shows this beside its grid, which is its strip.
-        let beside_grid = self.step == Step::EasyDelete;
+        // Easy Delete and Fix Rotation show this beside their grid, which
+        // is their strip.
+        let beside_grid = matches!(self.step, Step::EasyDelete | Step::Rotation);
         let side_strip = !beside_grid
             && self.preferences.strip_position == crate::core::preferences::StripPosition::Left
             && ui.available_width() >= 640.0;
@@ -250,9 +251,12 @@ impl PhotoSortApp {
         let columns = if beside_grid && ids.len() == 2 {
             // A narrow panel: side by side or stacked, whichever shows the
             // photos larger for their shape.
-            let ratio = self
-                .delete_current
-                .map_or(0.75, |id| self.delete_card_ratio(id));
+            let ratio = if self.step == Step::Rotation {
+                self.rotation_card_ratio(active)
+            } else {
+                self.delete_current
+                    .map_or(0.75, |id| self.delete_card_ratio(id))
+            };
             let width = ui.available_width();
             let side_by_side = (width / 2.0).min(height / ratio);
             let stacked = width.min(height / 2.0 / ratio);
@@ -393,11 +397,9 @@ impl PhotoSortApp {
                     }
                     divider(ui);
                     self.pick_confirm_buttons(ui);
+                } else if self.step == Step::Rotation {
+                    self.rotation_bar_buttons(ui);
                 } else {
-                    if self.step == Step::Rotation {
-                        self.rotation_confirm_buttons(ui);
-                        divider(ui);
-                    }
                     let rejected = self.decision(active).rejected;
                     // Both labels get the wider label's width so toggling never
                     // resizes the bar.
@@ -437,7 +439,12 @@ impl PhotoSortApp {
                 if compact {
                     ui.end_row();
                 }
-                self.review_ratings(ui, active);
+                // Fix Rotation stages turns only: no stars.
+                if self.step == Step::Rotation {
+                    self.review_view_controls(ui);
+                } else {
+                    self.review_ratings(ui, active);
+                }
             },
         );
         if show_filmstrip {
@@ -692,7 +699,7 @@ impl PhotoSortApp {
             return;
         }
         let count = if self.step == Step::Rotation {
-            2
+            self.rotation_canvas_ids(id).len()
         } else {
             self.comparison_ids().len().max(1)
         };
@@ -726,8 +733,12 @@ impl PhotoSortApp {
         if count > 1 {
             ui.painter().rect_filled(rect, R_SURFACE, CHROME);
         }
-        // Easy Delete outlines nothing: an outline could be read as Keep or Trash.
-        if count > 1 && self.focused_slot == slot && self.step != Step::EasyDelete {
+        // Easy Delete outlines nothing: an outline could be read as Keep or
+        // Trash. Fix Rotation shows one photo twice: nothing to pick.
+        if count > 1
+            && self.focused_slot == slot
+            && !matches!(self.step, Step::EasyDelete | Step::Rotation)
+        {
             ui.painter().rect_stroke(
                 rect,
                 R_SURFACE,
@@ -915,24 +926,10 @@ impl PhotoSortApp {
                     head.to_owned()
                 }
             };
+            // Fix Rotation's photos need no label: as it is, then turned,
+            // under the panel's header with the file name.
             let label = if self.step == Step::Rotation {
-                named(
-                    if self
-                        .rotation_review
-                        .choice(id)
-                        .is_some_and(|c| c.selected == corrected)
-                    {
-                        if corrected {
-                            "Correction · selected"
-                        } else {
-                            "Original · selected"
-                        }
-                    } else if corrected {
-                        "Correction"
-                    } else {
-                        "Original"
-                    },
-                )
+                String::new()
             } else {
                 let mut label = named(&(slot + 1).to_string());
                 // Easy Delete shows what tells the two photos apart, as on
@@ -1042,9 +1039,6 @@ impl PhotoSortApp {
         }
         if pan.is_none() && response.clicked() && self.step == Step::PickBest {
             self.toggle_pick(id);
-        }
-        if pan.is_none() && response.clicked() && self.step == Step::Rotation {
-            self.select_rotation(corrected);
         }
         if response.clicked() {
             self.pending_bookmark = None;

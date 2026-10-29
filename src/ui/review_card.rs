@@ -37,12 +37,13 @@ pub(super) struct Fact {
     pub better: bool,
 }
 
-/// A pill over a photo: Keep or Trash, or a neutral label.
+/// A pill over a photo: Keep or Trash, or none.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Badge {
     Keep(String),
     Trash(String),
-    Plain(String),
+    /// No pill: the photo speaks for itself.
+    None,
 }
 impl Badge {
     pub fn keep(keep: bool) -> Self {
@@ -498,14 +499,49 @@ impl PhotoSortApp {
         let inner = rect.shrink(PAD);
         let header = egui::Rect::from_min_size(inner.min, egui::vec2(inner.width(), HEADER));
         let mut right = header.right();
+        // Without a footer, a card's buttons are icons at the header's right.
+        if !layout.footer {
+            for (index, button) in card.buttons.iter().enumerate().rev() {
+                let ink = if button.enabled { MUTED } else { FAINT };
+                let glyph =
+                    painter.layout_no_wrap(button.text.clone(), FontId::proportional(15.0), ink);
+                let rect = Align2::RIGHT_CENTER.anchor_size(
+                    egui::pos2(right, header.center().y),
+                    egui::vec2(glyph.size().x + 10.0, HEADER + 4.0),
+                );
+                let response = ui
+                    .interact(rect, ui.id().with(("button", index)), Sense::click())
+                    .on_hover_text(&button.hover);
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        button.enabled,
+                        &button.hover,
+                    )
+                });
+                if button.enabled && response.hovered() {
+                    painter.rect_filled(rect, R_CONTROL, ACCENT_SOFT);
+                }
+                painter.galley(rect.center() - glyph.size() / 2.0, glyph, ink);
+                if button.enabled && response.clicked() {
+                    event = Some(CardEvent::Button(index));
+                }
+                right = rect.left() - 2.0;
+            }
+            if !card.buttons.is_empty() {
+                right -= S1;
+            }
+        }
         if let Some((label, hover)) = &card.undo {
             let undo = painter.layout_no_wrap(
                 format!("{}  {label}", egui_phosphor::regular::ARROW_U_UP_LEFT),
                 medium(11.0),
                 ACCENT,
             );
-            let link = Align2::RIGHT_CENTER
-                .anchor_size(header.right_center(), undo.size() + egui::vec2(8.0, 4.0));
+            let link = Align2::RIGHT_CENTER.anchor_size(
+                egui::pos2(right, header.center().y),
+                undo.size() + egui::vec2(8.0, 4.0),
+            );
             let response = ui
                 .interact(link, ui.id().with("undo"), Sense::click())
                 .on_hover_text(hover)
@@ -568,7 +604,8 @@ impl PhotoSortApp {
                         side + 1,
                         photo.name,
                         match &photo.badge {
-                            Badge::Keep(text) | Badge::Trash(text) | Badge::Plain(text) => text,
+                            Badge::Keep(text) | Badge::Trash(text) => text,
+                            Badge::None => "",
                         }
                     ),
                 )
@@ -824,7 +861,7 @@ fn badge_pill(painter: &egui::Painter, slot: egui::Rect, badge: &Badge) -> egui:
     let (text, fill, ink) = match badge {
         Badge::Keep(text) => (format!("{}  {text}", icon::CHECK), GREEN, Color32::BLACK),
         Badge::Trash(text) => (format!("{}  {text}", icon::TRASH), RED, Color32::BLACK),
-        Badge::Plain(text) => (text.clone(), Color32::from_black_alpha(170), INK),
+        Badge::None => return Align2::RIGHT_TOP.anchor_size(slot.right_top(), Vec2::ZERO),
     };
     let galley = painter.layout_no_wrap(text, medium(11.0), ink);
     let size = galley.size() + egui::vec2(16.0, 6.0);

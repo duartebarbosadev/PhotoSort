@@ -469,6 +469,58 @@ fn review_names_lossless_pixel_rotations() {
     app.runtime.shutdown();
 }
 
+/// A rotation reads "before → after": the photo as it is, then turned, and
+/// its caption names the turn from how it looks now, not the tag it ends
+/// with ("Set upright" for a photo tagged sideways reads "Rotate left").
+#[test]
+fn review_shows_rotations_before_and_after_named_by_the_turn() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app =
+        PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
+    app.root = Some("/library".into());
+    let metadata = |name: &str, orientation, rating| Action::Metadata {
+        source: source(name),
+        sidecar_before: None,
+        target: crate::core::metadata::WriteTarget::Embedded,
+        rating,
+        orientation,
+    };
+    for (name, orientation) in [("o1.jpg", 6), ("o6.jpg", 1)] {
+        app.metadata.insert(
+            MediaId::for_path(&Path::new("/library").join(name)),
+            Metadata {
+                orientation,
+                ..Default::default()
+            },
+        );
+    }
+    app.set_review_plan(Some(Plan {
+        actions: vec![
+            metadata("o1.jpg", Some(1), None),
+            metadata("o6.jpg", Some(6), Some(3)),
+        ],
+        ..Default::default()
+    }));
+    app.plan_open = true;
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let texts = dialog_texts(&mut app, &ctx, egui::vec2(900.0, 700.0));
+    for expected in ["o1.jpg: Rotate left", "o6.jpg: Rotate right · ★★★"] {
+        assert!(texts.iter().any(|t| t == expected), "{expected}: {texts:?}");
+    }
+    assert!(
+        !texts.iter().any(|t| t.contains("Set upright")),
+        "{texts:?}"
+    );
+    assert_eq!(app.plan_rows.slot(List::Updates), PAIR);
+    assert_eq!(app.plan_rows.slot(List::Trash), TILE.x);
+    // A mirror or an unknown orientation is still named, without a pair.
+    assert_eq!(turns_between(2, 5), Some(1));
+    assert_eq!(turns_between(1, 2), None);
+    app.runtime.shutdown();
+}
+
 /// One review covers Organize's moves and the staged ratings: one Apply
 /// applies the moves, then plans and applies the ratings for the moved files
 /// without opening a second review.
