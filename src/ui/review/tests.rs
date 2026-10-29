@@ -1115,3 +1115,46 @@ fn guided_comparisons_never_show_the_previous_photo_under_the_new_ones_pill() {
         );
     }
 }
+
+#[test]
+fn compared_photos_marked_for_trash_stay_bright() {
+    for step in [Step::Cull, Step::EasyDelete, Step::PickBest] {
+        let (_temp, mut app) = comparison_fixture(step);
+        let id = MediaId(1);
+        app.decisions.entry(id).or_default().rejected = true;
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
+        let texture = ctx.load_texture(
+            "photo",
+            egui::ColorImage::filled([40, 30], Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        );
+        for preview in [true, false] {
+            app.textures.insert(
+                (id, preview),
+                Texture {
+                    handle: texture.clone(),
+                    bytes: 4800,
+                    used: 0,
+                },
+            );
+        }
+        let output = ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    app.photo_canvas(ui, id, 1, egui::vec2(700.0, 500.0), true);
+                });
+            },
+        );
+        super::review_card::assert_trash_drawn_bright(&output, texture.id());
+        app.runtime.shutdown();
+    }
+}

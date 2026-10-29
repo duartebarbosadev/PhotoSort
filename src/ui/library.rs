@@ -358,7 +358,13 @@ impl PhotoSortApp {
             );
         }
         if d.rejected {
-            painter.rect_filled(drawn, image_radius, Color32::from_black_alpha(130));
+            // Edged in red, never darkened: the photo must still be judged.
+            painter.rect_stroke(
+                drawn,
+                image_radius,
+                Stroke::new(TRASH_EDGE, RED),
+                StrokeKind::Inside,
+            );
             badge(
                 &painter,
                 image_rect.left_top() + egui::vec2(S1, S1),
@@ -844,6 +850,71 @@ mod tests {
                     assert_eq!(app.textures.len(), 1);
                 }
             }
+        }
+    }
+    #[test]
+    fn photos_marked_for_trash_stay_bright_in_every_grid() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app =
+            PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
+        let id = MediaId(1);
+        app.media = vec![Media {
+            id,
+            path: temp.path().join("photo.jpg"),
+            kind: MediaKind::Photo,
+            fingerprint: Fingerprint::default(),
+        }];
+        app.index.insert(id, 0);
+        app.filtered = vec![0];
+        app.active = Some(id);
+        app.decisions.entry(id).or_default().rejected = true;
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        // Fade-ins finish at once, so a dim would show in a single frame.
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
+        let texture = ctx.load_texture(
+            "photo",
+            egui::ColorImage::filled([40, 30], Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        );
+        let texture_id = texture.id();
+        app.delete_review
+            .replace(vec![crate::core::delete_review::Entry {
+                subject: id,
+                companion: None,
+                category: crate::core::delete_review::Category::Dark,
+                tag: "Tag".into(),
+                keep_why: String::new(),
+                eyes: Vec::new(),
+                extra: Vec::new(),
+                reason: "dark".into(),
+            }]);
+        for preview in [true, false] {
+            app.textures.insert(
+                (id, preview),
+                Texture {
+                    handle: texture.clone(),
+                    bytes: 4800,
+                    used: 0,
+                },
+            );
+        }
+        for step in [Step::Cull, Step::EasyDelete] {
+            app.step = step;
+            app.library_layout = Layout::Grid;
+            let output = ctx.run_test(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(640.0, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| app.library(ui));
+                },
+            );
+            super::super::review_card::assert_trash_drawn_bright(&output, texture_id);
         }
     }
     #[test]

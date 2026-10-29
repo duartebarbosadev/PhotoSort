@@ -498,7 +498,7 @@ impl PhotoSortApp {
             },
             name,
             facts: Vec::new(),
-            dim: false,
+            trash: false,
             toggle: None,
             suggested_hover: None,
             inset: None,

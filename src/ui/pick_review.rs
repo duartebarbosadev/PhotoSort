@@ -554,7 +554,7 @@ impl PhotoSortApp {
                         .map(|m| m.path.display().to_string())
                         .unwrap_or_default(),
                     facts,
-                    dim: !keep,
+                    trash: !keep,
                     inset: None,
                     toggle: enabled.then(|| {
                         format!(
