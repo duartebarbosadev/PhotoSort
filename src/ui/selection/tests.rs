@@ -127,11 +127,14 @@ fn single_review_navigation_rates_current_photo_and_comparison_rates_its_members
     settle(&mut app);
     assert_eq!(app.decisions[&MediaId(1)].rating, Some(2));
     assert_eq!(app.decisions[&MediaId(3)].rating, Some(2));
-    assert!(
-        !app.cull_selection_key(egui::Key::D, egui::Modifiers::NONE),
-        "review must use focused mark handler"
-    );
-    app.reject(app.active.unwrap());
+    // The comparison is the selection: D marks both until one is focused.
+    assert!(app.cull_selection_key(egui::Key::D, egui::Modifiers::NONE));
+    settle(&mut app);
+    assert!(app.decisions[&MediaId(1)].rejected);
+    assert!(app.decisions[&MediaId(3)].rejected);
+    app.numeric_key(egui::Key::Num2, egui::Modifiers::NONE);
+    assert!(app.cull_selection_key(egui::Key::D, egui::Modifiers::NONE));
+    settle(&mut app);
     assert!(app.decisions[&MediaId(1)].rejected);
     assert!(!app.decisions[&MediaId(3)].rejected);
 }
@@ -669,4 +672,169 @@ fn d_on_one_selected_photo_in_organize_stays_with_the_canvas() {
     app.select_library(MediaId(3), false, false);
     assert!(!app.cull_selection_key(egui::Key::D, egui::Modifiers::NONE));
     assert!(app.decisions.is_empty());
+}
+
+#[test]
+fn d_marks_only_the_compared_photo_picked_and_every_one_otherwise() {
+    let marked = |app: &PhotoSortApp, i| app.decisions.get(&MediaId(i)).is_some_and(|d| d.rejected);
+    for step in [Step::Organize, Step::Cull] {
+        let (_dir, mut app) = fixture();
+        settle(&mut app);
+        app.step = step;
+        app.select_library(MediaId(1), false, false);
+        for id in [3, 5] {
+            app.select_library(MediaId(id), true, false);
+        }
+        app.compare_selection();
+        assert!(app.selection_compared(), "{step:?}");
+        assert_eq!(app.comparison_ids(), [MediaId(1), MediaId(3), MediaId(5)]);
+        // A digit picks the second photo, as a click on it does: D marks it
+        // alone, and again unmarks it.
+        app.numeric_key(egui::Key::Num2, egui::Modifiers::NONE);
+        assert_eq!(app.focused_comparison_photo(), Some(MediaId(3)));
+        assert!(app.cull_selection_key(egui::Key::D, egui::Modifiers::NONE));
+        settle(&mut app);
+        assert!(
+            marked(&app, 3) && !marked(&app, 1) && !marked(&app, 5),
+            "{step:?}"
+        );
+        // The Trash button acts on the same photo D does.
+        assert_eq!(app.trash_button_state(MediaId(3)), (false, true));
+        app.trash_button_clicked(MediaId(3));
+        settle(&mut app);
+        assert!(!marked(&app, 3), "{step:?}");
+        // Escape lets go of it: D marks every compared photo.
+        assert!(app.cull_selection_key(egui::Key::Escape, egui::Modifiers::NONE));
+        assert_eq!(app.focused_comparison_photo(), None);
+        assert!(app.selection_compared(), "{step:?}: the comparison stays");
+        assert_eq!(app.trash_button_state(MediaId(3)), (true, false));
+        assert!(app.cull_selection_key(egui::Key::D, egui::Modifiers::NONE));
+        settle(&mut app);
+        assert!([1, 3, 5].iter().all(|i| marked(&app, *i)), "{step:?}");
+        assert!(!marked(&app, 2), "{step:?}");
+        // A new selection lets go of a picked photo too.
+        app.numeric_key(egui::Key::Num1, egui::Modifiers::NONE);
+        assert_eq!(app.focused_comparison_photo(), Some(MediaId(1)));
+        app.review = false;
+        app.select_library(MediaId(7), true, false);
+        app.compare_selection();
+        assert_eq!(app.comparison_focus, None, "{step:?}");
+    }
+}
+
+#[test]
+fn a_similarity_group_comparison_keeps_d_on_the_current_photo() {
+    let (_dir, mut app) = fixture();
+    settle(&mut app);
+    app.cull_groups = Arc::new(
+        [(1, 3), (4, 3), (6, 3)]
+            .into_iter()
+            .map(|(id, g)| (MediaId(id), g))
+            .collect(),
+    );
+    app.select_library(MediaId(9), false, false);
+    app.select_library(MediaId(10), true, false);
+    app.compare_group(3);
+    // The group is not the selection: D stays with the canvas's photo.
+    assert!(!app.selection_compared());
+    assert!(!app.cull_selection_key(egui::Key::D, egui::Modifiers::NONE));
+    assert_eq!(app.trash_button_state(MediaId(1)), (false, false));
+}
+
+/// Real frames: a click on a compared photo picks it for D, and a click
+/// between the photos lets go of it.
+#[test]
+fn clicking_a_compared_photo_picks_it_for_d_and_empty_space_lets_go() {
+    use super::super::compact_cull_tests::{fixture as files, frame, rendered};
+    for step in [Step::Organize, Step::Cull] {
+        let (_temp, mut app) = files();
+        app.step = step;
+        app.output = app.root.as_ref().unwrap().display().to_string();
+        app.filter_dirty = true;
+        app.refilter();
+        let ids: Vec<MediaId> = app.filtered.iter().map(|i| app.media[*i].id).collect();
+        let ctx = egui::Context::default();
+        super::theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1500.0, 1000.0);
+        rendered(&mut app, &ctx, size);
+        app.select_library(ids[0], false, false);
+        app.select_library(ids[2], true, false);
+        if step == Step::Cull {
+            app.compare_selection();
+        }
+        let click = |app: &mut PhotoSortApp, pos: egui::Pos2| {
+            for pressed in [true, false] {
+                frame(
+                    app,
+                    &ctx,
+                    size,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+            }
+            // Let the click age, so the next one is not a double click.
+            for _ in 0..30 {
+                frame(app, &ctx, size, Vec::new());
+            }
+        };
+        let press_d = |app: &mut PhotoSortApp| {
+            frame(
+                app,
+                &ctx,
+                size,
+                vec![egui::Event::Key {
+                    key: egui::Key::D,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }],
+            );
+        };
+        let nodes = rendered(&mut app, &ctx, size);
+        let canvas = |slot: usize| {
+            nodes
+                .iter()
+                .find(|(label, _)| label.starts_with(&format!("Photo {slot}: ")))
+                .unwrap_or_else(|| panic!("{step:?}: no canvas {slot}"))
+                .1
+        };
+        let (first, second) = (canvas(1), canvas(2));
+        assert!(
+            nodes.iter().any(|(l, _)| l.contains("Mark all for Trash")),
+            "{step:?}"
+        );
+        // Click the second photo: D marks only it.
+        click(&mut app, second.center());
+        assert_eq!(app.comparison_focus, Some(ids[2]), "{step:?}");
+        let nodes = rendered(&mut app, &ctx, size);
+        assert!(
+            !nodes.iter().any(|(l, _)| l.contains("Mark all for Trash")),
+            "{step:?}: the Trash button follows the picked photo"
+        );
+        press_d(&mut app);
+        assert!(app.decision(ids[2]).rejected, "{step:?}");
+        assert!(!app.decision(ids[0]).rejected, "{step:?}");
+        // Click between the photos: D marks both.
+        let gap = if second.left() > first.right() {
+            egui::pos2((first.right() + second.left()) / 2.0, first.center().y)
+        } else {
+            egui::pos2(first.center().x, (first.bottom() + second.top()) / 2.0)
+        };
+        click(&mut app, gap);
+        assert_eq!(app.comparison_focus, None, "{step:?}");
+        assert_eq!(app.selection.len(), 2, "{step:?}: the selection stays");
+        press_d(&mut app);
+        assert!(app.decision(ids[0]).rejected, "{step:?}");
+        assert!(app.decision(ids[2]).rejected, "{step:?}");
+        app.runtime.shutdown();
+    }
 }

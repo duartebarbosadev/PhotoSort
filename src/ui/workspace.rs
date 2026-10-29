@@ -309,6 +309,9 @@ pub struct PhotoSortApp {
     independent_views: HashMap<u64, InspectionView>,
     sync_views: bool,
     focused_slot: u64,
+    /// A photo clicked inside a comparison of selected photos: D and Trash
+    /// act on it alone. Without one they act on every selected photo.
+    comparison_focus: Option<MediaId>,
     inspection_wanted: Vec<InspectionRequest>,
     inspection_frames: HashMap<u64, InspectionFrame>,
     view_started: Instant,
@@ -546,6 +549,7 @@ impl PhotoSortApp {
             independent_views: HashMap::new(),
             sync_views: true,
             focused_slot: 0,
+            comparison_focus: None,
             inspection_wanted: Vec::new(),
             inspection_frames: HashMap::new(),
             view_started: Instant::now(),
@@ -1494,6 +1498,10 @@ impl PhotoSortApp {
             self.compare_with(id);
         } else if !self.comparison.is_empty() && !self.comparison.contains(&id) {
             let slot = (self.focused_slot as usize).min(self.comparison.len() - 1);
+            // A clicked photo hands its focus to the one replacing it.
+            if self.comparison_focus == Some(self.comparison[slot]) {
+                self.comparison_focus = Some(id);
+            }
             self.comparison[slot] = id;
             if self.step == Step::Cull {
                 self.selection.replace(self.comparison.iter().copied());

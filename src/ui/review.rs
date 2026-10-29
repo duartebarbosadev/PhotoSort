@@ -44,6 +44,7 @@ impl PhotoSortApp {
         }
         if self.step == Step::Cull {
             self.selection.replace(self.comparison.iter().copied());
+            self.comparison_focus = None;
         }
         self.review = true;
     }
@@ -280,6 +281,18 @@ impl PhotoSortApp {
         let follow_focus = ui.data(|data| data.get_temp::<(u64, usize, u32, usize)>(focus_key))
             != Some(focus_layout);
         ui.data_mut(|data| data.insert_temp(focus_key, focus_layout));
+        // A click between compared selected photos lets go of a clicked one.
+        // Registered first, so the photos drawn over it keep their clicks.
+        let background = self.selection_compared().then(|| {
+            ui.interact(
+                egui::Rect::from_min_size(
+                    ui.cursor().min,
+                    egui::vec2(ui.available_width(), height),
+                ),
+                ui.id().with("comparison-background"),
+                Sense::click(),
+            )
+        });
         // Floating bars fade out even with AlwaysVisible. Review reserves the
         // wheel for zoom, so its scroll affordance must stay discoverable.
         let scroll_style = ui.spacing().scroll;
@@ -329,6 +342,9 @@ impl PhotoSortApp {
                 }
             });
         ui.spacing_mut().scroll = scroll_style;
+        if background.is_some_and(|response| response.clicked()) {
+            self.comparison_focus = None;
+        }
         ui.add_space(S1);
         floating_bar(
             ui,
@@ -398,36 +414,16 @@ impl PhotoSortApp {
                         self.rotation_confirm_buttons(ui);
                         divider(ui);
                     }
-                    let rejected = self.decision(active).rejected;
-                    // Both labels get the wider label's width so toggling never
+                    let (all, rejected) = self.trash_button_state(active);
+                    let (label, hover) = selection::trash_button_text(all, rejected, ids.len() > 1);
+                    // Every label gets the widest one's width so toggling never
                     // resizes the bar.
-                    let font = egui::TextStyle::Button.resolve(ui.style());
-                    let wide = ui
-                        .painter()
-                        .layout_no_wrap(format!("{}  Marked for Trash", icon::TRASH), font, INK)
-                        .size()
-                        .x
-                        + 2.0 * ui.spacing().button_padding.x;
-                    if icon_text_button_min(
-                        ui,
-                        true,
-                        rejected,
-                        icon::TRASH,
-                        if rejected {
-                            "Marked for Trash"
-                        } else {
-                            "Trash"
-                        },
-                        wide,
-                    )
-                    .on_hover_text(if rejected {
-                        "Unmark · D"
-                    } else {
-                        "Mark for Trash · D"
-                    })
-                    .clicked()
+                    let wide = selection::trash_button_width(ui, self.selection_compared());
+                    if icon_text_button_min(ui, true, rejected, icon::TRASH, label, wide)
+                        .on_hover_text(hover)
+                        .clicked()
                     {
-                        self.reject(active);
+                        self.trash_button_clicked(active);
                     }
                 }
                 if !self.comparison.is_empty() && ui.small_button("End comparison").clicked() {
@@ -726,14 +722,22 @@ impl PhotoSortApp {
         if count > 1 {
             ui.painter().rect_filled(rect, R_SURFACE, CHROME);
         }
-        // Easy Delete outlines nothing: an outline could be read as Keep or Trash.
-        if count > 1 && self.focused_slot == slot && self.step != Step::EasyDelete {
-            ui.painter().rect_stroke(
-                rect,
-                R_SURFACE,
-                Stroke::new(1.5, ACCENT.gamma_multiply(0.85)),
-                StrokeKind::Inside,
-            );
+        // The outline shows what D acts on. Compared selected photos are all
+        // outlined until one is clicked, which then stands out alone. Easy
+        // Delete outlines nothing: an outline could be read as Keep or Trash.
+        let faint = Stroke::new(1.5, ACCENT.gamma_multiply(0.85));
+        let outline = if count > 1 && self.selection_compared() {
+            match self.focused_comparison_photo() {
+                Some(focus) => (focus == id).then_some(Stroke::new(3.0, ACCENT)),
+                None => Some(faint),
+            }
+        } else {
+            (count > 1 && self.focused_slot == slot && self.step != Step::EasyDelete)
+                .then_some(faint)
+        };
+        if let Some(stroke) = outline {
+            ui.painter()
+                .rect_stroke(rect, R_SURFACE, stroke, StrokeKind::Inside);
         }
         let content = egui::Rect::from_min_max(
             rect.min + egui::vec2(8.0, 28.0),
@@ -1050,6 +1054,10 @@ impl PhotoSortApp {
             self.pending_bookmark = None;
             self.active = Some(id);
             self.focused_slot = slot;
+            // Among compared selected photos, D now marks only this one.
+            if count > 1 && matches!(self.step, Step::Cull | Step::Organize) {
+                self.comparison_focus = Some(id);
+            }
         }
         if response.hovered() {
             // Scrolling zooms, and so does a trackpad pinch (or Ctrl+scroll,
