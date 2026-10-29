@@ -231,3 +231,61 @@ fn videos_show_duration_frame_rate_codec_and_bitrate() {
             .all(|s| s.title != "Video")
     );
 }
+
+#[test]
+fn comparisons_group_photos_that_share_a_value() {
+    use details::Row;
+    let row = |values: &[&str]| Row {
+        label: "Format",
+        values: values.iter().map(|v| (*v).to_owned()).collect(),
+    };
+    let camera_and_phone = row(&["ARW", "HEIC", "HEIC", "HEIC"]);
+    assert!(camera_and_phone.differs());
+    assert_eq!(
+        camera_and_phone.groups(),
+        [("ARW", vec![0]), ("HEIC", vec![1, 2, 3])]
+    );
+    // A missing value is a value of its own, kept in first-appearance order.
+    let gaps = row(&["", "6.3 mm", "", "6.3 mm"]);
+    assert_eq!(gaps.groups(), [("", vec![0, 2]), ("6.3 mm", vec![1, 3])]);
+    let same = row(&["JPG", "JPG"]);
+    assert!(!same.differs());
+    assert_eq!(same.groups(), [("JPG", vec![0, 1])]);
+}
+
+#[test]
+fn location_reads_as_a_place_or_falls_back_to_coordinates() {
+    use photosort::core::geography::Location;
+    let media = Media {
+        id: photosort::core::model::MediaId(1),
+        path: "x.jpg".into(),
+        kind: photosort::core::model::MediaKind::Photo,
+        fingerprint: Default::default(),
+    };
+    let place = |city: &str, region: &str, country: &str| Metadata {
+        gps: Some((35.3606, 138.7274)),
+        location: Some(Location {
+            country: country.into(),
+            region: region.into(),
+            city: city.into(),
+        }),
+        ..Default::default()
+    };
+    let render =
+        |meta: &Metadata| value(&details::sections(&[(&media, meta)]), "Location")[0].clone();
+    assert_eq!(
+        render(&place("Fuji", "Shizuoka", "Japan")),
+        "Fuji, Shizuoka, Japan"
+    );
+    assert_eq!(
+        render(&place("Lisboa", "Lisboa", "Portugal")),
+        "Lisboa, Portugal"
+    );
+    assert_eq!(render(&place("", "", "")), "35.3606, 138.7274");
+    assert!(
+        details::sections(&[(&media, &Metadata::default())])
+            .iter()
+            .flat_map(|s| &s.rows)
+            .all(|r| r.label != "Location")
+    );
+}

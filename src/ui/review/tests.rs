@@ -458,14 +458,14 @@ fn details_panel_compares_every_open_photo_and_returns_to_one_photo() {
     let ctx = egui::Context::default();
     theme_install(&ctx);
     ctx.enable_accesskit();
-    let texts = |app: &mut PhotoSortApp| -> Vec<String> {
+    let texts = |app: &mut PhotoSortApp, width: f32| -> Vec<String> {
         let mut output = None;
         for _ in 0..2 {
             output = Some(ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        egui::vec2(1200.0, 900.0),
+                        egui::vec2(width, 900.0),
                     )),
                     ..Default::default()
                 },
@@ -482,26 +482,65 @@ fn details_panel_compares_every_open_photo_and_returns_to_one_photo() {
             .filter_map(|(_, n)| n.value().or(n.label()).map(str::to_owned))
             .collect()
     };
-    let compared = texts(&mut app);
-    for text in [
-        "Compare details",
-        "0.jpg",
-        "1.jpg",
-        "2.jpg",
-        "Fired (Auto)",
-        "Off",
-        "12.0 MP",
-    ] {
-        assert!(
-            compared.iter().any(|t| t == text),
-            "missing {text}: {compared:?}"
+    let count = |texts: &[String], text: &str| texts.iter().filter(|t| *t == text).count();
+    // Wide: one column per photo, so the two photos sharing 12.0 MP each show
+    // it. Narrow: stacked, and photos that share a value are listed once.
+    // Counted against JPG, which every photo shares and is always said once.
+    for (width, megapixels) in [(1200.0, 2), (300.0, 1)] {
+        let compared = texts(&mut app, width);
+        for text in [
+            "Compare details",
+            "0.jpg",
+            "1.jpg",
+            "2.jpg",
+            "1",
+            "2",
+            "3",
+            "Fired (Auto)",
+            "Off",
+            "-",
+        ] {
+            assert!(
+                compared.iter().any(|t| t == text),
+                "missing {text} at {width}: {compared:?}"
+            );
+        }
+        assert!(count(&compared, "JPG") > 0);
+        assert_eq!(
+            count(&compared, "12.0 MP"),
+            megapixels * count(&compared, "JPG"),
+            "{width}: {compared:?}"
         );
     }
     app.comparison.clear();
-    let single = texts(&mut app);
-    assert!(single.iter().all(|t| t != "Compare details"));
-    assert!(single.iter().any(|t| t == "Fired (Auto)"));
-    assert!(single.iter().all(|t| t != "Off"));
+    for width in [1200.0, 300.0] {
+        let single = texts(&mut app, width);
+        assert!(single.iter().all(|t| t != "Compare details"));
+        assert!(single.iter().any(|t| t == "Fired (Auto)"));
+        assert!(single.iter().any(|t| t == "Flash"));
+        assert!(single.iter().all(|t| t != "Off"));
+    }
+    // Organize keeps Show in Finder but no longer repeats where the photo
+    // goes or offers renaming here; F2 and the board still do.
+    app.step = Step::Organize;
+    let organize = texts(&mut app, 300.0);
+    assert!(
+        organize
+            .iter()
+            .any(|t| t == crate::core::desktop::Action::Reveal.label())
+    );
+    for gone in [
+        "Stays in",
+        "Will move to",
+        "Renamed to",
+        "Rename",
+        "Move to",
+    ] {
+        assert!(
+            organize.iter().all(|t| !t.contains(gone)),
+            "{gone}: {organize:?}"
+        );
+    }
     app.runtime.shutdown();
 }
 

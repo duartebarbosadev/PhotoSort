@@ -1632,7 +1632,7 @@ impl PhotoSortApp {
             .resizable(true)
             .drag_to_open(false)
             .default_size(300.0)
-            .size_range(260.0..=440.0)
+            .size_range(260.0..=560.0)
             .frame(egui::Frame::new().fill(PANEL).inner_margin(S4 as i8))
             .show_collapsible(root, &mut expanded, |ui| {
                 // While sliding out after the folder closed or the window
