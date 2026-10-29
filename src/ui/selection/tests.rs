@@ -751,18 +751,23 @@ fn clicking_a_compared_photo_picks_it_for_d_and_empty_space_lets_go() {
         app.step = step;
         app.output = app.root.as_ref().unwrap().display().to_string();
         app.filter_dirty = true;
-        app.refilter();
+        settle(&mut app);
         let ids: Vec<MediaId> = app.filtered.iter().map(|i| app.media[*i].id).collect();
         let ctx = egui::Context::default();
         super::theme_install(&ctx);
         ctx.enable_accesskit();
         let size = egui::vec2(1500.0, 1000.0);
         rendered(&mut app, &ctx, size);
+        // Cull ignores selection clicks while its browse query runs.
+        settle(&mut app);
         app.select_library(ids[0], false, false);
         app.select_library(ids[2], true, false);
+        assert_eq!(app.selection.len(), 2, "{step:?}");
         if step == Step::Cull {
             app.compare_selection();
+            assert!(app.review, "{step:?}");
         }
+        assert_eq!(app.comparison_ids(), [ids[0], ids[2]], "{step:?}");
         let click = |app: &mut PhotoSortApp, pos: egui::Pos2| {
             for pressed in [true, false] {
                 frame(
