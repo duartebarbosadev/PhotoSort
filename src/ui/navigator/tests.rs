@@ -558,7 +558,14 @@ fn cull_navigator_shows_several_folders_chosen_with_ctrl_cmd_or_shift() {
     let shown = |app: &PhotoSortApp| {
         let folders = app.browse.folder.folders();
         let mut names: Vec<String> = folders
-            .map(|f| f.strip_prefix(&root).unwrap().display().to_string())
+            // Windows lists paths with backslashes.
+            .map(|f| {
+                f.strip_prefix(&root)
+                    .unwrap()
+                    .display()
+                    .to_string()
+                    .replace('\\', "/")
+            })
             .collect();
         names.sort_unstable();
         names
