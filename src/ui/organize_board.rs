@@ -5186,23 +5186,19 @@ mod tests {
         assert_eq!(app.selection.ordered(&app.media, &app.filtered), [ids[0]]);
         // The round circle at a tile's corner adds that photo, and again
         // removes it.
-        // Tiles take their photos' shapes as thumbnails arrive, so the
-        // circle is found again before each click.
-        let circle = |app: &mut PhotoSortApp| {
-            let other = tile(app, ids[5]);
-            egui::pos2(
-                other.right() - 6.0 - S2 - 1.0,
-                other.bottom() - library::CAPTION - S2 - 1.0,
-            )
-        };
-        let at = circle(&mut app);
-        click(&mut app, at, Default::default());
+        let other = tile(&mut app, ids[5]);
+        let circle = egui::pos2(
+            other.right() - 6.0 - S2 - 1.0,
+            other.bottom() - library::CAPTION - S2 - 1.0,
+        );
+        click(&mut app, circle, Default::default());
         assert_eq!(
             app.selection.ordered(&app.media, &app.filtered),
             [ids[0], ids[5]]
         );
-        let at = circle(&mut app);
-        click(&mut app, at, Default::default());
+        // The tile kept its shape, so the same spot removes it again.
+        assert_eq!(tile(&mut app, ids[5]), other);
+        click(&mut app, circle, Default::default());
         assert_eq!(app.selection.ordered(&app.media, &app.filtered), [ids[0]]);
         app.runtime.shutdown();
     }

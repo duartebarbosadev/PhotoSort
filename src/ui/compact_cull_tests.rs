@@ -37,7 +37,13 @@ pub(super) fn fixture_with(count: usize) -> (tempfile::TempDir, PhotoSortApp) {
     // (a made-up capture date, say) re-sorts the grid and rebuilds the
     // navigator between a press and its release.
     for m in &app.media {
-        let metadata = crate::core::metadata::read(&m.path);
+        let mut metadata = crate::core::metadata::read(&m.path);
+        // Without native metadata a PNG has no size until its thumbnail is
+        // decoded, and the workers then publish it: seed it now, so tiles
+        // keep their shape instead of changing between a press and release.
+        if metadata.width == 0 || metadata.height == 0 {
+            (metadata.width, metadata.height) = image::image_dimensions(&m.path).unwrap();
+        }
         assert_eq!(
             metadata.rating,
             if m.path.ends_with("photo-0.png") {
