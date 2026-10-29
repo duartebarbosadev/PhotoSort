@@ -59,6 +59,8 @@ fn change_every_view(app: &mut PhotoSortApp) {
     app.filter = Filter::Rated;
     app.browse.rating = RatingFilter::AtLeast(2);
     app.browse.sort = Sort::Newest;
+    app.browse.folder.path = Some(PathBuf::from("/Trip"));
+    app.browse.folder.also = vec![PathBuf::from("/Home")];
     app.browse_filters_open = true;
     app.group_mode = GroupMode::Visual;
     app.delete_current = Some(first);
@@ -73,9 +75,10 @@ fn change_every_view(app: &mut PhotoSortApp) {
     app.sync_views = false;
     app.focused_slot = 1;
     app.library_offset = 120.0;
-    app.board.focus = Some("Trip".into());
+    app.board.focus = vec!["Trip".into(), "Home".into()];
+    app.board.folder_anchor = Some("Home".into());
     app.board.original = true;
-    app.board.focus_before = Some(None);
+    app.board.focus_before = Some(Vec::new());
     app.board.single = Some(2);
     app.board.searching = true;
     app.board.renaming = Some((first, "x".into()));
@@ -107,7 +110,8 @@ fn assert_clean(app: &PhotoSortApp) {
     assert!(app.single_view_stash.is_empty() && app.focused_slot == 0);
     assert!(!app.browse_filters_open && !app.delete_panel);
     let board = &app.board;
-    assert!(board.focus.is_none() && !board.original && board.focus_before.is_none());
+    assert!(board.focus.is_empty() && !board.original && board.focus_before.is_none());
+    assert!(board.folder_anchor.is_none());
     assert!(board.single.is_none() && !board.searching && board.renaming.is_none());
     assert!(!board.confirm_reset && board.people.merged.is_empty());
 }
@@ -163,7 +167,7 @@ fn another_folder_opens_with_clean_views_in_every_step_and_keeps_app_wide_choice
     app.open_now(b.clone());
     // Clean while B is still being discovered, not only once it opens.
     assert_eq!(app.group_mode, GroupMode::Current);
-    assert!(app.query.is_empty() && app.board.focus.is_none());
+    assert!(app.query.is_empty() && app.board.focus.is_empty());
     settle(&mut app);
 
     assert_eq!(app.root.as_ref(), Some(&b));

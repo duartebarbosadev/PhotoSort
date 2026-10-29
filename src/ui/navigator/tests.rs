@@ -513,3 +513,91 @@ fn empty_filtered_scope_keeps_navigation_available_and_other_workflows_stay_isol
         });
     });
 }
+
+#[test]
+fn cull_navigator_shows_several_folders_chosen_with_ctrl_cmd_or_shift() {
+    use super::super::compact_cull_tests::{fixture, frame, rendered};
+    let (_temp, mut app) = fixture();
+    let root = app.root.clone().unwrap();
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let size = egui::vec2(1400.0, 900.0);
+    let click = |app: &mut PhotoSortApp, folder: &str, modifiers: egui::Modifiers| {
+        rendered(app, &ctx, size);
+        let key = Key::Folder(root.join(folder));
+        let pos = ctx
+            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("test_navigator_node", &key))))
+            .unwrap_or_else(|| panic!("{folder} is not in the navigator"))
+            .center();
+        for pressed in [true, false] {
+            frame(
+                app,
+                &ctx,
+                size,
+                vec![
+                    egui::Event::ModifiersChanged(modifiers),
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers,
+                    },
+                ],
+            );
+        }
+        frame(
+            app,
+            &ctx,
+            size,
+            vec![egui::Event::ModifiersChanged(Default::default())],
+        );
+        settle(app);
+    };
+    let shown = |app: &PhotoSortApp| {
+        let folders = app.browse.folder.folders();
+        let mut names: Vec<String> = folders
+            .map(|f| f.strip_prefix(&root).unwrap().display().to_string())
+            .collect();
+        names.sort_unstable();
+        names
+    };
+    let none = egui::Modifiers::default();
+    click(&mut app, "B", none);
+    assert_eq!(shown(&app), ["B"]);
+    assert_eq!(app.filtered.len(), 5);
+    // Cmd (macOS) or Ctrl adds a folder; the photos of both are shown.
+    click(&mut app, "A/Day1", egui::Modifiers::COMMAND);
+    assert_eq!(shown(&app), ["A/Day1", "B"]);
+    assert_eq!(app.filtered.len(), 9);
+    assert!(
+        app.active_cull_filters().contains(&"2 folders".to_owned()),
+        "{:?}",
+        app.active_cull_filters()
+    );
+    // And takes one away again.
+    click(&mut app, "B", egui::Modifiers::CTRL);
+    assert_eq!(shown(&app), ["A/Day1"]);
+    assert_eq!(app.filtered.len(), 4);
+    // Shift shows the folders listed from the last one clicked through
+    // this one; Cmd/Ctrl with Shift adds them.
+    click(&mut app, "A", none);
+    click(&mut app, "B", egui::Modifiers::SHIFT);
+    assert_eq!(shown(&app), ["A", "A/Day1", "B"]);
+    click(&mut app, "Empty", none);
+    click(&mut app, "B", egui::Modifiers::SHIFT);
+    assert_eq!(shown(&app), ["B", "Empty"]);
+    click(&mut app, "A/Day1", egui::Modifiers::COMMAND);
+    click(
+        &mut app,
+        "Empty",
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+    );
+    assert_eq!(shown(&app), ["A/Day1", "B", "Empty"]);
+    // A plain click shows one folder again.
+    click(&mut app, "A/Day1", none);
+    assert_eq!(shown(&app), ["A/Day1"]);
+    assert!(app.browse.folder.also.is_empty());
+    app.runtime.shutdown();
+}
