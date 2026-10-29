@@ -24,9 +24,48 @@ impl PhotoSortApp {
     }
     fn select_navigation_node(&mut self, key: Key) {
         match key {
-            Key::Folder(path) => self.browse.folder.path = Some(path),
+            Key::Folder(path) => self.browse.folder.show_only(Some(path)),
             Key::Date(date) => self.browse.date = Some(date),
             Key::Group(group) => self.browse.group = Some(group),
+        }
+        self.navigator_changed();
+    }
+    /// A click on a folder in the navigator, by the Organize sidebar's rules:
+    /// a plain click shows just that folder; Ctrl/Cmd adds it to the folders
+    /// shown, or takes it away again; Shift shows the folders listed from the
+    /// last one clicked through this one, added to those shown with Ctrl/Cmd.
+    fn choose_navigator_folder(
+        &mut self,
+        view: &crate::core::browsing::tree::View,
+        path: std::path::PathBuf,
+        modifiers: egui::Modifiers,
+    ) {
+        let toggle = modifiers.command || modifiers.ctrl;
+        let row = |target: &std::path::Path| {
+            view.visible.iter().position(
+                |i| matches!(&view.tree.nodes[*i].key, Key::Folder(folder) if folder == target),
+            )
+        };
+        let span = self
+            .browse
+            .folder
+            .path
+            .as_deref()
+            .filter(|_| modifiers.shift)
+            .and_then(row)
+            .zip(row(&path));
+        let folder = &mut self.browse.folder;
+        if let Some((from, to)) = span {
+            let rows = view.visible[from.min(to)..=from.max(to)].iter();
+            let span = rows.filter_map(|i| match &view.tree.nodes[*i].key {
+                Key::Folder(folder) => Some(folder.clone()),
+                _ => None,
+            });
+            folder.show_span(span.collect(), toggle);
+        } else if toggle {
+            folder.toggle(path);
+        } else {
+            folder.show_only(Some(path));
         }
         self.navigator_changed();
     }
@@ -93,10 +132,14 @@ impl PhotoSortApp {
                 let index = view.tree.lookup.get(&key)?;
                 Some(view.tree.nodes[*index].label.clone())
             });
-            let label = selected.map_or_else(
-                || format!("Browse {}", self.navigator.mode.title().to_lowercase()),
-                |label| format!("{}: {label}", self.navigator.mode.title()),
-            );
+            let several = self.browse.folder.folders().count();
+            let label = match selected {
+                _ if self.navigator.mode == Mode::Folders && several > 1 => {
+                    format!("Folders: {several} folders")
+                }
+                Some(label) => format!("{}: {label}", self.navigator.mode.title()),
+                None => format!("Browse {}", self.navigator.mode.title().to_lowercase()),
+            };
             let width = ui.available_width().clamp(240., 420.);
             let height = (ui.ctx().content_rect().height() - 180.).clamp(160., 420.);
             let response = ui
@@ -168,7 +211,7 @@ impl PhotoSortApp {
                 .clicked()
             {
                 match self.navigator.mode {
-                    Mode::Folders => self.browse.folder.path = None,
+                    Mode::Folders => self.browse.folder.show_only(None),
                     Mode::Dates => self.browse.date = None,
                     Mode::Groups => self.browse.group = None,
                 }
@@ -252,7 +295,10 @@ impl PhotoSortApp {
                             let response = ui.add_sized(
                                 [ui.available_width(), row_height],
                                 egui::Button::selectable(
-                                    selected.as_ref() == Some(&node.key),
+                                    match &node.key {
+                                        Key::Folder(path) => self.browse.folder.shows(path),
+                                        key => selected.as_ref() == Some(key),
+                                    },
                                     label,
                                 )
                                 .truncate()
@@ -312,7 +358,10 @@ impl PhotoSortApp {
                             });
                             if response
                                 .on_hover_text(match &node.key {
-                                    Key::Folder(p) => p.display().to_string(),
+                                    Key::Folder(p) => format!(
+                                        "{} · Ctrl/Cmd-click to show it with other folders",
+                                        p.display()
+                                    ),
                                     Key::Date(d) => {
                                         if d.is_empty() {
                                             "Unknown capture date".into()
@@ -324,7 +373,21 @@ impl PhotoSortApp {
                                 })
                                 .clicked()
                             {
-                                self.select_navigation_node(node.key.clone());
+                                let modifiers = ui.input(|i| i.modifiers);
+                                match &node.key {
+                                    Key::Folder(path)
+                                        if modifiers.shift
+                                            || modifiers.command
+                                            || modifiers.ctrl =>
+                                    {
+                                        self.choose_navigator_folder(
+                                            &view,
+                                            path.clone(),
+                                            modifiers,
+                                        );
+                                    }
+                                    key => self.select_navigation_node(key.clone()),
+                                }
                             }
                         });
                     }
