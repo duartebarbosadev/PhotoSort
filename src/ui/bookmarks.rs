@@ -262,6 +262,49 @@ impl PhotoSortApp {
         self.view_data_ready.insert(self.step);
         self.view_started = Instant::now();
     }
+    /// A different library starts every step with a clean view: Group by
+    /// "Current folders", no search or filter, every Easy Delete tab, no
+    /// selection, zoom or open panel, scrolled to the top. Staged changes are
+    /// not views; the new folder's own session restores them. App-wide
+    /// choices stay: preferences, thumbnail and photo sizes, panel widths.
+    pub(super) fn reset_folder_views(&mut self) {
+        let view = Bookmark::default();
+        self.pending_bookmark = None;
+        self.active = view.active;
+        self.selection.clear();
+        self.comparison = view.comparison;
+        self.single_view_stash.clear();
+        self.review = self.step != Step::Organize;
+        self.inspector = view.inspector && self.was_wide;
+        self.library_layout = view.layout;
+        self.query = view.query;
+        self.filter = view.filter;
+        self.browse = view.browse;
+        self.navigator = view.navigator;
+        self.browse_filters_open = false;
+        self.group_mode = view.group_mode;
+        self.delete_current = view.delete_current;
+        self.delete_categories = view.delete_categories.into_iter().collect();
+        self.delete_panel = false;
+        self.rotation_queue_only = view.rotation_queue_only;
+        self.pick_focus = view.pick_focus;
+        self.inspection_view = view.view;
+        self.independent_views = view.independent_views;
+        self.fit_zooms.clear();
+        self.sync_views = view.sync_views;
+        self.focused_slot = 0;
+        self.review_notice = None;
+        self.library_offset = view.scroll;
+        self.library_reveal = true;
+        // Organize's sidebar focus, preview, "Show original", renames and
+        // face merges belong to the folder; the thumbnail size does not.
+        self.board = organize_board::Board {
+            tile: self.board.tile,
+            ..Default::default()
+        };
+        self.forget_scroll = true;
+        self.filter_dirty = true;
+    }
     pub(super) fn load_bookmarks(&mut self, views: Saved) {
         self.saved_views = views;
         let step = self.saved_views.step.unwrap_or(self.step);
