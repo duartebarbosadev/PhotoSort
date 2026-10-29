@@ -290,6 +290,7 @@ impl PhotoSortApp {
         self.pick_focus = view.pick_focus;
         self.inspection_view = view.view;
         self.independent_views = view.independent_views;
+        self.fit_zooms.clear();
         self.sync_views = view.sync_views;
         self.focused_slot = 0;
         self.review_notice = None;
