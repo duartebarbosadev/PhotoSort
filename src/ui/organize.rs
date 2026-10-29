@@ -24,7 +24,7 @@ impl PhotoSortApp {
             return false;
         }
         if new_folder {
-            let parent = self.board.focus.clone().unwrap_or_default();
+            let parent = self.board_focus_folder();
             self.board_new_folder(&parent, &[]);
         } else if let Some(active) = self.active {
             self.board_rename_photo(active);

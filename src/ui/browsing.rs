@@ -33,17 +33,22 @@ impl PhotoSortApp {
                 date.clone()
             });
         }
-        if let Some(path) = &self.browse.folder.path {
-            let folder = self
-                .root
-                .as_ref()
-                .and_then(|root| path.strip_prefix(root).ok())
-                .filter(|p| !p.as_os_str().is_empty())
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "Library root".into());
-            active.push(format!("Folder {folder}"));
+        let folders = self.browse.folder.folders().count();
+        if folders > 1 {
+            active.push(format!("{folders} folders"));
+        } else if let Some(path) = &self.browse.folder.path {
+            active.push(format!("Folder {}", self.folder_label(path)));
         }
         active
+    }
+    /// A folder's path inside the library, or "Library root".
+    fn folder_label(&self, path: &std::path::Path) -> String {
+        self.root
+            .as_ref()
+            .and_then(|root| path.strip_prefix(root).ok())
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Library root".into())
     }
     /// A line above the photos whenever Cull shows only some of them, so a
     /// filter restored with the folder's saved view is never a surprise.
@@ -430,26 +435,22 @@ impl PhotoSortApp {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            let selected = self.browse.folder.path.as_ref().map_or_else(
-                || "All folders".into(),
-                |path| {
-                    self.root
-                        .as_ref()
-                        .and_then(|root| path.strip_prefix(root).ok())
-                        .filter(|p| !p.as_os_str().is_empty())
-                        .map(|p| p.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "Library root".into())
-                },
-            );
+            let several = self.browse.folder.folders().count();
+            let selected = match &self.browse.folder.path {
+                _ if several > 1 => format!("{several} folders"),
+                Some(path) => self.folder_label(path),
+                None => "All folders".into(),
+            };
             egui::ComboBox::from_id_salt("browse_folder")
                 .width(200.0)
                 .truncate()
                 .selected_text(selected)
                 .show_ui(ui, |ui| {
                     if ui
-                        .selectable_value(&mut self.browse.folder.path, None, "All folders")
+                        .selectable_label(self.browse.folder.path.is_none(), "All folders")
                         .clicked()
                     {
+                        self.browse.folder.show_only(None);
                         self.filter_dirty = true;
                         ui.close();
                     }
@@ -466,7 +467,7 @@ impl PhotoSortApp {
                                     .add_sized(
                                         [200.0, row_height],
                                         egui::Button::selectable(
-                                            self.browse.folder.path.as_ref() == Some(&folder.path),
+                                            self.browse.folder.shows(&folder.path),
                                             &folder.label,
                                         )
                                         .truncate(),
@@ -474,7 +475,7 @@ impl PhotoSortApp {
                                     .on_hover_text(folder.path.display().to_string())
                                     .clicked()
                                 {
-                                    self.browse.folder.path = Some(folder.path.clone());
+                                    self.browse.folder.show_only(Some(folder.path.clone()));
                                     self.filter_dirty = true;
                                     ui.close();
                                 }
@@ -492,10 +493,12 @@ impl PhotoSortApp {
                 self.filter_dirty = true;
             }
             if let Some(path) = self.browse.folder.path.as_ref()
+                && several == 1
                 && self.root.as_ref().is_some_and(|root| path != root)
                 && ui.button("Parent folder").clicked()
             {
-                self.browse.folder.path = path.parent().map(|p| p.to_path_buf());
+                let parent = path.parent().map(|p| p.to_path_buf());
+                self.browse.folder.show_only(parent);
                 self.filter_dirty = true;
             }
         });

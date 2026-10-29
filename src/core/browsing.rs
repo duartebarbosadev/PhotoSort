@@ -96,28 +96,76 @@ pub struct Options {
 /// It never scans the filesystem or conflates siblings such as Trip and Trip-2.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderFilter {
+    /// The folder shown, or of several the last one clicked, which a
+    /// Shift-click range starts from. `None` shows every folder.
     pub path: Option<std::path::PathBuf>,
+    /// More folders shown with `path`, chosen with Ctrl/Cmd or Shift.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<std::path::PathBuf>,
     pub recursive: bool,
 }
 impl Default for FolderFilter {
     fn default() -> Self {
         Self {
             path: None,
+            also: Vec::new(),
             recursive: true,
         }
     }
 }
 impl FolderFilter {
     pub fn matches(&self, media: &std::path::Path) -> bool {
-        self.path.as_ref().is_none_or(|folder| {
-            media.parent().is_some_and(|parent| {
-                if self.recursive {
-                    parent.starts_with(folder)
-                } else {
-                    parent == folder
-                }
+        self.path.is_none()
+            || media.parent().is_some_and(|parent| {
+                self.folders().any(|folder| {
+                    if self.recursive {
+                        parent.starts_with(folder)
+                    } else {
+                        parent == folder
+                    }
+                })
             })
-        })
+    }
+    /// Every folder shown; none when every folder is.
+    pub fn folders(&self) -> impl Iterator<Item = &std::path::PathBuf> {
+        let also = if self.path.is_some() {
+            &self.also[..]
+        } else {
+            &[]
+        };
+        self.path.iter().chain(also)
+    }
+    pub fn shows(&self, folder: &std::path::Path) -> bool {
+        self.folders().any(|f| f == folder)
+    }
+    /// Shows just this folder, or every folder.
+    pub fn show_only(&mut self, folder: Option<std::path::PathBuf>) {
+        self.path = folder;
+        self.also.clear();
+    }
+    /// Ctrl/Cmd-click: adds `folder` to those shown, or takes it away again.
+    pub fn toggle(&mut self, folder: std::path::PathBuf) {
+        if self.path.as_ref() == Some(&folder) {
+            self.path = self.also.pop();
+        } else if let Some(at) = self.also.iter().position(|f| *f == folder) {
+            self.also.remove(at);
+        } else {
+            self.also.extend(self.path.replace(folder));
+        }
+    }
+    /// Shift-click: shows the `span` of folders, from `path` through the
+    /// one clicked; `add` (Ctrl/Cmd) keeps those already shown too.
+    pub fn show_span(&mut self, span: Vec<std::path::PathBuf>, add: bool) {
+        if !add {
+            self.also.clear();
+        }
+        for folder in span {
+            if self.path.is_none() {
+                self.path = Some(folder);
+            } else if !self.shows(&folder) {
+                self.also.push(folder);
+            }
+        }
     }
 }
 /// Cached folder navigation entries, built once by the browse worker.
@@ -239,5 +287,50 @@ impl Filter {
             Self::Issues => issues,
             Self::Duplicates => duplicate,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn a_folder_filter_shows_every_folder_chosen() {
+        let root = Path::new("/photos");
+        let [a, b, c] = ["A", "B", "C"].map(|name| root.join(name));
+        let mut filter = FolderFilter::default();
+        assert!(filter.matches(&c.join("x.jpg")));
+        // Ctrl/Cmd-click adds folders, and takes them away again.
+        filter.show_only(Some(a.clone()));
+        filter.toggle(b.clone());
+        assert_eq!(filter.folders().collect::<Vec<_>>(), [&b, &a]);
+        assert!(filter.matches(&a.join("Day1/x.jpg")) && filter.matches(&b.join("x.jpg")));
+        assert!(!filter.matches(&c.join("x.jpg")));
+        filter.recursive = false;
+        assert!(!filter.matches(&a.join("Day1/x.jpg")) && filter.matches(&a.join("x.jpg")));
+        filter.toggle(b.clone());
+        assert_eq!(filter.folders().collect::<Vec<_>>(), [&a]);
+        filter.toggle(a.clone());
+        assert!(filter.path.is_none() && filter.matches(&c.join("x.jpg")));
+        // Shift shows a range from the folder clicked last, replacing or
+        // (with Ctrl/Cmd) adding to those shown.
+        filter.show_only(Some(c.clone()));
+        filter.show_span(vec![a.clone(), b.clone(), c.clone()], false);
+        assert_eq!(filter.folders().collect::<Vec<_>>(), [&c, &a, &b]);
+        filter.show_span(vec![b.clone(), c.clone()], false);
+        assert_eq!(filter.folders().collect::<Vec<_>>(), [&c, &b]);
+        filter.show_span(vec![a.clone()], true);
+        assert_eq!(filter.folders().count(), 3);
+    }
+
+    #[test]
+    fn views_saved_with_one_folder_still_load() {
+        let saved = r#"{"path":"/photos/A","recursive":true}"#;
+        let filter: FolderFilter = serde_json::from_str(saved).unwrap();
+        assert_eq!(filter.path, Some(PathBuf::from("/photos/A")));
+        assert!(filter.also.is_empty());
+        // One folder is still saved the way it was.
+        assert_eq!(serde_json::to_string(&filter).unwrap(), saved);
     }
 }
