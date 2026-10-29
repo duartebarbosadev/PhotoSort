@@ -524,7 +524,17 @@ fn native_portrait_quality_restart_preserves_face_evidence_without_pixel_request
         AnalysisProfile::Quality,
         Thresholds::default(),
     );
-    assert!(values.values().next().unwrap().faces.unwrap().count > 0);
+    assert!(
+        values
+            .values()
+            .next()
+            .unwrap()
+            .faces
+            .as_ref()
+            .unwrap()
+            .count
+            > 0
+    );
     assert!(cold.model_inferences > 0);
     rt.shutdown();
     let mut rt = Runtime::with_cache(|| {}, cache.path().into());

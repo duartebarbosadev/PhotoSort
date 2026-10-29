@@ -73,11 +73,6 @@ impl Badge {
 pub(super) enum CardState {
     /// The suggestion is the decision: nothing to say.
     Suggested,
-    /// PhotoSort's suggestion, nothing changed or confirmed yet.
-    Provisional,
-    /// Changed but not confirmed: leaving it asks first.
-    Changed,
-    Confirmed,
 }
 
 /// A button on a card's action row.
@@ -99,16 +94,8 @@ impl CardButton {
             trailing: false,
         }
     }
-    pub fn primary(mut self, primary: bool) -> Self {
-        self.primary = primary;
-        self
-    }
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
-        self
-    }
-    pub fn trailing(mut self) -> Self {
-        self.trailing = true;
         self
     }
 }
@@ -208,85 +195,13 @@ impl CardLayout {
 
 impl CardState {
     fn label(self, text: Option<&str>) -> (String, Color32) {
-        use egui_phosphor::regular as icon;
-        let (glyph, words, color) = match self {
-            Self::Confirmed => (icon::CHECK_CIRCLE, "Confirmed", GREEN),
-            Self::Changed => (icon::PENCIL_SIMPLE, "Provisional · changed", ACCENT),
-            Self::Provisional => (icon::CIRCLE_DASHED, "Provisional", MUTED),
-            Self::Suggested => return (text.unwrap_or_default().to_owned(), MUTED),
-        };
-        (format!("{glyph}  {}", text.unwrap_or(words)), color)
+        match self {
+            Self::Suggested => (text.unwrap_or_default().to_owned(), MUTED),
+        }
     }
 }
 
 impl PhotoSortApp {
-    /// A virtualized grid of `count` review cards of `slots` photos each.
-    /// `card` describes card `i`; the current card is scrolled into view
-    /// whenever it changes. Returns the card and event clicked this frame.
-    pub(super) fn card_grid(
-        &mut self,
-        ui: &mut egui::Ui,
-        salt: &str,
-        count: usize,
-        slots: usize,
-        mut card: impl FnMut(&mut Self, usize) -> Option<ReviewCard>,
-        current: Option<usize>,
-    ) -> Option<(usize, CardEvent)> {
-        let gap = S3;
-        ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
-        let slots = slots.max(1);
-        let min = 2.0 * PAD + slots as f32 * MIN_SLOT + S2 * (slots - 1) as f32;
-        let width = ui.available_width();
-        let columns = ((width + gap) / (min + gap)).floor().max(1.0) as usize;
-        let layout = CardLayout {
-            width: (width - gap * (columns - 1) as f32) / columns as f32,
-            slots,
-            captions: self.preferences.show_filenames,
-            ratio: 0.75,
-            facts: false,
-            footer: true,
-        };
-        let height = layout.height();
-        let rows = count.div_ceil(columns);
-        let scroll = self.card_scroll(ui, salt, current, |position| {
-            ((position / columns) as f32 * (height + gap), height)
-        });
-        let mut clicked = None;
-        let output = scroll.show_rows(ui, height, rows, |ui, range| {
-            let origin = ui.max_rect().min;
-            for row in range.clone() {
-                for column in 0..columns {
-                    let index = row * columns + column;
-                    if index >= count {
-                        break;
-                    }
-                    let Some(spec) = card(self, index) else {
-                        continue;
-                    };
-                    let rect = egui::Rect::from_min_size(
-                        origin
-                            + egui::vec2(
-                                column as f32 * (layout.width + gap),
-                                (row - range.start) as f32 * (height + gap),
-                            ),
-                        egui::vec2(layout.width, height),
-                    );
-                    let event = ui
-                        .scope_builder(
-                            egui::UiBuilder::new().id_salt((salt, index)).max_rect(rect),
-                            |ui| self.review_card(ui, rect, &spec, layout),
-                        )
-                        .inner;
-                    if let Some(event) = event {
-                        clicked = Some((index, event));
-                    }
-                }
-            }
-        });
-        self.library_offset = output.state.offset.y;
-        clicked
-    }
-
     /// The grids' scroll area. It restores a saved offset, or follows the
     /// current card whenever it changes, as Review's strip follows its photo.
     /// `span` gives a card's top and height in the scrolled content.
@@ -343,6 +258,53 @@ impl PhotoSortApp {
         // The narrowest a photo slot gets before the grid drops a column.
         min_slot: f32,
         ratio: impl Fn(&Self, usize) -> f32,
+        header: impl FnMut(&mut Self, &mut egui::Ui, usize),
+        card: impl FnMut(&mut Self, usize) -> Option<ReviewCard>,
+        current: Option<usize>,
+    ) -> Option<GridClick> {
+        self.rows_card_grid(
+            ui, salt, sections, true, slots, min_slot, ratio, header, card, current,
+        )
+    }
+
+    /// `sectioned_card_grid` with one section and no header: every card in
+    /// one run, rows as tall as their tallest photo needs.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn flat_card_grid(
+        &mut self,
+        ui: &mut egui::Ui,
+        salt: &str,
+        count: usize,
+        slots: usize,
+        min_slot: f32,
+        ratio: impl Fn(&Self, usize) -> f32,
+        card: impl FnMut(&mut Self, usize) -> Option<ReviewCard>,
+        current: Option<usize>,
+    ) -> Option<GridClick> {
+        self.rows_card_grid(
+            ui,
+            salt,
+            &[count],
+            false,
+            &[slots],
+            min_slot,
+            ratio,
+            |_, _, _| {},
+            card,
+            current,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn rows_card_grid(
+        &mut self,
+        ui: &mut egui::Ui,
+        salt: &str,
+        sections: &[usize],
+        headers: bool,
+        slots: &[usize],
+        min_slot: f32,
+        ratio: impl Fn(&Self, usize) -> f32,
         mut header: impl FnMut(&mut Self, &mut egui::Ui, usize),
         mut card: impl FnMut(&mut Self, usize) -> Option<ReviewCard>,
         current: Option<usize>,
@@ -377,8 +339,10 @@ impl PhotoSortApp {
         for (section, &len) in sections.iter().enumerate() {
             let (columns, base) = section_layout(section);
             let header_top = top;
-            rows.push((top, SECTION, Row::Header(section)));
-            top += SECTION;
+            if headers {
+                rows.push((top, SECTION, Row::Header(section)));
+                top += SECTION;
+            }
             let mut first = start;
             while first < start + len {
                 let end = (first + columns).min(start + len);
@@ -977,6 +941,132 @@ fn suggested_mark(painter: &egui::Painter, pill: egui::Rect) -> egui::Rect {
     painter.rect_filled(rect, R_CONTROL, Color32::from_black_alpha(170));
     painter.galley(rect.min + egui::vec2(7.0, 3.0), galley, ACCENT);
     rect
+}
+
+/// A photo slot's height over its width for one photo: portrait photos get
+/// taller cells instead of dark bars beside them.
+pub(super) fn slot_ratio(width: u32, height: u32, orientation: u8) -> f32 {
+    if width == 0 || height == 0 {
+        return 0.75;
+    }
+    let (w, h) = if (5..=8).contains(&orientation) {
+        (height, width)
+    } else {
+        (width, height)
+    };
+    (h as f32 / w as f32).clamp(0.56, 1.5)
+}
+
+pub(super) fn size_text(bytes: u64) -> String {
+    let megabytes = bytes as f64 / 1_048_576.0;
+    if megabytes >= 1024.0 {
+        format!("{:.1} GB", megabytes / 1024.0)
+    } else {
+        format!("{megabytes:.1} MB")
+    }
+}
+
+/// The photo widths a grid's size slider offers.
+const SLOT_RANGE: std::ops::RangeInclusive<f32> = 140.0..=420.0;
+
+/// The size slider, as in Organize's board header: small image, slider,
+/// large image. It sets how wide a photo gets before the grid drops a
+/// column; cards still fill the row.
+pub(super) fn size_slider(ui: &mut egui::Ui, slot: &mut Option<f32>) {
+    use egui_phosphor::regular as icon;
+    ui.label(RichText::new(icon::IMAGE).size(16.0).color(MUTED));
+    let mut value = slot.unwrap_or(MIN_SLOT);
+    ui.spacing_mut().slider_width = 90.0;
+    ui.spacing_mut().interact_size.y = 14.0;
+    if named(
+        ui.add(egui::Slider::new(&mut value, SLOT_RANGE).show_value(false)),
+        egui::WidgetType::Slider,
+        "Photo size",
+    )
+    .on_hover_text("Photo size")
+    .changed()
+    {
+        *slot = Some(value);
+    }
+    ui.label(RichText::new(icon::IMAGE).size(11.0).color(MUTED));
+}
+
+/// A grid with a panel that slides over it from the right.
+pub(super) struct PanelLayout {
+    /// The grid and the panel together.
+    pub area: egui::Rect,
+    /// The grid: its final width at once, so it reflows once per open or
+    /// close, never once per frame of the slide.
+    pub grid: egui::Rect,
+    pub width: f32,
+    /// How far in the panel is, 0 to 1.
+    pub slide: f32,
+}
+
+/// Lays out a grid beside a panel that is `shown`, keeping room for one
+/// card. `width` is the panel's width once seen or resized.
+pub(super) fn panel_layout(
+    ui: &egui::Ui,
+    salt: &str,
+    shown: bool,
+    width: &mut Option<f32>,
+) -> PanelLayout {
+    let area = ui.available_rect_before_wrap();
+    let slide = ui.ctx().animate_bool_responsive(egui::Id::new(salt), shown);
+    let widest = (area.width() - 460.0).max(360.0);
+    let panel = width.unwrap_or(area.width() * 0.45).clamp(360.0, widest);
+    *width = Some(panel);
+    PanelLayout {
+        area,
+        grid: if shown {
+            area.with_max_x(area.right() - panel - S3)
+        } else {
+            area
+        },
+        width: panel,
+        slide,
+    }
+}
+
+/// The panel beside a grid, `slide` of the way in from the right edge of
+/// its area, over the grid's cards while it slides out. Its left edge
+/// resizes it: returns the new width while it is dragged.
+pub(super) fn side_panel(
+    ui: &mut egui::Ui,
+    layout: &PanelLayout,
+    salt: &str,
+    content: impl FnOnce(&mut egui::Ui),
+) -> Option<f32> {
+    let (area, width) = (layout.area, layout.width);
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(area.right() - (width + S3) * layout.slide + S3, area.top()),
+        egui::vec2(width, area.height()),
+    );
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .id_salt(salt)
+            .max_rect(rect)
+            .layout(egui::Layout::top_down(Align::Min)),
+        |ui| {
+            ui.set_clip_rect(area.intersect(ui.clip_rect()));
+            egui::Frame::new()
+                .fill(PANEL)
+                .corner_radius(R_SURFACE)
+                .inner_margin(S2)
+                .show(ui, |ui| {
+                    ui.set_min_size(ui.available_size());
+                    content(ui);
+                });
+        },
+    );
+    let handle = egui::Rect::from_x_y_ranges(
+        rect.left() - 4.0..=rect.left() + 2.0,
+        rect.top()..=rect.bottom(),
+    );
+    let response = ui
+        .interact(handle, egui::Id::new((salt, "resize")), Sense::drag())
+        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+    response.dragged().then(|| width - response.drag_delta().x)
 }
 
 /// Every piece of text a frame painted, one per line, for tests.

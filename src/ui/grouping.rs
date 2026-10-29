@@ -28,7 +28,6 @@ impl PhotoSortApp {
             && self.group_task.is_none()
             && !self.plan_open
             && self.departure.is_none()
-            && self.review_notice.is_none()
     }
     pub(super) fn publish_groups(&mut self, groups: Arc<HashMap<MediaId, usize>>) {
         // Restore a group filter by photo identity, not yesterday's AI numbering.

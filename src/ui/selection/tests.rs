@@ -165,7 +165,7 @@ fn selection_does_not_act_on_pending_views_busy_mutations_or_other_workflows() {
     assert_eq!(app.stats.decodes, 0);
 }
 #[test]
-fn clear_all_trash_does_not_resurrect_marks_from_confirmed_keep_all_reviews() {
+fn clear_all_trash_does_not_resurrect_marks_and_lets_suggestions_return() {
     use crate::core::{delete_review, pick_review};
     let (dir, mut app) = fixture();
     app.root = Some(dir.path().into());
@@ -192,15 +192,14 @@ fn clear_all_trash_does_not_resurrect_marks_from_confirmed_keep_all_reviews() {
     }]);
     app.delete_review
         .toggle(MediaId(0), MediaId(0), &mut app.decisions);
-    app.pick_review.replace(
-        vec![pick_review::Cluster {
-            key: 1,
-            ordered: vec![MediaId(2), MediaId(3)],
-            scores: HashMap::from([(MediaId(2), 0.2), (MediaId(3), 0.8)]),
-        }],
-        &mut app.decisions,
-    );
-    app.pick_review.confirm(true, &mut app.decisions);
+    app.pick_review.replace(vec![pick_review::Cluster::new(
+        1,
+        vec![MediaId(2), MediaId(3)],
+        HashMap::from([(MediaId(2), 0.2), (MediaId(3), 0.8)]),
+    )]);
+    app.pick_review
+        .restore_suggested([MediaId(2), MediaId(3)].into_iter().collect());
+    app.pick_review.toggle(MediaId(2), &mut app.decisions);
     assert!(!app.decision(MediaId(0)).rejected && !app.decision(MediaId(2)).rejected);
     let ctx = egui::Context::default();
     theme_install(&ctx);
@@ -221,11 +220,9 @@ fn clear_all_trash_does_not_resurrect_marks_from_confirmed_keep_all_reviews() {
         },
     );
     assert!(app.decisions.values().all(|d| !d.rejected));
-    app.pick_review.reset_all(&mut app.decisions);
-    assert!(
-        app.decisions.values().all(|d| !d.rejected),
-        "Reset replayed marks cleared by Alt+D"
-    );
+    // Both steps stage their suggestions again the next time they open.
+    assert!(app.pick_review.suggested().is_empty());
+    assert!(app.delete_review.suggested().is_empty());
     for id in [MediaId(0), MediaId(2), MediaId(4)] {
         assert_eq!(app.decision(id).rating, Some(4));
         assert_eq!(app.decision(id).turns, 1);
@@ -282,14 +279,11 @@ fn clear_all_trash_shared_action_covers_every_workflow_and_retains_unconfirmed_c
         }]);
         app.delete_review
             .toggle(MediaId(0), MediaId(0), &mut app.decisions);
-        app.pick_review.replace(
-            vec![pick_review::Cluster {
-                key: 1,
-                ordered: vec![MediaId(2), MediaId(3)],
-                scores: HashMap::from([(MediaId(2), 0.2), (MediaId(3), 0.8)]),
-            }],
-            &mut app.decisions,
-        );
+        app.pick_review.replace(vec![pick_review::Cluster::new(
+            1,
+            vec![MediaId(2), MediaId(3)],
+            HashMap::from([(MediaId(2), 0.2), (MediaId(3), 0.8)]),
+        )]);
         app.pick_review.toggle(MediaId(2), &mut app.decisions);
         for id in [MediaId(4), MediaId(7), MediaId(100), MediaId(999)] {
             app.decisions.insert(
@@ -317,8 +311,8 @@ fn clear_all_trash_shared_action_covers_every_workflow_and_retains_unconfirmed_c
         // The card keeps its photo, now unlike its suggestion, with Undo.
         assert!(app.delete_review.changed(MediaId(0), &app.decisions));
         assert!(delete_review::Review::keeps(&app.decisions, MediaId(0)));
-        assert!(app.pick_review.unfinished());
-        assert!(app.pick_review.comparison().unwrap().keep_all());
+        // So does the group, which now keeps both photos.
+        assert!(app.pick_review.changed(0, &app.decisions));
         assert!(Arc::ptr_eq(&catalog, app.catalog.as_ref().unwrap()));
         assert!(
             app.session_snapshot()
@@ -479,35 +473,26 @@ fn clear_all_trash_shortcut_preserves_text_and_requires_exact_modifiers() {
     app.runtime.shutdown();
 }
 #[test]
-fn clear_all_trash_reconciles_active_pick_round_without_reanalysis() {
+fn clear_all_trash_keeps_the_selected_pick_group_without_reanalysis() {
     let (dir, mut app) = fixture();
     app.root = Some(dir.path().into());
     app.step = Step::PickBest;
-    app.pick_review.replace(
-        vec![crate::core::pick_review::Cluster {
-            key: 1,
-            ordered: (0..4).map(MediaId).collect(),
-            scores: (0..4).map(|i| (MediaId(i), i as f64)).collect(),
-        }],
-        &mut app.decisions,
-    );
-    app.pick_review.confirm(false, &mut app.decisions);
-    app.pick_review.confirm(false, &mut app.decisions);
-    app.sync_pick_view();
-    assert!(app.pick_review.current().unwrap().current > 0);
+    app.pick_review
+        .replace(vec![crate::core::pick_review::Cluster::new(
+            1,
+            (0..4).map(MediaId).collect(),
+            (0..4).map(|i| (MediaId(i), i as f64)).collect(),
+        )]);
+    app.view_data_ready.insert(Step::PickBest);
+    app.stage_pick_suggestions();
+    app.set_active(MediaId(1));
+    app.pick_panel = true;
+    assert_eq!(app.decisions.values().filter(|d| d.rejected).count(), 3);
     app.clear_all_trash_marks();
-    assert_eq!(app.pick_review.current().unwrap().current, 0);
-    assert!(
-        app.pick_review
-            .comparison()
-            .unwrap()
-            .paths
-            .contains(&app.active.unwrap())
-    );
-    assert_eq!(app.focused_slot, 0);
     assert!(app.decisions.values().all(|d| !d.rejected));
-    app.pick_review.reset_all(&mut app.decisions);
-    assert!(app.decisions.values().all(|d| !d.rejected));
+    assert_eq!(app.pick_group(), Some(0));
+    assert!(app.pick_panel);
+    assert!(app.pick_review.changed(0, &app.decisions));
     assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
     assert!(app.analysis_run.is_none() && app.requested.is_empty());
     app.runtime.shutdown();

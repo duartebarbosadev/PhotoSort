@@ -258,9 +258,6 @@ impl PhotoSortApp {
         self.review = !matches!(step, Step::Organize | Step::Rotation);
         self.fit_view();
         self.view_started = Instant::now();
-        if step == Step::PickBest {
-            self.sync_pick_view();
-        }
         self.start_ready_analysis();
         self.prepare_bookmark();
         if step == Step::EasyDelete {
@@ -271,6 +268,12 @@ impl PhotoSortApp {
             self.active = None;
             self.rotation_panel = false;
             self.stage_rotation_suggestions();
+        }
+        if step == Step::PickBest {
+            // As in Easy Delete, no group is selected until the user picks one.
+            self.pick_current = None;
+            self.pick_panel = false;
+            self.stage_pick_suggestions();
         }
         if step == Step::Cull || self.metadata_organize_mode() {
             self.start_metadata_index();
@@ -675,7 +678,7 @@ impl PhotoSortApp {
                 .background_color(fill)
                 .desired_width(width),
         );
-        if response.changed() && self.allow_review_departure() {
+        if response.changed() {
             self.query = query;
             self.filter_dirty = true;
             // A saved view waiting to be restored must not undo the typing.
@@ -692,9 +695,7 @@ impl PhotoSortApp {
     }
     pub(super) fn filter_choices(&mut self, ui: &mut egui::Ui) {
         for f in Filter::ALL {
-            if ui.selectable_label(self.filter == f, f.title()).clicked()
-                && self.allow_review_departure()
-            {
+            if ui.selectable_label(self.filter == f, f.title()).clicked() {
                 self.filter = f;
                 self.filter_dirty = true;
                 self.pending_bookmark = None;
@@ -716,7 +717,7 @@ impl PhotoSortApp {
             self.group_mode,
             self.delete_categories.clone(),
             self.rotation_queue_only,
-            self.pick_focus,
+            self.pick_current,
         );
         use egui_phosphor::regular as icon;
         // Right group first (view switch, Details); the step's controls then
@@ -739,15 +740,18 @@ impl PhotoSortApp {
                     }
                     // No step has a More menu: Analyze and the step's own
                     // actions sit in the bar. Organize previews the clicked
-                    // photo beside its folders, Easy Delete and Fix Rotation
-                    // the clicked card beside their grid, so none of them
-                    // has a view switch.
+                    // photo beside its folders, Easy Delete, Fix Rotation and
+                    // Pick Best the clicked card beside their grid, so none of
+                    // them has a view switch.
                     if self.step == Step::Organize {
                         self.organize_bar_actions(ui, compact);
                     } else {
                         ui.add_space(S1);
                         self.analyze_icon_button(ui);
-                        if !matches!(self.step, Step::EasyDelete | Step::Rotation) {
+                        if !matches!(
+                            self.step,
+                            Step::EasyDelete | Step::Rotation | Step::PickBest
+                        ) {
                             ui.add_space(S1);
                             self.view_switch(ui);
                         }
@@ -771,7 +775,7 @@ impl PhotoSortApp {
                         Step::Organize => self.organize_controls(ui),
                         Step::EasyDelete => self.delete_controls(ui),
                         Step::Rotation => self.rotation_controls(ui),
-                        Step::PickBest => self.pick_controls(ui),
+                        Step::PickBest => {}
                         Step::Cull => self.browse_controls(ui),
                     }
                     if self.analysis_run.is_some()
@@ -789,11 +793,11 @@ impl PhotoSortApp {
             .response
             .rect;
         ui.advance_cursor_after_rect(left.union(right));
-        // Organize, Easy Delete and Fix Rotation have no context line, so
-        // the bar ends right under its row.
+        // Organize, Easy Delete, Fix Rotation and Pick Best have no context
+        // line, so the bar ends right under its row.
         if !matches!(
             self.step,
-            Step::Organize | Step::EasyDelete | Step::Rotation
+            Step::Organize | Step::EasyDelete | Step::Rotation | Step::PickBest
         ) {
             ui.add_space(2.0);
             self.step_context(ui);
@@ -809,7 +813,7 @@ impl PhotoSortApp {
             self.group_mode,
             self.delete_categories.clone(),
             self.rotation_queue_only,
-            self.pick_focus,
+            self.pick_current,
         );
         if before != after {
             self.pending_bookmark = None;
@@ -851,10 +855,8 @@ impl PhotoSortApp {
     }
     /// One quiet line under the toolbar with what the current photo needs.
     fn step_context(&mut self, ui: &mut egui::Ui) {
-        match self.step {
-            Step::PickBest => self.pick_context(ui),
-            Step::Cull => self.cull_filter_notice(ui),
-            _ => {}
+        if self.step == Step::Cull {
+            self.cull_filter_notice(ui);
         }
     }
     /// One segmented view switch: library layouts, then Review. Narrow
@@ -1269,14 +1271,11 @@ mod step_bar_tests {
             );
         }
         app.finish_rotation_detection();
-        app.pick_review.replace(
-            vec![Cluster {
-                key: 1,
-                ordered: vec![ids[2], ids[3]],
-                scores: HashMap::from([(ids[2], 10.), (ids[3], 20.)]),
-            }],
-            &mut app.decisions,
-        );
+        app.pick_review.replace(vec![Cluster::new(
+            1,
+            vec![ids[2], ids[3]],
+            HashMap::from([(ids[2], 10.), (ids[3], 20.)]),
+        )]);
         (temp, app, ids)
     }
     #[test]

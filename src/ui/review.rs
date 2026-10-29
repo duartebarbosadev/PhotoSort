@@ -3,21 +3,7 @@ use super::*;
 impl PhotoSortApp {
     pub(super) fn comparison_ids(&self) -> Vec<MediaId> {
         if self.step == Step::PickBest {
-            return self
-                .pick_review
-                .comparison()
-                .map(|c| {
-                    if self.pick_focus {
-                        c.paths
-                            .iter()
-                            .copied()
-                            .filter(|id| Some(*id) == self.active)
-                            .collect()
-                    } else {
-                        c.paths.clone()
-                    }
-                })
-                .unwrap_or_default();
+            return self.pick_panel_ids();
         }
         if self.step == Step::EasyDelete {
             return self
@@ -210,9 +196,12 @@ impl PhotoSortApp {
         // On short windows, give the photos room and use Previous/Next instead
         // of squeezing both the canvas and a clipped thumbnail strip below it.
         // The strip can sit in a column on the left instead.
-        // Easy Delete and Fix Rotation show this beside their grid, which
-        // is their strip.
-        let beside_grid = matches!(self.step, Step::EasyDelete | Step::Rotation);
+        // Easy Delete, Fix Rotation and Pick Best show this beside their
+        // grid, which is their strip.
+        let beside_grid = matches!(
+            self.step,
+            Step::EasyDelete | Step::Rotation | Step::PickBest
+        );
         let side_strip = !beside_grid
             && self.preferences.strip_position == crate::core::preferences::StripPosition::Left
             && ui.available_width() >= 640.0;
@@ -251,6 +240,14 @@ impl PhotoSortApp {
             // photos larger for their shape.
             let ratio = if self.step == Step::Rotation {
                 self.rotation_card_ratio(active)
+            } else if self.step == Step::PickBest {
+                ids.iter()
+                    .map(|id| {
+                        self.metadata.get(id).map_or(0.75, |m| {
+                            super::review_card::slot_ratio(m.width, m.height, m.orientation)
+                        })
+                    })
+                    .fold(0.0, f32::max)
             } else {
                 self.delete_current
                     .map_or(0.75, |id| self.delete_card_ratio(id))
@@ -393,23 +390,24 @@ impl PhotoSortApp {
                     divider(ui);
                     self.delete_undo_button(ui);
                 } else if self.step == Step::PickBest {
-                    let paths = self
-                        .pick_review
-                        .comparison()
-                        .map(|c| c.paths.clone())
-                        .unwrap_or_default();
-                    for (side, id) in paths.iter().enumerate() {
-                        let keep = self.pick_review.comparison().is_none_or(|c| c.keeps(*id));
-                        if ui
-                            .add(decision_button(side, keep))
-                            .on_hover_text(format!("Toggle photo {} · {}", side + 1, side + 1))
-                            .clicked()
-                        {
+                    for (side, id) in ids.iter().enumerate() {
+                        let keep = !self.decision(*id).rejected;
+                        let button = ui.add(decision_button(side, keep));
+                        let button = if side < 9 {
+                            button.on_hover_text(format!(
+                                "Toggle photo {} · {}",
+                                side + 1,
+                                side + 1
+                            ))
+                        } else {
+                            button.on_hover_text(format!("Toggle photo {}", side + 1))
+                        };
+                        if button.clicked() {
                             self.toggle_pick(*id);
                         }
                     }
                     divider(ui);
-                    self.pick_confirm_buttons(ui);
+                    self.pick_undo_button(ui);
                 } else if self.step == Step::Rotation {
                     self.rotation_bar_buttons(ui);
                 } else {
@@ -955,22 +953,20 @@ impl PhotoSortApp {
                 String::new()
             } else {
                 let mut label = named(&(slot + 1).to_string());
-                // Easy Delete shows what tells the two photos apart, as on
-                // its cards, in place of the scores.
-                let facts = (self.step == Step::EasyDelete)
-                    .then(|| self.delete_photo_facts(id))
-                    .flatten();
+                // Easy Delete and Pick Best show what tells the photos
+                // apart, as on their cards, in place of the scores.
+                let facts = match self.step {
+                    Step::EasyDelete => self.delete_photo_facts(id),
+                    Step::PickBest => self.pick_photo_facts(id),
+                    _ => None,
+                };
                 if let Some(facts) = &facts {
                     label.push_str(" · ");
                     label.push_str(facts);
                 }
-                // Pick Best ranks by its cluster score; elsewhere show the
-                // photo's quality score once analysis has run.
-                let score = (self.step == Step::PickBest)
-                    .then(|| self.pick_review.current())
-                    .flatten()
-                    .and_then(|t| t.cluster.scores.get(&id).copied())
-                    .or_else(|| self.analysis.get(&id).map(|a| a.score));
+                // Elsewhere show the photo's quality score once analysis has
+                // run.
+                let score = self.analysis.get(&id).map(|a| a.score);
                 if let Some(score) = score.filter(|_| facts.is_none()) {
                     label.push_str(&format!(" · score {score:.1}"));
                 }
@@ -1023,25 +1019,37 @@ impl PhotoSortApp {
             .on_hover_text(warning);
         }
         if pixels && matches!(self.step, Step::EasyDelete | Step::PickBest) {
-            let keep = if self.step == Step::PickBest {
-                self.pick_review.comparison().is_none_or(|c| c.keeps(id))
-            } else {
-                !self.decision(id).rejected
-            };
+            let keep = !self.decision(id).rejected;
+            // A photo going to Trash is dimmed and edged in red, as on the
+            // grid's cards; its pill stays bright.
+            if !keep {
+                let painter = ui.painter().with_clip_rect(rect);
+                painter.rect_filled(content, 0.0, Color32::from_black_alpha(140));
+                painter.rect_stroke(
+                    rect.shrink(1.0),
+                    R_TILE,
+                    Stroke::new(2.0, RED.gamma_multiply(0.85)),
+                    egui::StrokeKind::Inside,
+                );
+            }
             let pill = decision_pill(ui.painter(), rect, keep);
             let suggested = if self.step == Step::PickBest {
                 self.pick_review
-                    .comparison()
-                    .is_some_and(|c| c.ai_pick == id)
+                    .cluster_of(id)
+                    .is_some_and(|c| c.best() == id)
             } else {
                 self.delete_suggested_keeper(id)
             };
             if suggested {
                 let badge = suggested_badge(ui.painter(), pill);
-                if let Some(why) = (self.step == Step::EasyDelete)
-                    .then(|| self.delete_keep_why(id))
-                    .flatten()
-                {
+                let why = if self.step == Step::PickBest {
+                    self.pick_review
+                        .cluster_of(id)
+                        .map(|c| self.pick_keep_why(c))
+                } else {
+                    self.delete_keep_why(id)
+                };
+                if let Some(why) = why {
                     ui.interact(badge, ui.id().with(("suggested", slot)), Sense::hover())
                         .on_hover_text(why);
                 }

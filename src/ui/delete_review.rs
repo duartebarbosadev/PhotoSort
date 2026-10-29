@@ -1115,17 +1115,6 @@ impl PhotoSortApp {
     }
 }
 
-/// The Keep/Trash toggle's label for one side, as on Review's bar.
-pub(super) fn decision_label(side: usize, keep: bool) -> String {
-    use egui_phosphor::regular as icon;
-    format!(
-        "{}  {}  {}",
-        side + 1,
-        if keep { icon::CHECK } else { icon::TRASH },
-        if keep { "Keep" } else { "Trash" }
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1214,9 +1203,7 @@ mod tests {
         assert!(!trashed(&app, 2) && !trashed(&app, 4) && !trashed(&app, 5));
         assert_eq!(app.staged_change_count(), 2);
         // Nothing waits on a confirmation: moving between cards is free.
-        assert!(app.allow_review_departure());
         app.navigate_selection(1, false, false);
-        assert_eq!(app.review_notice, None);
         // Leaving the step offers Review changes for the staged marks.
         app.request_departure(Destination::Step(Step::Cull));
         assert!(matches!(app.departure, Some(Destination::Step(Step::Cull))));

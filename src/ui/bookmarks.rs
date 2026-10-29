@@ -4,10 +4,7 @@ use crate::core::views::{Bookmark, Saved};
 impl PhotoSortApp {
     pub(super) fn capture_bookmark(&self) -> Bookmark {
         let comparison = if self.step == Step::PickBest {
-            self.pick_review
-                .comparison()
-                .map(|c| c.paths.clone())
-                .unwrap_or_default()
+            Vec::new()
         } else {
             self.comparison.clone()
         };
@@ -38,7 +35,7 @@ impl PhotoSortApp {
             delete_current: self.delete_current,
             delete_categories: categories,
             rotation_queue_only: self.rotation_queue_only,
-            pick_focus: self.pick_focus,
+            pick_focus: false,
             view: self.inspection_view,
             independent_views: self.independent_views.clone(),
             sync_views: self.sync_views,
@@ -87,11 +84,11 @@ impl PhotoSortApp {
             self.pending_bookmark = self.saved_views.bookmarks.get(&self.step).cloned();
         }
         self.decisions.clear();
-        // Back to the defaults: Easy Delete and Fix Rotation stage their
-        // suggestions again.
+        // Back to the defaults: Easy Delete, Fix Rotation and Pick Best stage
+        // their suggestions again.
         self.delete_review.restore_suggested(Default::default());
         self.rotation_review.restore_staged(Default::default());
-        self.pick_review.discard_confirmations();
+        self.pick_review.restore_suggested(Default::default());
         self.changed();
     }
     pub(super) fn prepare_bookmark(&mut self) {
@@ -197,8 +194,10 @@ impl PhotoSortApp {
             }
         }
         if self.step == Step::PickBest {
-            self.pick_review.restore_pair(view.active, &view.comparison);
-            self.sync_pick_view();
+            // The group of the saved photo, if it is still one.
+            self.pick_current = view
+                .active
+                .filter(|id| self.pick_review.group_of(*id).is_some());
         } else if self.step == Step::EasyDelete {
             if let Some(id) = view.delete_current.filter(|id| {
                 self.delete_review.entry(*id).is_some()
@@ -242,9 +241,6 @@ impl PhotoSortApp {
                     None
                 }
             });
-        if self.step == Step::PickBest {
-            self.pick_focus = view.pick_focus;
-        }
         self.focused_slot = self
             .active
             .and_then(|id| self.comparison_ids().iter().position(|p| *p == id))
@@ -284,13 +280,13 @@ impl PhotoSortApp {
         self.delete_categories = view.delete_categories.into_iter().collect();
         self.delete_panel = false;
         self.rotation_queue_only = view.rotation_queue_only;
-        self.pick_focus = view.pick_focus;
+        self.pick_current = None;
+        self.pick_panel = false;
         self.inspection_view = view.view;
         self.independent_views = view.independent_views;
         self.fit_zooms.clear();
         self.sync_views = view.sync_views;
         self.focused_slot = 0;
-        self.review_notice = None;
         self.library_offset = view.scroll;
         self.library_reveal = true;
         // Organize's sidebar focus, preview, "Show original", renames and

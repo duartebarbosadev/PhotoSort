@@ -177,16 +177,6 @@ impl PhotoSortApp {
             self.set_status("Stopping file changes…".into());
         }
     }
-    pub(super) fn allow_review_departure(&mut self) -> bool {
-        let unfinished = match self.step {
-            Step::PickBest => self.pick_review.unfinished(),
-            _ => false,
-        };
-        if unfinished {
-            self.review_notice = Some(self.step);
-        }
-        !unfinished
-    }
     pub(super) fn has_unsaved_plan_extras(&self) -> bool {
         self.organize_changes_pending()
             && self
@@ -197,7 +187,6 @@ impl PhotoSortApp {
     pub(super) fn save_plan_and_quit(&mut self) {
         if self.has_unsaved_plan_extras()
             || !self.plan_open
-            || self.review_notice.is_some()
             || self.busy
             || self.scanning
             || self.retry_edit.is_some()
@@ -236,21 +225,14 @@ impl PhotoSortApp {
             && self.recovery_ticket.is_some()
             && self.organize_departure.is_none()
             && self.departure.is_none()
-            && self.review_notice.is_none()
         {
-            if self.allow_review_departure() {
-                self.after_apply = Some(destination);
-            } else {
-                self.plan_open = false;
-            }
+            self.after_apply = Some(destination);
             return;
         }
         if self.busy
             || self.plan_open
             || self.organize_departure.is_some()
             || self.departure.is_some()
-            || self.review_notice.is_some()
-            || !self.allow_review_departure()
         {
             return;
         }
@@ -281,28 +263,6 @@ impl PhotoSortApp {
         }
     }
     pub(super) fn review_dialogs(&mut self, ctx: &egui::Context) {
-        if let Some(step) = self.review_notice {
-            let mut action = 0;
-            modal(egui::Id::new("unfinished_review")).show(ctx, |ui| {
-                ui.set_max_width(460.0);
-                ui.heading("Confirm or reset this choice");
-                ui.label("This review has unfinished choices. Confirm them or restore the suggestions before moving on.");
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("Keep reviewing").clicked() { action = 1; }
-                    if ui.button("Confirm").clicked() { action = 2; }
-                    if ui.button("Reset default").clicked() { action = 3; }
-                    if ui.button("Reset all").clicked() { action = 4; }
-                });
-            });
-            if action > 0 {
-                self.review_notice = None;
-                match (step, action) {
-                    (Step::PickBest, 2) => self.confirm_pick(false),
-                    (Step::PickBest, 3 | 4) => self.reset_pick(action == 4),
-                    _ => {}
-                }
-            }
-        }
         if self.departure.is_some() {
             let mut action = 0;
             modal(egui::Id::new("pending_changes")).show(ctx, |ui| {

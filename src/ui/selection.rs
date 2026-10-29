@@ -82,21 +82,16 @@ impl PhotoSortApp {
         if !self.can_clear_trash_marks() {
             return;
         }
-        let pick_before = self.pick_review.comparison().map(|c| c.paths.clone());
         let changed = decisions::clear_trash_marks(&mut self.decisions);
         let count = changed.len();
-        // Easy Delete stages its suggestions again the next time it opens.
+        // Easy Delete and Pick Best stage their suggestions again the next
+        // time they open.
         self.delete_review.restore_suggested(Default::default());
-        self.pick_review.clear_prior_trash_marks();
+        self.pick_review.restore_suggested(Default::default());
         self.pending_bookmark = None;
         // A closed preview is a derived snapshot; unfinished recovery stays guarded.
         self.set_review_plan(None);
         self.changed_items(changed);
-        if self.step == Step::PickBest
-            && pick_before != self.pick_review.comparison().map(|c| c.paths.clone())
-        {
-            self.sync_pick_view();
-        }
         self.set_status(format!(
             "Cleared {count} Trash marks · ratings and rotations kept"
         ));

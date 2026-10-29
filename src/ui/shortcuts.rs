@@ -190,39 +190,36 @@ impl PhotoSortApp {
     }
 
     fn pick_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
+        // Keys that change a group act on the one shown beside the grid.
+        let shown = self.pick_panel && self.pick_current.is_some();
+        let digit = [
+            egui::Key::Num1,
+            egui::Key::Num2,
+            egui::Key::Num3,
+            egui::Key::Num4,
+            egui::Key::Num5,
+            egui::Key::Num6,
+            egui::Key::Num7,
+            egui::Key::Num8,
+            egui::Key::Num9,
+        ]
+        .iter()
+        .position(|k| *k == pressed);
         match pressed {
-            egui::Key::Num1 | egui::Key::Num2 | egui::Key::Num3 => {
-                let slot = match pressed {
-                    egui::Key::Num1 => 0,
-                    egui::Key::Num2 => 1,
-                    _ => 2,
-                };
-                if let Some(id) = self
-                    .pick_review
-                    .comparison()
-                    .and_then(|c| c.paths.get(slot).copied())
-                {
-                    self.toggle_pick(id);
+            _ if digit.is_some() => {
+                if shown && let Some(slot) = digit {
+                    self.toggle_pick_slot(slot);
                 }
             }
-            egui::Key::ArrowLeft | egui::Key::ArrowRight => {
-                self.navigate_pick(
-                    if pressed == egui::Key::ArrowLeft {
-                        -1
-                    } else {
-                        1
-                    },
-                    true,
-                );
-            }
-            egui::Key::ArrowUp | egui::Key::ArrowDown => {
-                self.navigate_pick(if pressed == egui::Key::ArrowUp { -1 } else { 1 }, false);
-            }
-            egui::Key::C => self.toggle_pick_focus(),
-            egui::Key::K => self.confirm_pick(true),
-            egui::Key::R => self.reset_pick(modifiers.shift),
+            egui::Key::ArrowLeft | egui::Key::ArrowUp => self.navigate_pick(-1),
+            egui::Key::ArrowRight | egui::Key::ArrowDown => self.navigate_pick(1),
+            egui::Key::R if modifiers.shift => self.accept_pick_defaults(),
+            egui::Key::R if shown => self.undo_pick(),
+            egui::Key::R => {}
             egui::Key::Enter if modifiers.shift => self.review_changes(),
-            egui::Key::Enter => self.confirm_pick(false),
+            egui::Key::Enter => self.next_pick_group(),
+            egui::Key::A => self.accept_pick_defaults(),
+            egui::Key::Escape if self.pick_panel => self.pick_panel = false,
             _ => return false,
         }
         true

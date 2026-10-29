@@ -71,6 +71,10 @@ pub struct Session {
     /// Discarding staged choices forgets it, so the suggestions return.
     #[serde(default, rename = "staged_suggestions")]
     pub suggested: HashSet<MediaId>,
+    /// The same for Pick Best's suggestions, kept apart: a photo Easy Delete
+    /// kept can still be one Pick Best suggests moving to Trash.
+    #[serde(default, rename = "staged_pick_suggestions")]
+    pub pick_suggested: HashSet<MediaId>,
     /// Photos whose Fix Rotation suggestion was already staged, kept apart
     /// from Easy Delete's: one photo can be a suggestion in both steps.
     #[serde(default, rename = "staged_rotations")]
@@ -120,7 +124,11 @@ impl Session {
         }
         remap_media_ids(&mut self.decisions, changes);
         for (old, new, _) in changes {
-            for staged in [&mut self.suggested, &mut self.rotations_staged] {
+            for staged in [
+                &mut self.suggested,
+                &mut self.pick_suggested,
+                &mut self.rotations_staged,
+            ] {
                 if staged.remove(old) {
                     staged.insert(*new);
                 }
@@ -148,6 +156,7 @@ impl Session {
         }
         self.decisions.extend(other.decisions);
         self.suggested.extend(other.suggested);
+        self.pick_suggested.extend(other.pick_suggested);
         self.rotations_staged.extend(other.rotations_staged);
         self.fingerprints.extend(other.fingerprints);
     }
@@ -171,7 +180,11 @@ impl Session {
             });
         }
         // An edited file is a new photo: its suggestion may be staged again.
-        for staged in [&mut self.suggested, &mut self.rotations_staged] {
+        for staged in [
+            &mut self.suggested,
+            &mut self.pick_suggested,
+            &mut self.rotations_staged,
+        ] {
             staged.retain(|id| {
                 self.fingerprints
                     .get(id)

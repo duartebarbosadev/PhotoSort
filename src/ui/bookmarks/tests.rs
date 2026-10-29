@@ -206,29 +206,22 @@ fn empty_guided_bookmark_focuses_new_results_without_restarting_analysis() {
                                 reason: "identical".into(),
                             }])
                     }
-                    Step::PickBest => app.pick_review.replace(
-                        vec![crate::core::pick_review::Cluster {
-                            key: 1,
-                            ordered: ids.clone(),
-                            scores: ids.iter().map(|id| (*id, 1.0)).collect(),
-                        }],
-                        &mut app.decisions,
-                    ),
+                    Step::PickBest => {
+                        app.pick_review
+                            .replace(vec![crate::core::pick_review::Cluster::new(
+                                1,
+                                ids.clone(),
+                                ids.iter().map(|id| (*id, 1.0)).collect(),
+                            )])
+                    }
                     Step::Rotation => app.rotation_review.replace_suggestions(vec![(ids[1], 1)]),
                     _ => unreachable!(),
                 }
             }
             app.refilter();
             app.restore_bookmark();
-            // Easy Delete and Fix Rotation wait for the user to pick a card.
-            assert_eq!(
-                app.active.is_some(),
-                has_results && step == Step::PickBest,
-                "{step:?}"
-            );
-            if let Some(active) = app.active {
-                assert!(app.comparison_ids().contains(&active));
-            }
+            // Every guided step waits for the user to pick a card.
+            assert!(app.active.is_none(), "{step:?}");
             assert!(app.pending_bookmark.is_none());
             assert!(app.decisions.is_empty());
             assert!(app.analysis_run.is_none() && app.metadata_run.is_none());
@@ -258,56 +251,55 @@ fn cancelling_deferred_analysis_stays_cancelled_and_preserves_the_saved_view() {
     app.cancel_analysis();
 }
 #[test]
-fn discard_then_exit_preserves_the_later_pair_without_replaying_confirmations() {
+fn discard_then_exit_keeps_the_selected_pick_group_and_brings_suggestions_back() {
     let (_dir, mut app) = fixture();
     let ids: Vec<_> = app.media.iter().map(|m| m.id).collect();
-    let clusters = vec![crate::core::pick_review::Cluster {
-        key: 1,
-        ordered: ids.clone(),
-        scores: ids
-            .iter()
+    let clusters = vec![crate::core::pick_review::Cluster::new(
+        1,
+        ids.clone(),
+        ids.iter()
             .enumerate()
             .map(|(i, id)| (*id, i as f64))
             .collect(),
-    }];
-    app.pick_review
-        .replace(clusters.clone(), &mut app.decisions);
+    )];
+    app.pick_review.replace(clusters.clone());
     app.step = Step::PickBest;
     app.view_data_ready.insert(Step::PickBest);
-    app.sync_pick_view();
-    app.confirm_pick(false);
-    app.pick_focus = true;
-    let pair = app.pick_review.comparison().unwrap().paths.clone();
-    assert!(pair.contains(&ids[2]));
-    let active = app.active;
+    app.stage_pick_suggestions();
+    assert!(app.decisions.values().any(|d| d.rejected));
+    app.set_active(ids[2]);
     app.discard_staged_choices();
     app.checkpoint_bookmarks(); // The actual exit and step-departure paths checkpoint again.
     assert!(app.decisions.is_empty());
-    assert_eq!(app.saved_views.bookmarks[&Step::PickBest].comparison, pair);
-    app.pick_review.replace(clusters, &mut app.decisions);
+    assert!(app.pick_review.suggested().is_empty());
+    assert_eq!(
+        app.saved_views.bookmarks[&Step::PickBest].active,
+        Some(ids[2])
+    );
+    app.pick_review.replace(clusters);
+    app.pick_current = None;
     app.prepare_bookmark();
     settle(&mut app);
-    assert_eq!(app.pick_review.comparison().unwrap().paths, pair);
-    assert_eq!(app.active, active);
-    assert!(app.pick_focus && app.decisions.is_empty());
-    assert!(!app.pick_review.comparison().unwrap().confirmed);
+    assert_eq!(app.pick_group(), Some(0));
+    assert!(app.decisions.is_empty(), "Restoring a view stages nothing");
+    // Opening Pick Best again stages the suggestions again.
+    app.step = Step::Cull;
+    app.set_step(Step::PickBest);
+    assert!(app.decisions.values().any(|d| d.rejected));
 }
 #[test]
-fn guided_views_restore_position_and_pair_without_confirmations_or_decisions() {
+fn guided_views_restore_position_and_group_without_decisions() {
     let (_dir, mut app) = fixture();
     let ids: Vec<_> = app.media.iter().map(|m| m.id).collect();
-    app.pick_review.replace(
-        vec![crate::core::pick_review::Cluster {
-            key: 1,
-            ordered: ids.clone(),
-            scores: ids
-                .iter()
+    app.pick_review
+        .replace(vec![crate::core::pick_review::Cluster::new(
+            1,
+            ids.clone(),
+            ids.iter()
                 .enumerate()
                 .map(|(i, id)| (*id, i as f64))
                 .collect(),
-        }],
-        &mut app.decisions,
-    );
+        )]);
     app.view_data_ready.insert(Step::PickBest);
     app.step = Step::PickBest;
     app.saved_views.bookmarks.insert(
@@ -322,10 +314,13 @@ fn guided_views_restore_position_and_pair_without_confirmations_or_decisions() {
     );
     app.prepare_bookmark();
     settle(&mut app);
+    // A view saved with the old focus mode still opens: on its group.
     assert_eq!(app.active, Some(ids[2]));
-    assert!(app.pick_focus);
-    assert_eq!(app.comparison_ids(), vec![ids[2]]);
-    assert!(!app.pick_review.comparison().unwrap().confirmed && app.decisions.is_empty());
+    assert_eq!(app.pick_group(), Some(0));
+    let mut best_first = ids.clone();
+    best_first.reverse();
+    assert_eq!(app.comparison_ids(), best_first);
+    assert!(app.decisions.is_empty());
     app.delete_review
         .replace(vec![crate::core::delete_review::Entry {
             subject: ids[1],

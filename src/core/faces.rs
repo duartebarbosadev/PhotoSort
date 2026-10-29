@@ -14,12 +14,27 @@ pub struct Faces {
 }
 /// Lightweight review evidence. Detailed landmarks stay in the shared artifact
 /// cache instead of being retained by every UI analysis row.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FaceSummary {
     pub count: usize,
     pub closed_eyes: usize,
     pub primary: Option<[f32; 4]>,
+    /// Each face's eyes, for comparing one person across similar photos.
+    #[serde(default)]
+    pub eyes: Vec<FaceEyes>,
 }
+
+/// One face's eyes and where the face is, in normalized source coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FaceEyes {
+    pub centre: [f32; 2],
+    /// The face box's width and height.
+    pub size: [f32; 2],
+    pub state: EyeState,
+    /// Mean eye aspect ratio, higher when more open; `None` when unknown.
+    pub ratio: Option<f32>,
+}
+
 impl Faces {
     pub fn complete(&self) -> bool {
         self.count == self.geometry.len()
@@ -36,11 +51,18 @@ impl Faces {
                         .all(|v| v.is_finite())
             })
     }
-    pub fn summary(&self) -> FaceSummary {
+    /// The summary for review. `width` and `height` are the pixels the faces
+    /// were detected on, which the eye rule's minimum size is measured in.
+    pub fn summary(&self, width: u32, height: u32) -> FaceSummary {
         FaceSummary {
             count: self.count,
             closed_eyes: self.closed_eyes,
             primary: self.primary,
+            eyes: self
+                .geometry
+                .iter()
+                .map(|face| face.eyes(width, height))
+                .collect(),
         }
     }
 }
@@ -57,6 +79,24 @@ pub struct Face {
     /// `None` only in legacy records, which `Faces::complete` rejects.
     #[serde(default)]
     pub blink: Option<[f32; 2]>,
+}
+impl Face {
+    /// This face's eyes and where it is, judged from its stored landmarks
+    /// and blink scores on the `width` x `height` image it was found in, by
+    /// the same rule as Easy Delete (`eye_state`).
+    pub fn eyes(&self, width: u32, height: u32) -> FaceEyes {
+        let [left, top, right, bottom] = self.bbox;
+        let measures = eye_measures(self, width, height);
+        let state = measures.map_or(EyeState::Unknown, |m| judge(&m));
+        FaceEyes {
+            centre: [(left + right) / 2.0, (top + bottom) / 2.0],
+            size: [right - left, bottom - top],
+            state,
+            ratio: measures
+                .map(|m| m.ratio())
+                .filter(|_| state != EyeState::Unknown),
+        }
+    }
 }
 #[derive(Clone)]
 struct Detection {
@@ -850,6 +890,87 @@ fn cubic_pixel(image: &image::RgbaImage, x: f32, y: f32, channel: usize) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A face whose eyes, in a `width` × `height` frame, are `gap` pixels
+    /// apart and open to `ratio` (lid gap over eye width).
+    fn face(width: u32, height: u32, gap: f32, ratio: f32, blink: Option<[f32; 2]>) -> Face {
+        let (w, h) = (width as f32, height as f32);
+        let mut landmarks = vec![[0.5, 0.5]; 478];
+        let eye = 0.4 * gap;
+        for (indices, centre) in [
+            (LEFT_EYE, 500.0 - gap / 2.0),
+            (RIGHT_EYE, 500.0 + gap / 2.0),
+        ] {
+            // Corners, upper lids, lower lids, in source pixels.
+            let points = [
+                [centre - eye / 2.0, 400.0],
+                [centre - eye / 6.0, 400.0 - ratio * eye / 2.0],
+                [centre + eye / 6.0, 400.0 - ratio * eye / 2.0],
+                [centre + eye / 2.0, 400.0],
+                [centre + eye / 6.0, 400.0 + ratio * eye / 2.0],
+                [centre - eye / 6.0, 400.0 + ratio * eye / 2.0],
+            ];
+            for (i, [x, y]) in indices.iter().zip(points) {
+                landmarks[*i] = [x / w, y / h];
+            }
+        }
+        Face {
+            bbox: [0.3, 0.3, 0.6, 0.6],
+            eyes: [landmarks[33], landmarks[263]],
+            landmarks,
+            blink,
+        }
+    }
+    #[test]
+    fn stored_faces_are_judged_by_the_easy_delete_rule_on_any_frame_shape() {
+        let open = Some([0.1, 0.1]);
+        let blinking = Some([0.8, 0.7]);
+        // Non-square frames: the ratio is measured in pixels, not normalized.
+        for (width, height) in [(1024, 768), (577, 1024)] {
+            let eyes =
+                |gap, ratio, blink| face(width, height, gap, ratio, blink).eyes(width, height);
+            let wide = eyes(60.0, 0.3, open);
+            assert_eq!(wide.state, EyeState::Open);
+            assert!((wide.ratio.unwrap() - 0.3).abs() < 1e-3, "{wide:?}");
+            assert_eq!(eyes(60.0, 0.05, blinking).state, EyeState::Closed);
+            // Doubtful faces are Unknown, never closed: shut by shape but
+            // not by blink, a squint or laugh, narrow eyes.
+            for (ratio, blink) in [
+                (0.05, open),
+                (0.13, blinking),
+                (0.13, open),
+                (0.2, blinking),
+            ] {
+                let face = eyes(60.0, ratio, blink);
+                assert_eq!(
+                    (face.state, face.ratio),
+                    (EyeState::Unknown, None),
+                    "{ratio}"
+                );
+            }
+            // Too small to read, or a legacy record.
+            assert_eq!(eyes(15.0, 0.02, blinking).state, EyeState::Unknown);
+            assert_eq!(eyes(60.0, 0.02, None).state, EyeState::Unknown);
+        }
+        let mut legacy = face(1024, 768, 60.0, 0.3, open);
+        legacy.landmarks.clear();
+        assert_eq!(legacy.eyes(1024, 768).state, EyeState::Unknown);
+    }
+    #[test]
+    fn the_summary_carries_each_faces_eyes() {
+        let faces = Faces {
+            count: 2,
+            closed_eyes: 1,
+            primary: None,
+            geometry: vec![
+                face(1024, 768, 60.0, 0.05, Some([0.9, 0.9])),
+                face(1024, 768, 60.0, 0.3, Some([0.0, 0.0])),
+            ],
+        };
+        let summary = faces.summary(1024, 768);
+        let states: Vec<_> = summary.eyes.iter().map(|e| e.state).collect();
+        assert_eq!(states, vec![EyeState::Closed, EyeState::Open]);
+        assert_eq!(summary.closed_eyes, 1);
+    }
     #[test]
     fn every_face_from_28_pixels_fills_an_eighth_of_some_detector_window() {
         // Phone photos at analysis size, a small screenshot and the SFace group.

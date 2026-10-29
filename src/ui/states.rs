@@ -242,10 +242,8 @@ impl PhotoSortApp {
             Some(Empty::OpenFolder) => self.select_folder(),
             Some(Empty::Analyze) => self.analyze_current_workflow(),
             Some(Empty::ShowAllRotations) => {
-                if self.allow_review_departure() {
-                    self.rotation_queue_only = false;
-                    self.filter_dirty = true;
-                }
+                self.rotation_queue_only = false;
+                self.filter_dirty = true;
             }
             Some(Empty::ShowAllCategories) => {
                 self.delete_categories = Category::ALL.into_iter().collect();

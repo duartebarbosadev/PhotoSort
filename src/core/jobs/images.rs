@@ -1141,7 +1141,10 @@ impl ImageWorker {
             changed |= self.complete_faces(it, &store, &mut features)?;
         }
         if let Some(faces) = &features.faces {
-            self.cached_mut(&it.source_key).faces = Some(faces.summary());
+            // Faces were found on the measured analysis frame.
+            let cached = self.cached_mut(&it.source_key);
+            let (width, height) = cached.dimensions;
+            cached.faces = Some(faces.summary(width, height));
         }
         if grouped {
             if features.identities.is_none() {
@@ -1273,7 +1276,7 @@ impl ImageWorker {
             .expect("measurements are cached before later stages");
         let mut technical = cached.technical.clone();
         technical.reclassify(self.selection.thresholds);
-        technical.faces = cached.faces;
+        technical.faces = cached.faces.clone();
         if let Some(aesthetic) = cached.aesthetic {
             technical.aesthetic = Some(aesthetic);
             let sharpness = technical
@@ -1399,7 +1402,7 @@ impl ImageWorker {
             captured_ms: metadata
                 .captured_ms
                 .map(|ms| ms + i64::from(metadata.captured_subsec_ms.unwrap_or(0))),
-            faces: technical.faces.map_or(0, |f| f.count),
+            faces: technical.faces.as_ref().map_or(0, |f| f.count),
         });
         Ok(())
     }

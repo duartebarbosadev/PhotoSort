@@ -296,7 +296,7 @@ fn review_rows_retain_summary_only_and_face_evidence_roundtrips_without_inferenc
     let persisted = serde_json::to_vec(&faces).unwrap();
     let restored: Faces = serde_json::from_slice(&persisted).unwrap();
     assert_eq!(restored.geometry[0].landmarks, faces.geometry[0].landmarks);
-    let summary = restored.summary();
+    let summary = restored.summary(1000, 1000);
     assert_eq!(summary.count, 1);
     assert_eq!(summary.closed_eyes, 1);
     assert_eq!(summary.primary, faces.primary);

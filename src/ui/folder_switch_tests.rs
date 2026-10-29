@@ -65,7 +65,8 @@ fn change_every_view(app: &mut PhotoSortApp) {
     app.delete_categories = [Category::Blur].into_iter().collect();
     app.delete_panel = true;
     app.rotation_queue_only = true;
-    app.pick_focus = true;
+    app.pick_current = Some(first);
+    app.pick_panel = true;
     app.inspection_view.zoom = 3.0;
     app.independent_views
         .insert(1, crate::core::inspection::View::default());

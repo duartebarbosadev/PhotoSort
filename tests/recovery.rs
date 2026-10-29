@@ -116,6 +116,7 @@ fn move_migrates_decisions_and_new_fingerprints_without_marking_them_applied() {
     let (_dir, c, plan) = fixture();
     let mut session = Session {
         suggested: Default::default(),
+        pick_suggested: Default::default(),
         rotations_staged: Default::default(),
         organize: None,
         manual_groups: Default::default(),
@@ -168,6 +169,7 @@ fn session_merge_preserves_preexisting_destination_decisions() {
     let report = run(&plan, &c.root.join("journal"));
     let mut moved = Session {
         suggested: Default::default(),
+        pick_suggested: Default::default(),
         rotations_staged: Default::default(),
         organize: None,
         manual_groups: Default::default(),

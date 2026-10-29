@@ -152,10 +152,7 @@ impl PhotoSortApp {
     /// A quit, step or folder change waiting on an answer, in whichever
     /// prompt `request_departure` asked it.
     fn departure_pending(&self) -> bool {
-        self.departure.is_some()
-            || self.review_notice.is_some()
-            || self.organize_departure.is_some()
-            || self.after_apply.is_some()
+        self.departure.is_some() || self.organize_departure.is_some() || self.after_apply.is_some()
     }
     /// Starts a due intro once nothing else asks for attention, then draws
     /// it over everything, including other dialogs.
