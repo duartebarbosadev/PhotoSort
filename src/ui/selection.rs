@@ -142,8 +142,10 @@ impl PhotoSortApp {
         {
             self.selection.single(active);
         }
+        let shown = self.board_shown_order();
+        let order = shown.as_deref().unwrap_or(&self.filtered);
         self.selection
-            .select(id, &self.media, &self.filtered, toggle, extend);
+            .select(id, &self.media, order, toggle, extend);
         self.comparison.clear();
         let active = if self.selection.contains(id) {
             Some(id)
@@ -167,10 +169,12 @@ impl PhotoSortApp {
         if !self.selection_ready() && !self.scene_selection_ready() {
             return;
         }
-        self.selection.all(&self.media, &self.filtered);
+        let shown = self.board_shown_order();
+        let order = shown.as_deref().unwrap_or(&self.filtered);
+        self.selection.all(&self.media, order);
         self.comparison_focus = None;
         if self.active.is_none()
-            && let Some(&i) = self.filtered.first()
+            && let Some(&i) = order.first()
         {
             self.set_active(self.media[i].id);
         }

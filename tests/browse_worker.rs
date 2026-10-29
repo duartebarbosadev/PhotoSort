@@ -376,6 +376,7 @@ fn folder_scopes_reuse_scan_inventory_and_cached_keys_with_all_other_filters() {
             folder: FolderFilter {
                 path: Some(catalog.root.join(folder)),
                 recursive,
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -428,7 +429,7 @@ fn folder_scopes_reuse_scan_inventory_and_cached_keys_with_all_other_filters() {
             options: Options {
                 folder: FolderFilter {
                     path: Some(catalog.root.join("Trip")),
-                    recursive: true,
+                    ..Default::default()
                 },
                 group: Some(7),
                 rating: RatingFilter::Exactly(5),

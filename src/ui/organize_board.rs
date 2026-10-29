@@ -45,8 +45,12 @@ pub(super) struct Board {
     /// and how many of them are videos.
     pub(super) unplaced: usize,
     pub(super) unplaced_videos: usize,
-    /// The folder shown in the middle; `None` shows every folder.
-    pub(super) focus: Option<String>,
+    /// The folders shown in the middle, chosen in the sidebar; empty shows
+    /// every folder. None is inside another.
+    pub(super) focus: Vec<String>,
+    /// The folder a Shift-click in the sidebar spans from: the last one
+    /// clicked without Shift.
+    pub(super) folder_anchor: Option<String>,
     /// A folder being renamed in place: (folder, typed name).
     pub(super) editing: Option<(String, String)>,
     pub(super) edit_focus: bool,
@@ -69,8 +73,8 @@ pub(super) struct Board {
     pub(super) original: bool,
     /// "Show original" was held down in the last frame.
     pub(super) original_button: bool,
-    /// The folder shown before the original layout was, restored after it.
-    pub(super) focus_before: Option<Option<String>>,
+    /// The folders shown before the original layout was, restored after it.
+    pub(super) focus_before: Option<Vec<String>>,
     /// A selection rectangle being dragged from empty space in the board:
     /// where it started (in board coordinates) and the photos selected
     /// before it, kept when Shift or Ctrl/Cmd was held.
@@ -143,6 +147,23 @@ pub(super) enum FolderAction {
     StartOver,
     /// Grouped by faces: the first folder's person is the second's.
     SamePerson(String, String),
+}
+/// Whether a section in folder `path` (`None`: staying in place) is shown
+/// while the `focus` folders are chosen.
+fn shows(focus: &[String], path: Option<&str>) -> bool {
+    focus.is_empty() || path.is_some_and(|path| focus.iter().any(|f| within(path, f)))
+}
+/// The folders to show, without those inside another one: they are shown
+/// with it already.
+fn outermost(focus: Vec<String>) -> Vec<String> {
+    let mut chosen: Vec<String> = Vec::new();
+    for folder in focus {
+        if !chosen.iter().any(|c| within(&folder, c)) {
+            chosen.retain(|c| !within(c, &folder));
+            chosen.push(folder);
+        }
+    }
+    chosen
 }
 fn within(path: &str, folder: &str) -> bool {
     folder.is_empty()
@@ -275,10 +296,10 @@ impl PhotoSortApp {
             return;
         }
         if on {
-            self.board.focus_before = Some(self.board.focus.take());
+            self.board.focus_before = Some(std::mem::take(&mut self.board.focus));
             self.board.editing = None;
         } else {
-            self.board.focus = self.board.focus_before.take().flatten();
+            self.board.focus = self.board.focus_before.take().unwrap_or_default();
         }
         self.board.original = on;
         self.board.current = None;
@@ -436,10 +457,14 @@ impl PhotoSortApp {
         self.board.folders = folders;
         self.board.key = Some(key);
         self.arrange_people();
-        if let Some(focus) = &self.board.focus
-            && !self.board.folders.iter().any(|f| &f.path == focus)
+        let folders = &self.board.folders;
+        self.board
+            .focus
+            .retain(|focus| folders.iter().any(|f| &f.path == focus));
+        if let Some(anchor) = &self.board.folder_anchor
+            && !folders.iter().any(|f| &f.path == anchor)
         {
-            self.board.focus = None;
+            self.board.folder_anchor = None;
         }
     }
     /// The board section holding the active photo.
@@ -471,22 +496,96 @@ impl PhotoSortApp {
         }
     }
     /// The sidebar row to highlight: the folder you are looking at, or the
-    /// folder shown (the library row when every item is).
+    /// folder shown (the library row when every item is). Several folders
+    /// shown are all highlighted instead, see [`Self::board_highlighted`].
     pub(super) fn board_highlight(&self) -> Option<String> {
-        match &self.board.current {
-            Some(Some(path)) => Some(path.clone()),
-            _ => Some(self.board.focus.clone().unwrap_or_default()),
+        match (&self.board.current, self.board.focus.as_slice()) {
+            (Some(Some(path)), _) => Some(path.clone()),
+            (_, [focus]) => Some(focus.clone()),
+            _ => Some(String::new()),
         }
+    }
+    /// Whether the sidebar highlights folder `path`: every folder shown
+    /// when there are several, otherwise [`Self::board_highlight`]'s.
+    pub(super) fn board_highlighted(&self, path: &str, highlight: Option<&str>) -> bool {
+        if self.board.focus.len() > 1 {
+            self.board.focus.iter().any(|f| f == path)
+        } else {
+            highlight == Some(path)
+        }
+    }
+    /// The folder new folders go inside: the one shown, or of several shown
+    /// the last one clicked; the library folder when every item is shown.
+    pub(super) fn board_focus_folder(&self) -> String {
+        let focus = &self.board.focus;
+        self.board
+            .folder_anchor
+            .as_ref()
+            .filter(|anchor| focus.contains(anchor))
+            .or(focus.last())
+            .cloned()
+            .unwrap_or_default()
     }
     /// Shows one folder (`None`: every item). Its first photo becomes the
     /// current one unless the current photo is already in it, so the arrow
     /// keys walk this folder's photos next.
     pub(super) fn board_select_folder(&mut self, focus: Option<String>) {
-        let shown = |section: &Section| match (&focus, &section.path) {
-            (None, _) => true,
-            (Some(focus), Some(path)) => within(path, focus),
-            (Some(_), None) => false,
-        };
+        self.board.folder_anchor = focus.clone();
+        self.board_show_folders(focus.into_iter().collect());
+    }
+    /// A click on a sidebar folder. A plain click shows just that folder;
+    /// Ctrl/Cmd adds it to the folders shown, or takes it away again; Shift
+    /// shows every folder from the last one clicked through this one, added
+    /// to those shown with Ctrl/Cmd. The library row shows every item.
+    pub(super) fn board_choose_folder(&mut self, path: &str, modifiers: egui::Modifiers) {
+        let toggle = modifiers.command || modifiers.ctrl;
+        if path.is_empty() || !(toggle || modifiers.shift) {
+            self.board_select_folder((!path.is_empty()).then(|| path.to_owned()));
+            return;
+        }
+        let rows = &self.board.folders;
+        let row = |target: &str| rows.iter().position(|f| f.path == target);
+        let mut focus = self.board.focus.clone();
+        let span = self
+            .board
+            .folder_anchor
+            .as_deref()
+            .filter(|_| modifiers.shift)
+            .and_then(row)
+            .zip(row(path));
+        if let Some((from, to)) = span {
+            if !toggle {
+                focus.clear();
+            }
+            let span = rows[from.min(to)..=from.max(to)].iter();
+            focus.extend(span.filter(|f| !f.path.is_empty()).map(|f| f.path.clone()));
+        } else if toggle && focus.iter().any(|f| f == path) {
+            focus.retain(|f| f != path);
+            self.board.folder_anchor = Some(path.to_owned());
+        } else {
+            if !toggle {
+                focus.clear();
+            }
+            focus.push(path.to_owned());
+            self.board.folder_anchor = Some(path.to_owned());
+        }
+        self.board_show_folders(outermost(focus));
+        // A folder taken away leaves none of its photos selected unseen.
+        if !self.board.focus.is_empty() {
+            let shown = self.board_positions_shown();
+            let order: Vec<usize> = shown.iter().map(|p| self.filtered[*p]).collect();
+            self.selection.reconcile(&self.media, &order);
+            if self
+                .comparison_focus
+                .is_some_and(|id| !self.selection.contains(id))
+            {
+                self.comparison_focus = None;
+            }
+        }
+    }
+    /// Shows these folders (none: every item), as [`Self::board_select_folder`].
+    fn board_show_folders(&mut self, focus: Vec<String>) {
+        let shown = |section: &Section| shows(&focus, section.path.as_deref());
         let inside = self.active_section().is_some_and(shown);
         let first = self
             .board
@@ -538,8 +637,19 @@ impl PhotoSortApp {
         };
         let added = if let Some(anchor) = anchor {
             let span = anchor.start.min(range.start)..anchor.end.max(range.end);
-            self.selection
-                .select_span(span, &self.media, &self.filtered, toggle);
+            match self.board_shown_positions() {
+                // The span counted in the photos shown only.
+                Some(shown) => {
+                    let order: Vec<usize> = shown.iter().map(|p| self.filtered[*p]).collect();
+                    let at = |position: usize| shown.partition_point(|p| *p < position);
+                    let span = at(span.start)..at(span.end);
+                    self.selection
+                        .select_span(span, &self.media, &order, toggle);
+                }
+                None => self
+                    .selection
+                    .select_span(span, &self.media, &self.filtered, toggle),
+            }
             false
         } else if toggle {
             self.selection.toggle_group(&ids)
@@ -585,10 +695,39 @@ impl PhotoSortApp {
             });
         Some(whole.unwrap_or(at..at + 1))
     }
+    /// Several folders shown in Organize: the positions in `filtered` of
+    /// their photos, in board order. With one folder shown the arrow keys
+    /// walk on into the next folder instead.
+    fn board_shown_positions(&self) -> Option<Vec<usize>> {
+        if self.step != Step::Organize || self.board.focus.len() < 2 {
+            return None;
+        }
+        Some(self.board_positions_shown())
+    }
+    /// The positions in `filtered` of the photos the board shows.
+    fn board_positions_shown(&self) -> Vec<usize> {
+        let shown = self
+            .board
+            .sections
+            .iter()
+            .filter(|s| shows(&self.board.focus, s.path.as_deref()));
+        shown
+            .flat_map(|s| s.range.clone())
+            .filter(|p| *p < self.filtered.len())
+            .collect()
+    }
+    /// Several folders shown in Organize: their photos in board order, which
+    /// Shift ranges, Ctrl/Cmd+A and the arrow keys keep to, so a photo of a
+    /// folder not shown is never selected unseen. `None` uses `filtered`.
+    pub(super) fn board_shown_order(&self) -> Option<Vec<usize>> {
+        let positions = self.board_shown_positions()?;
+        Some(positions.iter().map(|p| self.filtered[*p]).collect())
+    }
     /// After the arrow keys move past the shown folder's last (or first)
     /// photo, the sidebar follows to the folder now holding it.
+    /// Several folders shown keep the arrow keys inside them instead.
     pub(super) fn board_follow_active(&mut self) {
-        let Some(focus) = self.board.focus.as_deref() else {
+        let [focus] = self.board.focus.as_slice() else {
             return;
         };
         let Some(section) = self.active_section() else {
@@ -599,7 +738,8 @@ impl PhotoSortApp {
             Some(path) => Some(path.clone()),
             None => None, // Only "every item" shows those staying in place.
         };
-        self.board.focus = next;
+        self.board.folder_anchor = next.clone();
+        self.board.focus = next.into_iter().collect();
         self.library_reveal = true;
     }
     /// Whether the plan can be edited on the board now.
@@ -704,15 +844,20 @@ impl PhotoSortApp {
         }
         // Naming a person renames every folder they are in.
         match self.rename_person(&path, &name) {
-            Ok(renamed) => {
-                if let Some(focus) = &self.board.focus
-                    && within(focus, &path)
-                {
-                    self.board.focus = Some(format!("{renamed}{}", &focus[path.len()..]));
-                }
-            }
+            Ok(renamed) => self.board_refocus(&path, &renamed),
             Err(error) => self.navigation_notice = Some(error.to_string()),
         }
+    }
+    /// Folder `from` is now `to`: the folders shown inside it follow.
+    fn board_refocus(&mut self, from: &str, to: &str) {
+        let moved = |folder: &mut String| {
+            if within(folder, from) {
+                *folder = format!("{to}{}", &folder[from.len()..]);
+            }
+        };
+        self.board.focus.iter_mut().for_each(moved);
+        self.board.folder_anchor.iter_mut().for_each(moved);
+        self.board.focus = outermost(std::mem::take(&mut self.board.focus));
     }
     /// Starts renaming a folder in place in the sidebar.
     pub(super) fn board_rename_folder(&mut self, path: &str) {
@@ -854,7 +999,7 @@ impl PhotoSortApp {
     /// Makes a new folder holding `ids` inside the folder shown, then starts
     /// naming it.
     pub(super) fn board_new_folder_with(&mut self, ids: &[MediaId]) {
-        let parent = self.board.focus.clone().unwrap_or_default();
+        let parent = self.board_focus_folder();
         self.board_new_folder(&parent, ids);
     }
     /// Makes "New folder" (numbered when taken) inside `parent` in the plan,
@@ -1006,9 +1151,7 @@ impl PhotoSortApp {
                 .on_hover_text("New folder · inside the folder shown · Ctrl/Cmd+Shift+N")
                 .clicked()
                 {
-                    action = Some(FolderAction::NewInside(
-                        self.board.focus.clone().unwrap_or_default(),
-                    ));
+                    action = Some(FolderAction::NewInside(self.board_focus_folder()));
                 }
             });
         });
@@ -1021,7 +1164,7 @@ impl PhotoSortApp {
         } else {
             26.0
         };
-        let mut select: Option<Option<String>> = None;
+        let mut select: Option<(String, egui::Modifiers)> = None;
         let mut drop: Option<(Vec<MediaId>, String)> = None;
         let mut finish = false;
         // What stays where it is, under the folders; the folders get the rest.
@@ -1102,7 +1245,7 @@ impl PhotoSortApp {
                 // The library folder is the top row and shows every
                 // item, those staying in place included.
                 let top = path.is_empty();
-                let selected = highlighted.as_deref() == Some(path.as_str());
+                let selected = self.board_highlighted(&path, highlighted.as_deref());
                 let faces = faces_mode.then(|| self.folder_faces(&path, ui.ctx().pixels_per_point()));
                 let unnamed = editable && self.unnamed_person(&path);
                 let response = folder_row(
@@ -1137,7 +1280,7 @@ impl PhotoSortApp {
                     )
                 } else {
                     format!(
-                        "{path} · {direct} here, {total} including subfolders · drag onto another folder to move it"
+                        "{path} · {direct} here, {total} including subfolders · Ctrl/Cmd-click to show it with other folders · drag onto another folder to move it"
                     )
                 };
                 // Any other folder previews what is inside it.
@@ -1197,7 +1340,7 @@ impl PhotoSortApp {
                     }
                 }
                 if response.clicked() {
-                    select = Some((!top).then(|| path.clone()));
+                    select = Some((path.clone(), ui.input(|i| i.modifiers)));
                     // Arrow keys then walk this folder's photos instead
                     // of moving between folder rows.
                     ui.memory_mut(|m| m.surrender_focus(response.id));
@@ -1217,10 +1360,16 @@ impl PhotoSortApp {
             ui.add_space(S2);
             ui.add(egui::Label::new(RichText::new(note.text()).small().color(MUTED)).wrap());
         }
-        if let Some(focus) = select {
-            self.board.current = Some(Some(focus.clone().unwrap_or_default()));
+        if let Some((path, modifiers)) = select {
+            self.board_choose_folder(&path, modifiers);
+            // The folder now highlighted, when only one is shown.
+            let shown = match self.board.focus.as_slice() {
+                [] => String::new(),
+                [one] => one.clone(),
+                _ => path,
+            };
+            self.board.current = Some(Some(shown));
             self.board.hold = Some(None);
-            self.board_select_folder(focus);
             ui.ctx()
                 .data_mut(|d| d.insert_temp(egui::Id::new("organize-board-top"), true));
         }
@@ -1484,11 +1633,7 @@ impl PhotoSortApp {
                 };
                 match draft.nest_folder(&source, &target) {
                     Ok(moved) => {
-                        if let Some(focus) = &self.board.focus
-                            && within(focus, &source)
-                        {
-                            self.board.focus = Some(format!("{moved}{}", &focus[source.len()..]));
-                        }
+                        self.board_refocus(&source, &moved);
                         self.navigation_notice = Some(format!(
                             "Moved {} into {}{}",
                             leaf(&source),
@@ -1511,7 +1656,7 @@ impl PhotoSortApp {
                 };
                 match draft.create_parent(&source, &name) {
                     Ok(_) => {
-                        self.board.focus = None;
+                        self.board.focus.clear();
                         self.board_rename_folder(&join(&parent, &name));
                     }
                     Err(error) => self.navigation_notice = Some(error.to_string()),
@@ -1543,16 +1688,7 @@ impl PhotoSortApp {
                     return;
                 };
                 match draft.remove_folder(&path, &initial) {
-                    Ok(()) => {
-                        if self
-                            .board
-                            .focus
-                            .as_deref()
-                            .is_some_and(|f| within(f, &path))
-                        {
-                            self.board.focus = None;
-                        }
-                    }
+                    Ok(()) => self.board.focus.retain(|f| !within(f, &path)),
                     Err(error) => self.navigation_notice = Some(error.to_string()),
                 }
             }
@@ -1946,31 +2082,39 @@ impl PhotoSortApp {
         use egui_phosphor::regular as icon;
         let root = self.board_root_name();
         let focus = self.board.focus.clone();
-        let (folders, items) = match &focus {
-            None => (
+        let (folders, items) = if focus.is_empty() {
+            (
                 self.board
                     .sections
                     .iter()
                     .filter(|s| s.path.is_some())
                     .count(),
                 self.filtered.len(),
-            ),
-            Some(focus) => {
-                let shown: Vec<_> = self
-                    .board
-                    .sections
-                    .iter()
-                    .filter(|s| s.path.as_deref().is_some_and(|p| within(p, focus)))
-                    .collect();
-                (shown.len(), shown.iter().map(|s| s.range.len()).sum())
-            }
+            )
+        } else {
+            let shown: Vec<_> = self
+                .board
+                .sections
+                .iter()
+                .filter(|s| s.path.is_some() && shows(&focus, s.path.as_deref()))
+                .collect();
+            (shown.len(), shown.iter().map(|s| s.range.len()).sum())
         };
-        let title = match &focus {
-            None => root.clone(),
-            Some(path) if path.is_empty() => root.clone(),
-            Some(path) => format!("{root} / {}", path.replace('/', " / ")),
+        let title = match focus.as_slice() {
+            [] => root.clone(),
+            [path] if path.is_empty() => root.clone(),
+            [path] => format!("{root} / {}", path.replace('/', " / ")),
+            several => format!("{root} / {} folders", several.len()),
         };
-        let summary = self.board_counts(folders, items, focus.is_none());
+        // Several folders shown are named on hover over the title.
+        let names = (focus.len() > 1).then(|| {
+            focus
+                .iter()
+                .map(|path| path.replace('/', " / "))
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+        let summary = self.board_counts(folders, items, focus.is_empty());
         ui.horizontal(|ui| {
             ui.set_height(28.0);
             // The size slider is placed first, from the right; the title and
@@ -2012,7 +2156,7 @@ impl PhotoSortApp {
                     }
                 }
                 ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
-                    if focus.is_some()
+                    if !focus.is_empty()
                         && named(
                             ui.small_button(icon::ARROW_LEFT),
                             egui::WidgetType::Button,
@@ -2021,9 +2165,14 @@ impl PhotoSortApp {
                         .on_hover_text(format!("Every item in {root}"))
                         .clicked()
                     {
-                        self.board.focus = None;
+                        self.board.focus.clear();
                     }
-                    ui.add(egui::Label::new(RichText::new(&title).font(semibold(13.0))).truncate());
+                    let title = ui.add(
+                        egui::Label::new(RichText::new(&title).font(semibold(13.0))).truncate(),
+                    );
+                    if let Some(names) = &names {
+                        title.on_hover_text(format!("Showing these folders together:\n{names}"));
+                    }
                     ui.add(egui::Label::new(RichText::new(&summary).color(MUTED)).truncate())
                         .on_hover_text(&summary);
                 });
@@ -2146,7 +2295,7 @@ impl PhotoSortApp {
         self.board.editing = None;
         self.board.renaming = None;
         self.board.marquee = None;
-        self.board.focus = None;
+        self.board.focus.clear();
         self.board_epoch += 1;
         self.navigation_notice = Some("Changes reset · the folders are as they are on disk".into());
     }
@@ -2350,12 +2499,7 @@ impl PhotoSortApp {
         let mut heights = Vec::new();
         let mut y = 0.0;
         for (index, section) in self.board.sections.iter().enumerate() {
-            let shown = match (&focus, &section.path) {
-                (None, _) => true,
-                (Some(focus), Some(path)) => within(path, focus),
-                (Some(_), None) => false,
-            };
-            if !shown {
+            if !shows(&focus, section.path.as_deref()) {
                 continue;
             }
             rows.push(Row::Header(index));
@@ -2406,8 +2550,12 @@ impl PhotoSortApp {
             }
             ui.centered_and_justified(|ui| {
                 ui.label(
-                    RichText::new("This folder is empty. Drag photos here from another folder.")
-                        .color(MUTED),
+                    RichText::new(if focus.len() > 1 {
+                        "These folders are empty. Drag photos here from another folder."
+                    } else {
+                        "This folder is empty. Drag photos here from another folder."
+                    })
+                    .color(MUTED),
                 );
             });
             return;
@@ -3159,7 +3307,7 @@ mod tests {
         app.step = Step::PickBest;
         app.filtered.truncate(2);
         app.filter_dirty = false;
-        app.board.focus = Some("B".into());
+        app.board.focus = vec!["B".into()];
         // The step tabs switch steps after this frame's refilter has run,
         // so Organize draws before `filtered` is rebuilt.
         app.set_step(Step::Organize);
@@ -3496,7 +3644,7 @@ mod tests {
         // Choosing it after a folder shows every item again.
         app.board_select_folder(Some("B".into()));
         app.board_select_folder(None);
-        assert!(app.board.focus.is_none());
+        assert!(app.board.focus.is_empty());
         // Dropping onto it still moves photos to the library folder.
         let id = app.media[app.filtered[0]].id;
         app.board_move(&[id], "");
@@ -3541,7 +3689,7 @@ mod tests {
         app.select_library(ids[5], false, false);
         app.library_reveal = true;
         rendered(&mut app, &ctx, size);
-        assert!(app.board.focus.is_none());
+        assert!(app.board.focus.is_empty());
         assert_eq!(app.board_highlight().as_deref(), Some("B"));
         app.select_library(ids[1], false, false);
         app.library_reveal = true;
@@ -3551,7 +3699,7 @@ mod tests {
         // shown belong to its subfolder ...
         click_label(&mut app, &ctx, size, "A  ·  4");
         rendered(&mut app, &ctx, size);
-        assert_eq!(app.board.focus.as_deref(), Some("A"));
+        assert_eq!(app.board.focus, ["A"]);
         assert_eq!(app.board_highlight().as_deref(), Some("A"));
         // ... until you move to another photo.
         frame(
@@ -3625,17 +3773,17 @@ mod tests {
         };
         // Clicking a folder starts at its first photo; arrows stay in its photos.
         click_label(&mut app, &ctx, size, "Day1  ·  4");
-        assert_eq!(app.board.focus.as_deref(), Some("A/Day1"));
+        assert_eq!(app.board.focus, ["A/Day1"]);
         assert_eq!(app.active, Some(ids[0]));
         for &id in &ids[1..4] {
             press(&mut app, egui::Key::ArrowDown);
             assert_eq!(app.active, Some(id));
-            assert_eq!(app.board.focus.as_deref(), Some("A/Day1"));
+            assert_eq!(app.board.focus, ["A/Day1"]);
         }
         // Past the last photo: the next folder's first, and the sidebar follows.
         press(&mut app, egui::Key::ArrowDown);
         assert_eq!(app.active, Some(ids[4]));
-        assert_eq!(app.board.focus.as_deref(), Some("B"));
+        assert_eq!(app.board.focus, ["B"]);
         assert_eq!(
             app.selection.ordered(&app.media, &app.filtered),
             vec![ids[4]]
@@ -3643,23 +3791,23 @@ mod tests {
         // And back.
         press(&mut app, egui::Key::ArrowUp);
         assert_eq!(app.active, Some(ids[3]));
-        assert_eq!(app.board.focus.as_deref(), Some("A/Day1"));
+        assert_eq!(app.board.focus, ["A/Day1"]);
         // The end of the last folder stays put.
         for _ in 0..8 {
             press(&mut app, egui::Key::ArrowDown);
         }
         assert_eq!(app.active, Some(ids[8]));
-        assert_eq!(app.board.focus.as_deref(), Some("B"));
+        assert_eq!(app.board.focus, ["B"]);
         // The library row walks every photo across folders without
         // narrowing the view.
         let root = format!("{}  ·  9", app.board_root_name());
         click_label(&mut app, &ctx, size, &root);
-        assert!(app.board.focus.is_none());
+        assert!(app.board.focus.is_empty());
         assert_eq!(app.active, Some(ids[8]));
         for &id in ids[2..8].iter().rev() {
             press(&mut app, egui::Key::ArrowUp);
             assert_eq!(app.active, Some(id));
-            assert!(app.board.focus.is_none());
+            assert!(app.board.focus.is_empty());
         }
         app.runtime.shutdown();
     }
@@ -3908,11 +4056,11 @@ mod tests {
         rendered(&mut app, &ctx, size);
         assert_eq!(sections(&app), plan);
         // A folder chosen in the sidebar is shown again afterwards.
-        app.board.focus = Some("Unknown camera".into());
+        app.board.focus = vec!["Unknown camera".into()];
         frame(&mut app, &ctx, size, vec![backslash(true)]);
-        assert!(app.board.focus.is_none());
+        assert!(app.board.focus.is_empty());
         frame(&mut app, &ctx, size, vec![backslash(false)]);
-        assert_eq!(app.board.focus.as_deref(), Some("Unknown camera"));
+        assert_eq!(app.board.focus, ["Unknown camera"]);
         app.runtime.shutdown();
     }
 
@@ -5186,23 +5334,19 @@ mod tests {
         assert_eq!(app.selection.ordered(&app.media, &app.filtered), [ids[0]]);
         // The round circle at a tile's corner adds that photo, and again
         // removes it.
-        // Tiles take their photos' shapes as thumbnails arrive, so the
-        // circle is found again before each click.
-        let circle = |app: &mut PhotoSortApp| {
-            let other = tile(app, ids[5]);
-            egui::pos2(
-                other.right() - 6.0 - S2 - 1.0,
-                other.bottom() - library::CAPTION - S2 - 1.0,
-            )
-        };
-        let at = circle(&mut app);
-        click(&mut app, at, Default::default());
+        let other = tile(&mut app, ids[5]);
+        let circle = egui::pos2(
+            other.right() - 6.0 - S2 - 1.0,
+            other.bottom() - library::CAPTION - S2 - 1.0,
+        );
+        click(&mut app, circle, Default::default());
         assert_eq!(
             app.selection.ordered(&app.media, &app.filtered),
             [ids[0], ids[5]]
         );
-        let at = circle(&mut app);
-        click(&mut app, at, Default::default());
+        // The tile kept its shape, so the same spot removes it again.
+        assert_eq!(tile(&mut app, ids[5]), other);
+        click(&mut app, circle, Default::default());
         assert_eq!(app.selection.ordered(&app.media, &app.filtered), [ids[0]]);
         app.runtime.shutdown();
     }
@@ -5647,3 +5791,7 @@ mod tests {
         app.runtime.shutdown();
     }
 }
+
+#[cfg(test)]
+#[path = "organize_board/multi_folder_tests.rs"]
+mod multi_folder_tests;

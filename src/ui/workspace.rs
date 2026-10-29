@@ -735,7 +735,7 @@ impl PhotoSortApp {
         self.held.clear();
         self.prefetched_for = None;
         self.board.editing = None;
-        self.board.focus = None;
+        self.board.focus.clear();
         self.requested.clear();
         self.failures.clear();
         self.image_warnings.clear();
@@ -1478,9 +1478,10 @@ impl PhotoSortApp {
                 self.filter == Filter::Rejected,
             )
         } else {
+            let shown = self.board_shown_order();
             crate::core::navigation::next_visible(
                 &self.media,
-                &self.filtered,
+                shown.as_deref().unwrap_or(&self.filtered),
                 current,
                 delta,
                 &self.decisions,
