@@ -117,6 +117,7 @@ fn move_migrates_decisions_and_new_fingerprints_without_marking_them_applied() {
     let mut session = Session {
         suggested: Default::default(),
         pick_suggested: Default::default(),
+        rotations_staged: Default::default(),
         organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),
@@ -169,6 +170,7 @@ fn session_merge_preserves_preexisting_destination_decisions() {
     let mut moved = Session {
         suggested: Default::default(),
         pick_suggested: Default::default(),
+        rotations_staged: Default::default(),
         organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),
@@ -228,21 +230,22 @@ fn equivalent_folder_spellings_share_a_session() {
 }
 
 #[test]
-fn rotation_review_follows_successful_moves_without_losing_confirmation() {
+fn rotation_review_follows_successful_moves_without_losing_staged_suggestions() {
     use photosort::core::rotation::Review;
     let (_dir, c, plan) = fixture();
     let id = c.media[0].id;
     let mut review = Review::default();
-    review.ensure(id, 1);
-    review.confirm(id);
+    review.replace_suggestions(vec![(id, 1)]);
+    let mut decisions = HashMap::new();
+    review.stage_new_suggestions(&mut decisions);
     let report = run(&plan, &c.root.join("journal"));
     review.complete(&report.applied_decisions(&c.media));
     review.relocate(&report.relocated);
     let new_id = MediaId::for_path(&c.root.join("After/a.jpg"));
-    assert_eq!(review.pending_count(), 1);
-    assert!(review.choice(id).is_none());
-    assert!(review.choice(new_id).unwrap().confirmed);
-    assert_eq!(review.pending()[&new_id].turns, 1);
+    assert_eq!(review.ids(), &[new_id]);
+    assert!(review.suggestion(id).is_none());
+    assert_eq!(review.default_turns(new_id), 1);
+    assert!(review.staged().contains(&new_id));
 }
 
 #[test]

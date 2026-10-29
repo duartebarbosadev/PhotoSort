@@ -2,7 +2,7 @@
 //! Pixels and faces for duplicate review come from the image worker on request.
 use super::{AnalysisProfile, AnalysisStats, Event, Publisher, RunGeneration};
 use crate::core::{
-    cache, face_groups, faces, manual_groups, model::*, near_duplicates, pipeline::Pipeline,
+    cache, eyes, face_groups, faces, manual_groups, model::*, near_duplicates, pipeline::Pipeline,
     regional, subjects,
 };
 use std::{
@@ -31,7 +31,14 @@ pub(super) struct SimilarityJob {
 pub(super) type EvidenceReply = (
     crate::core::pipeline::Asset,
     Option<Vec<faces::Face>>,
+    Option<Vec<eyes::Person>>,
     AnalysisStats,
+);
+/// One photo's pixels, faces and people, as a request asked for them.
+type Evidence = (
+    crate::core::pipeline::Asset,
+    Option<Vec<faces::Face>>,
+    Option<Vec<eyes::Person>>,
 );
 pub(super) struct EvidenceRequest {
     pub(super) epoch: u64,
@@ -39,6 +46,8 @@ pub(super) struct EvidenceRequest {
     pub(super) input: near_duplicates::batch::Input,
     pub(super) store: Arc<subjects::store::Store>,
     pub(super) faces: bool,
+    /// Each person's eyes too, judged for Easy Delete.
+    pub(super) people: bool,
     pub(super) reply: SyncSender<anyhow::Result<EvidenceReply>>,
 }
 struct EvidenceClient<'a> {
@@ -52,7 +61,8 @@ impl EvidenceClient<'_> {
         &mut self,
         input: &near_duplicates::batch::Input,
         faces: bool,
-    ) -> anyhow::Result<(crate::core::pipeline::Asset, Option<Vec<faces::Face>>)> {
+        people: bool,
+    ) -> anyhow::Result<Evidence> {
         let (reply, rx) = mpsc::sync_channel(1);
         let mut request = EvidenceRequest {
             epoch: self.job.epoch,
@@ -60,6 +70,7 @@ impl EvidenceClient<'_> {
             input: input.clone(),
             store: self.job.store.clone(),
             faces,
+            people,
             reply,
         };
         loop {
@@ -77,9 +88,9 @@ impl EvidenceClient<'_> {
             anyhow::ensure!(!(self.cancelled)(), "Duplicate review cancelled");
             match rx.recv_timeout(Duration::from_millis(15)) {
                 Ok(result) => {
-                    let (asset, faces, stats) = result?;
+                    let (asset, faces, people, stats) = result?;
                     self.stats = stats;
-                    return Ok((asset, faces));
+                    return Ok((asset, faces, people));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(_) => anyhow::bail!("Image worker stopped"),
@@ -92,10 +103,12 @@ impl near_duplicates::batch::Evidence for EvidenceClient<'_> {
         &mut self,
         input: &near_duplicates::batch::Input,
     ) -> anyhow::Result<crate::core::pipeline::Asset> {
-        self.request(input, false).map(|(asset, _)| asset)
+        self.request(input, false, false).map(|(asset, ..)| asset)
     }
     fn faces(&mut self, input: &near_duplicates::batch::Input) -> Option<Vec<faces::Face>> {
-        self.request(input, true).ok().and_then(|(_, faces)| faces)
+        self.request(input, true, false)
+            .ok()
+            .and_then(|(_, faces, _)| faces)
     }
 }
 
@@ -317,6 +330,34 @@ impl Similarity<'_> {
         if cancelled() {
             return;
         }
+        // Photos with closed eyes and the other shots of their moment.
+        let blinks = match result {
+            Ok(Some(_)) if valid => {
+                let candidates: Vec<_> = job
+                    .inputs
+                    .iter()
+                    .map(|input| eyes::Candidate {
+                        id: input.media.id,
+                        group: input.group,
+                        camera: &input.camera,
+                        at_ms: input.captured_ms,
+                        faces: input.faces,
+                    })
+                    .collect();
+                eyes::moments(
+                    &candidates,
+                    |i| {
+                        let (_, _, people) = evidence.request(&job.inputs[i], true, true).ok()?;
+                        people
+                    },
+                    cancelled,
+                )
+            }
+            _ => None,
+        };
+        if cancelled() {
+            return;
+        }
         match result {
             Ok(Some(pairs)) if valid => {
                 self.send(
@@ -324,6 +365,7 @@ impl Similarity<'_> {
                     Event::DuplicatePairs {
                         run: job.run,
                         pairs,
+                        blinks: blinks.unwrap_or_default(),
                     },
                 );
                 self.cache.request(false);

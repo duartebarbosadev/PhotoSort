@@ -75,6 +75,10 @@ pub struct Session {
     /// kept can still be one Pick Best suggests moving to Trash.
     #[serde(default, rename = "staged_pick_suggestions")]
     pub pick_suggested: HashSet<MediaId>,
+    /// Photos whose Fix Rotation suggestion was already staged, kept apart
+    /// from Easy Delete's: one photo can be a suggestion in both steps.
+    #[serde(default, rename = "staged_rotations")]
+    pub rotations_staged: HashSet<MediaId>,
 }
 fn session_path(root: &Path) -> PathBuf {
     // Equivalent trailing separators must not create different session stores.
@@ -120,9 +124,13 @@ impl Session {
         }
         remap_media_ids(&mut self.decisions, changes);
         for (old, new, _) in changes {
-            for suggested in [&mut self.suggested, &mut self.pick_suggested] {
-                if suggested.remove(old) {
-                    suggested.insert(*new);
+            for staged in [
+                &mut self.suggested,
+                &mut self.pick_suggested,
+                &mut self.rotations_staged,
+            ] {
+                if staged.remove(old) {
+                    staged.insert(*new);
                 }
             }
         }
@@ -149,6 +157,7 @@ impl Session {
         self.decisions.extend(other.decisions);
         self.suggested.extend(other.suggested);
         self.pick_suggested.extend(other.pick_suggested);
+        self.rotations_staged.extend(other.rotations_staged);
         self.fingerprints.extend(other.fingerprints);
     }
     pub fn reconcile(&mut self, media: &[Media]) {
@@ -171,8 +180,12 @@ impl Session {
             });
         }
         // An edited file is a new photo: its suggestion may be staged again.
-        for suggested in [&mut self.suggested, &mut self.pick_suggested] {
-            suggested.retain(|id| {
+        for staged in [
+            &mut self.suggested,
+            &mut self.pick_suggested,
+            &mut self.rotations_staged,
+        ] {
+            staged.retain(|id| {
                 self.fingerprints
                     .get(id)
                     .zip(fingerprints.get(id))

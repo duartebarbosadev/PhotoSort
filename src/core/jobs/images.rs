@@ -9,7 +9,7 @@ use crate::core::{
     analysis::{self, Analysis, Thresholds, VisualGroups},
     cache,
     catalog::Catalog,
-    dates, face_groups, faces, inspection, manual_groups,
+    dates, eyes, face_groups, faces, inspection, manual_groups,
     model::*,
     model_assets, models, near_duplicates, operations,
     pipeline::{self, Pipeline},
@@ -442,11 +442,66 @@ impl ImageWorker {
         } else {
             None
         };
+        let people = match (&faces, request.people) {
+            (Some(faces), true) => Some(self.evidence_people(request, &asset, faces, scope)?),
+            _ => None,
+        };
         anyhow::ensure!(
             !scope.cancelled() && Pipeline::key(media)? == request.input.source,
             "Photo changed during duplicate review"
         );
-        Ok((asset, faces, self.stats()))
+        Ok((asset, faces, people, self.stats()))
+    }
+
+    /// Each person's eyes for Easy Delete, from the cache when judged
+    /// before. Faces too small to judge on the analysis image are measured
+    /// again on the display image, decoded only when one needs it.
+    fn evidence_people(
+        &mut self,
+        request: &EvidenceRequest,
+        asset: &pipeline::Asset,
+        faces: &[faces::Face],
+        scope: &Scope,
+    ) -> anyhow::Result<Vec<eyes::Person>> {
+        let key = subjects::store::Store::eyes_key(
+            &request.input.source,
+            &format!("{}:{}", eyes::RECIPE, models::face_signature()),
+        );
+        if let Some(people) = request.store.eyes(&key) {
+            return Ok(people);
+        }
+        let (width, height) = asset.pixels.dimensions();
+        let media = &request.input.media;
+        let (pipeline, models) = (&mut self.pipeline, &mut self.models);
+        let mut display: Option<Option<pipeline::Asset>> = None;
+        let mut failed = false;
+        let people = eyes::judge_people(faces, width, height, |face| {
+            let display = display
+                .get_or_insert_with(|| {
+                    pipeline
+                        .load_neutral_cancellable(media, || scope.cancelled())
+                        .ok()
+                })
+                .as_ref()
+                .filter(|d| d.pixels.width() > width);
+            let Some(display) = display else {
+                failed = true;
+                return None;
+            };
+            match faces::rejudge(models, display, face) {
+                Ok(again) => again.map(|f| (f, display.pixels.width(), display.pixels.height())),
+                Err(_) => {
+                    failed = true;
+                    None
+                }
+            }
+        });
+        anyhow::ensure!(!scope.cancelled(), "Duplicate review cancelled");
+        // A display image that failed to decode may decode next time.
+        if !failed {
+            request.store.put_eyes(&key, &people)?;
+        }
+        Ok(people)
     }
 
     /// Faces for duplicate review, upgrading cached geometry that lacks landmarks.
@@ -1081,7 +1136,8 @@ impl ImageWorker {
         };
         let embedding = features.dense.global.clone();
         self.cached_mut(&it.source_key).embedding = Some(embedding);
-        if grouped {
+        // Easy Delete finds closed eyes when the face models are installed.
+        if grouped || (profile == AnalysisProfile::Duplicates && faces::installed()) {
             changed |= self.complete_faces(it, &store, &mut features)?;
         }
         if let Some(faces) = &features.faces {
@@ -1342,6 +1398,11 @@ impl ImageWorker {
                 .then_some(technical.sharpness),
             metadata_fields: metadata.metadata_fields,
             shot: near_duplicates::formats::Shot::new(&it.media.path, metadata),
+            camera: metadata.camera.trim().to_owned(),
+            captured_ms: metadata
+                .captured_ms
+                .map(|ms| ms + i64::from(metadata.captured_subsec_ms.unwrap_or(0))),
+            faces: technical.faces.as_ref().map_or(0, |f| f.count),
         });
         Ok(())
     }

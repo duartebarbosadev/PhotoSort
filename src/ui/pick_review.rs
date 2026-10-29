@@ -39,7 +39,6 @@ impl PhotoSortApp {
             && !self.close_authorized
             && self.departure.is_none()
             && self.after_apply.is_none()
-            && self.review_notice.is_none()
             && !self.plan_open
             && self.analysis_run.is_none()
         {
@@ -569,6 +568,7 @@ impl PhotoSortApp {
                         .unwrap_or_default(),
                     facts,
                     dim: !keep,
+                    inset: None,
                     toggle: enabled.then(|| {
                         format!(
                             "{} · {}",
@@ -730,7 +730,6 @@ mod tests {
         // The user keeps photo 1; leaving and coming back never re-trashes it.
         app.toggle_pick(MediaId(1));
         app.set_step(Step::Cull);
-        assert!(app.review_notice.is_none(), "No Confirm guards the step");
         app.set_step(Step::PickBest);
         assert_eq!(trashed(&app), vec![2, 4]);
         // Review changes lists them: no "complete every comparison" gate.

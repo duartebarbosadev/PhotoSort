@@ -16,6 +16,27 @@ pub struct Row {
     pub values: Vec<String>,
 }
 
+impl Row {
+    /// Whether the compared photos disagree on this row, a missing value
+    /// counting as a value of its own.
+    pub fn differs(&self) -> bool {
+        self.values.iter().any(|value| *value != self.values[0])
+    }
+
+    /// Each distinct value with the photos (0-based) that share it, in order
+    /// of first appearance, so "HEIC" for photos 2, 3 and 4 is said once.
+    pub fn groups(&self) -> Vec<(&str, Vec<usize>)> {
+        let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
+        for (n, value) in self.values.iter().enumerate() {
+            match groups.iter_mut().find(|(known, _)| *known == value) {
+                Some((_, photos)) => photos.push(n),
+                None => groups.push((value, vec![n])),
+            }
+        }
+        groups
+    }
+}
+
 /// Parse an EXIF rational (`28/10`) or plain decimal. Zero denominators and
 /// non-finite results are rejected rather than displayed.
 pub fn ratio(text: &str) -> Option<f64> {
@@ -74,10 +95,11 @@ pub fn sections(items: &[(&Media, &Metadata)]) -> Vec<Section> {
                 row("Format", &|media, _| extension(media)),
                 row("Size", &|media, _| Some(size(media.fingerprint.bytes))),
                 row("Created", &|_, meta| created(meta)),
+                row("Location", &|_, meta| location(meta)),
             ],
         },
         Section {
-            title: "Camera & settings",
+            title: "Camera",
             rows: vec![
                 row("Source", &|media, meta| source(media, meta)),
                 row("Lens", &|_, meta| text(&meta.lens)),
@@ -233,6 +255,26 @@ fn created(meta: &Metadata) -> Option<String> {
         .and_then(|ms| Local.timestamp_millis_opt(ms).single())
         .map(|time| time.format("%Y-%m-%d %H:%M").to_string())
         .or_else(|| text(&meta.captured))
+}
+
+/// The resolved place, "Fuji, Shizuoka, Japan", or the raw coordinates when
+/// the place is not known.
+fn location(meta: &Metadata) -> Option<String> {
+    if let Some(place) = &meta.location {
+        let mut parts: Vec<&str> = Vec::new();
+        for part in [&place.city, &place.region, &place.country] {
+            let part = part.trim();
+            if !part.is_empty() && !parts.contains(&part) {
+                parts.push(part);
+            }
+        }
+        if !parts.is_empty() {
+            return Some(parts.join(", "));
+        }
+    }
+    meta.gps
+        .filter(|(lat, lon)| lat.is_finite() && lon.is_finite())
+        .map(|(lat, lon)| format!("{lat:.4}, {lon:.4}"))
 }
 
 fn source(media: &Media, meta: &Metadata) -> Option<String> {

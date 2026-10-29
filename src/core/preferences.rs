@@ -18,6 +18,9 @@ pub struct Preferences {
     /// The same for Pick Best: the suggested photo of each group is kept and
     /// the others are staged for Trash.
     pub pick_best_auto: bool,
+    /// Fix Rotation stages its certain suggestions as the user's choices;
+    /// off, every photo stays as it is until the user uses a suggestion.
+    pub rotation_auto: bool,
     pub cache: super::cache::Limits,
     pub metadata_writes: super::metadata::WritePolicy,
     pub processing: super::processing::Preferences,
@@ -70,6 +73,7 @@ impl Default for Preferences {
             easy_delete: Default::default(),
             easy_delete_auto: true,
             pick_best_auto: true,
+            rotation_auto: true,
             cache: Default::default(),
             processing: Default::default(),
             metadata_writes: Default::default(),

@@ -790,7 +790,7 @@ fn photos_without_a_recognized_person_stay_or_go_to_one_folder_as_chosen() {
         (photos[0].id, 1, "Person 001"),
         (photos[1].id, 0, "Unassigned"),
     ]));
-    // By default they stay in their folders, and Details says why.
+    // By default they stay in their folders, and the preview says why on hover.
     assert_eq!(app.preferences.faceless, Faceless::Stay);
     let labels = app.organize_labels();
     assert_eq!(

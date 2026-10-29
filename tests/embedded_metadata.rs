@@ -470,6 +470,7 @@ fn embedded_rotation_preserves_unapplied_ratings_and_saved_focus_across_reload()
     let mut session = Session {
         suggested: Default::default(),
         pick_suggested: Default::default(),
+        rotations_staged: Default::default(),
         organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),

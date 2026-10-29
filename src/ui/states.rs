@@ -157,12 +157,12 @@ impl PhotoSortApp {
                 ui,
                 icon::ARROW_CLOCKWISE,
                 if detected {
-                    "No rotation suggestions left"
+                    "Every photo looks upright"
                 } else {
                     "Find sideways photos"
                 },
                 if detected {
-                    "Every suggested photo has been reviewed. You can still turn any photo by hand."
+                    "PhotoSort found no photo to turn. Show all photos to turn any of them by hand."
                 } else {
                     "Detect rotations checks each photo's orientation on this computer and lists the ones that look sideways or upside down."
                 },
@@ -242,10 +242,8 @@ impl PhotoSortApp {
             Some(Empty::OpenFolder) => self.select_folder(),
             Some(Empty::Analyze) => self.analyze_current_workflow(),
             Some(Empty::ShowAllRotations) => {
-                if self.allow_review_departure() {
-                    self.rotation_queue_only = false;
-                    self.filter_dirty = true;
-                }
+                self.rotation_queue_only = false;
+                self.filter_dirty = true;
             }
             Some(Empty::ShowAllCategories) => {
                 self.delete_categories = Category::ALL.into_iter().collect();

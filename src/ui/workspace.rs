@@ -154,6 +154,11 @@ pub struct PhotoSortApp {
     model_issue: Option<crate::core::model_assets::Issue>,
     model_retry: Option<model_setup::Retry>,
     saved_views: crate::core::views::Saved,
+    /// The library open before the user chose another folder. Its views
+    /// must not carry over: the new folder opens with clean views.
+    switched_from: Option<PathBuf>,
+    /// Every scroll position returns to the top on the next frame.
+    forget_scroll: bool,
     pending_bookmark: Option<crate::core::views::Bookmark>,
     view_data_ready: HashSet<Step>,
     resume_started: bool,
@@ -191,11 +196,19 @@ pub struct PhotoSortApp {
     duplicates: HashMap<MediaId, MediaId>,
     near_duplicates: HashMap<MediaId, MediaId>,
     delete_pairs: Vec<crate::core::near_duplicates::batch::Pair>,
+    /// Photos with closed eyes and the other shots of their moment.
+    delete_blinks: Vec<crate::core::eyes::Blink>,
     rotations: HashMap<MediaId, crate::core::models::RotationSuggestion>,
     rotation_review: crate::core::rotation::Review,
     rotation_run: Option<u64>,
     rotation_queue_only: bool,
-    review_notice: Option<Step>,
+    /// The clicked card's photos, large, in a panel beside Fix Rotation's grid.
+    rotation_panel: bool,
+    /// The panel's width once the user has seen or resized it.
+    rotation_panel_width: Option<f32>,
+    /// Photo width chosen with Fix Rotation's size slider, kept while the
+    /// app runs.
+    rotation_slot: Option<f32>,
     delete_review: crate::core::delete_review::Review,
     delete_current: Option<MediaId>,
     delete_categories: HashSet<crate::core::delete_review::Category>,
@@ -312,8 +325,14 @@ pub struct PhotoSortApp {
     /// The photo whose neighbours' previews were last requested ahead.
     prefetched_for: Option<MediaId>,
     independent_views: HashMap<u64, InspectionView>,
+    /// The 1:1 zoom at which each canvas slot's photo last fitted its view,
+    /// so zooming out from the keyboard or slider stops at Fit.
+    fit_zooms: HashMap<u64, f32>,
     sync_views: bool,
     focused_slot: u64,
+    /// A photo clicked inside a comparison of selected photos: D and Trash
+    /// act on it alone. Without one they act on every selected photo.
+    comparison_focus: Option<MediaId>,
     inspection_wanted: Vec<InspectionRequest>,
     inspection_frames: HashMap<u64, InspectionFrame>,
     view_started: Instant,
@@ -413,6 +432,8 @@ impl PhotoSortApp {
             model_issue: None,
             model_retry: None,
             saved_views: Default::default(),
+            switched_from: None,
+            forget_scroll: false,
             pending_bookmark: None,
             view_data_ready: [Step::Organize, Step::Cull, Step::Rotation]
                 .into_iter()
@@ -451,11 +472,14 @@ impl PhotoSortApp {
             duplicates: HashMap::new(),
             near_duplicates: HashMap::new(),
             delete_pairs: Vec::new(),
+            delete_blinks: Vec::new(),
             rotations: HashMap::new(),
             rotation_review: Default::default(),
             rotation_run: None,
             rotation_queue_only: false,
-            review_notice: None,
+            rotation_panel: false,
+            rotation_panel_width: None,
+            rotation_slot: None,
             delete_review: Default::default(),
             delete_current: None,
             delete_categories: crate::core::delete_review::Category::ALL
@@ -551,8 +575,10 @@ impl PhotoSortApp {
             held: HashMap::new(),
             prefetched_for: None,
             independent_views: HashMap::new(),
+            fit_zooms: HashMap::new(),
             sync_views: true,
             focused_slot: 0,
+            comparison_focus: None,
             inspection_wanted: Vec::new(),
             inspection_frames: HashMap::new(),
             view_started: Instant::now(),
@@ -569,6 +595,7 @@ impl PhotoSortApp {
             decisions: self.decisions.clone(),
             suggested: self.delete_review.suggested().clone(),
             pick_suggested: self.pick_review.suggested().clone(),
+            rotations_staged: self.rotation_review.staged().clone(),
             organize: self.catalog.as_ref().and_then(|catalog| {
                 crate::core::organize::Intent::capture(
                     catalog,
@@ -620,11 +647,26 @@ impl PhotoSortApp {
         }
         self.checkpoint_bookmarks();
         self.save_session();
+        let previous = self
+            .catalog
+            .as_ref()
+            .map(|catalog| catalog.root.clone())
+            .or_else(|| self.root.clone());
+        let switching = previous
+            .as_ref()
+            .is_some_and(|root| !root.components().eq(folder.components()));
         self.scan_folder(folder);
+        // Another spelling of the same folder (a link, say) is only known to
+        // be the same once the scan resolves it; it then gets its views back.
+        if switching {
+            self.reset_folder_views();
+            self.switched_from = previous;
+        }
     }
     // Reload after an apply has already queued its reconciled session save.
     // Saving the old catalog again would overwrite migrated fingerprints.
     fn scan_folder(&mut self, folder: PathBuf) {
+        self.switched_from = None;
         self.browse_filters_open = false;
         self.clear_model_retry();
         self.runtime.next_epoch();
@@ -676,6 +718,7 @@ impl PhotoSortApp {
         self.duplicates.clear();
         self.near_duplicates.clear();
         self.delete_pairs.clear();
+        self.delete_blinks.clear();
         self.rotations.clear();
         self.delete_review = Default::default();
         self.delete_current = None;
@@ -689,6 +732,7 @@ impl PhotoSortApp {
         self.rotation_review = Default::default();
         self.rotation_run = None;
         self.rotation_queue_only = false;
+        self.rotation_panel = false;
         self.active = None;
         self.comparison.clear();
         self.inspection_wanted.clear();
@@ -767,11 +811,7 @@ impl PhotoSortApp {
     }
     // Decoded textures stay canonical; every surface applies this display-only transform.
     fn preview_turns(&self, id: MediaId) -> u8 {
-        if self.step == Step::Rotation {
-            self.rotation_review.choice(id).map_or(0, |c| c.turns())
-        } else {
-            self.decision(id).turns
-        }
+        self.decision(id).turns
     }
     fn reject(&mut self, id: MediaId) {
         if self.step == Step::PickBest {
@@ -790,7 +830,7 @@ impl PhotoSortApp {
                 })
             {
                 self.toggle_delete_candidate(side);
-            } else if self.delete_review.entry(id).is_some() && self.allow_review_departure() {
+            } else if self.delete_review.entry(id).is_some() {
                 self.set_active(id);
                 self.toggle_delete_candidate(0);
             }
@@ -811,8 +851,10 @@ impl PhotoSortApp {
             .is_some_and(|m| m.kind != MediaKind::Video)
         {
             if self.step == Step::Rotation {
-                self.ensure_rotation_choice(id);
-                self.rotation_review.rotate(id, turns);
+                // Back to how it is on disk, nothing stays staged.
+                let staged = crate::core::rotation::turns(&self.decisions, id);
+                crate::core::rotation::set_turns(&mut self.decisions, id, staged + turns);
+                self.pending_bookmark = None;
             } else {
                 self.stage_manual([id], crate::core::decisions::Change::Rotate(turns));
                 return;
@@ -837,9 +879,6 @@ impl PhotoSortApp {
                 self.independent_views.clear();
             }
             self.view_started = Instant::now();
-            return;
-        }
-        if self.active != Some(id) && !self.allow_review_departure() {
             return;
         }
         if self.step == Step::EasyDelete && self.delete_review.entry(id).is_some() {
@@ -992,22 +1031,9 @@ impl PhotoSortApp {
             self.arrange_board();
         }
         if self.step == Step::Rotation {
-            self.filtered.retain(|i| {
-                self.media[*i].kind != MediaKind::Video
-                    && (!self.rotation_queue_only
-                        || self.rotation_review.choice(self.media[*i].id).is_some())
-            });
-            if self.rotation_queue_only {
-                let order: HashMap<_, _> = self
-                    .rotation_review
-                    .ids()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, id)| (*id, i))
-                    .collect();
-                self.filtered
-                    .sort_by_key(|i| order.get(&self.media[*i].id).copied().unwrap_or(usize::MAX));
-            }
+            self.refilter_rotations();
+            self.filter_dirty = false;
+            return;
         }
         if self.step == Step::EasyDelete {
             self.filtered.retain(|i| {
@@ -1039,9 +1065,6 @@ impl PhotoSortApp {
             .active
             .is_none_or(|id| !self.filtered.iter().any(|&i| self.media[i].id == id))
         {
-            if !self.allow_review_departure() {
-                return;
-            }
             self.active = self.filtered.first().map(|&i| self.media[i].id);
         }
         self.filter_dirty = false;
@@ -1086,9 +1109,6 @@ impl PhotoSortApp {
     }
     fn analyze(&mut self) {
         if !self.can_start_analysis() || !self.model_install_ready() {
-            return;
-        }
-        if !self.allow_review_departure() {
             return;
         }
         self.resume_suspended = false;
@@ -1155,13 +1175,6 @@ impl PhotoSortApp {
     }
     fn review_changes(&mut self) {
         if self.review_remaining_operations() {
-            return;
-        }
-        if !self.allow_review_departure() {
-            return;
-        }
-        if self.step == Step::Rotation {
-            self.review_rotations();
             return;
         }
         // Organize's moves, renames and new folders are one plan; staged
@@ -1448,7 +1461,7 @@ impl PhotoSortApp {
             self.navigate_pick(delta);
             return;
         }
-        if self.filtered.is_empty() || !self.allow_review_departure() {
+        if self.filtered.is_empty() {
             return;
         }
         self.pending_bookmark = None;
@@ -1504,6 +1517,10 @@ impl PhotoSortApp {
             self.compare_with(id);
         } else if !self.comparison.is_empty() && !self.comparison.contains(&id) {
             let slot = (self.focused_slot as usize).min(self.comparison.len() - 1);
+            // A clicked photo hands its focus to the one replacing it.
+            if self.comparison_focus == Some(self.comparison[slot]) {
+                self.comparison_focus = Some(id);
+            }
             self.comparison[slot] = id;
             if self.step == Step::Cull {
                 self.selection.replace(self.comparison.iter().copied());
@@ -1527,7 +1544,6 @@ impl PhotoSortApp {
             || self.model_dialog
             || self.preferences_draft.is_some()
             || self.busy
-            || self.review_notice.is_some()
             || self.departure.is_some()
             || self.intro.playing()
     }
@@ -1609,6 +1625,9 @@ impl PhotoSortApp {
             set_reduce_motion(ctx, reduce);
         }
         self.check_updates_at_startup();
+        if std::mem::take(&mut self.forget_scroll) {
+            ctx.data_mut(|d| d.remove_by_type::<egui::scroll_area::State>());
+        }
         self.tick += 1;
         self.poll(ctx);
         self.check_board();
@@ -1616,11 +1635,12 @@ impl PhotoSortApp {
         self.restore_bookmark();
         self.intro_keys(ctx);
         self.keyboard(ctx);
-        // Organize, Easy Delete and Pick Best have no separate Review: they
-        // show the clicked photo or card in a panel beside their board or grid.
+        // Organize, Easy Delete, Fix Rotation and Pick Best have no separate
+        // Review: they show the clicked photo or card in a panel beside their
+        // board or grid.
         if matches!(
             self.step,
-            Step::Organize | Step::EasyDelete | Step::PickBest
+            Step::Organize | Step::EasyDelete | Step::Rotation | Step::PickBest
         ) {
             self.review = false;
         }
@@ -1645,7 +1665,7 @@ impl PhotoSortApp {
             .resizable(true)
             .drag_to_open(false)
             .default_size(300.0)
-            .size_range(260.0..=440.0)
+            .size_range(260.0..=560.0)
             .frame(egui::Frame::new().fill(PANEL).inner_margin(S4 as i8))
             .show_collapsible(root, &mut expanded, |ui| {
                 // While sliding out after the folder closed or the window
@@ -1676,9 +1696,9 @@ impl PhotoSortApp {
                     // The step's controls sit on a panel strip above the photos.
                     egui::Frame::new()
                         .fill(PANEL)
-                        // Organize's, Easy Delete's and Pick Best's bars have no
-                        // context line: as much room below as above.
-                        .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: if matches!(self.step, Step::Organize | Step::EasyDelete | Step::PickBest) { 6 } else { 2 } })
+                        // Organize's, Easy Delete's, Fix Rotation's and Pick Best's
+                        // bars have no context line: as much room below as above.
+                        .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: if matches!(self.step, Step::Organize | Step::EasyDelete | Step::Rotation | Step::PickBest) { 6 } else { 2 } })
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             if self.group_task.is_some() {
@@ -1809,6 +1829,8 @@ impl PhotoSortApp {
                 category: Category::Exact,
                 tag: "Identical copy".into(),
                 keep_why: "The two files are identical, so either can go. This one keeps its place in the library.".into(),
+                eyes: Vec::new(),
+                extra: Vec::new(),
                 reason: "Byte-for-byte identical to the photo beside it.".into(),
             });
         }
@@ -1819,6 +1841,8 @@ impl PhotoSortApp {
                 category: Category::Near,
                 tag: "Sharper kept".into(),
                 keep_why: "It is the sharper photo of the two.".into(),
+                eyes: Vec::new(),
+                extra: Vec::new(),
                 reason: "No visible subject change detected. PhotoSort suggests keeping the sharper photo.".into(),
             });
         }
@@ -1829,6 +1853,8 @@ impl PhotoSortApp {
                 category: Category::Blur,
                 tag: Category::Blur.title().into(),
                 keep_why: String::new(),
+                eyes: Vec::new(),
+                extra: Vec::new(),
                 reason: "Out of focus across the frame. PhotoSort suggests moving it to Trash."
                     .into(),
             });
@@ -1852,6 +1878,8 @@ impl PhotoSortApp {
                     category,
                     tag: category.title().into(),
                     keep_why: String::new(),
+                    eyes: Vec::new(),
+                    extra: Vec::new(),
                     reason: reason.into(),
                 });
             }
@@ -2025,6 +2053,14 @@ impl PhotoSortApp {
                 }
             }
             self.delete_panel = review;
+        } else if self.step == Step::Rotation {
+            if review && self.active.is_none() {
+                self.refilter();
+                if let Some(first) = self.filtered.first().map(|i| self.media[*i].id) {
+                    self.set_active(first);
+                }
+            }
+            self.rotation_panel = review;
         } else if self.step == Step::PickBest {
             // So does Pick Best.
             if review && self.pick_current.is_none() {
@@ -2311,6 +2347,10 @@ mod organize_tests;
 #[cfg(test)]
 #[path = "folder_open_tests.rs"]
 mod folder_open_tests;
+
+#[cfg(test)]
+#[path = "folder_switch_tests.rs"]
+mod folder_switch_tests;
 
 impl PhotoSortApp {
     fn accept_image_warning(&mut self, id: MediaId, warning: Option<String>) {

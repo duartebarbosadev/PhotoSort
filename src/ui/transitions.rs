@@ -177,28 +177,16 @@ impl PhotoSortApp {
             self.set_status("Stopping file changes…".into());
         }
     }
-    pub(super) fn allow_review_departure(&mut self) -> bool {
-        let unfinished = match self.step {
-            Step::Rotation => self.rotation_review.unfinished(self.active),
-            _ => false,
-        };
-        if unfinished {
-            self.review_notice = Some(self.step);
-        }
-        !unfinished
-    }
     pub(super) fn has_unsaved_plan_extras(&self) -> bool {
-        self.rotation_review.pending_count() > 0
-            || (self.organize_changes_pending()
-                && self
-                    .retry_plan
-                    .as_ref()
-                    .is_none_or(|plan| plan.output_root.is_some()))
+        self.organize_changes_pending()
+            && self
+                .retry_plan
+                .as_ref()
+                .is_none_or(|plan| plan.output_root.is_some())
     }
     pub(super) fn save_plan_and_quit(&mut self) {
         if self.has_unsaved_plan_extras()
             || !self.plan_open
-            || self.review_notice.is_some()
             || self.busy
             || self.scanning
             || self.retry_edit.is_some()
@@ -237,21 +225,14 @@ impl PhotoSortApp {
             && self.recovery_ticket.is_some()
             && self.organize_departure.is_none()
             && self.departure.is_none()
-            && self.review_notice.is_none()
         {
-            if self.allow_review_departure() {
-                self.after_apply = Some(destination);
-            } else {
-                self.plan_open = false;
-            }
+            self.after_apply = Some(destination);
             return;
         }
         if self.busy
             || self.plan_open
             || self.organize_departure.is_some()
             || self.departure.is_some()
-            || self.review_notice.is_some()
-            || !self.allow_review_departure()
         {
             return;
         }
@@ -268,9 +249,7 @@ impl PhotoSortApp {
         self.continue_departure(destination);
     }
     pub(super) fn continue_departure(&mut self, destination: Destination) {
-        if self.rotation_review.pending_count() > 0
-            || self.decisions.values().any(|d| !d.is_empty())
-        {
+        if self.decisions.values().any(|d| !d.is_empty()) {
             self.departure = Some(destination);
         } else {
             self.finish_departure(destination);
@@ -284,36 +263,12 @@ impl PhotoSortApp {
         }
     }
     pub(super) fn review_dialogs(&mut self, ctx: &egui::Context) {
-        if let Some(step) = self.review_notice {
-            let mut action = 0;
-            modal(egui::Id::new("unfinished_review")).show(ctx, |ui| {
-                ui.set_max_width(460.0);
-                ui.heading("Confirm or reset this choice");
-                ui.label("This review has unfinished choices. Confirm them or restore the suggestions before moving on.");
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("Keep reviewing").clicked() { action = 1; }
-                    if ui.button("Confirm").clicked() { action = 2; }
-                    if ui.button("Reset default").clicked() { action = 3; }
-                    if ui.button("Reset all").clicked() { action = 4; }
-                });
-            });
-            if action > 0 {
-                self.review_notice = None;
-                match (step, action) {
-                    (Step::Rotation, 2) => self.confirm_rotation(),
-                    (Step::Rotation, 3 | 4) => self.reset_rotation(action == 4),
-                    _ => {}
-                }
-            }
-        }
         if self.departure.is_some() {
-            let rotations = self.rotation_review.pending_count();
             let mut action = 0;
             modal(egui::Id::new("pending_changes")).show(ctx, |ui| {
                 ui.set_max_width(460.0);
-                ui.heading(if rotations > 0 { "Resolve confirmed rotations" } else { "Resolve staged changes" });
-                if rotations > 0 { ui.label(format!("{rotations} confirmed corrections are waiting to be applied.")); }
-                else { ui.label(format!("{} photos have staged ratings, rotations or Trash marks.",self.decisions.values().filter(|d|!d.is_empty()).count())); }
+                ui.heading("Resolve staged changes");
+                ui.label(format!("{} photos have staged ratings, rotations or Trash marks.",self.decisions.values().filter(|d|!d.is_empty()).count()));
                 ui.label("Discard clears these staged choices. Your files remain unchanged until you review and apply a plan.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancel").clicked() { action = 1; }
@@ -330,11 +285,7 @@ impl PhotoSortApp {
                     }
                     3 => {
                         self.after_apply = Some(destination);
-                        if rotations > 0 {
-                            self.review_rotations();
-                        } else {
-                            self.review_decisions();
-                        }
+                        self.review_decisions();
                     }
                     _ => {}
                 }

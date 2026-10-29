@@ -30,6 +30,7 @@ impl PhotoSortApp {
         }
         if self.step == Step::Cull {
             self.selection.replace(self.comparison.iter().copied());
+            self.comparison_focus = None;
         }
         self.review = true;
     }
@@ -152,21 +153,18 @@ impl PhotoSortApp {
         self.zoom_view_at(factor, egui::Vec2::ZERO);
     }
     /// Zooms keeping the image point at `anchor` (relative to the slot's
-    /// centre) under the pointer. Back at fit or smaller, the image recentres.
+    /// centre) under the pointer. Zooming out stops at Fit, recentred.
     pub(super) fn zoom_view_at(&mut self, factor: f32, anchor: egui::Vec2) {
+        let fit = self.fit_zooms.get(&self.focused_slot).copied();
         let mut view = self.view_for(self.focused_slot);
         let old = view.zoom;
-        view.zoom = (old * factor).clamp(InspectionView::MIN_ZOOM, InspectionView::MAX_ZOOM);
+        view.zoom = (old * factor).clamp(view.min_zoom(fit), InspectionView::MAX_ZOOM);
         let ratio = view.zoom / old.max(f32::EPSILON);
-        if !view.actual_size && view.zoom <= 1.0 {
-            view.pan = [0.0, 0.0];
-        } else {
-            view.pan = [
-                anchor.x - (anchor.x - view.pan[0]) * ratio,
-                anchor.y - (anchor.y - view.pan[1]) * ratio,
-            ];
-        }
-        self.set_view(self.focused_slot, view);
+        view.pan = [
+            anchor.x - (anchor.x - view.pan[0]) * ratio,
+            anchor.y - (anchor.y - view.pan[1]) * ratio,
+        ];
+        self.set_view(self.focused_slot, view.clamped(fit));
     }
     pub(super) fn toggle_sync(&mut self) {
         if self.sync_views {
@@ -186,7 +184,7 @@ impl PhotoSortApp {
             return;
         };
         let ids = if self.step == Step::Rotation {
-            vec![active, active]
+            self.rotation_canvas_ids(active)
         } else {
             self.comparison_ids()
         };
@@ -198,9 +196,12 @@ impl PhotoSortApp {
         // On short windows, give the photos room and use Previous/Next instead
         // of squeezing both the canvas and a clipped thumbnail strip below it.
         // The strip can sit in a column on the left instead.
-        // Easy Delete and Pick Best show this beside their grid, which is
-        // their strip.
-        let beside_grid = matches!(self.step, Step::EasyDelete | Step::PickBest);
+        // Easy Delete, Fix Rotation and Pick Best show this beside their
+        // grid, which is their strip.
+        let beside_grid = matches!(
+            self.step,
+            Step::EasyDelete | Step::Rotation | Step::PickBest
+        );
         let side_strip = !beside_grid
             && self.preferences.strip_position == crate::core::preferences::StripPosition::Left
             && ui.available_width() >= 640.0;
@@ -237,7 +238,9 @@ impl PhotoSortApp {
         let columns = if beside_grid && ids.len() == 2 {
             // A narrow panel: side by side or stacked, whichever shows the
             // photos larger for their shape.
-            let ratio = if self.step == Step::PickBest {
+            let ratio = if self.step == Step::Rotation {
+                self.rotation_card_ratio(active)
+            } else if self.step == Step::PickBest {
                 ids.iter()
                     .map(|id| {
                         self.metadata.get(id).map_or(0.75, |m| {
@@ -276,6 +279,18 @@ impl PhotoSortApp {
         let follow_focus = ui.data(|data| data.get_temp::<(u64, usize, u32, usize)>(focus_key))
             != Some(focus_layout);
         ui.data_mut(|data| data.insert_temp(focus_key, focus_layout));
+        // A click between compared selected photos lets go of a clicked one.
+        // Registered first, so the photos drawn over it keep their clicks.
+        let background = self.selection_compared().then(|| {
+            ui.interact(
+                egui::Rect::from_min_size(
+                    ui.cursor().min,
+                    egui::vec2(ui.available_width(), height),
+                ),
+                ui.id().with("comparison-background"),
+                Sense::click(),
+            )
+        });
         // Floating bars fade out even with AlwaysVisible. Review reserves the
         // wheel for zoom, so its scroll affordance must stay discoverable.
         let scroll_style = ui.spacing().scroll;
@@ -325,6 +340,9 @@ impl PhotoSortApp {
                 }
             });
         ui.spacing_mut().scroll = scroll_style;
+        if background.is_some_and(|response| response.clicked()) {
+            self.comparison_focus = None;
+        }
         ui.add_space(S1);
         floating_bar(
             ui,
@@ -390,41 +408,19 @@ impl PhotoSortApp {
                     }
                     divider(ui);
                     self.pick_undo_button(ui);
+                } else if self.step == Step::Rotation {
+                    self.rotation_bar_buttons(ui);
                 } else {
-                    if self.step == Step::Rotation {
-                        self.rotation_confirm_buttons(ui);
-                        divider(ui);
-                    }
-                    let rejected = self.decision(active).rejected;
-                    // Both labels get the wider label's width so toggling never
+                    let (all, rejected) = self.trash_button_state(active);
+                    let (label, hover) = selection::trash_button_text(all, rejected, ids.len() > 1);
+                    // Every label gets the widest one's width so toggling never
                     // resizes the bar.
-                    let font = egui::TextStyle::Button.resolve(ui.style());
-                    let wide = ui
-                        .painter()
-                        .layout_no_wrap(format!("{}  Marked for Trash", icon::TRASH), font, INK)
-                        .size()
-                        .x
-                        + 2.0 * ui.spacing().button_padding.x;
-                    if icon_text_button_min(
-                        ui,
-                        true,
-                        rejected,
-                        icon::TRASH,
-                        if rejected {
-                            "Marked for Trash"
-                        } else {
-                            "Trash"
-                        },
-                        wide,
-                    )
-                    .on_hover_text(if rejected {
-                        "Unmark · D"
-                    } else {
-                        "Mark for Trash · D"
-                    })
-                    .clicked()
+                    let wide = selection::trash_button_width(ui, self.selection_compared());
+                    if icon_text_button_min(ui, true, rejected, icon::TRASH, label, wide)
+                        .on_hover_text(hover)
+                        .clicked()
                     {
-                        self.reject(active);
+                        self.trash_button_clicked(active);
                     }
                 }
                 if !self.comparison.is_empty() && ui.small_button("End comparison").clicked() {
@@ -434,7 +430,12 @@ impl PhotoSortApp {
                 if compact {
                     ui.end_row();
                 }
-                self.review_ratings(ui, active);
+                // Fix Rotation stages turns only: no stars.
+                if self.step == Step::Rotation {
+                    self.review_view_controls(ui);
+                } else {
+                    self.review_ratings(ui, active);
+                }
             },
         );
         if show_filmstrip {
@@ -521,30 +522,34 @@ impl PhotoSortApp {
         {
             self.actual_size();
         }
-        if ui
-            .selectable_label(self.sync_views, "Sync")
-            .on_hover_text("Synchronize pan and zoom across the comparison (F3)")
-            .clicked()
+        // A single photo has nothing to sync with. Fix Rotation always shows
+        // the original beside its correction.
+        let several = self.step == Step::Rotation || self.comparison_ids().len() > 1;
+        if several
+            && ui
+                .selectable_label(self.sync_views, "Sync")
+                .on_hover_text("Synchronize pan and zoom across the comparison (F3)")
+                .clicked()
         {
             self.toggle_sync();
         }
         let mut view = self.view_for(self.focused_slot);
+        let fit = self.fit_zooms.get(&self.focused_slot).copied();
+        let lowest = view.min_zoom(fit);
         ui.spacing_mut().slider_width = 60.0;
         // A small handle suits the floating bar.
         ui.spacing_mut().interact_size.y = 14.0;
+        // The slider's lowest position is Fit.
         if ui
             .add(
-                egui::Slider::new(
-                    &mut view.zoom,
-                    InspectionView::MIN_ZOOM..=InspectionView::MAX_ZOOM,
-                )
-                .logarithmic(true)
-                .text("Zoom")
-                .show_value(false),
+                egui::Slider::new(&mut view.zoom, lowest..=InspectionView::MAX_ZOOM)
+                    .logarithmic(true)
+                    .text("Zoom")
+                    .show_value(false),
             )
             .changed()
         {
-            self.set_view(self.focused_slot, view);
+            self.set_view(self.focused_slot, view.clamped(fit));
         }
         ui.label(
             RichText::new(format!("{:.0}%", view.zoom * 100.0))
@@ -689,7 +694,7 @@ impl PhotoSortApp {
             return;
         }
         let count = if self.step == Step::Rotation {
-            2
+            self.rotation_canvas_ids(id).len()
         } else {
             self.comparison_ids().len().max(1)
         };
@@ -707,9 +712,13 @@ impl PhotoSortApp {
             self.active = Some(id);
             self.focused_slot = slot;
             let mut view = self.view_for(slot);
-            view.pan[0] += delta.x;
-            view.pan[1] += delta.y;
-            self.set_view(slot, view);
+            // At Fit the whole photo is on screen: a drag still counts as a
+            // pan, so it never clicks, but the photo stays put.
+            if !view.shows_whole_photo(self.fit_zooms.get(&slot).copied()) {
+                view.pan[0] += delta.x;
+                view.pan[1] += delta.y;
+                self.set_view(slot, view);
+            }
             ui.ctx().request_repaint();
         }
         let texture = self
@@ -723,20 +732,31 @@ impl PhotoSortApp {
         if count > 1 {
             ui.painter().rect_filled(rect, R_SURFACE, CHROME);
         }
-        // Easy Delete outlines nothing: an outline could be read as Keep or Trash.
-        if count > 1 && self.focused_slot == slot && self.step != Step::EasyDelete {
-            ui.painter().rect_stroke(
-                rect,
-                R_SURFACE,
-                Stroke::new(1.5, ACCENT.gamma_multiply(0.85)),
-                StrokeKind::Inside,
-            );
+        // The outline shows what D acts on. Compared selected photos are all
+        // outlined until one is clicked, which then stands out alone. Easy
+        // Delete outlines nothing: an outline could be read as Keep or Trash.
+        // Fix Rotation shows one photo twice: nothing to pick.
+        let faint = Stroke::new(1.5, ACCENT.gamma_multiply(0.85));
+        let outline = if count > 1 && self.selection_compared() {
+            match self.focused_comparison_photo() {
+                Some(focus) => (focus == id).then_some(Stroke::new(3.0, ACCENT)),
+                None => Some(faint),
+            }
+        } else {
+            (count > 1
+                && self.focused_slot == slot
+                && !matches!(self.step, Step::EasyDelete | Step::Rotation))
+            .then_some(faint)
+        };
+        if let Some(stroke) = outline {
+            ui.painter()
+                .rect_stroke(rect, R_SURFACE, stroke, StrokeKind::Inside);
         }
         let content = egui::Rect::from_min_max(
             rect.min + egui::vec2(8.0, 28.0),
             rect.max - egui::vec2(8.0, 8.0),
         );
-        let view = self.view_for(slot);
+        let mut view = self.view_for(slot);
         let turns = if !corrected {
             0
         } else {
@@ -766,6 +786,21 @@ impl PhotoSortApp {
         if let Some(source) = source {
             let ppp = ui.ctx().pixels_per_point();
             let viewport = [content.width(), content.height()];
+            let fit = InspectionView::fit_zoom(source, viewport, turns, ppp);
+            self.fit_zooms.insert(slot, fit);
+            // After a resize a view at Fit still fits, and one now below the
+            // new Fit snaps to it. Synced views follow the focused photo, so
+            // photos of different shapes cannot pull the shared view apart.
+            let limited = view.clamped(Some(fit));
+            if limited != view && (!self.sync_views || slot == self.focused_slot) {
+                view = limited;
+                if self.sync_views {
+                    self.inspection_view = view;
+                } else {
+                    self.independent_views.insert(slot, view);
+                }
+                ui.ctx().request_repaint();
+            }
             let scale = view.scale(source, viewport, turns, ppp);
             if let Some(texture) = texture.as_ref() {
                 paint_region(
@@ -912,24 +947,10 @@ impl PhotoSortApp {
                     head.to_owned()
                 }
             };
+            // Fix Rotation's photos need no label: as it is, then turned,
+            // under the panel's header with the file name.
             let label = if self.step == Step::Rotation {
-                named(
-                    if self
-                        .rotation_review
-                        .choice(id)
-                        .is_some_and(|c| c.selected == corrected)
-                    {
-                        if corrected {
-                            "Correction · selected"
-                        } else {
-                            "Original · selected"
-                        }
-                    } else if corrected {
-                        "Correction"
-                    } else {
-                        "Original"
-                    },
-                )
+                String::new()
             } else {
                 let mut label = named(&(slot + 1).to_string());
                 // Easy Delete and Pick Best show what tells the photos
@@ -1050,13 +1071,14 @@ impl PhotoSortApp {
         if pan.is_none() && response.clicked() && self.step == Step::PickBest {
             self.toggle_pick(id);
         }
-        if pan.is_none() && response.clicked() && self.step == Step::Rotation {
-            self.select_rotation(corrected);
-        }
         if response.clicked() {
             self.pending_bookmark = None;
             self.active = Some(id);
             self.focused_slot = slot;
+            // Among compared selected photos, D now marks only this one.
+            if count > 1 && matches!(self.step, Step::Cull | Step::Organize) {
+                self.comparison_focus = Some(id);
+            }
         }
         if response.hovered() {
             // Scrolling zooms, and so does a trackpad pinch (or Ctrl+scroll,

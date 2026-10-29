@@ -331,20 +331,16 @@ mod tests {
 
     #[test]
     fn unknown_eyes_are_not_closed_so_the_score_decides() {
-        // A small or sunglassed face (Unknown) and a legacy face with no
-        // eye evidence never lose to an open one on eyes.
-        for unknown in [
-            face(0.3, EyeState::Unknown, None),
-            face(0.3, EyeState::Closed, None),
-        ] {
-            let c = rank(vec![
-                photo(80., 300., vec![unknown]),
-                photo(60., 300., vec![open(0.3)]),
-            ]);
-            assert_eq!(c.best(), MediaId(1));
-            assert_eq!(c.reason, Reason::Score);
-            assert!(c.eyes.is_empty(), "No eye facts to show");
-        }
+        // A small, sunglassed, squinting or legacy face is Unknown: it never
+        // loses to an open one on eyes.
+        let unknown = face(0.3, EyeState::Unknown, None);
+        let c = rank(vec![
+            photo(80., 300., vec![unknown]),
+            photo(60., 300., vec![open(0.3)]),
+        ]);
+        assert_eq!(c.best(), MediaId(1));
+        assert_eq!(c.reason, Reason::Score);
+        assert!(c.eyes.is_empty(), "No eye facts to show");
     }
 
     #[test]
@@ -443,6 +439,8 @@ mod tests {
             tag: String::new(),
             reason: String::new(),
             keep_why: String::new(),
+            eyes: Vec::new(),
+            extra: Vec::new(),
         }]);
         let mut decisions = HashMap::new();
         pick.stage_new_suggestions(&mut decisions);

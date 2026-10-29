@@ -223,12 +223,11 @@ impl PhotoSortApp {
         }
     }
 
-    /// Photos with a staged Trash mark, rating or rotation, plus confirmed
-    /// rotations waiting in Fix Rotation and planned changes in Organize.
+    /// Photos with a staged Trash mark, rating or rotation, plus planned
+    /// changes in Organize.
     pub(super) fn staged_change_count(&self) -> usize {
         let decided = self.decisions.values().filter(|d| !d.is_empty()).count();
         match self.step {
-            Step::Rotation => decided.max(self.rotation_review.pending_count()),
             // Moves, renames and new folders are reviewed with them.
             Step::Organize => decided + self.board.changes,
             _ => decided,
@@ -256,7 +255,7 @@ impl PhotoSortApp {
         self.comparison.clear();
         self.filter = Filter::All;
         self.filter_dirty = true;
-        self.review = step != Step::Organize;
+        self.review = !matches!(step, Step::Organize | Step::Rotation);
         self.fit_view();
         self.view_started = Instant::now();
         self.start_ready_analysis();
@@ -264,7 +263,16 @@ impl PhotoSortApp {
         if step == Step::EasyDelete {
             self.stage_delete_suggestions();
         }
+        if step == Step::Rotation {
+            // As in Easy Delete, no card is selected until the user picks one.
+            self.active = None;
+            self.rotation_panel = false;
+            self.stage_rotation_suggestions();
+        }
         if step == Step::PickBest {
+            // As in Easy Delete, no group is selected until the user picks one.
+            self.pick_current = None;
+            self.pick_panel = false;
             self.stage_pick_suggestions();
         }
         if step == Step::Cull || self.metadata_organize_mode() {
@@ -670,7 +678,7 @@ impl PhotoSortApp {
                 .background_color(fill)
                 .desired_width(width),
         );
-        if response.changed() && self.allow_review_departure() {
+        if response.changed() {
             self.query = query;
             self.filter_dirty = true;
             // A saved view waiting to be restored must not undo the typing.
@@ -687,9 +695,7 @@ impl PhotoSortApp {
     }
     pub(super) fn filter_choices(&mut self, ui: &mut egui::Ui) {
         for f in Filter::ALL {
-            if ui.selectable_label(self.filter == f, f.title()).clicked()
-                && self.allow_review_departure()
-            {
+            if ui.selectable_label(self.filter == f, f.title()).clicked() {
                 self.filter = f;
                 self.filter_dirty = true;
                 self.pending_bookmark = None;
@@ -734,25 +740,24 @@ impl PhotoSortApp {
                     }
                     // No step has a More menu: Analyze and the step's own
                     // actions sit in the bar. Organize previews the clicked
-                    // photo beside its folders, Easy Delete and Pick Best the
-                    // clicked card beside their grid, so none has a view switch.
+                    // photo beside its folders, Easy Delete, Fix Rotation and
+                    // Pick Best the clicked card beside their grid, so none of
+                    // them has a view switch.
                     if self.step == Step::Organize {
                         self.organize_bar_actions(ui, compact);
                     } else {
                         ui.add_space(S1);
                         self.analyze_icon_button(ui);
-                        if !matches!(self.step, Step::EasyDelete | Step::PickBest) {
+                        if !matches!(
+                            self.step,
+                            Step::EasyDelete | Step::Rotation | Step::PickBest
+                        ) {
                             ui.add_space(S1);
                             self.view_switch(ui);
                         }
                     }
-                    match self.step {
-                        Step::Cull => self.cull_view_options(ui),
-                        Step::Rotation => {
-                            ui.add_space(S1);
-                            self.rotation_confirm_all_button(ui, compact);
-                        }
-                        _ => {}
+                    if self.step == Step::Cull {
+                        self.cull_view_options(ui);
                     }
                 },
             )
@@ -788,11 +793,11 @@ impl PhotoSortApp {
             .response
             .rect;
         ui.advance_cursor_after_rect(left.union(right));
-        // Organize, Easy Delete and Pick Best have no context line, so the
-        // bar ends right under its row.
+        // Organize, Easy Delete, Fix Rotation and Pick Best have no context
+        // line, so the bar ends right under its row.
         if !matches!(
             self.step,
-            Step::Organize | Step::EasyDelete | Step::PickBest
+            Step::Organize | Step::EasyDelete | Step::Rotation | Step::PickBest
         ) {
             ui.add_space(2.0);
             self.step_context(ui);
@@ -850,10 +855,8 @@ impl PhotoSortApp {
     }
     /// One quiet line under the toolbar with what the current photo needs.
     fn step_context(&mut self, ui: &mut egui::Ui) {
-        match self.step {
-            Step::Rotation => self.rotation_context(ui),
-            Step::Cull => self.cull_filter_notice(ui),
-            _ => {}
+        if self.step == Step::Cull {
+            self.cull_filter_notice(ui);
         }
     }
     /// One segmented view switch: library layouts, then Review. Narrow
@@ -1239,7 +1242,7 @@ mod cull_navigation_tests {
 
 #[cfg(test)]
 mod step_bar_tests {
-    use super::super::compact_cull_tests::{click_label, fixture, rendered};
+    use super::super::compact_cull_tests::{fixture, rendered};
     use super::*;
     use crate::core::models::RotationSuggestion;
     use crate::core::pick_review::Cluster;
@@ -1289,11 +1292,7 @@ mod step_bar_tests {
             } else {
                 "Analyze library · Ctrl/Cmd+S"
             };
-            let mut bar = Vec::new();
-            if step == Step::Rotation {
-                bar.push("Confirm all suggestions");
-            }
-            bar.extend([analyze, "Details"]);
+            let bar = [analyze, "Details"];
             for width in [760.0, 1000.0, 1280.0, 1800.0] {
                 let nodes = rendered(&mut app, &ctx, egui::vec2(width, 800.0));
                 assert!(
@@ -1335,27 +1334,19 @@ mod step_bar_tests {
         app.runtime.shutdown();
     }
     #[test]
-    fn confirm_all_in_the_bar_confirms_certain_rotations_and_shrinks_to_its_icon() {
+    fn fix_rotation_bar_has_no_confirm_or_view_switch_and_stages_certain_turns() {
         let (_temp, mut app, ids) = app();
         app.set_step(Step::Rotation);
         let ctx = egui::Context::default();
         theme_install(&ctx);
         ctx.enable_accesskit();
-        let width = |app: &mut PhotoSortApp, window: f32| {
-            let nodes = rendered(app, &ctx, egui::vec2(window, 800.0));
-            found(&nodes, "Confirm all suggestions")[0].width()
-        };
-        assert!(width(&mut app, 900.0) < width(&mut app, 1440.0));
-        click_label(
-            &mut app,
-            &ctx,
-            egui::vec2(1440.0, 800.0),
-            "Confirm all suggestions",
-        );
-        let pending = app.rotation_review.pending();
-        assert_eq!(pending.len(), 1, "the uncertain photo stays open");
-        assert_eq!(pending[&ids[0]].turns, 1);
-        assert!(!app.rotation_review.choice(ids[1]).unwrap().confirmed);
+        let nodes = rendered(&mut app, &ctx, egui::vec2(1440.0, 800.0));
+        for gone in ["Confirm all suggestions", "Grid", "Review"] {
+            assert!(found(&nodes, gone).is_empty(), "{gone}");
+        }
+        assert_eq!(found(&nodes, "Suggestions only").len(), 1);
+        assert_eq!(app.decision(ids[0]).turns, 1);
+        assert_eq!(app.decision(ids[1]).turns, 0, "the uncertain photo waits");
         app.runtime.shutdown();
     }
 }

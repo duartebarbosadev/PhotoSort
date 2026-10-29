@@ -201,6 +201,8 @@ fn empty_guided_bookmark_focuses_new_results_without_restarting_analysis() {
                                 category: crate::core::delete_review::Category::Exact,
                                 tag: "Tag".into(),
                                 keep_why: String::new(),
+                                eyes: Vec::new(),
+                                extra: Vec::new(),
                                 reason: "identical".into(),
                             }])
                     }
@@ -218,15 +220,8 @@ fn empty_guided_bookmark_focuses_new_results_without_restarting_analysis() {
             }
             app.refilter();
             app.restore_bookmark();
-            // Easy Delete and Pick Best wait for the user to pick a card.
-            assert_eq!(
-                app.active.is_some(),
-                has_results && step == Step::Rotation,
-                "{step:?}"
-            );
-            if let Some(active) = app.active {
-                assert!(app.comparison_ids().contains(&active));
-            }
+            // Every guided step waits for the user to pick a card.
+            assert!(app.active.is_none(), "{step:?}");
             assert!(app.pending_bookmark.is_none());
             assert!(app.decisions.is_empty());
             assert!(app.analysis_run.is_none() && app.metadata_run.is_none());
@@ -333,6 +328,8 @@ fn guided_views_restore_position_and_group_without_decisions() {
             category: crate::core::delete_review::Category::Near,
             tag: "Tag".into(),
             keep_why: String::new(),
+            eyes: Vec::new(),
+            extra: Vec::new(),
             reason: String::new(),
         }]);
     app.view_data_ready.insert(Step::EasyDelete);
@@ -365,6 +362,5 @@ fn guided_views_restore_position_and_group_without_decisions() {
     app.set_step(Step::Rotation);
     settle(&mut app);
     assert_eq!(app.active, Some(ids[2]));
-    assert!(app.rotation_review.pending().is_empty());
     assert!(app.decisions == staged && app.requested.is_empty());
 }

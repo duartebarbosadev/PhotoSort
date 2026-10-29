@@ -27,6 +27,19 @@ pub(super) struct CardPhoto {
     pub toggle: Option<String>,
     /// Why it is the suggested keeper, over its Suggested mark.
     pub suggested_hover: Option<String>,
+    /// A zoomed detail over its lower-left corner.
+    pub inset: Option<Inset>,
+}
+
+/// Zoomed parts of a card photo drawn over it, such as the eyes of each
+/// person in a closed-eyes shot, with a quiet label under them.
+pub(super) struct Inset {
+    /// Each detail, cut sharp from the original (`None` while it decodes),
+    /// with its width over its height.
+    pub strips: Vec<(Option<super::people::FaceImage>, f32)>,
+    pub label: String,
+    /// Shut eyes rather than open ones: picks the label's icon.
+    pub closed: bool,
 }
 
 /// One fact under a card photo, such as "4.1 MB".
@@ -37,12 +50,13 @@ pub(super) struct Fact {
     pub better: bool,
 }
 
-/// A pill over a photo: Keep or Trash, or a neutral label.
+/// A pill over a photo: Keep or Trash, or none.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Badge {
     Keep(String),
     Trash(String),
-    Plain(String),
+    /// No pill: the photo speaks for itself.
+    None,
 }
 impl Badge {
     pub fn keep(keep: bool) -> Self {
@@ -59,11 +73,6 @@ impl Badge {
 pub(super) enum CardState {
     /// The suggestion is the decision: nothing to say.
     Suggested,
-    /// PhotoSort's suggestion, nothing changed or confirmed yet.
-    Provisional,
-    /// Changed but not confirmed: leaving it asks first.
-    Changed,
-    Confirmed,
 }
 
 /// A button on a card's action row.
@@ -85,16 +94,8 @@ impl CardButton {
             trailing: false,
         }
     }
-    pub fn primary(mut self, primary: bool) -> Self {
-        self.primary = primary;
-        self
-    }
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
-        self
-    }
-    pub fn trailing(mut self) -> Self {
-        self.trailing = true;
         self
     }
 }
@@ -194,85 +195,13 @@ impl CardLayout {
 
 impl CardState {
     fn label(self, text: Option<&str>) -> (String, Color32) {
-        use egui_phosphor::regular as icon;
-        let (glyph, words, color) = match self {
-            Self::Confirmed => (icon::CHECK_CIRCLE, "Confirmed", GREEN),
-            Self::Changed => (icon::PENCIL_SIMPLE, "Provisional · changed", ACCENT),
-            Self::Provisional => (icon::CIRCLE_DASHED, "Provisional", MUTED),
-            Self::Suggested => return (text.unwrap_or_default().to_owned(), MUTED),
-        };
-        (format!("{glyph}  {}", text.unwrap_or(words)), color)
+        match self {
+            Self::Suggested => (text.unwrap_or_default().to_owned(), MUTED),
+        }
     }
 }
 
 impl PhotoSortApp {
-    /// A virtualized grid of `count` review cards of `slots` photos each.
-    /// `card` describes card `i`; the current card is scrolled into view
-    /// whenever it changes. Returns the card and event clicked this frame.
-    pub(super) fn card_grid(
-        &mut self,
-        ui: &mut egui::Ui,
-        salt: &str,
-        count: usize,
-        slots: usize,
-        mut card: impl FnMut(&mut Self, usize) -> Option<ReviewCard>,
-        current: Option<usize>,
-    ) -> Option<(usize, CardEvent)> {
-        let gap = S3;
-        ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
-        let slots = slots.max(1);
-        let min = 2.0 * PAD + slots as f32 * MIN_SLOT + S2 * (slots - 1) as f32;
-        let width = ui.available_width();
-        let columns = ((width + gap) / (min + gap)).floor().max(1.0) as usize;
-        let layout = CardLayout {
-            width: (width - gap * (columns - 1) as f32) / columns as f32,
-            slots,
-            captions: self.preferences.show_filenames,
-            ratio: 0.75,
-            facts: false,
-            footer: true,
-        };
-        let height = layout.height();
-        let rows = count.div_ceil(columns);
-        let scroll = self.card_scroll(ui, salt, current, |position| {
-            ((position / columns) as f32 * (height + gap), height)
-        });
-        let mut clicked = None;
-        let output = scroll.show_rows(ui, height, rows, |ui, range| {
-            let origin = ui.max_rect().min;
-            for row in range.clone() {
-                for column in 0..columns {
-                    let index = row * columns + column;
-                    if index >= count {
-                        break;
-                    }
-                    let Some(spec) = card(self, index) else {
-                        continue;
-                    };
-                    let rect = egui::Rect::from_min_size(
-                        origin
-                            + egui::vec2(
-                                column as f32 * (layout.width + gap),
-                                (row - range.start) as f32 * (height + gap),
-                            ),
-                        egui::vec2(layout.width, height),
-                    );
-                    let event = ui
-                        .scope_builder(
-                            egui::UiBuilder::new().id_salt((salt, index)).max_rect(rect),
-                            |ui| self.review_card(ui, rect, &spec, layout),
-                        )
-                        .inner;
-                    if let Some(event) = event {
-                        clicked = Some((index, event));
-                    }
-                }
-            }
-        });
-        self.library_offset = output.state.offset.y;
-        clicked
-    }
-
     /// The grids' scroll area. It restores a saved offset, or follows the
     /// current card whenever it changes, as Review's strip follows its photo.
     /// `span` gives a card's top and height in the scrolled content.
@@ -317,14 +246,15 @@ impl PhotoSortApp {
     /// slot height over width), so portrait photos fill their cells. Cards
     /// are numbered across sections, `sections` holding each one's count.
     /// Returns the card and event clicked this frame, or a click on the
-    /// empty space around the cards.
+    /// empty space around the cards. `slots` gives each section's photo
+    /// slots per card, so one section's cards can be wider than another's.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn sectioned_card_grid(
         &mut self,
         ui: &mut egui::Ui,
         salt: &str,
         sections: &[usize],
-        slots: usize,
+        slots: &[usize],
         // The narrowest a photo slot gets before the grid drops a column.
         min_slot: f32,
         ratio: impl Fn(&Self, usize) -> f32,
@@ -356,7 +286,7 @@ impl PhotoSortApp {
             salt,
             &[count],
             false,
-            slots,
+            &[slots],
             min_slot,
             ratio,
             |_, _, _| {},
@@ -372,7 +302,7 @@ impl PhotoSortApp {
         salt: &str,
         sections: &[usize],
         headers: bool,
-        slots: usize,
+        slots: &[usize],
         min_slot: f32,
         ratio: impl Fn(&Self, usize) -> f32,
         mut header: impl FnMut(&mut Self, &mut egui::Ui, usize),
@@ -385,17 +315,21 @@ impl PhotoSortApp {
         }
         let gap = S3;
         ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
-        let slots = slots.max(1);
-        let min = 2.0 * PAD + slots as f32 * min_slot + S2 * (slots - 1) as f32;
         let width = ui.available_width();
-        let columns = ((width + gap) / (min + gap)).floor().max(1.0) as usize;
-        let base = CardLayout {
-            width: (width - gap * (columns - 1) as f32) / columns as f32,
-            slots,
-            captions: self.preferences.show_filenames,
-            ratio: 0.75,
-            facts: true,
-            footer: false,
+        // A section's cards: as many to a row as fit, and their layout.
+        let section_layout = |section: usize| {
+            let slots = slots.get(section).copied().unwrap_or(1).max(1);
+            let min = 2.0 * PAD + slots as f32 * min_slot + S2 * (slots - 1) as f32;
+            let columns = ((width + gap) / (min + gap)).floor().max(1.0) as usize;
+            let layout = CardLayout {
+                width: (width - gap * (columns - 1) as f32) / columns as f32,
+                slots,
+                captions: self.preferences.show_filenames,
+                ratio: 0.75,
+                facts: true,
+                footer: false,
+            };
+            (columns, layout)
         };
         // (top, height, row) in the scrolled content.
         let mut rows: Vec<(f32, f32, Row)> = Vec::new();
@@ -403,6 +337,7 @@ impl PhotoSortApp {
         let mut top = 0.0;
         let mut start = 0;
         for (section, &len) in sections.iter().enumerate() {
+            let (columns, base) = section_layout(section);
             let header_top = top;
             if headers {
                 rows.push((top, SECTION, Row::Header(section)));
@@ -547,14 +482,49 @@ impl PhotoSortApp {
         let inner = rect.shrink(PAD);
         let header = egui::Rect::from_min_size(inner.min, egui::vec2(inner.width(), HEADER));
         let mut right = header.right();
+        // Without a footer, a card's buttons are icons at the header's right.
+        if !layout.footer {
+            for (index, button) in card.buttons.iter().enumerate().rev() {
+                let ink = if button.enabled { MUTED } else { FAINT };
+                let glyph =
+                    painter.layout_no_wrap(button.text.clone(), FontId::proportional(15.0), ink);
+                let rect = Align2::RIGHT_CENTER.anchor_size(
+                    egui::pos2(right, header.center().y),
+                    egui::vec2(glyph.size().x + 10.0, HEADER + 4.0),
+                );
+                let response = ui
+                    .interact(rect, ui.id().with(("button", index)), Sense::click())
+                    .on_hover_text(&button.hover);
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        button.enabled,
+                        &button.hover,
+                    )
+                });
+                if button.enabled && response.hovered() {
+                    painter.rect_filled(rect, R_CONTROL, ACCENT_SOFT);
+                }
+                painter.galley(rect.center() - glyph.size() / 2.0, glyph, ink);
+                if button.enabled && response.clicked() {
+                    event = Some(CardEvent::Button(index));
+                }
+                right = rect.left() - 2.0;
+            }
+            if !card.buttons.is_empty() {
+                right -= S1;
+            }
+        }
         if let Some((label, hover)) = &card.undo {
             let undo = painter.layout_no_wrap(
                 format!("{}  {label}", egui_phosphor::regular::ARROW_U_UP_LEFT),
                 medium(11.0),
                 ACCENT,
             );
-            let link = Align2::RIGHT_CENTER
-                .anchor_size(header.right_center(), undo.size() + egui::vec2(8.0, 4.0));
+            let link = Align2::RIGHT_CENTER.anchor_size(
+                egui::pos2(right, header.center().y),
+                undo.size() + egui::vec2(8.0, 4.0),
+            );
             let response = ui
                 .interact(link, ui.id().with("undo"), Sense::click())
                 .on_hover_text(hover)
@@ -617,7 +587,8 @@ impl PhotoSortApp {
                         side + 1,
                         photo.name,
                         match &photo.badge {
-                            Badge::Keep(text) | Badge::Trash(text) | Badge::Plain(text) => text,
+                            Badge::Keep(text) | Badge::Trash(text) => text,
+                            Badge::None => "",
                         }
                     ),
                 )
@@ -861,10 +832,83 @@ impl PhotoSortApp {
                 egui::StrokeKind::Inside,
             );
         }
+        if let Some(inset) = &photo.inset {
+            paint_inset(painter, slot, inset);
+        }
         let pill = badge_pill(painter, slot, &photo.badge);
         let mark = photo.suggested.then(|| suggested_mark(painter, pill));
         (pill, mark)
     }
+}
+
+/// An inset over a card photo's lower-left corner: the zoomed details,
+/// stacked, on a dark plate with their label under them. Neutral, so the
+/// photo's Keep/Trash pill stays the only colour that decides.
+fn paint_inset(painter: &egui::Painter, slot: egui::Rect, inset: &Inset) {
+    use egui_phosphor::regular as icon;
+    if inset.strips.is_empty() {
+        return;
+    }
+    let label = painter.layout_no_wrap(
+        format!(
+            "{}  {}",
+            if inset.closed {
+                icon::EYE_CLOSED
+            } else {
+                icon::EYE
+            },
+            inset.label
+        ),
+        FontId::proportional(10.5),
+        INK.gamma_multiply(0.9),
+    );
+    let (margin, pad, gap) = (6.0, 3.0, 2.0);
+    let aspects: Vec<f32> = inset
+        .strips
+        .iter()
+        .map(|(_, aspect)| aspect.clamp(1.5, 6.0))
+        .collect();
+    let band = label.size().y + 4.0;
+    // As wide as fits, then narrower until the stack fits under the pill.
+    let mut width = (slot.width() * 0.42)
+        .min(170.0)
+        .max(label.size().x)
+        .min(slot.width() - 2.0 * (margin + pad));
+    let stack = |width: f32| {
+        aspects.iter().map(|a| width / a).sum::<f32>() + gap * (aspects.len() - 1) as f32
+    };
+    let room = slot.height() * 0.45 - band - 2.0 * pad;
+    if stack(width) > room {
+        width *= room / stack(width);
+    }
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(
+            slot.left() + margin,
+            slot.bottom() - margin - stack(width) - band - 2.0 * pad,
+        ),
+        egui::vec2(
+            width.max(label.size().x) + 2.0 * pad,
+            stack(width) + band + 2.0 * pad,
+        ),
+    );
+    painter.rect_filled(rect, R_CONTROL, Color32::from_black_alpha(150));
+    let mut top = rect.top() + pad;
+    for ((image, _), aspect) in inset.strips.iter().zip(&aspects) {
+        let strip = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + pad, top),
+            egui::vec2(width, width / aspect),
+        );
+        match image {
+            Some(face) => painter.image(face.texture, strip, face.uv, Color32::WHITE),
+            None => painter.rect_filled(strip, 2.0, WELL),
+        };
+        top = strip.bottom() + gap;
+    }
+    painter.galley(
+        egui::pos2(rect.left() + pad, rect.bottom() - pad - label.size().y),
+        label,
+        INK,
+    );
 }
 
 /// The pill over a card photo's top-right corner. Returns its rect.
@@ -873,7 +917,7 @@ fn badge_pill(painter: &egui::Painter, slot: egui::Rect, badge: &Badge) -> egui:
     let (text, fill, ink) = match badge {
         Badge::Keep(text) => (format!("{}  {text}", icon::CHECK), GREEN, Color32::BLACK),
         Badge::Trash(text) => (format!("{}  {text}", icon::TRASH), RED, Color32::BLACK),
-        Badge::Plain(text) => (text.clone(), Color32::from_black_alpha(170), INK),
+        Badge::None => return Align2::RIGHT_TOP.anchor_size(slot.right_top(), Vec2::ZERO),
     };
     let galley = painter.layout_no_wrap(text, medium(11.0), ink);
     let size = galley.size() + egui::vec2(16.0, 6.0);

@@ -245,16 +245,20 @@ impl PhotoSortApp {
     }
 
     fn rotation_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
+        // Keys that change a photo act on the one shown beside the grid.
+        let shown = self.rotation_panel;
         match pressed {
-            egui::Key::Q | egui::Key::E => {
+            egui::Key::Q | egui::Key::E if shown => {
                 if let Some(id) = self.active {
-                    self.rotate(id, if pressed == egui::Key::Q { 3 } else { 1 });
+                    self.rotate_card(id, if pressed == egui::Key::Q { 3 } else { 1 });
                 }
             }
-            egui::Key::R => self.reset_rotation(modifiers.shift),
-            egui::Key::Enter if modifiers.shift => self.review_rotations(),
-            egui::Key::Enter => self.confirm_rotation(),
-            egui::Key::Num1 | egui::Key::Num2 => self.select_rotation(pressed == egui::Key::Num2),
+            egui::Key::Q | egui::Key::E => {}
+            egui::Key::R if shown && !modifiers.shift => self.undo_rotation(),
+            egui::Key::R => {}
+            egui::Key::Enter if modifiers.shift => self.review_changes(),
+            egui::Key::Enter => self.next_rotation_card(),
+            egui::Key::Escape if shown => self.rotation_panel = false,
             _ => return false,
         }
         true
@@ -273,9 +277,12 @@ impl PhotoSortApp {
         if self.step == Step::Organize {
             self.board_follow_active();
         }
-        // Easy Delete shows the selected card beside its grid.
+        // Easy Delete and Fix Rotation show the selected card beside their grid.
         if self.step == Step::EasyDelete {
             self.delete_panel = self.delete_current.is_some();
+        }
+        if self.step == Step::Rotation {
+            self.rotation_panel = self.active.is_some();
         }
     }
 
@@ -340,6 +347,8 @@ impl PhotoSortApp {
             if let Some(&id) = ids.get(digit - 1) {
                 self.active = Some(id);
                 self.focused_slot = (digit - 1) as u64;
+                // Like a click: D now marks only this compared photo.
+                self.comparison_focus = Some(id);
             }
         } else if self.step == Step::Cull
             && let Some(group) = self

@@ -95,6 +95,7 @@ impl PhotoSortApp {
         }
         let auto_on = next.easy_delete_auto && !self.preferences.easy_delete_auto;
         let pick_auto_on = next.pick_best_auto && !self.preferences.pick_best_auto;
+        let rotation_auto_on = next.rotation_auto && !self.preferences.rotation_auto;
         self.preferences = next;
         self.navigation_notice = None;
         self.save_preferences();
@@ -103,6 +104,9 @@ impl PhotoSortApp {
         }
         if pick_auto_on && self.step == Step::PickBest {
             self.stage_pick_suggestions();
+        }
+        if rotation_auto_on && self.step == Step::Rotation {
+            self.stage_rotation_suggestions();
         }
         if !self.preferences.visible(self.step)
             && let Some(next) = self.preferences.neighbor(self.step, true)
@@ -320,6 +324,10 @@ impl PhotoSortApp {
                     settings_note(ui, "Lower blur values flag fewer photos. Near-black suggestions still require an almost entirely black preview.");
                     settings_note(ui, "Applies to future Easy Delete analyses. Current reviews stay unchanged.");
                     if ui.button("Reset detection defaults").clicked() { draft.easy_delete = Default::default(); }
+                    ui.separator();
+                    settings_heading(ui, "Fix Rotation suggestions");
+                    ui.add(Switch::new(&mut draft.rotation_auto, "Apply suggestions automatically"));
+                    settings_note(ui, "On: photos Fix Rotation is sure about are staged turned, and you change only the ones you disagree with. Off: every photo stays as it is until you use a suggestion. Nothing changes on disk until you apply Review changes.");
                     ui.separator();
                     settings_heading(ui, "Visual similarity grouping");
                     ui.add(egui::Slider::new(&mut draft.similarity_distance,0.02..=0.20).fixed_decimals(3).text("Similarity distance"));
@@ -551,7 +559,7 @@ pub(super) fn workflow_hint(step: Step) -> &'static str {
             "1/Left, 2/Right · Keep/Trash   Up/Down · Browse   Enter · Next   R · Undo   A · Accept all suggestions   Esc · Close photos   Shift+Enter · Review changes"
         }
         Step::Rotation => {
-            "1/2 · Original/Correction   Q/E · Rotate   Enter · Confirm   R · Reset   Shift+R · Reset all   Shift+Enter · Apply confirmed"
+            "Arrows · Browse   Q/E · Rotate   R · Undo   Enter · Next   Esc · Close photos   Shift+Enter · Review changes"
         }
         Step::PickBest => {
             "1–9 · Keep/Trash   Arrows · Group   Enter · Show/Next   R · Undo   A · Accept all suggestions   Esc · Close photos   Shift+Enter · Review changes"
