@@ -356,6 +356,12 @@ fn modified_unbound_keys_do_not_change_photos_in_any_workflow() {
                 app.keyboard(ctx)
             });
             assert_eq!(app.inspection_view.zoom, 1.0);
+            // Fit is as far out as zoom goes.
+            let _ = ctx.run_test(input(&[(egui::Key::Minus, command)]), |ui| {
+                let ctx = &ui.ctx().clone();
+                app.keyboard(ctx)
+            });
+            assert_eq!(app.inspection_view, InspectionView::default());
         }
     }
 }
