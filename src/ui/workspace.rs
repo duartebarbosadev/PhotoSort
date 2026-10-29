@@ -154,6 +154,11 @@ pub struct PhotoSortApp {
     model_issue: Option<crate::core::model_assets::Issue>,
     model_retry: Option<model_setup::Retry>,
     saved_views: crate::core::views::Saved,
+    /// The library open before the user chose another folder. Its views
+    /// must not carry over: the new folder opens with clean views.
+    switched_from: Option<PathBuf>,
+    /// Every scroll position returns to the top on the next frame.
+    forget_scroll: bool,
     pending_bookmark: Option<crate::core::views::Bookmark>,
     view_data_ready: HashSet<Step>,
     resume_started: bool,
@@ -191,6 +196,8 @@ pub struct PhotoSortApp {
     duplicates: HashMap<MediaId, MediaId>,
     near_duplicates: HashMap<MediaId, MediaId>,
     delete_pairs: Vec<crate::core::near_duplicates::batch::Pair>,
+    /// Photos with closed eyes and the other shots of their moment.
+    delete_blinks: Vec<crate::core::eyes::Blink>,
     rotations: HashMap<MediaId, crate::core::models::RotationSuggestion>,
     rotation_review: crate::core::rotation::Review,
     rotation_run: Option<u64>,
@@ -314,6 +321,9 @@ pub struct PhotoSortApp {
     /// The photo whose neighbours' previews were last requested ahead.
     prefetched_for: Option<MediaId>,
     independent_views: HashMap<u64, InspectionView>,
+    /// The 1:1 zoom at which each canvas slot's photo last fitted its view,
+    /// so zooming out from the keyboard or slider stops at Fit.
+    fit_zooms: HashMap<u64, f32>,
     sync_views: bool,
     focused_slot: u64,
     inspection_wanted: Vec<InspectionRequest>,
@@ -415,6 +425,8 @@ impl PhotoSortApp {
             model_issue: None,
             model_retry: None,
             saved_views: Default::default(),
+            switched_from: None,
+            forget_scroll: false,
             pending_bookmark: None,
             view_data_ready: [Step::Organize, Step::Cull, Step::Rotation]
                 .into_iter()
@@ -453,6 +465,7 @@ impl PhotoSortApp {
             duplicates: HashMap::new(),
             near_duplicates: HashMap::new(),
             delete_pairs: Vec::new(),
+            delete_blinks: Vec::new(),
             rotations: HashMap::new(),
             rotation_review: Default::default(),
             rotation_run: None,
@@ -554,6 +567,7 @@ impl PhotoSortApp {
             held: HashMap::new(),
             prefetched_for: None,
             independent_views: HashMap::new(),
+            fit_zooms: HashMap::new(),
             sync_views: true,
             focused_slot: 0,
             inspection_wanted: Vec::new(),
@@ -623,11 +637,26 @@ impl PhotoSortApp {
         }
         self.checkpoint_bookmarks();
         self.save_session();
+        let previous = self
+            .catalog
+            .as_ref()
+            .map(|catalog| catalog.root.clone())
+            .or_else(|| self.root.clone());
+        let switching = previous
+            .as_ref()
+            .is_some_and(|root| !root.components().eq(folder.components()));
         self.scan_folder(folder);
+        // Another spelling of the same folder (a link, say) is only known to
+        // be the same once the scan resolves it; it then gets its views back.
+        if switching {
+            self.reset_folder_views();
+            self.switched_from = previous;
+        }
     }
     // Reload after an apply has already queued its reconciled session save.
     // Saving the old catalog again would overwrite migrated fingerprints.
     fn scan_folder(&mut self, folder: PathBuf) {
+        self.switched_from = None;
         self.browse_filters_open = false;
         self.clear_model_retry();
         self.runtime.next_epoch();
@@ -679,6 +708,7 @@ impl PhotoSortApp {
         self.duplicates.clear();
         self.near_duplicates.clear();
         self.delete_pairs.clear();
+        self.delete_blinks.clear();
         self.rotations.clear();
         self.delete_review = Default::default();
         self.delete_current = None;
@@ -1592,6 +1622,9 @@ impl PhotoSortApp {
             set_reduce_motion(ctx, reduce);
         }
         self.check_updates_at_startup();
+        if std::mem::take(&mut self.forget_scroll) {
+            ctx.data_mut(|d| d.remove_by_type::<egui::scroll_area::State>());
+        }
         self.tick += 1;
         self.poll(ctx);
         self.check_board();
@@ -1629,7 +1662,7 @@ impl PhotoSortApp {
             .resizable(true)
             .drag_to_open(false)
             .default_size(300.0)
-            .size_range(260.0..=440.0)
+            .size_range(260.0..=560.0)
             .frame(egui::Frame::new().fill(PANEL).inner_margin(S4 as i8))
             .show_collapsible(root, &mut expanded, |ui| {
                 // While sliding out after the folder closed or the window
@@ -1793,6 +1826,8 @@ impl PhotoSortApp {
                 category: Category::Exact,
                 tag: "Identical copy".into(),
                 keep_why: "The two files are identical, so either can go. This one keeps its place in the library.".into(),
+                eyes: Vec::new(),
+                extra: Vec::new(),
                 reason: "Byte-for-byte identical to the photo beside it.".into(),
             });
         }
@@ -1803,6 +1838,8 @@ impl PhotoSortApp {
                 category: Category::Near,
                 tag: "Sharper kept".into(),
                 keep_why: "It is the sharper photo of the two.".into(),
+                eyes: Vec::new(),
+                extra: Vec::new(),
                 reason: "No visible subject change detected. PhotoSort suggests keeping the sharper photo.".into(),
             });
         }
@@ -1813,6 +1850,8 @@ impl PhotoSortApp {
                 category: Category::Blur,
                 tag: Category::Blur.title().into(),
                 keep_why: String::new(),
+                eyes: Vec::new(),
+                extra: Vec::new(),
                 reason: "Out of focus across the frame. PhotoSort suggests moving it to Trash."
                     .into(),
             });
@@ -1836,6 +1875,8 @@ impl PhotoSortApp {
                     category,
                     tag: category.title().into(),
                     keep_why: String::new(),
+                    eyes: Vec::new(),
+                    extra: Vec::new(),
                     reason: reason.into(),
                 });
             }
@@ -2293,6 +2334,10 @@ mod organize_tests;
 #[cfg(test)]
 #[path = "folder_open_tests.rs"]
 mod folder_open_tests;
+
+#[cfg(test)]
+#[path = "folder_switch_tests.rs"]
+mod folder_switch_tests;
 
 impl PhotoSortApp {
     fn accept_image_warning(&mut self, id: MediaId, warning: Option<String>) {

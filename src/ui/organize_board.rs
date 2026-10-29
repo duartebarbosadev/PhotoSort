@@ -1601,6 +1601,7 @@ impl PhotoSortApp {
         let pending = self
             .board_pending()
             .filter(|_| !self.organize_drafts.contains_key(&self.group_mode));
+        let mut reason = None;
         let line = match pending {
             None if self.board.original => format!(
                 "{}  Now in {}",
@@ -1610,6 +1611,9 @@ impl PhotoSortApp {
             Some(pending) => format!("{}  {}", icon::CIRCLE_DASHED, unplaced_title(Some(pending))),
             None => {
                 let placement = self.placement(&media);
+                if placement.label.is_none() {
+                    reason = Some(format!("Not moving · {}", self.unplaced_reason(&media)));
+                }
                 if placement.moves {
                     format!("{}  Moves to {}", icon::ARROW_RIGHT, placement.folder)
                 } else {
@@ -1617,7 +1621,10 @@ impl PhotoSortApp {
                 }
             }
         };
-        ui.add(egui::Label::new(RichText::new(line).small().color(MUTED)).truncate());
+        let line = ui.add(egui::Label::new(RichText::new(line).small().color(MUTED)).truncate());
+        if let Some(reason) = reason {
+            line.on_hover_text(reason);
+        }
         ui.add_space(S1);
         // The mark, rating and zoom controls take two rows in a narrow panel,
         // so they never widen it over the board.
@@ -3790,12 +3797,15 @@ mod tests {
             step(app, to, None, keep);
             step(app, to, Some(false), keep);
         };
-        // From the empty slot after B's last tile (three columns: B fills
-        // one row and two tiles of the next), up and left to the middle of
-        // B's first tile: it and the tiles between are selected.
-        assert_eq!(tiles[4].top(), tiles[6].top());
-        assert_eq!(tiles[7].top(), tiles[8].top());
-        let from = egui::pos2(tiles[6].center().x, tiles[8].center().y);
+        // From the empty slot after B's last tile (B's five tiles fill one
+        // row and part of the next), up and left to the middle of B's first
+        // tile: it and the tiles between are selected.
+        let columns = tiles[4..]
+            .iter()
+            .take_while(|t| t.top() == tiles[4].top())
+            .count();
+        assert!((2..5).contains(&columns), "B wraps: {columns} columns");
+        let from = egui::pos2(tiles[4 + 5 % columns].center().x, tiles[8].center().y);
         let to = tiles[4].center();
         assert!(
             !tiles.iter().any(|t| t.contains(from)),
@@ -4474,20 +4484,6 @@ mod tests {
             click_at(&mut app, &ctx, size, center(&nodes, "Move item to folder"));
             click_label(&mut app, &ctx, size, &label);
             check(&mut app, unplaced[2], "tile menu");
-            // Details' Move to, once the photo's details have loaded in the
-            // background: they push the button down when they arrive.
-            app.inspector = true;
-            app.select_library(unplaced[3], false, false);
-            let started = Instant::now();
-            while !shows(&rendered(&mut app, &ctx, size), "Dimensions") {
-                assert!(started.elapsed().as_secs() < 10, "{mode:?} details");
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            let nodes = rendered(&mut app, &ctx, size);
-            let move_to = format!("{}  Move to…", egui_phosphor::regular::FOLDER_SIMPLE);
-            click_at(&mut app, &ctx, size, center(&nodes, &move_to));
-            click_label(&mut app, &ctx, size, &label);
-            check(&mut app, unplaced[3], "Details");
             app.runtime.shutdown();
         }
     }

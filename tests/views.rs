@@ -671,13 +671,25 @@ fn restored_shared_and_independent_views_use_the_live_zoom_limits() {
         0,
         View {
             zoom: 1e-6,
+            pan: [40.0, -20.0],
+            ..Default::default()
+        },
+    );
+    view.independent_views.insert(
+        1,
+        View {
+            zoom: 1e-6,
+            actual_size: true,
             ..Default::default()
         },
     );
     saved.reconcile(&catalog.media);
     let view = &saved.bookmarks[&Step::Cull];
     assert_eq!(view.view.zoom, View::MAX_ZOOM);
-    assert_eq!(view.independent_views[&0].zoom, View::MIN_ZOOM);
+    // Zoomed out past Fit comes back at Fit, centred.
+    assert_eq!(view.independent_views[&0], View::default());
+    // 1:1 zoom is limited by the photo's own Fit once it is laid out.
+    assert_eq!(view.independent_views[&1].zoom, View::MIN_ZOOM);
 }
 
 #[test]

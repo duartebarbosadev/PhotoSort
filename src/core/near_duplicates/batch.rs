@@ -21,6 +21,11 @@ pub struct Input {
     pub metadata_fields: usize,
     /// Capture facts for pairing the JPEG and HEIC of one shot.
     pub shot: Option<formats::Shot>,
+    /// For finding a better shot of the same moment: the camera, the
+    /// capture time with sub-seconds, and how many faces were found.
+    pub camera: String,
+    pub captured_ms: Option<i64>,
+    pub faces: usize,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {

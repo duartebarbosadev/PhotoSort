@@ -316,7 +316,7 @@ impl PhotoSortApp {
                         ui,
                         "rotation",
                         &lengths,
-                        2,
+                        &vec![2; lengths.len()],
                         slot,
                         |app, i| app.rotation_card_ratio(ids[i]),
                         |_, ui, section| {
@@ -513,6 +513,7 @@ impl PhotoSortApp {
             dim: false,
             toggle: None,
             suggested_hover: None,
+            inset: None,
         };
         let mut photos = vec![photo(0, path.clone())];
         if staged != 0 {

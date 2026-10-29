@@ -239,6 +239,27 @@ impl Store {
         anyhow::ensure!(value.complete(), "Invalid verified face evidence");
         self.write(key, Kind::Faces, value)
     }
+    pub fn eyes_key(source: &str, recipe: &str) -> String {
+        blake3::hash(format!("people-eyes:{source}:{recipe}").as_bytes())
+            .to_hex()
+            .to_string()
+    }
+    pub fn eyes(&self, key: &str) -> Option<Vec<crate::core::eyes::Person>> {
+        self.read(
+            key,
+            Kind::Eyes,
+            |people: &Vec<crate::core::eyes::Person>| {
+                people.iter().all(crate::core::eyes::Person::valid)
+            },
+        )
+    }
+    pub fn put_eyes(&self, key: &str, value: &[crate::core::eyes::Person]) -> Result<()> {
+        anyhow::ensure!(
+            value.iter().all(crate::core::eyes::Person::valid),
+            "Invalid eye evidence"
+        );
+        self.write(key, Kind::Eyes, &value)
+    }
     pub fn recognition_key(face_key: &str, models: &str) -> String {
         blake3::hash(
             format!("face-recognition-v3-sface112-all-main60:{face_key}:{models}").as_bytes(),

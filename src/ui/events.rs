@@ -68,7 +68,9 @@ impl PhotoSortApp {
                 groups,
             } => self.on_general_groups(run, automatic, choices, groups),
             Event::DuplicateStarted { run } => self.on_duplicate_started(run),
-            Event::DuplicatePairs { run, pairs } => self.on_duplicate_pairs(run, pairs),
+            Event::DuplicatePairs { run, pairs, blinks } => {
+                self.on_duplicate_pairs(run, pairs, blinks)
+            }
             Event::SubjectStarted { run } => self.on_subject_started(run),
             Event::FaceGroups { run, groups } => self.on_face_groups(run, groups),
             Event::SubjectGroups { run, groups } => self.on_subject_groups(run, groups),
@@ -212,6 +214,18 @@ impl PhotoSortApp {
         self.catalog = Some(catalog);
         self.initialize_browse();
         self.scanning = false;
+        // A folder chosen in place of another opens with clean views, even
+        // ones it saved itself; reopening or reloading the same folder keeps
+        // them. Its staged changes come from its session either way.
+        let views = if self
+            .switched_from
+            .take()
+            .is_some_and(|previous| self.root.as_ref() != Some(&previous))
+        {
+            Default::default()
+        } else {
+            views
+        };
         self.load_bookmarks(views);
         if let Some(mut review) = self.rotation_reload.take() {
             review.retain(|id| self.index.contains_key(&id));
@@ -513,9 +527,11 @@ impl PhotoSortApp {
         &mut self,
         run: u64,
         pairs: Vec<crate::core::near_duplicates::batch::Pair>,
+        blinks: Vec<crate::core::eyes::Blink>,
     ) {
         if self.analysis_run == Some(run) && self.delete_run == Some(run) {
             self.delete_pairs = pairs;
+            self.delete_blinks = blinks;
         }
     }
 

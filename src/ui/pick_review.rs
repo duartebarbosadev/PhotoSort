@@ -527,6 +527,7 @@ impl PhotoSortApp {
                     dim: false,
                     toggle: None,
                     suggested_hover: None,
+                    inset: None,
                 })
                 .collect(),
             note: format!(

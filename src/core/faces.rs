@@ -87,6 +87,12 @@ const CLOSED_EYE_RATIO: f32 = 0.15;
 /// HEIC and open in its JPEG twin. The five fixed detector windows used before
 /// tiling never found faces this small, so verdicts on larger faces are unchanged.
 const MIN_EYE_PIXELS: f32 = 20.0;
+/// Per-person verdicts (`eye_state`): closed needs both blink scores at
+/// least `STRICT_BLINK`; open needs each eye's aspect ratio at least
+/// `OPEN_EYE_RATIO` and neither blink score above `OPEN_BLINK`.
+const STRICT_BLINK: f32 = 0.6;
+const OPEN_EYE_RATIO: f32 = 0.18;
+const OPEN_BLINK: f32 = 0.4;
 /// Minimum detector score for a box centred on the candidate, on a crop centred
 /// on it, and minimum Face Mesh presence. Tiling gives the detector many more
 /// chances to fire on texture than five fixed windows did, so both are stricter
@@ -118,6 +124,18 @@ const BLENDSHAPE_POINTS: [usize; 146] = [
 ];
 const EYE_BLINK_LEFT: usize = 9;
 const EYE_BLINK_RIGHT: usize = 10;
+/// Whether faces can be analyzed: the native runtime is built in and the
+/// three face models are installed.
+pub fn installed() -> bool {
+    cfg!(feature = "onnx")
+        && [
+            "face_detector.onnx",
+            "face_landmarks_detector.onnx",
+            "face_blendshapes.onnx",
+        ]
+        .iter()
+        .all(|name| model_path(name).is_some())
+}
 pub fn analyze(models: &mut super::models::Models, asset: &Asset) -> Result<Faces> {
     analyze_cancellable(models, asset, || false)
 }
@@ -317,29 +335,20 @@ fn detect(
         );
         let blink =
             [shapes[0][EYE_BLINK_LEFT], shapes[0][EYE_BLINK_RIGHT]].map(|v| v.clamp(0.0, 1.0));
-        faces.geometry.push(Face {
+        let kept = Face {
             bbox,
             eyes: [point(33), point(263)],
             landmarks: (0..landmarks.len() / 3).map(point).collect(),
             blink: Some(blink),
-        });
-        faces.count += 1;
+        };
         let left = eye_aspect_ratio(landmarks, [33, 160, 158, 133, 153, 144]);
         let right = eye_aspect_ratio(landmarks, [362, 385, 387, 263, 373, 380]);
         record(sigmoid(presence[0]), [left, right], blink, true);
-        let ratio = (left + right) / 2.0;
-        let centre = |a: usize, b: usize| {
-            let ([ax, ay], [bx, by]) = (point(a), point(b));
-            [(ax + bx) / 2.0 * width, (ay + by) / 2.0 * height]
-        };
-        let ([ax, ay], [bx, by]) = (centre(33, 133), centre(362, 263));
-        let readable = (ax - bx).hypot(ay - by) >= MIN_EYE_PIXELS;
-        if readable
-            && (ratio < SHUT_EYE_RATIO
-                || (blink.iter().all(|&b| b >= CLOSED_BLINK) && ratio < CLOSED_EYE_RATIO))
-        {
+        if eye_measures(&kept, image.width(), image.height()).is_some_and(|m| counted_closed(&m)) {
             faces.closed_eyes += 1;
         }
+        faces.geometry.push(kept);
+        faces.count += 1;
         if face.size > largest {
             largest = face.size;
             faces.primary = Some([
@@ -413,6 +422,41 @@ pub fn refine(
         blink: face.blink,
     }))
 }
+/// `face`, found on a small analysis image, measured again on `asset`, a
+/// larger rendering of the same photo: Face Mesh landmarks and blink scores.
+/// On the display image a distant face has about twice the pixels, enough to
+/// judge eyes that were too small on the analysis image. `None` when Face
+/// Mesh no longer sees a face there.
+pub fn rejudge(
+    models: &mut super::models::Models,
+    asset: &Asset,
+    face: &Face,
+) -> Result<Option<Face>> {
+    let Some(mut refined) = refine(models, asset, face)? else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        refined.landmarks.len() >= 478,
+        "Face Mesh returned no iris landmarks"
+    );
+    let path = model_path("face_blendshapes.onnx").context("Face blendshapes are not installed")?;
+    let (width, height) = (asset.pixels.width() as f32, asset.pixels.height() as f32);
+    let points = BLENDSHAPE_POINTS
+        .iter()
+        .flat_map(|&i| {
+            let [x, y] = refined.landmarks[i];
+            [x * width, y * height]
+        })
+        .collect();
+    let shapes = models.infer_points("face_blendshapes", &path, points)?;
+    anyhow::ensure!(
+        shapes.first().is_some_and(|s| s.len() == 52),
+        "Unexpected blendshape output"
+    );
+    refined.blink =
+        Some([shapes[0][EYE_BLINK_LEFT], shapes[0][EYE_BLINK_RIGHT]].map(|v| v.clamp(0.0, 1.0)));
+    Ok(Some(refined))
+}
 /// One shared face artifact used by Organize, quality, subjects and duplicates.
 /// Existing complete subject records can seed it without another model pass.
 pub fn cached(
@@ -454,6 +498,142 @@ pub fn cached_lazy(
     anyhow::ensure!(!cancelled(), "Face analysis cancelled");
     store.put_faces(&key, &faces)?;
     Ok(faces)
+}
+/// Whether one person's eyes are open, closed, or cannot be told.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum EyeState {
+    Open,
+    Closed,
+    /// Too small, turned away, behind glasses, squinting or laughing, or one
+    /// eye open and one shut: never counted as closed.
+    Unknown,
+}
+/// What the eye verdict is made of, from a face's stored landmarks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EyeMeasures {
+    /// Pixels between the eye centres in the image the face was found in.
+    pub spacing: f32,
+    /// Eye aspect ratios (subject's left, right).
+    pub ratios: [f32; 2],
+    /// MediaPipe blendshape eye-blink scores (subject's left, right).
+    pub blink: [f32; 2],
+}
+impl EyeMeasures {
+    fn ratio(&self) -> f32 {
+        (self.ratios[0] + self.ratios[1]) / 2.0
+    }
+}
+const LEFT_EYE: [usize; 6] = [33, 160, 158, 133, 153, 144];
+const RIGHT_EYE: [usize; 6] = [362, 385, 387, 263, 373, 380];
+/// The eye measures of `face`, found in a `width` x `height` image (the
+/// analysis image). Landmarks are normalized, so they are scaled back to
+/// pixels first: the eye aspect ratio must not change with the photo's
+/// shape. `None` for legacy records without landmarks or blink scores.
+pub fn eye_measures(face: &Face, width: u32, height: u32) -> Option<EyeMeasures> {
+    let blink = face.blink?;
+    let (w, h) = (width as f32, height as f32);
+    let point = |i: usize| face.landmarks.get(i).map(|[x, y]| [x * w, y * h]);
+    let ratio = |eye: [usize; 6]| -> Option<f32> {
+        let p: Vec<[f32; 2]> = eye.iter().map(|&i| point(i)).collect::<Option<_>>()?;
+        let distance = |a: usize, b: usize| (p[a][0] - p[b][0]).hypot(p[a][1] - p[b][1]);
+        Some((distance(1, 5) + distance(2, 4)) / (2.0 * distance(0, 3)).max(f32::EPSILON))
+    };
+    let centre = |a: usize, b: usize| -> Option<[f32; 2]> {
+        let ([ax, ay], [bx, by]) = (point(a)?, point(b)?);
+        Some([(ax + bx) / 2.0, (ay + by) / 2.0])
+    };
+    let ([ax, ay], [bx, by]) = (centre(33, 133)?, centre(362, 263)?);
+    let measures = EyeMeasures {
+        spacing: (ax - bx).hypot(ay - by),
+        ratios: [ratio(LEFT_EYE)?, ratio(RIGHT_EYE)?],
+        blink,
+    };
+    (measures.spacing.is_finite()
+        && measures
+            .ratios
+            .iter()
+            .chain(&measures.blink)
+            .all(|v| v.is_finite()))
+    .then_some(measures)
+}
+/// The rule `Faces::closed_eyes` counts with, which the quality score uses
+/// and the face cache stores (see `SHUT_EYE_RATIO`).
+fn counted_closed(m: &EyeMeasures) -> bool {
+    let ratio = m.ratio();
+    m.spacing >= MIN_EYE_PIXELS
+        && (ratio < SHUT_EYE_RATIO
+            || (m.blink.iter().all(|&b| b >= CLOSED_BLINK) && ratio < CLOSED_EYE_RATIO))
+}
+/// One person's eyes, for decisions about that person: Easy Delete's Trash
+/// suggestion and Pick Best. Stricter than `counted_closed` both ways, so
+/// a doubtful face is Unknown, never closed:
+/// - Closed: both eyes shut by shape (each ratio under `CLOSED_EYE_RATIO`,
+///   the mean under `SHUT_EYE_RATIO`) and by both blink scores (at least
+///   `STRICT_BLINK`). A squint or a laugh narrows the eyes to a ratio of
+///   about 0.12 to 0.2 and raises the blink scores: it stays Unknown. So
+///   does a wink or one eye hidden. On a 79-photo phone library, the six
+///   closed faces had ratios of 0.016 to 0.037 and blink scores of 0.72 to
+///   0.85.
+/// - Open: each ratio at least `OPEN_EYE_RATIO` and neither blink score
+///   above `OPEN_BLINK`. Open faces there had ratios of 0.2 to 0.43 and
+///   blink scores up to 0.3.
+/// - Unknown: everything else, and faces under `MIN_EYE_PIXELS`.
+///
+/// Every face it calls Closed is counted by `counted_closed` too, so the
+/// cached count can tell which photos are worth a closer look.
+pub fn eye_state(face: &Face, width: u32, height: u32) -> EyeState {
+    eye_measures(face, width, height).map_or(EyeState::Unknown, |m| judge(&m))
+}
+/// Whether `face`'s eyes are too small to judge on this `width` x `height`
+/// image but would be on one twice as large, such as the display image.
+pub fn rejudgeable(face: &Face, width: u32, height: u32) -> bool {
+    eye_measures(face, width, height)
+        .is_some_and(|m| (MIN_EYE_PIXELS / 2.0..MIN_EYE_PIXELS).contains(&m.spacing))
+}
+/// The `eye_state` verdict on measures alone.
+pub fn judge(m: &EyeMeasures) -> EyeState {
+    if m.spacing < MIN_EYE_PIXELS {
+        EyeState::Unknown
+    } else if m.ratio() < SHUT_EYE_RATIO
+        && m.ratios.iter().all(|&r| r < CLOSED_EYE_RATIO)
+        && m.blink.iter().all(|&b| b >= STRICT_BLINK)
+    {
+        EyeState::Closed
+    } else if m.ratios.iter().all(|&r| r >= OPEN_EYE_RATIO)
+        && m.blink.iter().all(|&b| b <= OPEN_BLINK)
+    {
+        EyeState::Open
+    } else {
+        EyeState::Unknown
+    }
+}
+/// The strip around both eyes of `face`, found in a `width` x `height`
+/// image, in normalized `[left, top, right, bottom]`: wide enough to read the
+/// eyelids, about three times as wide as it is tall, inside the photo.
+pub fn eye_rect(face: &Face, width: u32, height: u32) -> Option<[f32; 4]> {
+    let (w, h) = (width as f32, height as f32);
+    let points: Vec<[f32; 2]> = LEFT_EYE
+        .iter()
+        .chain(&RIGHT_EYE)
+        .map(|&i| face.landmarks.get(i).map(|[x, y]| [x * w, y * h]))
+        .collect::<Option<_>>()?;
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for [x, y] in &points {
+        (x0, y0, x1, y1) = (x0.min(*x), y0.min(*y), x1.max(*x), y1.max(*y));
+    }
+    let span = (x1 - x0).max(y1 - y0);
+    if !(span.is_finite() && span > 1.0 && w > 0.0 && h > 0.0) {
+        return None;
+    }
+    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let half_w = span * 0.7;
+    let half_h = (half_w / 3.0).max((y1 - y0) * 0.9);
+    Some([
+        ((cx - half_w) / w).clamp(0.0, 1.0),
+        ((cy - half_h) / h).clamp(0.0, 1.0),
+        ((cx + half_w) / w).clamp(0.0, 1.0),
+        ((cy + half_h) / h).clamp(0.0, 1.0),
+    ])
 }
 /// Square detector windows (centre x, centre y, edge) in source pixels: the whole
 /// frame, then overlapping tiles that shrink by `TILE_STEP` down to

@@ -1,6 +1,9 @@
 use super::review_card::{
-    Badge, CardEvent, CardPhoto, CardState, Fact, GridClick, MIN_SLOT, ReviewCard,
+    Badge, CardEvent, CardPhoto, CardState, Fact, GridClick, Inset, MIN_SLOT, ReviewCard,
 };
+
+/// The long side, in pixels, a closed-eyes card's zoomed eyes are cut at.
+const EYE_EDGE: f32 = 480.0;
 
 /// The photo widths Easy Delete's size slider offers.
 const SLOT_RANGE: std::ops::RangeInclusive<f32> = 140.0..=420.0;
@@ -41,6 +44,7 @@ impl PhotoSortApp {
             &self.analysis,
             &self.metadata,
             &self.delete_pairs,
+            &self.delete_blinks,
         );
         let mut changed: std::collections::HashSet<_> = self
             .duplicates
@@ -80,12 +84,29 @@ impl PhotoSortApp {
             .flat_map(Entry::candidates)
             .filter(|id| self.decision(*id).rejected)
             .count();
+        // A closed-eyes shot with no better one is kept: a note, not a suggestion.
+        let notes = self
+            .delete_review
+            .entries()
+            .iter()
+            .filter(|e| e.informational())
+            .count();
+        let kept = if notes > 0 {
+            format!(
+                " · {} kept with no better shot",
+                count(notes, "closed-eyes photo", "closed-eyes photos")
+            )
+        } else {
+            String::new()
+        };
         self.set_workflow_status(
             Step::EasyDelete,
-            match self.delete_review.entries().len() {
-                0 => "Nothing to clean up · no duplicates or problem shots found".to_owned(),
+            match self.delete_review.entries().len() - notes {
+                0 if notes == 0 => {
+                    "Nothing to clean up · no duplicates or problem shots found".to_owned()
+                }
                 n => format!(
-                    "{} · {} marked for Trash · nothing changes on disk until you apply Review changes",
+                    "{} · {} marked for Trash{kept} · nothing changes on disk until you apply Review changes",
                     count(n, "suggestion", "suggestions"),
                     count(trash, "photo", "photos")
                 ),
@@ -360,6 +381,19 @@ impl PhotoSortApp {
             .delete_current
             .and_then(|id| subjects.iter().position(|other| *other == id));
         let lengths: Vec<usize> = sections.iter().map(|(_, n)| *n).collect();
+        // Room for a pair everywhere, and for every photo of a section's
+        // largest card, such as several closed-eyes shots and the better one.
+        let slots: Vec<usize> = sections
+            .iter()
+            .zip(&starts)
+            .map(|((_, n), start)| {
+                subjects[*start..start + n]
+                    .iter()
+                    .filter_map(|id| self.delete_review.entry(*id))
+                    .map(|e| e.candidates().len())
+                    .fold(2, usize::max)
+            })
+            .collect();
         let app_slot = self.delete_slot.unwrap_or(MIN_SLOT);
         let clicked = ui
             .scope_builder(
@@ -371,7 +405,7 @@ impl PhotoSortApp {
                         ui,
                         "delete",
                         &lengths,
-                        2,
+                        &slots,
                         app_slot,
                         |app, i| app.delete_card_ratio(subjects[i]),
                         |app, ui, section| {
@@ -599,6 +633,28 @@ impl PhotoSortApp {
                 ui.label(RichText::new("For all of them:").color(MUTED));
                 return;
             }
+            // Only shots with a better one have a suggestion to act on; the
+            // others are kept and stay kept.
+            let ids: Vec<MediaId> = if category == Category::EyesClosed {
+                ids.iter()
+                    .copied()
+                    .filter(|id| {
+                        self.delete_review
+                            .entry(*id)
+                            .is_some_and(|e| !e.informational())
+                    })
+                    .collect()
+            } else {
+                ids.to_vec()
+            };
+            let ids = ids.as_slice();
+            if ids.is_empty() {
+                ui.label(RichText::new("No better shots found · kept").color(MUTED))
+                    .on_hover_text(
+                        "None of these has another shot of the same moment with everyone's eyes open, so they are kept",
+                    );
+                return;
+            }
             let n = ids.len();
             let (label, hover) = match category {
                 Category::Exact => (
@@ -616,6 +672,20 @@ impl PhotoSortApp {
                         format!("Keep the sharper one in all {n}")
                     },
                     "Keeps the sharper photo of each pair (or, when equally sharp, the one with more metadata) and moves the other to Trash",
+                ),
+                Category::EyesClosed => (
+                    // Photos, not cards: a card can hold several shots.
+                    match ids
+                        .iter()
+                        .filter_map(|id| self.delete_review.entry(*id))
+                        .flat_map(|e| e.suggestion())
+                        .filter(|keep| !keep)
+                        .count()
+                    {
+                        1 => "Trash the closed-eyes shot".to_owned(),
+                        n => format!("Trash all {n} closed-eyes shots"),
+                    },
+                    "Moves each closed-eyes shot that has a better shot of the same moment to Trash and keeps the better one. Shots with no better one stay kept",
                 ),
                 Category::Blur => (
                     if n == 1 {
@@ -666,17 +736,39 @@ impl PhotoSortApp {
     pub(super) fn delete_suggested_keeper(&self, id: MediaId) -> bool {
         self.delete_keep_why(id).is_some()
     }
-    /// Why PhotoSort suggests keeping this photo, for its Suggested mark.
+    /// Why PhotoSort suggests keeping this photo, for its Suggested mark:
+    /// the selected card's reason when it keeps the photo, as one photo can
+    /// be the keeper of several cards (an identical pair and a closed-eyes
+    /// shot, say), otherwise the first card's.
     pub(super) fn delete_keep_why(&self, id: MediaId) -> Option<String> {
-        let entry = self.delete_review.entries().iter().find(|e| {
-            e.companion == Some(id) && e.subject != id && e.category != Category::Formats
+        let current = self
+            .delete_current
+            .and_then(|c| self.delete_review.entry(c));
+        let entry = current.filter(|e| keeps_for(e, id)).or_else(|| {
+            self.delete_review
+                .entries()
+                .iter()
+                .find(|e| keeps_for(e, id))
         })?;
-        Some(if entry.keep_why.is_empty() {
-            "PhotoSort suggests keeping this photo and moving the other to Trash.".to_owned()
-        } else {
-            format!("Suggested to keep. {}", entry.keep_why)
-        })
+        keep_why_text(entry)
     }
+}
+
+/// Whether `entry` suggests keeping `id` over the other photo of its card.
+fn keeps_for(entry: &Entry, id: MediaId) -> bool {
+    entry.companion == Some(id) && entry.subject != id && entry.category != Category::Formats
+}
+
+/// The Suggested mark's tooltip for `entry`'s keeper.
+fn keep_why_text(entry: &Entry) -> Option<String> {
+    Some(if entry.keep_why.is_empty() {
+        "PhotoSort suggests keeping this photo and moving the other to Trash.".to_owned()
+    } else {
+        format!("Suggested to keep. {}", entry.keep_why)
+    })
+}
+
+impl PhotoSortApp {
     /// The slot height over width a card's photos need.
     pub(super) fn delete_card_ratio(&self, subject: MediaId) -> f32 {
         let Some(entry) = self.delete_review.entry(subject) else {
@@ -699,9 +791,9 @@ impl PhotoSortApp {
     /// that can out of the line. The folder joins in when the copies live in
     /// different places, which for exact copies is often the only difference.
     /// A single photo shows its deciding fact first, then what it is.
-    fn delete_facts(&self, entry: &Entry) -> Vec<Vec<Fact>> {
-        let ids = entry.candidates();
-        let pair = ids.len() == 2;
+    fn delete_facts(&self, entry: &Entry, ids: &[MediaId]) -> Vec<Vec<Fact>> {
+        // Two photos or more, compared; or one photo alone.
+        let pair = ids.len() >= 2;
         let media = |id: &MediaId| self.index.get(id).map(|i| &self.media[*i]);
         let meta = |id: &MediaId| self.metadata.get(id);
         let sharpness: Vec<Option<f64>> = ids
@@ -718,9 +810,11 @@ impl PhotoSortApp {
             .map(|id| meta(id).map_or(0.0, |m| f64::from(m.width) * f64::from(m.height)))
             .collect();
         let bytes: Vec<u64> = ids.iter().map(|id| self.delete_bytes(*id)).collect();
-        // Higher is better by more than `margin`, against a known other value.
+        // Higher than every other photo's known value by more than `margin`.
         let higher = |values: &[f64], i: usize, margin: f64| {
-            pair && values[1 - i] > 0.0 && values[i] > values[1 - i] * (1.0 + margin)
+            pair && (0..values.len())
+                .filter(|j| *j != i)
+                .all(|j| values[j] > 0.0 && values[i] > values[j] * (1.0 + margin))
         };
         // One row per kind of fact: its text for each photo, and which is better.
         let mut rows: Vec<(Vec<Option<String>>, Vec<bool>)> = Vec::new();
@@ -745,7 +839,11 @@ impl PhotoSortApp {
                 .collect(),
             (0..ids.len())
                 // Two formats of one shot: the smaller file saves space.
-                .map(|i| entry.category == Category::Formats && pair && bytes[i] < bytes[1 - i])
+                .map(|i| {
+                    entry.category == Category::Formats
+                        && pair
+                        && (0..ids.len()).all(|j| j == i || bytes[i] < bytes[j])
+                })
                 .collect(),
         );
         let resolution = (
@@ -789,7 +887,7 @@ impl PhotoSortApp {
                 })
                 .collect();
             rows.push((times, none.clone()));
-            rows.retain(|(texts, _)| texts[0] != texts[1]);
+            rows.retain(|(texts, _)| texts.iter().any(|t| *t != texts[0]));
         } else {
             let brightness = ids
                 .iter()
@@ -878,8 +976,9 @@ impl PhotoSortApp {
     /// One photo's facts on its card, in one line, for Review.
     pub(super) fn delete_photo_facts(&self, id: MediaId) -> Option<String> {
         let entry = self.delete_review.entry(self.delete_current?)?;
-        let side = entry.candidates().iter().position(|other| *other == id)?;
-        let facts = self.delete_facts(entry).swap_remove(side);
+        let ids = entry.candidates();
+        let side = ids.iter().position(|other| *other == id)?;
+        let facts = self.delete_facts(entry, &ids).swap_remove(side);
         (!facts.is_empty()).then(|| {
             facts
                 .iter()
@@ -892,12 +991,16 @@ impl PhotoSortApp {
     /// The card for one suggestion: a short tag (the full reason in its
     /// tooltip), its photos with a Keep/Trash pill each and their deciding
     /// facts, and Undo once it differs from the suggestion.
-    fn delete_card(&self, entry: &Entry) -> ReviewCard {
+    fn delete_card(&mut self, entry: &Entry) -> ReviewCard {
         let subject = entry.subject;
         let enabled = self.delete_enabled();
-        let facts = self.delete_facts(entry);
-        let photos = entry
-            .candidates()
+        let leaders = entry.candidates();
+        let facts = self.delete_facts(entry, &leaders);
+        let mut insets: Vec<Option<Inset>> = leaders
+            .iter()
+            .map(|id| self.delete_eye_inset(entry, *id))
+            .collect();
+        let photos = leaders
             .iter()
             .zip(facts)
             .enumerate()
@@ -908,8 +1011,11 @@ impl PhotoSortApp {
                     id: *id,
                     turns: self.preview_turns(*id),
                     badge: Badge::keep(keep),
-                    suggested: self.delete_suggested_keeper(*id),
-                    suggested_hover: self.delete_keep_why(*id),
+                    // This card's own reason: its keeper may keep others too.
+                    suggested: keeps_for(entry, *id),
+                    suggested_hover: keeps_for(entry, *id)
+                        .then(|| keep_why_text(entry))
+                        .flatten(),
                     caption: media.map(Media::name).unwrap_or_default(),
                     name: media
                         .map(|m| m.path.display().to_string())
@@ -927,6 +1033,7 @@ impl PhotoSortApp {
                             side + 1
                         )
                     }),
+                    inset: insets[side].take(),
                 }
             })
             .collect();
@@ -950,6 +1057,32 @@ impl PhotoSortApp {
                 )
             }),
         }
+    }
+
+    /// The eyes of a closed-eyes card's photo, zoomed and cut sharp from the
+    /// original: one strip per person, as many as the card names. Not on a
+    /// photo shown turned: the crops follow the photo as it is stored.
+    fn delete_eye_inset(&mut self, entry: &Entry, id: MediaId) -> Option<Inset> {
+        let crops: Vec<_> = entry.eyes.iter().filter(|c| c.id == id).copied().collect();
+        if crops.is_empty() || self.preview_turns(id) != 0 {
+            return None;
+        }
+        let (w, h) = self.shown_size(id)?;
+        let strips = crops
+            .iter()
+            .map(|crop| {
+                let [left, top, right, bottom] = crop.rect;
+                let uv = egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom));
+                let aspect = uv.width() * w as f32 / (uv.height() * h as f32).max(1.0);
+                (self.sharp_region(id, uv, EYE_EDGE), aspect)
+            })
+            .collect();
+        let closed = crops[0].closed;
+        Some(Inset {
+            strips,
+            label: if closed { "Eyes closed" } else { "Eyes open" }.into(),
+            closed,
+        })
     }
 
     /// Applies a card's event to its suggestion, after making it the
@@ -1013,6 +1146,8 @@ mod tests {
             } else {
                 String::new()
             },
+            eyes: Vec::new(),
+            extra: Vec::new(),
         }
     }
     /// An exact copy (1 + 2), a dark photo (3) and a JPEG + HEIC of one shot
@@ -1304,6 +1439,124 @@ mod tests {
         );
     }
     #[test]
+    fn eyes_closed_cards_show_the_eyes_zoomed_and_only_trash_shots_with_a_better_one() {
+        let mut app = app();
+        for n in 6..=10 {
+            app.media.push(Media {
+                id: MediaId(n),
+                path: format!("/{n}.jpg").into(),
+                kind: MediaKind::Photo,
+                fingerprint: Fingerprint {
+                    bytes: n * 1_048_576,
+                    ..Default::default()
+                },
+            });
+            app.index.insert(MediaId(n), app.media.len() - 1);
+            app.metadata.insert(
+                MediaId(n),
+                crate::core::model::Metadata {
+                    width: 4000,
+                    height: 3000,
+                    ..Default::default()
+                },
+            );
+        }
+        let crop = |n, closed| delete_review::EyeCrop {
+            id: MediaId(n),
+            rect: [0.4, 0.4, 0.6, 0.45],
+            closed,
+        };
+        let mut entries = app.delete_review.entries().to_vec();
+        // 7 is the better shot and also the keeper of an identical pair.
+        entries.push(entry(9, Some(7), Category::Exact));
+        // 10 is an identical copy of 6: both go to Trash, each on the card.
+        entries.push(Entry {
+            tag: "Keep the shot with eyes open".into(),
+            keep_why: "Everyone's eyes are open here.".into(),
+            eyes: vec![crop(6, true), crop(6, true), crop(7, false)],
+            extra: vec![MediaId(10)],
+            ..entry(6, Some(7), Category::EyesClosed)
+        });
+        app.delete_pairs
+            .push(crate::core::near_duplicates::batch::Pair {
+                discard: MediaId(10),
+                keep: MediaId(6),
+                kind: crate::core::near_duplicates::batch::Kind::Exact,
+                keeper: crate::core::near_duplicates::batch::Keeper::First,
+                assessment: crate::core::near_duplicates::Comparator::default().assess(
+                    None,
+                    None,
+                    true,
+                    |_| None,
+                    || false,
+                ),
+                reason: String::new(),
+            });
+        entries.push(Entry {
+            tag: "No shot with eyes open - kept".into(),
+            eyes: vec![crop(8, true)],
+            ..entry(8, None, Category::EyesClosed)
+        });
+        app.delete_review.replace(entries);
+        app.delete_review.stage_new_suggestions(&mut app.decisions);
+        assert!(trashed(&app, 6) && trashed(&app, 10) && !trashed(&app, 7) && !trashed(&app, 8));
+        app.set_delete_tab(Some(Category::EyesClosed));
+        app.refilter();
+        let shown = super::super::review_card::render_grid(&mut app);
+        for text in [
+            "Keep the shot with eyes open",
+            "No shot with eyes open - kept",
+            "Eyes open",
+            "Eyes closed",
+            "10.jpg",
+            // Photos, not cards; the note is kept, so it is not counted.
+            "Trash all 2 closed-eyes shots · frees 16.0 MB",
+        ] {
+            assert!(shown.contains(text), "{text} missing from:\n{shown}");
+        }
+        assert!(!shown.contains("Identical copy"), "{shown}");
+        // The zoomed eyes are cut sharp from the originals, off the UI thread.
+        let wanted: Vec<_> = app.board.people.wanted.iter().map(|r| r.media.id).collect();
+        for n in [6, 7, 8] {
+            assert!(
+                wanted.contains(&MediaId(n)),
+                "{n} not requested: {wanted:?}"
+            );
+        }
+        // Each card explains its own keeper, though 7 keeps two cards.
+        let eyes = app.delete_review.entry(MediaId(6)).unwrap().clone();
+        let card = app.delete_card(&eyes);
+        assert_eq!(
+            card.photos[2].suggested_hover.as_deref(),
+            Some("Suggested to keep. Everyone's eyes are open here.")
+        );
+        let copy = app.delete_review.entry(MediaId(9)).unwrap().clone();
+        assert_eq!(
+            app.delete_card(&copy).photos[1].suggested_hover.as_deref(),
+            Some("Suggested to keep. Why this one is kept")
+        );
+        app.set_active(MediaId(6));
+        assert_eq!(
+            app.delete_keep_why(MediaId(7)).as_deref(),
+            Some("Suggested to keep. Everyone's eyes are open here.")
+        );
+        // Every photo of the card is shown: both closed-eyes shots, then the
+        // better one on the right, with two people's eyes on the first.
+        let card = app.delete_card(&eyes);
+        let shown: Vec<_> = card.photos.iter().map(|p| p.id.0).collect();
+        assert_eq!(shown, vec![6, 10, 7]);
+        let strips: Vec<_> = card
+            .photos
+            .iter()
+            .map(|p| p.inset.as_ref().map_or(0, |i| i.strips.len()))
+            .collect();
+        assert_eq!(strips, vec![2, 0, 1]);
+        // Each pill switches its own photo; the panel shows all three.
+        app.delete_card_event(MediaId(6), CardEvent::Toggle(1));
+        assert!(trashed(&app, 6) && !trashed(&app, 10));
+        assert_eq!(app.comparison_ids().len(), 3);
+    }
+    #[test]
     fn grid_shows_short_tags_facts_and_group_actions_without_confirm() {
         let mut app = app();
         let shown = super::super::review_card::render_grid(&mut app);
@@ -1364,13 +1617,13 @@ mod tests {
         let text = |facts: &[Fact]| facts.iter().map(|f| f.text.clone()).collect::<Vec<_>>();
         // Identical files: only where each one lives.
         let exact = app.delete_review.entry(MediaId(1)).unwrap().clone();
-        let facts = app.delete_facts(&exact);
+        let facts = app.delete_facts(&exact, &exact.candidates());
         assert_eq!(text(&facts[0]), vec!["2025"]);
         assert_eq!(text(&facts[1]), vec!["2025/sorted"]);
         // Two formats in one folder: format and size, the smaller highlighted;
         // the shared resolution and capture time are left out.
         let formats = app.delete_review.entry(MediaId(4)).unwrap().clone();
-        let facts = app.delete_facts(&formats);
+        let facts = app.delete_facts(&formats, &formats.candidates());
         assert_eq!(text(&facts[0]), vec!["JPEG", "4.0 MB"]);
         assert_eq!(text(&facts[1]), vec!["HEIC", "5.0 MB"]);
         assert!(facts[0][1].better && !facts[1][1].better);
@@ -1384,7 +1637,7 @@ mod tests {
         );
         let dark = app.delete_review.entry(MediaId(3)).unwrap().clone();
         assert_eq!(
-            text(&app.delete_facts(&dark)[0]),
+            text(&app.delete_facts(&dark, &dark.candidates())[0]),
             vec!["Brightness 9/255", "JPEG", "3.0 MB", "4000×3000"]
         );
         // Review shows the same facts beside each file name.
@@ -1759,6 +2012,7 @@ mod tests {
             Event::DuplicatePairs {
                 run: 41,
                 pairs: Vec::new(),
+                blinks: Vec::new(),
             },
             Event::AnalysisDone {
                 run: 41,

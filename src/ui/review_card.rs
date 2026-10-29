@@ -27,6 +27,19 @@ pub(super) struct CardPhoto {
     pub toggle: Option<String>,
     /// Why it is the suggested keeper, over its Suggested mark.
     pub suggested_hover: Option<String>,
+    /// A zoomed detail over its lower-left corner.
+    pub inset: Option<Inset>,
+}
+
+/// Zoomed parts of a card photo drawn over it, such as the eyes of each
+/// person in a closed-eyes shot, with a quiet label under them.
+pub(super) struct Inset {
+    /// Each detail, cut sharp from the original (`None` while it decodes),
+    /// with its width over its height.
+    pub strips: Vec<(Option<super::people::FaceImage>, f32)>,
+    pub label: String,
+    /// Shut eyes rather than open ones: picks the label's icon.
+    pub closed: bool,
 }
 
 /// One fact under a card photo, such as "4.1 MB".
@@ -318,14 +331,15 @@ impl PhotoSortApp {
     /// slot height over width), so portrait photos fill their cells. Cards
     /// are numbered across sections, `sections` holding each one's count.
     /// Returns the card and event clicked this frame, or a click on the
-    /// empty space around the cards.
+    /// empty space around the cards. `slots` gives each section's photo
+    /// slots per card, so one section's cards can be wider than another's.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn sectioned_card_grid(
         &mut self,
         ui: &mut egui::Ui,
         salt: &str,
         sections: &[usize],
-        slots: usize,
+        slots: &[usize],
         // The narrowest a photo slot gets before the grid drops a column.
         min_slot: f32,
         ratio: impl Fn(&Self, usize) -> f32,
@@ -339,17 +353,21 @@ impl PhotoSortApp {
         }
         let gap = S3;
         ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
-        let slots = slots.max(1);
-        let min = 2.0 * PAD + slots as f32 * min_slot + S2 * (slots - 1) as f32;
         let width = ui.available_width();
-        let columns = ((width + gap) / (min + gap)).floor().max(1.0) as usize;
-        let base = CardLayout {
-            width: (width - gap * (columns - 1) as f32) / columns as f32,
-            slots,
-            captions: self.preferences.show_filenames,
-            ratio: 0.75,
-            facts: true,
-            footer: false,
+        // A section's cards: as many to a row as fit, and their layout.
+        let section_layout = |section: usize| {
+            let slots = slots.get(section).copied().unwrap_or(1).max(1);
+            let min = 2.0 * PAD + slots as f32 * min_slot + S2 * (slots - 1) as f32;
+            let columns = ((width + gap) / (min + gap)).floor().max(1.0) as usize;
+            let layout = CardLayout {
+                width: (width - gap * (columns - 1) as f32) / columns as f32,
+                slots,
+                captions: self.preferences.show_filenames,
+                ratio: 0.75,
+                facts: true,
+                footer: false,
+            };
+            (columns, layout)
         };
         // (top, height, row) in the scrolled content.
         let mut rows: Vec<(f32, f32, Row)> = Vec::new();
@@ -357,6 +375,7 @@ impl PhotoSortApp {
         let mut top = 0.0;
         let mut start = 0;
         for (section, &len) in sections.iter().enumerate() {
+            let (columns, base) = section_layout(section);
             let header_top = top;
             rows.push((top, SECTION, Row::Header(section)));
             top += SECTION;
@@ -849,10 +868,83 @@ impl PhotoSortApp {
                 egui::StrokeKind::Inside,
             );
         }
+        if let Some(inset) = &photo.inset {
+            paint_inset(painter, slot, inset);
+        }
         let pill = badge_pill(painter, slot, &photo.badge);
         let mark = photo.suggested.then(|| suggested_mark(painter, pill));
         (pill, mark)
     }
+}
+
+/// An inset over a card photo's lower-left corner: the zoomed details,
+/// stacked, on a dark plate with their label under them. Neutral, so the
+/// photo's Keep/Trash pill stays the only colour that decides.
+fn paint_inset(painter: &egui::Painter, slot: egui::Rect, inset: &Inset) {
+    use egui_phosphor::regular as icon;
+    if inset.strips.is_empty() {
+        return;
+    }
+    let label = painter.layout_no_wrap(
+        format!(
+            "{}  {}",
+            if inset.closed {
+                icon::EYE_CLOSED
+            } else {
+                icon::EYE
+            },
+            inset.label
+        ),
+        FontId::proportional(10.5),
+        INK.gamma_multiply(0.9),
+    );
+    let (margin, pad, gap) = (6.0, 3.0, 2.0);
+    let aspects: Vec<f32> = inset
+        .strips
+        .iter()
+        .map(|(_, aspect)| aspect.clamp(1.5, 6.0))
+        .collect();
+    let band = label.size().y + 4.0;
+    // As wide as fits, then narrower until the stack fits under the pill.
+    let mut width = (slot.width() * 0.42)
+        .min(170.0)
+        .max(label.size().x)
+        .min(slot.width() - 2.0 * (margin + pad));
+    let stack = |width: f32| {
+        aspects.iter().map(|a| width / a).sum::<f32>() + gap * (aspects.len() - 1) as f32
+    };
+    let room = slot.height() * 0.45 - band - 2.0 * pad;
+    if stack(width) > room {
+        width *= room / stack(width);
+    }
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(
+            slot.left() + margin,
+            slot.bottom() - margin - stack(width) - band - 2.0 * pad,
+        ),
+        egui::vec2(
+            width.max(label.size().x) + 2.0 * pad,
+            stack(width) + band + 2.0 * pad,
+        ),
+    );
+    painter.rect_filled(rect, R_CONTROL, Color32::from_black_alpha(150));
+    let mut top = rect.top() + pad;
+    for ((image, _), aspect) in inset.strips.iter().zip(&aspects) {
+        let strip = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + pad, top),
+            egui::vec2(width, width / aspect),
+        );
+        match image {
+            Some(face) => painter.image(face.texture, strip, face.uv, Color32::WHITE),
+            None => painter.rect_filled(strip, 2.0, WELL),
+        };
+        top = strip.bottom() + gap;
+    }
+    painter.galley(
+        egui::pos2(rect.left() + pad, rect.bottom() - pad - label.size().y),
+        label,
+        INK,
+    );
 }
 
 /// The pill over a card photo's top-right corner. Returns its rect.

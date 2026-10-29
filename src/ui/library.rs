@@ -767,6 +767,8 @@ mod tests {
                 category: crate::core::delete_review::Category::Dark,
                 tag: "Tag".into(),
                 keep_why: String::new(),
+                eyes: Vec::new(),
+                extra: Vec::new(),
                 reason: "dark".into(),
             }]);
         app.textures.insert(
