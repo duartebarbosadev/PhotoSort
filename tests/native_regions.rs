@@ -1,6 +1,5 @@
 #![cfg(feature = "native-imaging")]
-#[path = "../src/test_support.rs"]
-mod test_support;
+use crate::test_support;
 use image::{DynamicImage, Rgba, RgbaImage};
 use photosort::core::{
     catalog::Catalog,

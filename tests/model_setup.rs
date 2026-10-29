@@ -1,5 +1,4 @@
-#[path = "../src/test_support.rs"]
-mod test_support;
+use crate::test_support;
 use photosort::core::{
     model_assets::{self, Health, Id, Work, Worker},
     models,

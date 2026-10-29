@@ -32,19 +32,29 @@ def write_build_record(prefix, provenance):
     return recipe
 
 
+def cache_key(dependencies):
+    """CI reuses a built prefix only while this script and the libraries it builds against match."""
+    inputs = Path(__file__).read_bytes() + json.dumps(dependencies, sort_keys=True).encode()
+    return hashlib.sha256(inputs).hexdigest()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prefix", type=Path, default=ROOT / ".tools/vips")
     parser.add_argument("--archive", type=Path, help="Use a previously downloaded, checksum-verified source archive")
     parser.add_argument("--simd", action=argparse.BooleanOptionalAction, default=True, help="Use Highway SIMD (default); --no-simd builds the scalar comparison")
+    parser.add_argument("--cache-key", action="store_true", help="Print a key for caching the built prefix and exit")
     args = parser.parse_args()
-    prefix = args.prefix.expanduser().absolute()
-    if prefix.exists() or prefix.is_symlink():
-        parser.error("Choose a new prefix; existing installations are never overwritten")
     dependencies = {
         name: subprocess.check_output(["pkg-config", "--modversion", name], text=True).strip()
         for name in DEPENDENCIES + (["libhwy"] if args.simd else [])
     }
+    if args.cache_key:
+        print(cache_key(dependencies))
+        return
+    prefix = args.prefix.expanduser().absolute()
+    if prefix.exists() or prefix.is_symlink():
+        parser.error("Choose a new prefix; existing installations are never overwritten")
     with tempfile.TemporaryDirectory(prefix="photosort-vips-build-") as directory:
         work = Path(directory)
         archive = args.archive.resolve() if args.archive else work / "vips.tar.xz"

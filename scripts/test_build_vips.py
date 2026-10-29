@@ -16,4 +16,8 @@ class RecipeTests(unittest.TestCase):
             self.assertEqual(pc.read_text().count('photosort_recipe='),1)
             self.assertIn('Name: vips',pc.read_text())
 
+    def test_cache_key_tracks_codec_versions(self):
+        self.assertEqual(build_vips.cache_key({'libjpeg':'3.2','zlib':'1.3'}),build_vips.cache_key({'zlib':'1.3','libjpeg':'3.2'}))
+        self.assertNotEqual(build_vips.cache_key({'libjpeg':'3.2'}),build_vips.cache_key({'libjpeg':'3.3'}))
+
 if __name__=='__main__':unittest.main()

@@ -262,6 +262,11 @@ CI ([`.github/workflows/check.yml`](.github/workflows/check.yml)) runs the minim
 Ubuntu and Windows, the full build on macOS (with and without libvips), and the full libvips
 build in a Debian container. Formatting is checked once. Changes that only touch Markdown
 files skip CI, and Rust build caches are saved from `main`, so pull requests reuse them.
+CI runs tests with [cargo-nextest](https://nexte.st), which runs every test in one parallel
+pool; `cargo nextest run` works the same locally, and plain `cargo test` still runs
+everything. Integration tests build into one binary, so a new file in `tests/` must be listed
+in `tests/integration.rs` (a test fails if it is not). The private libvips build is cached
+until its script or libraries change.
 Release builds are separate (see [Releases](#releases)). Run the same checks before opening
 a pull request:
 
@@ -324,7 +329,7 @@ extra variables named in their `#[ignore]` reason (`PHOTOSORT_ANALYSIS_REFERENCE
 Trash. To run one file:
 
 ```sh
-PHOTOSORT_SAMPLE_DIR=tests/samples cargo test --release --test reference_samples -- --ignored --nocapture
+PHOTOSORT_SAMPLE_DIR=tests/samples cargo test --release --test integration reference_samples:: -- --ignored --nocapture
 ```
 
 Cargo runs the root crate's tests from the repository root, so the relative path works

@@ -30,10 +30,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       # Formatting does not depend on the platform; check it once.
       - if: matrix.os == 'ubuntu-latest'
         run: cargo fmt --all --check
-      - run: cargo test --locked --no-default-features --no-fail-fast
+      # nextest runs every test in one parallel pool, each in its own process. It skips
+      # doctests, so those run separately. Examples have no tests, so they are not linked
+      # here; clippy --all-targets still checks that they compile.
+      - run: cargo nextest run --locked --lib --bins --tests --no-default-features --no-fail-fast
+      - run: cargo test --locked --no-default-features --doc
       - run: cargo clippy --locked --no-default-features --all-targets -- -D warnings
       - run: cargo check --locked --no-default-features --features onnx --all-targets
   macos:
@@ -61,19 +68,36 @@ jobs:
             . -> target
             crates/imaging-vips -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
       - run: brew install libraw exiv2 pkg-config
       - if: matrix.flags != ''
+        run: brew install glib jpeg-turbo libpng libtiff little-cms2 highway
+      # The private engine only changes with its build script or the libraries it builds
+      # against, so reuse it until one of them does.
+      - if: matrix.flags != ''
+        id: vips-key
+        run: echo "key=vips-$ImageOS-$(python3 -B scripts/build_vips.py --cache-key)" >> "$GITHUB_OUTPUT"
+      - if: matrix.flags != ''
+        id: vips-cache
+        uses: actions/cache@v4
+        with:
+          path: .tools/vips
+          key: ${{ steps.vips-key.outputs.key }}
+      - if: matrix.flags != '' && steps.vips-cache.outputs.cache-hit != 'true'
+        run: python3 -B scripts/build_vips.py
+      - if: matrix.flags != ''
         run: |
-          brew install glib jpeg-turbo libpng libtiff little-cms2 highway
-          python3 -B scripts/build_vips.py
           # setup-python exports its own PKG_CONFIG_PATH, which would hide
           # the private engine from the build scripts that follow.
           echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/.tools/vips/lib/pkgconfig" >> "$GITHUB_ENV"
       - run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
-      - run: cargo test --locked --no-fail-fast ${{ matrix.flags }}
+      - run: cargo nextest run --locked --lib --bins --tests --no-fail-fast ${{ matrix.flags }}
+      - run: cargo test --locked --doc ${{ matrix.flags }}
       - run: cargo clippy --locked ${{ matrix.flags }} --all-targets -- -D warnings
       - if: matrix.flags != ''
         run: cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
@@ -112,10 +136,22 @@ jobs:
           useradd --create-home photosort
           mkdir -p "$CARGO_HOME"
           chown -R photosort:photosort "$GITHUB_WORKSPACE" "$CARGO_HOME"
-      - name: Build and verify the private image engine without root privileges
-        run: |
-          runuser -u photosort -- python3 -B -m unittest discover -s scripts -p 'test_*.py'
-          runuser -u photosort -- python3 -B scripts/build_vips.py --prefix /tmp/photosort-vips
-      - run: runuser -u photosort -- cargo test --locked --no-fail-fast --features native-imaging
+      # Installed into CARGO_HOME, where cargo finds subcommands for the build user too.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - id: vips-key
+        run: echo "key=vips-debian-trixie-$(python3 -B scripts/build_vips.py --cache-key)" >> "$GITHUB_OUTPUT"
+      - id: vips-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/photosort-vips
+          key: ${{ steps.vips-key.outputs.key }}
+      - run: runuser -u photosort -- python3 -B -m unittest discover -s scripts -p 'test_*.py'
+      - name: Build the private image engine without root privileges
+        if: steps.vips-cache.outputs.cache-hit != 'true'
+        run: runuser -u photosort -- python3 -B scripts/build_vips.py --prefix /tmp/photosort-vips
+      - run: runuser -u photosort -- cargo nextest run --locked --lib --bins --tests --no-fail-fast --features native-imaging
+      - run: runuser -u photosort -- cargo test --locked --doc --features native-imaging
       - run: runuser -u photosort -- cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
       - run: runuser -u photosort -- cargo clippy --locked --features native-imaging --all-targets -- -D warnings

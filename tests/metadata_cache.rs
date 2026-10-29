@@ -1,6 +1,5 @@
 //! Metadata persistence belongs to the shared image owner, including worker restart.
-#[path = "../src/test_support.rs"]
-mod test_support;
+use crate::test_support;
 use photosort::core::{
     cache::{self, Limits},
     catalog::Catalog,

@@ -1,6 +1,5 @@
 //! Shared neutral inputs must not inherit display resizing or RAW enhancements.
-#[path = "../src/test_support.rs"]
-mod test_support;
+use crate::test_support;
 use photosort::core::{catalog::Catalog, metadata, pipeline::Pipeline};
 use std::{
     sync::Arc,
