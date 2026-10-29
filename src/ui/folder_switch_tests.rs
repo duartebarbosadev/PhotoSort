@@ -151,8 +151,7 @@ fn another_folder_opens_with_clean_views_in_every_step_and_keeps_app_wide_choice
     app.preferences.show_filenames = true;
     app.preferences.faceless = Faceless::Folder;
     app.preferences.easy_delete_auto = false;
-    app.board.tile = Some(222.0);
-    app.delete_slot = Some(333.0);
+    app.preferences.photo_size = 222.0;
     app.delete_panel_width = Some(444.0);
     for step in Step::ALL {
         app.step = step;
@@ -187,8 +186,7 @@ fn another_folder_opens_with_clean_views_in_every_step_and_keeps_app_wide_choice
     assert!(app.preferences.show_filenames);
     assert_eq!(app.preferences.faceless, Faceless::Folder);
     assert!(!app.preferences.easy_delete_auto);
-    assert_eq!(app.board.tile, Some(222.0));
-    assert_eq!(app.delete_slot, Some(333.0));
+    assert_eq!(app.preferences.photo_size, 222.0);
     assert_eq!(app.delete_panel_width, Some(444.0));
 }
 

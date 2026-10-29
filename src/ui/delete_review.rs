@@ -1,40 +1,16 @@
 use super::review_card::{
-    Badge, CardEvent, CardPhoto, CardState, Fact, GridClick, Inset, MIN_SLOT, ReviewCard,
+    Badge, CardEvent, CardPhoto, CardState, Fact, GridClick, Inset, ReviewCard, size_text,
+    slot_ratio,
 };
 
 /// The long side, in pixels, a closed-eyes card's zoomed eyes are cut at.
 const EYE_EDGE: f32 = 480.0;
 
-/// The photo widths Easy Delete's size slider offers.
-const SLOT_RANGE: std::ops::RangeInclusive<f32> = 140.0..=420.0;
 use super::*;
 use crate::core::delete_review::{self, Category, Entry, FormatChoice, Review};
 
-/// A photo slot's height over its width for one photo: portrait photos get
-/// taller cells instead of dark bars beside them.
-fn slot_ratio(width: u32, height: u32, orientation: u8) -> f32 {
-    if width == 0 || height == 0 {
-        return 0.75;
-    }
-    let (w, h) = if (5..=8).contains(&orientation) {
-        (height, width)
-    } else {
-        (width, height)
-    };
-    (h as f32 / w as f32).clamp(0.56, 1.5)
-}
-
 fn count(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
-}
-
-fn size_text(bytes: u64) -> String {
-    let megabytes = bytes as f64 / 1_048_576.0;
-    if megabytes >= 1024.0 {
-        format!("{:.1} GB", megabytes / 1024.0)
-    } else {
-        format!("{megabytes:.1} MB")
-    }
 }
 
 impl PhotoSortApp {
@@ -381,20 +357,6 @@ impl PhotoSortApp {
             .delete_current
             .and_then(|id| subjects.iter().position(|other| *other == id));
         let lengths: Vec<usize> = sections.iter().map(|(_, n)| *n).collect();
-        // Room for a pair everywhere, and for every photo of a section's
-        // largest card, such as several closed-eyes shots and the better one.
-        let slots: Vec<usize> = sections
-            .iter()
-            .zip(&starts)
-            .map(|((_, n), start)| {
-                subjects[*start..start + n]
-                    .iter()
-                    .filter_map(|id| self.delete_review.entry(*id))
-                    .map(|e| e.candidates().len())
-                    .fold(2, usize::max)
-            })
-            .collect();
-        let app_slot = self.delete_slot.unwrap_or(MIN_SLOT);
         let clicked = ui
             .scope_builder(
                 egui::UiBuilder::new()
@@ -405,9 +367,8 @@ impl PhotoSortApp {
                         ui,
                         "delete",
                         &lengths,
-                        &slots,
-                        app_slot,
-                        |app, i| app.delete_card_ratio(subjects[i]),
+                        |app, i| app.delete_card_aspects(subjects[i]),
+                        |app, i| app.delete_card_has_facts(subjects[i]),
                         |app, ui, section| {
                             let (category, n) = sections[section];
                             let ids = &subjects[starts[section]..starts[section] + n];
@@ -470,28 +431,6 @@ impl PhotoSortApp {
         }
     }
 
-    /// The size slider, as in Organize's board header: small image, slider,
-    /// large image. It sets how wide a photo gets before the grid drops a
-    /// column; cards still fill the row.
-    fn delete_size_slider(&mut self, ui: &mut egui::Ui) {
-        use egui_phosphor::regular as icon;
-        ui.label(RichText::new(icon::IMAGE).size(16.0).color(MUTED));
-        let mut slot = self.delete_slot.unwrap_or(MIN_SLOT);
-        ui.spacing_mut().slider_width = 90.0;
-        ui.spacing_mut().interact_size.y = 14.0;
-        if named(
-            ui.add(egui::Slider::new(&mut slot, SLOT_RANGE).show_value(false)),
-            egui::WidgetType::Slider,
-            "Photo size",
-        )
-        .on_hover_text("Photo size")
-        .changed()
-        {
-            self.delete_slot = Some(slot);
-        }
-        ui.label(RichText::new(icon::IMAGE).size(11.0).color(MUTED));
-    }
-
     /// One line over the grid: what is staged, the photo size, and Accept
     /// all suggestions.
     fn delete_summary(&mut self, ui: &mut egui::Ui, subjects: &[MediaId]) {
@@ -537,7 +476,7 @@ impl PhotoSortApp {
                     self.accept_delete_defaults();
                 }
                 ui.add_space(S3);
-                self.delete_size_slider(ui);
+                self.size_slider(ui);
                 ui.add_space(S3);
                 ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
                     let mut job = egui::text::LayoutJob::default();
@@ -769,6 +708,30 @@ fn keep_why_text(entry: &Entry) -> Option<String> {
 }
 
 impl PhotoSortApp {
+    /// Each photo's width over its height on `subject`'s card, in order.
+    fn delete_card_aspects(&self, subject: MediaId) -> Vec<f32> {
+        self.delete_review
+            .entry(subject)
+            .map(|entry| {
+                entry
+                    .candidates()
+                    .iter()
+                    .map(|id| self.photo_aspect(*id, 0))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Whether `subject`'s card shows a line of facts: exact copies in one
+    /// folder have nothing that tells them apart.
+    fn delete_card_has_facts(&self, subject: MediaId) -> bool {
+        self.delete_review.entry(subject).is_some_and(|entry| {
+            self.delete_facts(entry, &entry.candidates())
+                .iter()
+                .any(|facts| !facts.is_empty())
+        })
+    }
+
     /// The slot height over width a card's photos need.
     pub(super) fn delete_card_ratio(&self, subject: MediaId) -> f32 {
         let Some(entry) = self.delete_review.entry(subject) else {
@@ -1326,6 +1289,8 @@ mod tests {
     #[test]
     fn large_cards_on_a_retina_screen_ask_for_the_display_preview() {
         let mut app = app();
+        // Clicks and preview sizes below assume photos 160 points tall.
+        app.preferences.photo_size = 160.0;
         app.review = false;
         let draw = |app: &mut PhotoSortApp, scale: f32| {
             let ctx = egui::Context::default();
@@ -1734,7 +1699,7 @@ mod tests {
         app.set_step(Step::EasyDelete);
         app.refilter();
         app.review = false;
-        // The x of every card title drawn, at a window width.
+        // The x of every card title in the first row, at a window width.
         let titles = |app: &mut PhotoSortApp, width: f32| {
             let ctx = egui::Context::default();
             theme_install(&ctx);
@@ -1750,33 +1715,37 @@ mod tests {
                     egui::CentralPanel::default().show(ui, |ui| app.library(ui));
                 },
             );
-            let mut xs = Vec::new();
-            fn walk(shape: &egui::Shape, xs: &mut Vec<f32>) {
+            let mut titles = Vec::new();
+            fn walk(shape: &egui::Shape, titles: &mut Vec<egui::Pos2>) {
                 match shape {
                     egui::Shape::Text(text) if text.galley.text() == "Identical copy" => {
-                        xs.push(text.pos.x)
+                        titles.push(text.pos)
                     }
-                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, xs)),
+                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, titles)),
                     _ => {}
                 }
             }
             for clipped in &output.shapes {
-                walk(&clipped.shape, &mut xs);
+                walk(&clipped.shape, &mut titles);
             }
             let text = super::super::review_card::painted_text(&output);
+            // The cards of the first row.
+            let top = titles.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+            let mut xs: Vec<f32> = titles.iter().filter(|p| p.y == top).map(|p| p.x).collect();
             xs.sort_by(f32::total_cmp);
             xs.dedup();
             (xs, text)
         };
-        // The default fits three cards in a wide window.
+        // The default fits five pairs of 4:3 photos in a wide window.
         let (columns, text) = titles(&mut app, 1600.0);
-        assert_eq!(columns.len(), 3, "{columns:?}");
+        assert_eq!(columns.len(), 5, "{columns:?}");
         assert!(text.contains("Accept all suggestions"), "{text}");
         // Smallest: more cards in a row.
-        app.delete_slot = Some(*SLOT_RANGE.start());
-        assert!(titles(&mut app, 1600.0).0.len() >= 4);
+        let sizes = crate::core::preferences::PHOTO_SIZES;
+        app.preferences.photo_size = *sizes.start();
+        assert_eq!(titles(&mut app, 1600.0).0.len(), 6);
         // Largest: one card a row, still inside the window, even narrow.
-        app.delete_slot = Some(*SLOT_RANGE.end());
+        app.preferences.photo_size = *sizes.end();
         for width in [1600.0, 700.0] {
             let (columns, text) = titles(&mut app, width);
             assert_eq!(columns.len(), 1, "at {width}: {columns:?}");
@@ -1786,7 +1755,7 @@ mod tests {
         // The size survives leaving the step, and the panel and keys work.
         app.set_step(Step::Cull);
         app.set_step(Step::EasyDelete);
-        assert_eq!(app.delete_slot, Some(*SLOT_RANGE.end()));
+        assert_eq!(app.preferences.photo_size, *sizes.end());
         app.delete_card_event(MediaId(3), CardEvent::Select(0));
         let (_, text) = titles(&mut app, 1200.0);
         assert!(text.matches("Identical copy").count() >= 2, "{text}");
@@ -1890,6 +1859,8 @@ mod tests {
     #[test]
     fn a_click_on_the_grid_background_deselects_and_closes_the_panel() {
         let mut app = app();
+        // Clicks and preview sizes below assume photos 160 points tall.
+        app.preferences.photo_size = 160.0;
         app.delete_card_event(MediaId(4), CardEvent::Select(0));
         assert!(app.delete_panel);
         app.deselect_delete_card();
@@ -1946,12 +1917,12 @@ mod tests {
         // A click on a photo switches it between Keep and Trash, and leaves
         // the panel closed.
         assert!(trashed(&app, 1));
-        click(&mut app, egui::pos2(150.0, 300.0));
+        click(&mut app, egui::pos2(150.0, 200.0));
         assert!(!trashed(&app, 1));
         assert_eq!(app.delete_current, Some(MediaId(1)));
         assert!(!app.delete_panel);
         // A click on the card around the photos opens the panel.
-        click(&mut app, egui::pos2(450.0, 100.0));
+        click(&mut app, egui::pos2(300.0, 300.0));
         assert!(app.delete_panel);
         assert!(!trashed(&app, 1), "a card click changed a photo");
         app.deselect_delete_card();

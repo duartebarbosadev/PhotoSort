@@ -52,8 +52,6 @@ pub(super) struct Board {
     pub(super) edit_focus: bool,
     /// The sidebar scrolls the folder being renamed into view once.
     pub(super) reveal_editing: bool,
-    /// Thumbnail width chosen with the size slider.
-    pub(super) tile: Option<f32>,
     /// The folder you are looking at: the active photo's while it is on
     /// screen, otherwise the topmost one shown. `None` before the board is
     /// drawn, or for items staying where they are. The sidebar highlights it.
@@ -100,7 +98,10 @@ pub(super) struct Board {
 /// The space between Organize's panels, and under the bar above them.
 pub(super) const BOARD_GAP: f32 = 10.0;
 const HEADER: f32 = 44.0;
-const TILE: f32 = 160.0;
+/// The inset around a board tile's photo, as `library::card` draws it.
+const TILE_INSET: f32 = 6.0;
+/// The narrowest a board tile gets, so its name and details stay readable.
+const MIN_TILE: f32 = 104.0;
 
 fn leaf(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
@@ -1975,21 +1976,7 @@ impl PhotoSortApp {
             // The size slider is placed first, from the right; the title and
             // counts then get only the room left of it and truncate there.
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                ui.label(RichText::new(icon::IMAGE).size(16.0).color(MUTED));
-                let mut tile = self.board.tile.unwrap_or(TILE);
-                ui.spacing_mut().slider_width = 90.0;
-                ui.spacing_mut().interact_size.y = 14.0;
-                if named(
-                    ui.add(egui::Slider::new(&mut tile, 110.0..=300.0).show_value(false)),
-                    egui::WidgetType::Slider,
-                    "Thumbnail size",
-                )
-                .on_hover_text("Thumbnail size")
-                .changed()
-                {
-                    self.board.tile = Some(tile);
-                }
-                ui.label(RichText::new(icon::IMAGE).size(11.0).color(MUTED));
+                self.size_slider(ui);
                 ui.add_space(S3);
                 self.board_filter(ui);
                 self.board_search(ui);
@@ -2346,19 +2333,21 @@ impl PhotoSortApp {
         self.board_summary(ui);
         let gap = ui.spacing().item_spacing.x;
         let width = ui.available_width();
-        let tile = self.board.tile.unwrap_or(TILE);
-        let columns = ((width + gap) / tile).floor().max(1.0) as usize;
-        let cell = (width - gap * (columns.saturating_sub(1) as f32)) / columns as f32;
-        let tile_height = cell * 0.75 + library::CAPTION;
-        let pitch = tile_height + ui.spacing().item_spacing.y;
-        // Lay out the visible sections as header and tile rows.
+        let target = self.photo_size();
+        // A tile is its photo at the row's height, the inset around it and
+        // the caption under it.
+        let tile_height = |photo: f32| photo + TILE_INSET + library::CAPTION;
+        let spacing = ui.spacing().item_spacing.y;
+        // Lay out the visible sections as header and tile rows: justified
+        // rows, each photo as wide as its shape needs at the row's height.
         enum Row {
             Header(usize),
-            Tiles(usize, usize),
+            Tiles(usize, super::photo_rows::PhotoRow),
         }
         let focus = self.board.focus.clone();
         let mut rows = Vec::new();
         let mut tops = Vec::new();
+        let mut heights = Vec::new();
         let mut y = 0.0;
         for (index, section) in self.board.sections.iter().enumerate() {
             let shown = match (&focus, &section.path) {
@@ -2371,14 +2360,32 @@ impl PhotoSortApp {
             }
             rows.push(Row::Header(index));
             tops.push(y);
+            heights.push(HEADER);
             y += HEADER;
-            for start in (section.range.start..section.range.end).step_by(columns) {
-                rows.push(Row::Tiles(index, start));
+            let tiles: Vec<super::photo_rows::Tile> = section
+                .range
+                .clone()
+                .map(|position| {
+                    let id = self.media[self.filtered[position]].id;
+                    super::photo_rows::Tile {
+                        aspect: self.photo_aspect(id, self.preview_turns(id)),
+                        extra: 2.0 * TILE_INSET,
+                        min_width: MIN_TILE,
+                    }
+                })
+                .collect();
+            for mut row in super::photo_rows::justify(&tiles, width, target, gap) {
+                row.range =
+                    row.range.start + section.range.start..row.range.end + section.range.start;
+                let height = tile_height(row.height);
+                rows.push(Row::Tiles(index, row));
                 tops.push(y);
-                y += pitch;
+                heights.push(height);
+                y += height + spacing;
             }
         }
         let total = y;
+        let bottoms: Vec<f32> = tops.iter().zip(&heights).map(|(t, h)| t + h).collect();
         if rows.is_empty() {
             if self.filtered.is_empty()
                 && (!self.query.trim().is_empty() || self.filter != Filter::All)
@@ -2405,18 +2412,39 @@ impl PhotoSortApp {
             });
             return;
         }
-        // A tile row holds the photos from its start to the row's or the
-        // section's end, whichever comes first.
-        let ends: Vec<usize> = self.board.sections.iter().map(|s| s.range.end).collect();
         let holds = |row: &Row, position: usize| match row {
-            Row::Tiles(index, start) => {
-                (*start..(start + columns).min(ends[*index])).contains(&position)
-            }
+            Row::Tiles(_, tiles) => tiles.range.contains(&position),
             Row::Header(_) => false,
         };
         let mut scroll = egui::ScrollArea::vertical()
             .id_salt(("organize_board", self.group_mode))
             .auto_shrink([false, false]);
+        let saved_offset = || {
+            egui::scroll_area::State::load(
+                ui.ctx(),
+                ui.make_persistent_id(egui::IdSalt::new(("organize_board", self.group_mode))),
+            )
+            .map(|state| state.offset.y)
+        };
+        // Rows above the view change height as photos' sizes arrive with
+        // their thumbnails, or as the window is resized: the photo at the
+        // top of the view stays where it was.
+        // Kept per library, so another folder's photo is never the anchor.
+        let anchor_key = egui::Id::new(("organize-board-anchor", self.group_mode, &self.root));
+        let anchor = ui
+            .data(|d| d.get_temp::<Option<(MediaId, f32)>>(anchor_key))
+            .flatten()
+            .and_then(|(id, shift)| {
+                let position = self
+                    .index
+                    .get(&id)
+                    .and_then(|index| self.filtered.iter().position(|i| i == index))?;
+                let row = rows.iter().position(|row| holds(row, position))?;
+                Some(tops[row] - shift)
+            })
+            .zip(saved_offset())
+            .filter(|(wanted, offset)| (wanted - offset).abs() > 0.5)
+            .map(|(wanted, _)| wanted.max(0.0));
         if ui
             .ctx()
             .data_mut(|d| d.remove_temp::<bool>(egui::Id::new("organize-board-top")))
@@ -2430,18 +2458,18 @@ impl PhotoSortApp {
                 .and_then(|index| self.filtered.iter().position(|i| i == index))
             && let Some(row) = rows.iter().position(|row| holds(row, position))
         {
-            let offset = egui::scroll_area::State::load(
-                ui.ctx(),
-                ui.make_persistent_id(egui::IdSalt::new(("organize_board", self.group_mode))),
-            )
-            .map_or(0.0, |state| state.offset.y);
-            let top = tops[row];
+            let offset = anchor.or(saved_offset()).unwrap_or(0.0);
+            let (top, height) = (tops[row], heights[row]);
             if top < offset {
                 scroll = scroll.vertical_scroll_offset((top - HEADER).max(0.0));
-            } else if top + tile_height > offset + ui.available_height() {
-                scroll = scroll
-                    .vertical_scroll_offset((top + tile_height - ui.available_height()).max(0.0));
+            } else if top + height > offset + ui.available_height() {
+                scroll =
+                    scroll.vertical_scroll_offset((top + height - ui.available_height()).max(0.0));
+            } else if let Some(offset) = anchor {
+                scroll = scroll.vertical_scroll_offset(offset);
             }
+        } else if let Some(offset) = anchor {
+            scroll = scroll.vertical_scroll_offset(offset);
         }
         let faces_mode = self.board.people.signature.is_some();
         let editable = self.board_editable();
@@ -2489,17 +2517,15 @@ impl PhotoSortApp {
                 let area = egui::Rect::from_two_pos(*start, board_pos(pointer));
                 // Every tile the rectangle touches, drawn or not.
                 let mut hit = Vec::new();
-                for (row, top) in rows.iter().zip(&tops) {
-                    let Row::Tiles(index, first) = row else {
+                for ((row, top), height) in rows.iter().zip(&tops).zip(&heights) {
+                    let Row::Tiles(_, tiles) = row else {
                         continue;
                     };
-                    if *top > area.max.y || top + tile_height < area.min.y {
+                    if *top > area.max.y || top + height < area.min.y {
                         continue;
                     }
-                    let end = self.board.sections[*index].range.end.min(first + columns);
-                    for (column, position) in (*first..end).enumerate() {
-                        let left = column as f32 * (cell + gap);
-                        if left <= area.max.x && left + cell >= area.min.x {
+                    for (position, (left, w)) in tiles.range.clone().zip(&tiles.tiles) {
+                        if *left <= area.max.x && left + w >= area.min.x {
                             hit.push(self.media[self.filtered[position]].id);
                         }
                     }
@@ -2527,24 +2553,15 @@ impl PhotoSortApp {
             let section = |row: &Row| match row {
                 Row::Header(index) | Row::Tiles(index, _) => *index,
             };
-            let height = |row: &Row| match row {
-                Row::Header(_) => HEADER,
-                Row::Tiles(..) => tile_height,
-            };
-            let on_screen = |row: &Row, top: f32| {
-                top + height(row) > viewport.min.y + 8.0 && top < viewport.max.y - 8.0
-            };
+            let on_screen =
+                |i: usize| tops[i] + heights[i] > viewport.min.y + 8.0 && tops[i] < viewport.max.y - 8.0;
             let looking = active_position
-                .and_then(|position| {
-                    rows.iter()
-                        .zip(&tops)
-                        .find(|(row, _)| holds(row, position))
-                })
-                .filter(|(row, top)| on_screen(row, **top))
-                .or_else(|| rows.iter().zip(&tops).find(|(row, top)| on_screen(row, **top)))
-                .map(|(row, _)| section(row));
-            let first = tops.partition_point(|top| *top + pitch < viewport.min.y);
-            for (row, top) in rows.iter().zip(&tops).skip(first) {
+                .and_then(|position| (0..rows.len()).find(|i| holds(&rows[*i], position)))
+                .filter(|i| on_screen(*i))
+                .or_else(|| (0..rows.len()).find(|i| on_screen(*i)))
+                .map(|i| section(&rows[i]));
+            let first = bottoms.partition_point(|bottom| bottom + spacing < viewport.min.y);
+            for ((row, top), height) in rows.iter().zip(&tops).zip(&heights).skip(first) {
                 if *top > viewport.max.y {
                     break;
                 }
@@ -2703,12 +2720,11 @@ impl PhotoSortApp {
                             select_section = Some((*index, ui.input(|i| i.modifiers)));
                         }
                     }
-                    Row::Tiles(index, start) => {
-                        let end = self.board.sections[*index].range.end.min(start + columns);
-                        for (column, position) in (*start..end).enumerate() {
+                    Row::Tiles(_, tiles) => {
+                        for (position, &(left, w)) in tiles.range.clone().zip(&tiles.tiles) {
                             let rect = egui::Rect::from_min_size(
-                                origin + egui::vec2(column as f32 * (cell + gap), *top),
-                                egui::vec2(cell, tile_height),
+                                origin + egui::vec2(left, *top),
+                                egui::vec2(w, *height),
                             );
                             let Some(&media) = self.filtered.get(position) else {
                                 continue;
@@ -2723,7 +2739,7 @@ impl PhotoSortApp {
                                     if dim {
                                         ui.multiply_opacity(0.45);
                                     }
-                                    self.card(ui, media, cell, tile_height, true)
+                                    self.card(ui, media, w, *height, true)
                                 },
                             );
                         }
@@ -2738,6 +2754,22 @@ impl PhotoSortApp {
             looking
         });
         self.library_offset = output.state.offset.y;
+        let looking = output.inner;
+        // The photo at the top of the view once this frame's scrolling is
+        // done, and how far below the top of the view its row starts.
+        let offset = output.state.offset.y;
+        let top_photo = rows
+            .iter()
+            .zip(&tops)
+            .skip(bottoms.partition_point(|bottom| *bottom <= offset))
+            .find_map(|(row, top)| match row {
+                Row::Tiles(_, tiles) => Some((
+                    self.media[self.filtered[tiles.range.start]].id,
+                    top - offset,
+                )),
+                Row::Header(_) => None,
+            });
+        ui.data_mut(|d| d.insert_temp(anchor_key, top_photo));
         if let Some((_, ids)) = marquee {
             self.selection.replace(ids.iter().copied());
             self.comparison.clear();
@@ -2755,9 +2787,7 @@ impl PhotoSortApp {
             self.board.marquee = None;
         }
         self.board_look_at(
-            output
-                .inner
-                .map(|index| self.board.sections[index].path.clone()),
+            looking.map(|index| self.board.sections[index].path.clone()),
             output.state.offset.y,
         );
         if self.board.reveal_current {
@@ -3440,7 +3470,7 @@ mod tests {
                     .unwrap_or_else(|| panic!("{name} missing at {width}"))
                     .1
             };
-            let (counts, slider) = (rect(&summary), rect("Thumbnail size"));
+            let (counts, slider) = (rect(&summary), rect("Photo size"));
             assert!(
                 counts.right() <= slider.left(),
                 "counts {counts:?} overlap the slider {slider:?} at {width}"
@@ -3532,6 +3562,52 @@ mod tests {
         );
         rendered(&mut app, &ctx, size);
         assert_eq!(app.board_highlight().as_deref(), Some("A/Day1"));
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_board_and_it_stays_scrolled() {
+        use super::super::compact_cull_tests::{frame, rendered};
+        let (_temp, mut app) = organize();
+        // Large photos, so nine of them run past the window.
+        app.preferences.photo_size = *crate::core::preferences::PHOTO_SIZES.end();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1400.0, 900.0);
+        let name = app.media[app.filtered[0]].name();
+        let nodes = rendered(&mut app, &ctx, size);
+        let over = nodes
+            .iter()
+            .find(|(label, _)| *label == name)
+            .unwrap_or_else(|| panic!("{name} missing: {nodes:?}"))
+            .1
+            .center();
+        assert_eq!(app.library_offset, 0.0);
+        for _ in 0..4 {
+            frame(
+                &mut app,
+                &ctx,
+                size,
+                vec![
+                    egui::Event::PointerMoved(over),
+                    egui::Event::MouseWheel {
+                        phase: egui::TouchPhase::Move,
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -120.0),
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        for _ in 0..10 {
+            rendered(&mut app, &ctx, size);
+        }
+        let scrolled = app.library_offset;
+        assert!(scrolled > 200.0, "the board scrolled only {scrolled}");
+        // Nothing pulls it back while the layout stays the same.
+        rendered(&mut app, &ctx, size);
+        assert_eq!(app.library_offset, scrolled);
         app.runtime.shutdown();
     }
 
@@ -3844,6 +3920,8 @@ mod tests {
     fn dragging_on_empty_space_selects_every_photo_the_rectangle_touches() {
         use super::super::compact_cull_tests::rendered;
         let (_temp, mut app) = organize();
+        // B's five photos fill one row and part of the next at this size.
+        app.preferences.photo_size = 160.0;
         let ids: Vec<MediaId> = app.filtered.iter().map(|i| app.media[*i].id).collect();
         let names: Vec<String> = app.filtered.iter().map(|i| app.media[*i].name()).collect();
         let ctx = egui::Context::default();
@@ -4327,7 +4405,7 @@ mod tests {
             let nodes = rendered(&mut app, &ctx, size);
             assert!(app.filtered.is_empty());
             assert!(shows(&nodes, "No photos match"), "at {width}");
-            assert!(shows(&nodes, "Thumbnail size"), "the board stays");
+            assert!(shows(&nodes, "Photo size"), "the board stays");
             assert_eq!(ctx.memory(|m| m.focused()), Some(search), "at {width}");
             click_label(&mut app, &ctx, size, "Clear search and filter");
             rendered(&mut app, &ctx, size);
@@ -5108,17 +5186,23 @@ mod tests {
         assert_eq!(app.selection.ordered(&app.media, &app.filtered), [ids[0]]);
         // The round circle at a tile's corner adds that photo, and again
         // removes it.
-        let other = tile(&mut app, ids[5]);
-        let circle = egui::pos2(
-            other.right() - 6.0 - S2 - 1.0,
-            other.bottom() - library::CAPTION - S2 - 1.0,
-        );
-        click(&mut app, circle, Default::default());
+        // Tiles take their photos' shapes as thumbnails arrive, so the
+        // circle is found again before each click.
+        let circle = |app: &mut PhotoSortApp| {
+            let other = tile(app, ids[5]);
+            egui::pos2(
+                other.right() - 6.0 - S2 - 1.0,
+                other.bottom() - library::CAPTION - S2 - 1.0,
+            )
+        };
+        let at = circle(&mut app);
+        click(&mut app, at, Default::default());
         assert_eq!(
             app.selection.ordered(&app.media, &app.filtered),
             [ids[0], ids[5]]
         );
-        click(&mut app, circle, Default::default());
+        let at = circle(&mut app);
+        click(&mut app, at, Default::default());
         assert_eq!(app.selection.ordered(&app.media, &app.filtered), [ids[0]]);
         app.runtime.shutdown();
     }

@@ -1,11 +1,8 @@
 use super::review_card::{
-    Badge, CardButton, CardEvent, CardPhoto, CardState, GridClick, MIN_SLOT, ReviewCard,
+    Badge, CardButton, CardEvent, CardPhoto, CardState, GridClick, ReviewCard,
 };
 use super::*;
 use crate::core::rotation::{set_turns, turns};
-
-/// The photo widths Fix Rotation's size slider offers, as Easy Delete's.
-const SLOT_RANGE: std::ops::RangeInclusive<f32> = 140.0..=420.0;
 
 /// A number of clockwise quarter turns, in words, for tooltips.
 fn turn_text(turns: u8) -> &'static str {
@@ -305,7 +302,6 @@ impl PhotoSortApp {
         let current = self
             .active
             .and_then(|id| ids.iter().position(|other| *other == id));
-        let slot = self.rotation_slot.unwrap_or(MIN_SLOT);
         let clicked = ui
             .scope_builder(
                 egui::UiBuilder::new()
@@ -316,9 +312,8 @@ impl PhotoSortApp {
                         ui,
                         "rotation",
                         &lengths,
-                        &vec![2; lengths.len()],
-                        slot,
-                        |app, i| app.rotation_card_ratio(ids[i]),
+                        |app, i| app.rotation_card_aspects(ids[i]),
+                        |_, _| false,
                         |_, ui, section| {
                             let (suggestions, n) = sections[section];
                             ui.label(
@@ -358,7 +353,7 @@ impl PhotoSortApp {
             .count();
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                self.rotation_size_slider(ui);
+                self.size_slider(ui);
                 ui.add_space(S3);
                 ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
                     let mut job = egui::text::LayoutJob::default();
@@ -378,26 +373,6 @@ impl PhotoSortApp {
                 });
             });
         });
-    }
-
-    /// The size slider, as in Organize's board header and Easy Delete.
-    fn rotation_size_slider(&mut self, ui: &mut egui::Ui) {
-        use egui_phosphor::regular as icon;
-        ui.label(RichText::new(icon::IMAGE).size(16.0).color(MUTED));
-        let mut slot = self.rotation_slot.unwrap_or(MIN_SLOT);
-        ui.spacing_mut().slider_width = 90.0;
-        ui.spacing_mut().interact_size.y = 14.0;
-        if named(
-            ui.add(egui::Slider::new(&mut slot, SLOT_RANGE).show_value(false)),
-            egui::WidgetType::Slider,
-            "Photo size",
-        )
-        .on_hover_text("Photo size")
-        .changed()
-        {
-            self.rotation_slot = Some(slot);
-        }
-        ui.label(RichText::new(icon::IMAGE).size(11.0).color(MUTED));
     }
 
     /// The panel beside the grid, as in Easy Delete: it slides in over the
@@ -462,6 +437,19 @@ impl PhotoSortApp {
 
     /// The slot height over width a card's photos need: a quarter turn
     /// makes a landscape photo portrait.
+    /// Each photo's width over its height on `id`'s card: the photo as it
+    /// is and, once a turn is staged, as it will be. The turned photo keeps
+    /// the first one's slot, fitted inside it, so turning again does not
+    /// move the card or its rotate buttons.
+    fn rotation_card_aspects(&self, id: MediaId) -> Vec<f32> {
+        let shape = self.photo_aspect(id, 0);
+        if turns(&self.decisions, id) == 0 {
+            vec![shape]
+        } else {
+            vec![shape, shape]
+        }
+    }
+
     pub(super) fn rotation_card_ratio(&self, id: MediaId) -> f32 {
         let Some(m) = self
             .metadata

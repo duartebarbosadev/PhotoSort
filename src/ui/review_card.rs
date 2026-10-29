@@ -144,44 +144,40 @@ pub(super) enum GridClick {
     Background,
 }
 
-/// The fixed geometry of one grid's cards, so rows can be virtualized.
+/// The geometry of the cards in one grid row.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct CardLayout {
-    pub width: f32,
-    /// Photo slots in a row; a card with fewer photos centres them.
-    pub slots: usize,
+    /// The height of its photos, shared by its row; each photo is as wide
+    /// as its shape needs at that height.
+    pub photo_height: f32,
     pub captions: bool,
-    /// A photo slot's height over its width.
-    pub ratio: f32,
     /// A line of facts under each photo.
     pub facts: bool,
     /// The note line and the action row under the photos.
     pub footer: bool,
 }
 
-/// The narrowest photo slot before a grid drops a column.
-pub(super) const MIN_SLOT: f32 = 200.0;
-const PAD: f32 = S3;
+/// The narrowest a card gets, so its header and pills still fit.
+const MIN_CARD: f32 = 168.0;
+const PAD: f32 = S2;
 const HEADER: f32 = 18.0;
-const CAPTION: f32 = 18.0;
+/// Between the header and the photos.
+const HEADER_GAP: f32 = 6.0;
+/// Between photos on one card.
+const PHOTO_GAP: f32 = S1 + 2.0;
+const CAPTION: f32 = 16.0;
 const NOTE: f32 = 18.0;
 const FACTS: f32 = 16.0;
 /// A section header's row in a sectioned grid.
-const SECTION: f32 = 40.0;
+const SECTION: f32 = 36.0;
 const ACTIONS: f32 = 28.0;
 const RADIUS: f32 = 8.0;
 
 impl CardLayout {
-    fn image_height(&self) -> f32 {
-        self.slot_width() * self.ratio
-    }
-    fn slot_width(&self) -> f32 {
-        (self.width - 2.0 * PAD - S2 * (self.slots.saturating_sub(1)) as f32) / self.slots as f32
-    }
     pub fn height(&self) -> f32 {
         PAD + HEADER
-            + S2
-            + self.image_height()
+            + HEADER_GAP
+            + self.photo_height
             + if self.captions { CAPTION } else { 0.0 }
             + if self.facts { FACTS } else { 0.0 }
             + if self.footer {
@@ -190,6 +186,16 @@ impl CardLayout {
                 0.0
             }
             + PAD
+    }
+}
+
+/// A card's place in a justified row: its photos' shapes side by side, the
+/// padding around them, and the narrowest its header allows.
+pub(super) fn card_tile(aspects: &[f32]) -> super::photo_rows::Tile {
+    super::photo_rows::Tile {
+        aspect: aspects.iter().sum(),
+        extra: 2.0 * PAD + PHOTO_GAP * aspects.len().saturating_sub(1) as f32,
+        min_width: MIN_CARD,
     }
 }
 
@@ -241,43 +247,41 @@ impl PhotoSortApp {
     }
 
     /// A virtualized grid of review cards in sections, each under a header
-    /// row that `header` draws. Unlike `card_grid`, rows differ in height:
-    /// each is as tall as its tallest photo needs (`ratio` gives a card's
-    /// slot height over width), so portrait photos fill their cells. Cards
-    /// are numbered across sections, `sections` holding each one's count.
-    /// Returns the card and event clicked this frame, or a click on the
-    /// empty space around the cards. `slots` gives each section's photo
-    /// slots per card, so one section's cards can be wider than another's.
+    /// row that `header` draws. Cards sit in justified rows: the photos of
+    /// a row share one height, near the shared photo size, and each photo
+    /// is as wide as its shape needs, so it fills its slot. `aspects` gives
+    /// a card's photos' widths over their heights, from what is known
+    /// without drawing it, and `facts` whether it shows a line of facts
+    /// under its photos; a row keeps that line only when one of its cards
+    /// needs it. Cards are numbered across sections, `sections` holding each
+    /// one's count. Returns the card and event clicked this frame, or a
+    /// click on the empty space around the cards.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn sectioned_card_grid(
         &mut self,
         ui: &mut egui::Ui,
         salt: &str,
         sections: &[usize],
-        slots: &[usize],
-        // The narrowest a photo slot gets before the grid drops a column.
-        min_slot: f32,
-        ratio: impl Fn(&Self, usize) -> f32,
+        aspects: impl Fn(&Self, usize) -> Vec<f32>,
+        facts: impl Fn(&Self, usize) -> bool,
         header: impl FnMut(&mut Self, &mut egui::Ui, usize),
         card: impl FnMut(&mut Self, usize) -> Option<ReviewCard>,
         current: Option<usize>,
     ) -> Option<GridClick> {
         self.rows_card_grid(
-            ui, salt, sections, true, slots, min_slot, ratio, header, card, current,
+            ui, salt, sections, true, aspects, facts, header, card, current,
         )
     }
 
-    /// `sectioned_card_grid` with one section and no header: every card in
-    /// one run, rows as tall as their tallest photo needs.
+    /// `sectioned_card_grid` with one section and no header.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn flat_card_grid(
         &mut self,
         ui: &mut egui::Ui,
         salt: &str,
         count: usize,
-        slots: usize,
-        min_slot: f32,
-        ratio: impl Fn(&Self, usize) -> f32,
+        aspects: impl Fn(&Self, usize) -> Vec<f32>,
+        facts: impl Fn(&Self, usize) -> bool,
         card: impl FnMut(&mut Self, usize) -> Option<ReviewCard>,
         current: Option<usize>,
     ) -> Option<GridClick> {
@@ -286,9 +290,8 @@ impl PhotoSortApp {
             salt,
             &[count],
             false,
-            &[slots],
-            min_slot,
-            ratio,
+            aspects,
+            facts,
             |_, _, _| {},
             card,
             current,
@@ -302,66 +305,58 @@ impl PhotoSortApp {
         salt: &str,
         sections: &[usize],
         headers: bool,
-        slots: &[usize],
-        min_slot: f32,
-        ratio: impl Fn(&Self, usize) -> f32,
+        aspects: impl Fn(&Self, usize) -> Vec<f32>,
+        facts: impl Fn(&Self, usize) -> bool,
         mut header: impl FnMut(&mut Self, &mut egui::Ui, usize),
         mut card: impl FnMut(&mut Self, usize) -> Option<ReviewCard>,
         current: Option<usize>,
     ) -> Option<GridClick> {
         enum Row {
             Header(usize),
-            Cards(std::ops::Range<usize>, CardLayout),
+            Cards(super::photo_rows::PhotoRow, CardLayout),
         }
-        let gap = S3;
+        let gap = S2;
         ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
         let width = ui.available_width();
-        // A section's cards: as many to a row as fit, and their layout.
-        let section_layout = |section: usize| {
-            let slots = slots.get(section).copied().unwrap_or(1).max(1);
-            let min = 2.0 * PAD + slots as f32 * min_slot + S2 * (slots - 1) as f32;
-            let columns = ((width + gap) / (min + gap)).floor().max(1.0) as usize;
-            let layout = CardLayout {
-                width: (width - gap * (columns - 1) as f32) / columns as f32,
-                slots,
-                captions: self.preferences.show_filenames,
-                ratio: 0.75,
-                facts: true,
-                footer: false,
-            };
-            (columns, layout)
-        };
+        let target = self.photo_size();
+        let captions = self.preferences.show_filenames;
+
         // (top, height, row) in the scrolled content.
         let mut rows: Vec<(f32, f32, Row)> = Vec::new();
         let mut spans = Vec::new();
         let mut top = 0.0;
         let mut start = 0;
         for (section, &len) in sections.iter().enumerate() {
-            let (columns, base) = section_layout(section);
             let header_top = top;
             if headers {
                 rows.push((top, SECTION, Row::Header(section)));
                 top += SECTION;
             }
-            let mut first = start;
-            while first < start + len {
-                let end = (first + columns).min(start + len);
+            let tiles: Vec<_> = (start..start + len)
+                .map(|i| card_tile(&aspects(self, i)))
+                .collect();
+            for (n, mut row) in super::photo_rows::justify(&tiles, width, target, gap)
+                .into_iter()
+                .enumerate()
+            {
+                row.range = row.range.start + start..row.range.end + start;
                 let layout = CardLayout {
-                    ratio: (first..end).map(|i| ratio(self, i)).fold(0.0, f32::max),
-                    ..base
+                    photo_height: row.height,
+                    captions,
+                    facts: row.range.clone().any(|i| facts(self, i)),
+                    footer: false,
                 };
                 let height = layout.height();
-                for _ in first..end {
+                for _ in row.range.clone() {
                     // The first row keeps its section's header in view.
-                    spans.push(if first == start {
+                    spans.push(if n == 0 {
                         (header_top, top + height - header_top)
                     } else {
                         (top, height)
                     });
                 }
-                rows.push((top, height, Row::Cards(first..end, layout)));
+                rows.push((top, height, Row::Cards(row, layout)));
                 top += height + gap;
-                first = end;
             }
             start += len;
         }
@@ -402,20 +397,20 @@ impl PhotoSortApp {
                             |ui| header(self, ui, *section),
                         );
                     }
-                    Row::Cards(range, layout) => {
-                        for index in range.clone() {
+                    Row::Cards(row, layout) => {
+                        for (index, &(left, card_width)) in row.range.clone().zip(&row.tiles) {
                             let Some(spec) = card(self, index) else {
                                 continue;
                             };
-                            let column = index - range.start;
                             let rect = egui::Rect::from_min_size(
-                                egui::pos2(origin.x + column as f32 * (layout.width + gap), y),
-                                egui::vec2(layout.width, *height),
+                                egui::pos2(origin.x + left, y),
+                                egui::vec2(card_width, *height),
                             );
+                            let shapes = aspects(self, index);
                             let event = ui
                                 .scope_builder(
                                     egui::UiBuilder::new().id_salt((salt, index)).max_rect(rect),
-                                    |ui| self.review_card(ui, rect, &spec, *layout),
+                                    |ui| self.review_card(ui, rect, &spec, *layout, &shapes),
                                 )
                                 .inner;
                             if let Some(event) = event {
@@ -437,6 +432,8 @@ impl PhotoSortApp {
         rect: egui::Rect,
         card: &ReviewCard,
         layout: CardLayout,
+        // Each photo's width over its height; a photo without one is 4:3.
+        aspects: &[f32],
     ) -> Option<CardEvent> {
         let mut event = None;
         let response = ui.interact(rect, ui.id().with("card"), Sense::click());
@@ -566,16 +563,23 @@ impl PhotoSortApp {
                 .on_hover_text(hover);
         }
 
-        // Photos, side by side; fewer than the grid's slots are centred.
-        let slot_width = layout.slot_width();
-        let top = header.bottom() + S2;
-        let used = card.photos.len() as f32 * (slot_width + S2) - S2;
-        let lead = ((inner.width() - used) / 2.0).max(0.0);
+        // Photos, side by side, each as wide as its shape needs; on a card
+        // wider than its photos, as for a header, they are centred.
+        let top = header.bottom() + HEADER_GAP;
+        let widths: Vec<f32> = (0..card.photos.len())
+            .map(|i| aspects.get(i).copied().unwrap_or(4.0 / 3.0) * layout.photo_height)
+            .collect();
+        let used = widths.iter().sum::<f32>() + PHOTO_GAP * widths.len().saturating_sub(1) as f32;
+        // Rounding can leave the photos a hair wider than the card: they
+        // share what there is.
+        let scale = (inner.width() / used).min(1.0);
+        let mut left = inner.left() + ((inner.width() - used) / 2.0).max(0.0);
         for (side, photo) in card.photos.iter().enumerate() {
             let slot = egui::Rect::from_min_size(
-                egui::pos2(inner.left() + lead + side as f32 * (slot_width + S2), top),
-                egui::vec2(slot_width, layout.image_height()),
+                egui::pos2(left, top),
+                egui::vec2(widths[side] * scale, layout.photo_height),
             );
+            left = slot.right() + PHOTO_GAP;
             let (pill, mark) = self.card_photo(ui, &painter, slot, fill, photo);
             let response = ui.interact(slot, ui.id().with(("photo", side)), Sense::click());
             response.widget_info(|| {
@@ -679,7 +683,12 @@ impl PhotoSortApp {
                     FontId::proportional(11.0),
                     MUTED,
                 );
-                job.wrap = egui::text::TextWrapping::truncate_at_width(slot.width());
+                // A lone photo's name may use the card's width.
+                job.wrap = egui::text::TextWrapping::truncate_at_width(if card.photos.len() == 1 {
+                    inner.width()
+                } else {
+                    slot.width()
+                });
                 let galley = painter.layout_job(job);
                 painter.galley(
                     egui::pos2(
@@ -699,7 +708,7 @@ impl PhotoSortApp {
         let note = egui::Rect::from_min_size(
             egui::pos2(
                 inner.left(),
-                top + layout.image_height()
+                top + layout.photo_height
                     + if layout.captions { CAPTION } else { 0.0 }
                     + if layout.facts { FACTS } else { 0.0 }
                     + S1,
@@ -836,7 +845,7 @@ impl PhotoSortApp {
             paint_inset(painter, slot, inset);
         }
         let pill = badge_pill(painter, slot, &photo.badge);
-        let mark = photo.suggested.then(|| suggested_mark(painter, pill));
+        let mark = photo.suggested.then(|| suggested_mark(painter, slot, pill));
         (pill, mark)
     }
 }
@@ -928,16 +937,26 @@ fn badge_pill(painter: &egui::Painter, slot: egui::Rect, badge: &Badge) -> egui:
     rect
 }
 
-/// A star beside the pill of the photo PhotoSort suggests keeping.
-/// Returns its rect.
-fn suggested_mark(painter: &egui::Painter, pill: egui::Rect) -> egui::Rect {
-    let galley = painter.layout_no_wrap(
-        format!("{}  Suggested", egui_phosphor::regular::STAR),
-        medium(11.0),
-        ACCENT,
-    );
-    let size = galley.size() + egui::vec2(14.0, 6.0);
-    let rect = Align2::RIGHT_TOP.anchor_size(pill.left_top() - egui::vec2(S1, 0.0), size);
+/// A star beside the pill of the photo PhotoSort suggests keeping, or
+/// under it when the photo is too narrow for both side by side, and only
+/// the star when even that does not fit. Returns its rect.
+fn suggested_mark(painter: &egui::Painter, slot: egui::Rect, pill: egui::Rect) -> egui::Rect {
+    let star = egui_phosphor::regular::STAR;
+    let mark = |text: String| {
+        let galley = painter.layout_no_wrap(text, medium(11.0), ACCENT);
+        let size = galley.size() + egui::vec2(14.0, 6.0);
+        (galley, size)
+    };
+    let (mut galley, size) = mark(format!("{star}  Suggested"));
+    let mut rect = Align2::RIGHT_TOP.anchor_size(pill.left_top() - egui::vec2(S1, 0.0), size);
+    if rect.left() < slot.left() + S1 {
+        rect = Align2::RIGHT_TOP.anchor_size(pill.right_bottom() + egui::vec2(0.0, S1), size);
+    }
+    if rect.left() < slot.left() + S1 {
+        let (icon, size) = mark(star.to_owned());
+        galley = icon;
+        rect = Align2::RIGHT_TOP.anchor_size(pill.right_bottom() + egui::vec2(0.0, S1), size);
+    }
     painter.rect_filled(rect, R_CONTROL, Color32::from_black_alpha(170));
     painter.galley(rect.min + egui::vec2(7.0, 3.0), galley, ACCENT);
     rect
@@ -966,29 +985,48 @@ pub(super) fn size_text(bytes: u64) -> String {
     }
 }
 
-/// The photo widths a grid's size slider offers.
-const SLOT_RANGE: std::ops::RangeInclusive<f32> = 140.0..=420.0;
-
-/// The size slider, as in Organize's board header: small image, slider,
-/// large image. It sets how wide a photo gets before the grid drops a
-/// column; cards still fill the row.
-pub(super) fn size_slider(ui: &mut egui::Ui, slot: &mut Option<f32>) {
-    use egui_phosphor::regular as icon;
-    ui.label(RichText::new(icon::IMAGE).size(16.0).color(MUTED));
-    let mut value = slot.unwrap_or(MIN_SLOT);
-    ui.spacing_mut().slider_width = 90.0;
-    ui.spacing_mut().interact_size.y = 14.0;
-    if named(
-        ui.add(egui::Slider::new(&mut value, SLOT_RANGE).show_value(false)),
-        egui::WidgetType::Slider,
-        "Photo size",
-    )
-    .on_hover_text("Photo size")
-    .changed()
-    {
-        *slot = Some(value);
+impl PhotoSortApp {
+    /// A photo's width over its height as a grid shows it, from its
+    /// metadata, with `turns` more quarter turns. Never from its texture,
+    /// so rows do not move as thumbnails arrive.
+    pub(super) fn photo_aspect(&self, id: MediaId, turns: u8) -> f32 {
+        self.metadata.get(&id).map_or(4.0 / 3.0, |m| {
+            super::photo_rows::aspect(m.width, m.height, m.orientation, turns)
+        })
     }
-    ui.label(RichText::new(icon::IMAGE).size(11.0).color(MUTED));
+
+    /// The photo size every grid shares: the height of its photos.
+    pub(super) fn photo_size(&self) -> f32 {
+        self.preferences.photo_size
+    }
+
+    /// The photo size slider every grid shows over it: small image, slider,
+    /// large image. One size for every step, kept in preferences: changing
+    /// it in one step changes it in all of them.
+    pub(super) fn size_slider(&mut self, ui: &mut egui::Ui) {
+        use egui_phosphor::regular as icon;
+        ui.label(RichText::new(icon::IMAGE).size(16.0).color(MUTED));
+        let mut value = self.photo_size();
+        ui.spacing_mut().slider_width = 90.0;
+        ui.spacing_mut().interact_size.y = 14.0;
+        let response = named(
+            ui.add(
+                egui::Slider::new(&mut value, crate::core::preferences::PHOTO_SIZES)
+                    .show_value(false),
+            ),
+            egui::WidgetType::Slider,
+            "Photo size",
+        )
+        .on_hover_text("Photo size, the same in every step");
+        if response.changed() {
+            self.preferences.photo_size = value;
+        }
+        // Saved once a drag ends, not on every frame of it.
+        if response.drag_stopped() || (response.changed() && !response.dragged()) {
+            self.save_preferences();
+        }
+        ui.label(RichText::new(icon::IMAGE).size(11.0).color(MUTED));
+    }
 }
 
 /// A grid with a panel that slides over it from the right.
@@ -1108,4 +1146,118 @@ pub(super) fn render_grid(app: &mut PhotoSortApp) -> String {
         },
     );
     painted_text(&output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cards_reserve_lines_only_for_what_they_show() {
+        let bare = CardLayout {
+            photo_height: 160.0,
+            captions: false,
+            facts: false,
+            footer: false,
+        };
+        // Header, the photo and padding: nothing under the photo.
+        assert_eq!(bare.height(), PAD + HEADER + HEADER_GAP + 160.0 + PAD);
+        let named = CardLayout {
+            captions: true,
+            ..bare
+        };
+        assert_eq!(named.height(), bare.height() + CAPTION);
+        let full = CardLayout {
+            facts: true,
+            ..named
+        };
+        assert_eq!(full.height(), bare.height() + CAPTION + FACTS);
+    }
+
+    #[test]
+    fn a_card_is_as_wide_as_its_photos_or_its_header() {
+        let tile = card_tile(&[1.5, 2.0 / 3.0]);
+        // A pair of a landscape and a portrait photo, 200 tall.
+        assert!((tile.width(200.0) - (2.0 * PAD + PHOTO_GAP + 300.0 + 133.333)).abs() < 0.01);
+        // One small portrait photo: the header keeps the card readable.
+        assert_eq!(card_tile(&[2.0 / 3.0]).width(90.0), MIN_CARD);
+    }
+
+    #[test]
+    fn the_photo_size_slider_is_shared_and_saved_once_released() {
+        use std::time::{Duration, Instant};
+        let root = tempfile::tempdir().unwrap();
+        let mut app =
+            PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, root.path().join("cache")), None);
+        let path = root.path().join("preferences.json");
+        app.preferences_path = Some(path.clone());
+        assert_eq!(app.photo_size(), crate::core::preferences::PHOTO_SIZE);
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let frame = |app: &mut PhotoSortApp, events: Vec<egui::Event>| {
+            ctx.run_test(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 100.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.horizontal(|ui| app.size_slider(ui));
+                    });
+                },
+            )
+        };
+        let output = frame(&mut app, vec![]);
+        let slider = output
+            .platform_output
+            .accesskit_update
+            .unwrap()
+            .nodes
+            .into_iter()
+            .map(|(_, node)| node)
+            .find(|node| node.role() == egui::accesskit::Role::Slider)
+            .unwrap();
+        assert_eq!(slider.label(), Some("Photo size"));
+        assert_eq!(
+            slider.numeric_value(),
+            Some(f64::from(crate::core::preferences::PHOTO_SIZE))
+        );
+        let bounds = slider.bounds().unwrap();
+        let end = egui::pos2(
+            bounds.x1 as f32 - 1.0,
+            ((bounds.y0 + bounds.y1) / 2.0) as f32,
+        );
+        let press = |pressed| egui::Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut app, vec![egui::Event::PointerMoved(end), press(true)]);
+        let largest = *crate::core::preferences::PHOTO_SIZES.end();
+        assert_eq!(app.preferences.photo_size, largest);
+        // Not saved while the pointer is down ...
+        assert!(!path.exists());
+        frame(&mut app, vec![press(false)]);
+        frame(&mut app, vec![]);
+        // ... and saved once it is released, for the next launch.
+        let until = Instant::now() + Duration::from_secs(10);
+        loop {
+            // A missing file loads as the defaults.
+            if path.exists()
+                && let Ok(saved) = crate::core::preferences::Preferences::load(&path)
+            {
+                assert_eq!(saved.photo_size, largest);
+                break;
+            }
+            assert!(Instant::now() < until, "the photo size was never saved");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        app.runtime.shutdown();
+    }
 }

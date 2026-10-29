@@ -44,9 +44,16 @@ pub struct Preferences {
     pub strip_position: StripPosition,
     /// File names under thumbnails in every step's grid and photo strip.
     pub show_filenames: bool,
+    /// The height of the photos in every step's grid, in points: one size
+    /// that every step's size slider shows and changes.
+    pub photo_size: f32,
     /// The first-run intro has played. Menu → Watch the intro replays it.
     pub intro_shown: bool,
 }
+/// The photo size every grid starts with: a photo's height in points.
+pub const PHOTO_SIZE: f32 = 120.0;
+/// The photo sizes the size slider offers.
+pub const PHOTO_SIZES: std::ops::RangeInclusive<f32> = 90.0..=420.0;
 /// Where grouping by faces puts photos without a recognized person.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Faceless {
@@ -89,6 +96,7 @@ impl Default for Preferences {
             reduce_motion: false,
             strip_position: StripPosition::Bottom,
             show_filenames: true,
+            photo_size: PHOTO_SIZE,
             intro_shown: false,
         }
     }
@@ -120,6 +128,12 @@ impl Preferences {
         self.cache.normalize();
         self.processing.normalize(super::processing::available());
         self.navigation.normalize();
+        self.photo_size = if self.photo_size.is_finite() {
+            self.photo_size
+                .clamp(*PHOTO_SIZES.start(), *PHOTO_SIZES.end())
+        } else {
+            PHOTO_SIZE
+        };
         self.hidden_steps.remove(&Step::Organize);
         self.hidden_steps.remove(&Step::Cull);
         let mut seen = HashSet::new();

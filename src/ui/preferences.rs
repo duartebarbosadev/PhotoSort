@@ -85,6 +85,8 @@ impl PhotoSortApp {
         next.updates.last_attempt = self.preferences.updates.last_attempt;
         next.updates.repository = self.preferences.updates.repository.clone();
         next.intro_shown = self.preferences.intro_shown;
+        // The size sliders own the photo size, not the dialog.
+        next.photo_size = self.preferences.photo_size;
         next.normalize();
         self.runtime.cache.configure(next.cache);
         self.runtime.processing.configure(next.processing);
