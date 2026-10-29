@@ -307,6 +307,9 @@ pub struct PhotoSortApp {
     /// The photo whose neighbours' previews were last requested ahead.
     prefetched_for: Option<MediaId>,
     independent_views: HashMap<u64, InspectionView>,
+    /// The 1:1 zoom at which each canvas slot's photo last fitted its view,
+    /// so zooming out from the keyboard or slider stops at Fit.
+    fit_zooms: HashMap<u64, f32>,
     sync_views: bool,
     focused_slot: u64,
     inspection_wanted: Vec<InspectionRequest>,
@@ -544,6 +547,7 @@ impl PhotoSortApp {
             held: HashMap::new(),
             prefetched_for: None,
             independent_views: HashMap::new(),
+            fit_zooms: HashMap::new(),
             sync_views: true,
             focused_slot: 0,
             inspection_wanted: Vec::new(),

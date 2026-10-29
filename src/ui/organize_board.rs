@@ -3797,12 +3797,15 @@ mod tests {
             step(app, to, None, keep);
             step(app, to, Some(false), keep);
         };
-        // From the empty slot after B's last tile (three columns: B fills
-        // one row and two tiles of the next), up and left to the middle of
-        // B's first tile: it and the tiles between are selected.
-        assert_eq!(tiles[4].top(), tiles[6].top());
-        assert_eq!(tiles[7].top(), tiles[8].top());
-        let from = egui::pos2(tiles[6].center().x, tiles[8].center().y);
+        // From the empty slot after B's last tile (B's five tiles fill one
+        // row and part of the next), up and left to the middle of B's first
+        // tile: it and the tiles between are selected.
+        let columns = tiles[4..]
+            .iter()
+            .take_while(|t| t.top() == tiles[4].top())
+            .count();
+        assert!((2..5).contains(&columns), "B wraps: {columns} columns");
+        let from = egui::pos2(tiles[4 + 5 % columns].center().x, tiles[8].center().y);
         let to = tiles[4].center();
         assert!(
             !tiles.iter().any(|t| t.contains(from)),
