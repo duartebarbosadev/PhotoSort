@@ -1,0 +1,13 @@
+# Keeps the commit-pinned actions current; each update arrives as one PR.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Gives the ecosystem a week to catch a compromised release before it is proposed.
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ['*']

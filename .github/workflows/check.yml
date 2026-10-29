@@ -23,14 +23,17 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: nextest
       # Formatting does not depend on the platform; check it once.
@@ -51,55 +54,61 @@ jobs:
       matrix:
         include:
           - name: macOS
-            flags: ''
+            features: ''
           # The configuration the release workflow ships.
           - name: macOS + libvips
-            flags: '--features native-imaging'
+            features: native-imaging
     runs-on: macos-latest
+    env:
+      # Passed through the environment, never expanded into scripts. Cargo takes an empty list.
+      FEATURES: ${{ matrix.features }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: ${{ matrix.flags }}
+          key: ${{ matrix.features }}
           workspaces: |
             . -> target
             crates/imaging-vips -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: nextest
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.13'
       - run: brew install libraw exiv2 pkg-config
-      - if: matrix.flags != ''
+      - if: matrix.features != ''
         run: brew install glib jpeg-turbo libpng libtiff little-cms2 highway
       # The private engine only changes with its build script or the libraries it builds
       # against, so reuse it until one of them does.
-      - if: matrix.flags != ''
+      - if: matrix.features != ''
         id: vips-key
         run: echo "key=vips-$ImageOS-$(python3 -B scripts/build_vips.py --cache-key)" >> "$GITHUB_OUTPUT"
-      - if: matrix.flags != ''
+      - if: matrix.features != ''
         id: vips-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .tools/vips
           key: ${{ steps.vips-key.outputs.key }}
-      - if: matrix.flags != '' && steps.vips-cache.outputs.cache-hit != 'true'
+      - if: matrix.features != '' && steps.vips-cache.outputs.cache-hit != 'true'
         run: python3 -B scripts/build_vips.py
-      - if: matrix.flags != ''
+      - if: matrix.features != ''
         run: |
           # setup-python exports its own PKG_CONFIG_PATH, which would hide
           # the private engine from the build scripts that follow.
           echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/.tools/vips/lib/pkgconfig" >> "$GITHUB_ENV"
       - run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
-      - run: cargo nextest run --locked --lib --bins --tests --no-fail-fast ${{ matrix.flags }}
-      - run: cargo test --locked --doc ${{ matrix.flags }}
-      - run: cargo clippy --locked ${{ matrix.flags }} --all-targets -- -D warnings
-      - if: matrix.flags != ''
+      - run: cargo nextest run --locked --lib --bins --tests --no-fail-fast --features "$FEATURES"
+      - run: cargo test --locked --doc --features "$FEATURES"
+      - run: cargo clippy --locked --features "$FEATURES" --all-targets -- -D warnings
+      - if: matrix.features != ''
         run: cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
   linux:
     name: Linux + libvips
@@ -114,10 +123,12 @@ jobs:
       PKG_CONFIG_PATH: /tmp/photosort-vips/lib/pkgconfig
       LD_LIBRARY_PATH: /tmp/photosort-vips/lib
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       # Restored as root before the ownership change below, so the unprivileged
       # build user can reuse and extend it.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: |
             . -> target
@@ -137,13 +148,13 @@ jobs:
           mkdir -p "$CARGO_HOME"
           chown -R photosort:photosort "$GITHUB_WORKSPACE" "$CARGO_HOME"
       # Installed into CARGO_HOME, where cargo finds subcommands for the build user too.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: nextest
       - id: vips-key
         run: echo "key=vips-debian-trixie-$(python3 -B scripts/build_vips.py --cache-key)" >> "$GITHUB_OUTPUT"
       - id: vips-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: /tmp/photosort-vips
           key: ${{ steps.vips-key.outputs.key }}
