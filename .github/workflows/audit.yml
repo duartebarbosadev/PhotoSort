@@ -1,0 +1,32 @@
+name: Dependency audit
+on:
+  push:
+    branches: [main]
+    paths: ['**/Cargo.lock', '**/Cargo.toml', '.github/workflows/audit.yml']
+  pull_request:
+    paths: ['**/Cargo.lock', '**/Cargo.toml', '.github/workflows/audit.yml']
+  # New advisories are published against crates that have not changed here, so check weekly too.
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  audit:
+    name: cargo audit
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        with:
+          tool: cargo-audit
+      # Fails on vulnerabilities. Unmaintained, unsound and yanked crates are printed as
+      # warnings without failing, so an upstream crate going quiet does not block every PR.
+      - run: cargo audit --file Cargo.lock
+      - run: cargo audit --file crates/imaging-vips/Cargo.lock

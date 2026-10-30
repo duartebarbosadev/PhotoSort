@@ -157,6 +157,28 @@ fn xmp_replaces_element_values_without_losing_siblings() {
     assert_eq!(metadata::read_xmp(&updated).unwrap().0, Some(4));
 }
 #[test]
+fn xmp_rewrite_keeps_packet_comments_entities_and_cdata_byte_for_byte() {
+    let packet = |fields: &str, added: &str| {
+        format!(
+            "<?xpacket begin=\"\u{feff}\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"A &amp; B &#x41;\">\n <!-- note -->\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n  <rdf:Description xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmlns:tiff=\"http://ns.adobe.com/tiff/1.0/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n{fields}   <dc:title><rdf:li xml:lang=\"x-default\">Fish &amp; chips &lt;3 &#233;</rdf:li></dc:title>\n   <dc:description><![CDATA[raw <b>cdata</b> & stuff]]></dc:description>\n  </rdf:Description>\n {added}</rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>"
+        )
+    };
+    let xml = packet(
+        "   <xmp:Rating>3</xmp:Rating>\n   <tiff:Orientation>6</tiff:Orientation>\n",
+        "",
+    );
+    assert_eq!(metadata::read_xmp(&xml).unwrap(), (Some(3), Some(6)));
+    let updated = metadata::update_xmp(&xml, Some(5), None).unwrap();
+    assert_eq!(
+        updated,
+        packet(
+            "   \n   <tiff:Orientation>6</tiff:Orientation>\n",
+            "<rdf:Description xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmlns:tiff=\"http://ns.adobe.com/tiff/1.0/\" rdf:about=\"\" xmp:Rating=\"5\"/>",
+        )
+    );
+    assert_eq!(metadata::read_xmp(&updated).unwrap(), (Some(5), Some(6)));
+}
+#[test]
 fn invalid_xmp_is_never_silently_overwritten() {
     let d = TempDir::new().unwrap();
     let m = photo(d.path(), "a.png");
