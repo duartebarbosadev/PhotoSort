@@ -133,7 +133,7 @@ fn another_folder_opens_with_clean_views_in_every_step_and_keeps_app_wide_choice
         .collect();
     session.save(&b).unwrap();
     let mut views = Saved {
-        step: Some(Step::Organize),
+        step: Some(Step::Rotation),
         ..Default::default()
     };
     views.bookmarks.insert(
@@ -171,8 +171,8 @@ fn another_folder_opens_with_clean_views_in_every_step_and_keeps_app_wide_choice
 
     assert_eq!(app.root.as_ref(), Some(&b));
     assert_eq!(PathBuf::from(&app.output), b);
-    // The step stays where the user was.
-    assert_eq!(app.step, Step::Cull);
+    // B opens on the step it was left on.
+    assert_eq!(app.step, Step::Rotation);
     assert!(app.review);
     assert!(app.saved_views.bookmarks.is_empty());
     for step in Step::ALL {
@@ -192,6 +192,23 @@ fn another_folder_opens_with_clean_views_in_every_step_and_keeps_app_wide_choice
     assert!(!app.preferences.easy_delete_auto);
     assert_eq!(app.preferences.photo_size, 222.0);
     assert_eq!(app.delete_panel_width, Some(444.0));
+}
+
+#[test]
+fn a_folder_never_opened_before_starts_in_organize() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = library(&dir, "a");
+    let b = library(&dir, "b");
+    let mut app = app(&dir);
+    app.open_now(a);
+    settle(&mut app);
+    app.set_step(Step::Rotation);
+    app.open_now(b.clone());
+    settle(&mut app);
+    assert_eq!(app.root.as_ref(), Some(&b));
+    assert_eq!(app.step, Step::Organize);
+    assert!(!app.review);
+    app.runtime.shutdown();
 }
 
 #[test]
