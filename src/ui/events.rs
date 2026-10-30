@@ -217,13 +217,18 @@ impl PhotoSortApp {
         self.scanning = false;
         // A folder chosen in place of another opens with clean views, even
         // ones it saved itself; reopening or reloading the same folder keeps
-        // them. Its staged changes come from its session either way.
+        // them. It goes back to the step it was left on, and a folder never
+        // opened before starts in Organize. Its staged changes come from its
+        // session either way.
         let views = if self
             .switched_from
             .take()
             .is_some_and(|previous| self.root.as_ref() != Some(&previous))
         {
-            Default::default()
+            crate::core::views::Saved {
+                step: Some(views.step.unwrap_or(Step::Organize)),
+                ..Default::default()
+            }
         } else {
             views
         };
