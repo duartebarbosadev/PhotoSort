@@ -141,7 +141,12 @@ impl PhotoSortApp {
                 catalog,
                 &self.index,
                 self.session_intent(),
-                views.clone(),
+                // Applying writes these views; a forgotten folder saves none.
+                if self.views_forgotten {
+                    Default::default()
+                } else {
+                    views.clone()
+                },
             );
             let stop_requested = Arc::new(std::sync::atomic::AtomicBool::new(false));
             match self.runtime.io(IoWork::ApplyRecoverable {
@@ -203,7 +208,7 @@ impl PhotoSortApp {
         match self.runtime.io(IoWork::Checkpoint {
             root,
             session: self.session_snapshot(),
-            views: self.saved_views.clone(),
+            views: self.views_to_save(),
         }) {
             Ok(()) => {
                 self.close_save_pending = true;
