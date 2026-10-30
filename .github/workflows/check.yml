@@ -23,7 +23,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -63,7 +63,7 @@ jobs:
       # Passed through the environment, never expanded into scripts. Cargo takes an empty list.
       FEATURES: ${{ matrix.features }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -80,7 +80,7 @@ jobs:
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: nextest
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
       - run: brew install libraw exiv2 pkg-config
@@ -93,7 +93,7 @@ jobs:
         run: echo "key=vips-$ImageOS-$(python3 -B scripts/build_vips.py --cache-key)" >> "$GITHUB_OUTPUT"
       - if: matrix.features != ''
         id: vips-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .tools/vips
           key: ${{ steps.vips-key.outputs.key }}
@@ -123,7 +123,7 @@ jobs:
       PKG_CONFIG_PATH: /tmp/photosort-vips/lib/pkgconfig
       LD_LIBRARY_PATH: /tmp/photosort-vips/lib
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Restored as root before the ownership change below, so the unprivileged
@@ -154,7 +154,7 @@ jobs:
       - id: vips-key
         run: echo "key=vips-debian-trixie-$(python3 -B scripts/build_vips.py --cache-key)" >> "$GITHUB_OUTPUT"
       - id: vips-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/photosort-vips
           key: ${{ steps.vips-key.outputs.key }}
