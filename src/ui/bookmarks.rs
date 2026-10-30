@@ -50,12 +50,22 @@ impl PhotoSortApp {
             return;
         };
         if self.capture_saved_view()
+            && !self.views_forgotten
             && let Err(error) = self.runtime.io(IoWork::SaveViews {
                 root,
                 views: self.saved_views.clone(),
             })
         {
             self.error = Some(error);
+        }
+    }
+    /// The views a checkpoint writes for the open folder: none once
+    /// remembered folders were forgotten during this visit.
+    pub(super) fn views_to_save(&self) -> Saved {
+        if self.views_forgotten {
+            Saved::default()
+        } else {
+            self.saved_views.clone()
         }
     }
     pub(super) fn capture_saved_view(&mut self) -> bool {

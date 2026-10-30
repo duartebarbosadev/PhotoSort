@@ -89,6 +89,8 @@ impl PhotoSortApp {
             Event::Saved => {}
             Event::Checkpointed(result) => self.on_checkpointed(result),
             Event::ViewError(error) | Event::PreferencesError(error) => {
+                // A failed forget must not leave its success line behind.
+                self.forget_message = None;
                 self.error = Some(error);
             }
             Event::Error(e) => self.on_error(e),
@@ -232,6 +234,7 @@ impl PhotoSortApp {
         } else {
             views
         };
+        self.views_forgotten = false;
         self.load_bookmarks(views);
         if let Some(mut review) = self.rotation_reload.take() {
             review.retain(|id| self.index.contains_key(&id));
@@ -744,7 +747,7 @@ impl PhotoSortApp {
         // The pre-apply bookmark is already in the durable operation
         // context. Do not enqueue that old identity snapshot here.
         self.saved_views.relocate(&report.relocated);
-        if let Some(root) = self.root.clone() {
+        if let Some(root) = self.root.clone().filter(|_| !self.views_forgotten) {
             let _ = self.runtime.io(IoWork::SaveViews {
                 root,
                 views: self.saved_views.clone(),

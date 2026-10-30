@@ -292,3 +292,46 @@ fn a_folder_chosen_while_changes_were_applied_still_opens_clean() {
     assert_eq!(app.root.as_ref(), Some(&b));
     assert_clean(&app);
 }
+
+#[test]
+fn a_folder_open_while_folders_are_forgotten_does_not_save_its_view_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = library(&dir, "a");
+    let mut app = app(&dir);
+    app.open_now(a.clone());
+    settle(&mut app);
+    let a_photo = app.media[1].id;
+    app.decisions.insert(a_photo, rating(4));
+    app.group_mode = GroupMode::Date;
+    app.query = "b".into();
+    app.filter_dirty = true;
+    settle(&mut app);
+    app.checkpoint_bookmarks();
+    let until = Instant::now() + worker_patience();
+    while !Saved::path(&a).exists() {
+        assert!(Instant::now() < until, "the view was never saved");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    // What "Forget remembered folders" does to this folder. Removing every
+    // folder's views is covered in core::views; doing it here would race
+    // other tests sharing the data folder.
+    app.views_forgotten = true;
+    std::fs::remove_file(Saved::path(&a)).unwrap();
+    // This visit keeps its view, but nothing saves it again, even on quit.
+    app.switch_step(Step::Cull);
+    app.checkpoint_bookmarks();
+    app.save_session();
+    assert_eq!(app.views_to_save(), Saved::default());
+    app.runtime.shutdown();
+    drop(app);
+
+    let mut relaunched = self::app(&dir);
+    relaunched.open_now(a.clone());
+    settle(&mut relaunched);
+    assert!(!relaunched.views_forgotten);
+    assert_eq!(relaunched.saved_views, Saved::default());
+    assert_clean(&relaunched);
+    // Staged changes are not views.
+    assert_eq!(relaunched.decisions[&a_photo].rating, Some(4));
+}

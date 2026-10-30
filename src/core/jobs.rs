@@ -188,6 +188,8 @@ pub enum IoWork {
         root: PathBuf,
         views: super::views::Saved,
     },
+    /// Forgets every folder's saved views under this data folder.
+    ForgetViews(PathBuf),
     Scan(PathBuf),
     PlanTrash {
         catalog: Arc<Catalog>,
