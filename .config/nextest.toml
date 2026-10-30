@@ -1,3 +1,8 @@
+[profile.default]
+# A test running over a minute is reported as slow; one still running after five
+# minutes is stopped and fails, instead of holding the job until its timeout.
+slow-timeout = { period = "60s", terminate-after = 5 }
+
 # This test races 24 threads to replace one file. On Windows each writer retries a
 # busy file for up to 5 s (src/core/replace.rs), and other test processes on a
 # 4-core runner can starve a writer past that, so it runs on its own.
