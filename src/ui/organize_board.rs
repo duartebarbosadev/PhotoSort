@@ -717,10 +717,19 @@ impl PhotoSortApp {
             .collect()
     }
     /// Several folders shown in Organize: their photos in board order, which
-    /// Shift ranges, Ctrl/Cmd+A and the arrow keys keep to, so a photo of a
-    /// folder not shown is never selected unseen. `None` uses `filtered`.
+    /// Shift ranges and the arrow keys keep to, so a photo of a folder not
+    /// shown is never selected unseen. `None` uses `filtered`.
     pub(super) fn board_shown_order(&self) -> Option<Vec<usize>> {
         let positions = self.board_shown_positions()?;
+        Some(positions.iter().map(|p| self.filtered[*p]).collect())
+    }
+    /// Any folder shown in Organize, one or several: its photos in board
+    /// order, which Ctrl/Cmd+A selects. `None` (every item) uses `filtered`.
+    pub(super) fn board_select_all_order(&self) -> Option<Vec<usize>> {
+        if self.step != Step::Organize || self.board.focus.is_empty() {
+            return None;
+        }
+        let positions = self.board_positions_shown();
         Some(positions.iter().map(|p| self.filtered[*p]).collect())
     }
     /// After the arrow keys move past the shown folder's last (or first)

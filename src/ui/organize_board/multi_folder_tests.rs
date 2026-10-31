@@ -240,6 +240,36 @@ fn several_folders_shown_keep_arrows_ranges_and_marks_to_their_photos() {
 }
 
 #[test]
+fn ctrl_cmd_a_selects_the_photos_of_one_folder_shown_or_every_item() {
+    let (_temp, mut app, ids) = board();
+    let ctx = context();
+    let none = egui::Modifiers::default();
+    let selected = |app: &PhotoSortApp| app.selection.ordered(&app.media, &app.filtered);
+    // One folder shown: only its photos, even with a photo of another
+    // folder active before.
+    app.select_library(ids[8], false, false);
+    app.board_choose_folder("B", none);
+    rendered(&mut app, &ctx, SIZE);
+    press(&mut app, &ctx, egui::Key::A, egui::Modifiers::COMMAND);
+    assert_eq!(selected(&app), &ids[4..7]);
+    assert!(app.active.is_some_and(|id| ids[4..7].contains(&id)));
+    // D marks those, not B's neighbours.
+    press(&mut app, &ctx, egui::Key::D, none);
+    let marked: Vec<MediaId> = ids
+        .iter()
+        .copied()
+        .filter(|id| app.decision(*id).rejected)
+        .collect();
+    assert_eq!(marked, &ids[4..7]);
+    // Every item shown: every photo.
+    app.board_select_folder(None);
+    rendered(&mut app, &ctx, SIZE);
+    press(&mut app, &ctx, egui::Key::A, egui::Modifiers::COMMAND);
+    assert_eq!(selected(&app), ids);
+    app.runtime.shutdown();
+}
+
+#[test]
 fn folders_shown_together_follow_renames_moves_and_searches() {
     let (_temp, mut app, ids) = board();
     let ctx = context();
