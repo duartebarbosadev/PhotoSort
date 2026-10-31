@@ -1,7 +1,7 @@
 use super::model::Metadata;
 use anyhow::{Context, Result};
 use quick_xml::{
-    Writer,
+    Writer, XmlVersion,
     events::{BytesStart, Event},
     name::ResolveResult,
 };
@@ -174,15 +174,18 @@ fn read_xmp_date_values(xml: &str) -> Result<[Option<String>; 2]> {
     loop {
         match reader.read_event()? {
             Event::Start(e) | Event::Empty(e) => {
-                let (ns, local) = reader.resolve_element(e.name());
+                let (ns, local) = reader.resolver().resolve_element(e.name());
                 field = date_field(ns, local.as_ref());
                 for attribute in e.attributes() {
                     let attribute = attribute?;
-                    let (ns, local) = reader.resolve_attribute(attribute.key);
+                    let (ns, local) = reader.resolver().resolve_attribute(attribute.key);
                     if let Some(index) = date_field(ns, local.as_ref()) {
                         result[index] = Some(
                             attribute
-                                .decode_and_unescape_value(reader.decoder())?
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    reader.decoder(),
+                                )?
                                 .into_owned(),
                         );
                     }
@@ -214,14 +217,17 @@ pub fn read_xmp(xml: &str) -> Result<(Option<u8>, Option<u8>)> {
     loop {
         match reader.read_event()? {
             Event::Start(e) | Event::Empty(e) => {
-                let (ns, local) = reader.resolve_element(e.name());
+                let (ns, local) = reader.resolver().resolve_element(e.name());
                 field = target(ns, local.as_ref());
                 for attr in e.attributes() {
                     let attr = attr?;
-                    let (ns, local) = reader.resolve_attribute(attr.key);
+                    let (ns, local) = reader.resolver().resolve_attribute(attr.key);
                     if let Some(is_rating) = target(ns, local.as_ref()) {
                         let value = attr
-                            .decode_and_unescape_value(reader.decoder())?
+                            .decoded_and_normalized_value(
+                                XmlVersion::Implicit1_0,
+                                reader.decoder(),
+                            )?
                             .parse::<u8>()
                             .ok();
                         if is_rating {
@@ -271,7 +277,7 @@ pub fn update_xmp(xml: &str, rating: Option<u8>, orientation: Option<u8>) -> Res
                     }
                     continue;
                 }
-                let (ns, local) = reader.resolve_element(e.name());
+                let (ns, local) = reader.resolver().resolve_element(e.name());
                 if target(ns, local.as_ref()).is_some_and(|r| {
                     if r {
                         rating.is_some()
@@ -288,7 +294,7 @@ pub fn update_xmp(xml: &str, rating: Option<u8>, orientation: Option<u8>) -> Res
                 let mut replacement = BytesStart::new(name);
                 for attr in e.attributes() {
                     let attr = attr?;
-                    let (ns, local) = reader.resolve_attribute(attr.key);
+                    let (ns, local) = reader.resolver().resolve_attribute(attr.key);
                     if !target(ns, local.as_ref()).is_some_and(|r| {
                         if r {
                             rating.is_some()
@@ -310,7 +316,7 @@ pub fn update_xmp(xml: &str, rating: Option<u8>, orientation: Option<u8>) -> Res
                     skip -= 1;
                     continue;
                 }
-                let (ns, local) = reader.resolve_element(e.name());
+                let (ns, local) = reader.resolver().resolve_element(e.name());
                 if !inserted
                     && matches!(ns,ResolveResult::Bound(ns) if ns.as_ref()==RDF)
                     && local.as_ref() == b"RDF"
