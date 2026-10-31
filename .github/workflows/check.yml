@@ -10,7 +10,9 @@ permissions:
   contents: read
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A new push replaces a pull request's run. Runs on main always finish, since only
+  # they save the build caches that pull requests reuse.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   # Builds without the optional native libraries. Windows has no full native
   # toolchain in CI yet, so this is its only coverage; Linux keeps it compiling.

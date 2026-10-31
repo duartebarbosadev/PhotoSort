@@ -147,6 +147,10 @@ pub struct PhotoSortApp {
     preferences_unreadable: bool,
     preferences_draft: Option<crate::core::preferences::Preferences>,
     preferences_section: Option<preferences::Section>,
+    /// Settings is asking before it forgets every remembered folder.
+    forget_confirm: bool,
+    /// What the last "Forget remembered folders" or "Clear recent folders" did.
+    forget_message: Option<String>,
     browse_filters_open: bool,
     about: bool,
     update_dialog: bool,
@@ -156,6 +160,9 @@ pub struct PhotoSortApp {
     model_issue: Option<crate::core::model_assets::Issue>,
     model_retry: Option<model_setup::Retry>,
     saved_views: crate::core::views::Saved,
+    /// Remembered folders were forgotten while this folder was open. It keeps
+    /// its views for this visit but saves none, so it also opens fresh next time.
+    views_forgotten: bool,
     /// The library open before the user chose another folder. Its views
     /// must not carry over: the new folder opens with clean views.
     switched_from: Option<PathBuf>,
@@ -419,6 +426,9 @@ impl PhotoSortApp {
             preferences_unreadable: false,
             preferences_draft: None,
             preferences_section: None,
+            forget_confirm: false,
+            forget_message: None,
+            views_forgotten: false,
             browse_filters_open: false,
             about: false,
             update_dialog: false,

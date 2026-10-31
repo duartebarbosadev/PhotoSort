@@ -341,7 +341,7 @@ impl Saved {
     }
     pub fn path(root: &Path) -> PathBuf {
         let root: PathBuf = root.components().collect();
-        super::session::data_dir().join("views").join(format!(
+        dir(&super::session::data_dir()).join(format!(
             "{}.json",
             blake3::hash(root.as_os_str().as_encoded_bytes()).to_hex()
         ))
@@ -359,5 +359,40 @@ impl Saved {
     }
     pub fn save(&self, root: &Path) -> anyhow::Result<()> {
         super::metadata::atomic_write(&Self::path(root), &serde_json::to_vec(&(1, self))?)
+    }
+}
+
+/// Every folder's saved step and views, under the app's data folder.
+fn dir(data: &Path) -> PathBuf {
+    data.join("views")
+}
+/// Forgets the saved step and views of every folder, so each one opens as if
+/// it had never been opened. Staged changes, preferences and models live
+/// elsewhere in `data` and are kept.
+pub fn forget_all(data: &Path) -> std::io::Result<()> {
+    match std::fs::remove_dir_all(dir(data)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn forgetting_folders_removes_only_saved_views() {
+        let data = tempfile::tempdir().unwrap();
+        let kept = ["sessions/a.json", "preferences.json", "models/m.onnx"];
+        for file in ["views/a.json", "views/b.json"].iter().chain(&kept) {
+            let path = data.path().join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"{}").unwrap();
+        }
+        super::forget_all(data.path()).unwrap();
+        assert!(!data.path().join("views").exists());
+        for file in kept {
+            assert!(data.path().join(file).exists(), "{file} was removed");
+        }
+        // Nothing left to forget is not an error.
+        super::forget_all(data.path()).unwrap();
     }
 }
