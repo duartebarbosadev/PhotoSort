@@ -1,5 +1,6 @@
-//! Several folders shown together on the board: which folders a sidebar click
-//! chooses, and that moves, ranges and marks keep to the folders shown.
+//! Sidebar clicks on the board: a plain click scrolls to a folder, Ctrl/Cmd
+//! and Shift choose the folders shown, and moves, ranges and marks keep to
+//! the folders shown.
 use super::super::compact_cull_tests::{frame, rendered};
 use super::*;
 
@@ -121,12 +122,16 @@ fn sidebar_clicks_choose_one_or_several_folders_to_show() {
     let ctx = context();
     let none = egui::Modifiers::default();
     let (a, day1, b, c) = ("A  ·  4", "Day1  ·  4", "B  ·  3", "C  ·  2");
-    // A plain click shows just that folder.
+    // A plain click hides nothing: it highlights that folder.
     click(&mut app, &ctx, b, none);
+    assert!(app.board.focus.is_empty());
+    assert_eq!(highlighted(&app), ["B"]);
+    // Cmd (macOS) or Ctrl shows only that folder, and adds another; the
+    // board shows both together, the sidebar highlights both and the
+    // header counts them.
+    click(&mut app, &ctx, b, egui::Modifiers::COMMAND);
     assert_eq!(app.board.focus, ["B"]);
     assert_eq!(shown(&mut app, &ctx), ["B"]);
-    // Cmd (macOS) or Ctrl adds another; the board shows both together,
-    // the sidebar highlights both and the header counts them.
     click(&mut app, &ctx, c, egui::Modifiers::COMMAND);
     assert_eq!(app.board.focus, ["B", "C"]);
     assert_eq!(shown(&mut app, &ctx), ["B", "C"]);
@@ -144,8 +149,16 @@ fn sidebar_clicks_choose_one_or_several_folders_to_show() {
             .iter()
             .any(|(label, _)| label == "2 folders · 5 items")
     );
+    // A plain click on a folder shown keeps them; on one they leave out,
+    // every folder shows again.
+    click(&mut app, &ctx, c, none);
+    assert_eq!(app.board.focus, ["B", "C"]);
+    click(&mut app, &ctx, day1, none);
+    assert!(app.board.focus.is_empty());
     // Cmd/Ctrl-click on a folder shown takes it away; the last one taken
     // away shows every folder again.
+    click(&mut app, &ctx, b, egui::Modifiers::COMMAND);
+    click(&mut app, &ctx, c, egui::Modifiers::COMMAND);
     click(&mut app, &ctx, b, egui::Modifiers::CTRL);
     assert_eq!(app.board.focus, ["C"]);
     assert_eq!(highlighted(&app), ["C"]);
@@ -165,7 +178,9 @@ fn sidebar_clicks_choose_one_or_several_folders_to_show() {
     click(&mut app, &ctx, b, egui::Modifiers::SHIFT);
     assert_eq!(sorted(&app.board.focus), ["A", "B"]);
     // Cmd/Ctrl with Shift adds the range to the folders shown.
-    click(&mut app, &ctx, day1, none);
+    let library = format!("{root}  ·  9");
+    click(&mut app, &ctx, &library, none);
+    click(&mut app, &ctx, day1, egui::Modifiers::COMMAND);
     click(&mut app, &ctx, c, egui::Modifiers::COMMAND);
     click(
         &mut app,
@@ -179,18 +194,18 @@ fn sidebar_clicks_choose_one_or_several_folders_to_show() {
     assert_eq!(sorted(&app.board.focus), ["A", "B", "C"]);
     click(&mut app, &ctx, day1, egui::Modifiers::COMMAND);
     assert_eq!(sorted(&app.board.focus), ["A", "B", "C"]);
-    // A plain click shows one folder again; the library row shows all,
-    // with any key held.
-    click(&mut app, &ctx, b, none);
-    assert_eq!(app.board.focus, ["B"]);
-    click(&mut app, &ctx, c, egui::Modifiers::COMMAND);
-    let library = format!("{root}  ·  9");
+    // The library row shows all, with any key held, and so does the back
+    // arrow.
     click(&mut app, &ctx, &library, egui::Modifiers::COMMAND);
     assert!(app.board.focus.is_empty());
-    // The back arrow shows every folder too.
-    click(&mut app, &ctx, b, none);
+    click(&mut app, &ctx, b, egui::Modifiers::COMMAND);
     click(&mut app, &ctx, c, egui::Modifiers::COMMAND);
     click(&mut app, &ctx, "Back to all folders", none);
+    assert!(app.board.focus.is_empty());
+    // The right-click menu shows only one folder, then every folder again.
+    app.board_folder_action(FolderAction::ShowOnly(Some("C".into())));
+    assert_eq!(app.board.focus, ["C"]);
+    app.board_folder_action(FolderAction::ShowOnly(None));
     assert!(app.board.focus.is_empty());
     app.runtime.shutdown();
 }
@@ -201,7 +216,7 @@ fn several_folders_shown_keep_arrows_ranges_and_marks_to_their_photos() {
     let ctx = context();
     let none = egui::Modifiers::default();
     // A/Day1 and C, but not B between them.
-    app.board_choose_folder("A/Day1", none);
+    app.board_choose_folder("A/Day1", egui::Modifiers::COMMAND);
     app.board_choose_folder("C", egui::Modifiers::COMMAND);
     assert_eq!(app.board.focus, ["A/Day1", "C"]);
     rendered(&mut app, &ctx, SIZE);
@@ -248,7 +263,7 @@ fn ctrl_cmd_a_selects_the_photos_of_one_folder_shown_or_every_item() {
     // One folder shown: only its photos, even with a photo of another
     // folder active before.
     app.select_library(ids[8], false, false);
-    app.board_choose_folder("B", none);
+    app.board_choose_folder("B", egui::Modifiers::COMMAND);
     rendered(&mut app, &ctx, SIZE);
     press(&mut app, &ctx, egui::Key::A, egui::Modifiers::COMMAND);
     assert_eq!(selected(&app), &ids[4..7]);
@@ -273,8 +288,7 @@ fn ctrl_cmd_a_selects_the_photos_of_one_folder_shown_or_every_item() {
 fn folders_shown_together_follow_renames_moves_and_searches() {
     let (_temp, mut app, ids) = board();
     let ctx = context();
-    let none = egui::Modifiers::default();
-    app.board_choose_folder("A/Day1", none);
+    app.board_choose_folder("A/Day1", egui::Modifiers::COMMAND);
     app.board_choose_folder("C", egui::Modifiers::COMMAND);
     // Renamed, a folder shown stays shown.
     app.board_rename_folder("C");
@@ -324,7 +338,7 @@ fn folders_shown_together_follow_renames_moves_and_searches() {
 fn a_folder_taken_away_leaves_none_of_its_photos_selected() {
     let (_temp, mut app, ids) = board();
     let ctx = context();
-    app.board_choose_folder("B", Default::default());
+    app.board_choose_folder("B", egui::Modifiers::COMMAND);
     app.board_choose_folder("C", egui::Modifiers::COMMAND);
     rendered(&mut app, &ctx, SIZE);
     app.select_library(ids[4], false, false);
@@ -346,7 +360,7 @@ fn the_contact_sheet_filters_and_group_by_work_on_several_folders() {
     let (_temp, mut app, ids) = board_with(14, 6);
     let ctx = context();
     let size = SIZE;
-    app.board_choose_folder("A/Day1", Default::default());
+    app.board_choose_folder("A/Day1", egui::Modifiers::COMMAND);
     app.board_choose_folder("C", egui::Modifiers::COMMAND);
     rendered(&mut app, &ctx, size);
     let shown_ids = [&ids[..4], &ids[8..]].concat();
@@ -395,5 +409,87 @@ fn the_contact_sheet_filters_and_group_by_work_on_several_folders() {
     rendered(&mut app, &ctx, size);
     assert!(app.board.focus.is_empty());
     assert_eq!(app.board.sections.len(), 3);
+    app.runtime.shutdown();
+}
+
+#[test]
+fn a_folder_click_scrolls_the_board_to_it_and_the_sidebar_follows_your_scrolling() {
+    let (_temp, mut app, _) = board();
+    // Large photos, so the folders run past the window.
+    app.preferences.photo_size = *crate::core::preferences::PHOTO_SIZES.end();
+    let ctx = context();
+    set_reduce_motion(&ctx, false);
+    let none = egui::Modifiers::default();
+    let top = |app: &mut PhotoSortApp, folder: &str| {
+        let label = format!("Folder {folder}");
+        rendered(app, &ctx, SIZE)
+            .into_iter()
+            .find(|(l, _)| *l == label)
+            .map(|(_, rect)| rect.top())
+    };
+    let board_top = top(&mut app, "A/Day1").unwrap();
+    // A click eases the board down until B's header is at the top, hiding
+    // nothing; the sidebar keeps B highlighted on the way.
+    click(&mut app, &ctx, "B  ·  3", none);
+    assert!(app.board.focus.is_empty());
+    let gliding = app.library_offset;
+    assert!(gliding > 0.0 && app.board.glide.is_some(), "{gliding}");
+    for _ in 0..60 {
+        rendered(&mut app, &ctx, SIZE);
+        assert_eq!(highlighted(&app), ["B"]);
+    }
+    assert!(app.board.glide.is_none());
+    let landed = top(&mut app, "B").expect("B's header on screen");
+    assert!((landed - board_top).abs() < 1.0, "{landed} vs {board_top}");
+    // An empty folder has nothing to scroll to: the board stays put while
+    // the sidebar highlights it.
+    app.board_new_folder("A/Day1", &[]);
+    app.board.editing.as_mut().unwrap().1 = "Empty".into();
+    app.board_finish_edit();
+    rendered(&mut app, &ctx, SIZE);
+    let before = app.library_offset;
+    click(&mut app, &ctx, "Empty  ·  0", none);
+    for _ in 0..30 {
+        rendered(&mut app, &ctx, SIZE);
+    }
+    assert_eq!(app.library_offset, before);
+    assert_eq!(highlighted(&app), ["A/Day1/Empty"]);
+    assert_eq!(top(&mut app, "B"), Some(landed));
+    // Scrolling by hand: the sidebar follows the folder at the top.
+    let wheel = |app: &mut PhotoSortApp, dy: f32| {
+        let over = egui::pos2(SIZE.x / 2.0, SIZE.y / 2.0);
+        for _ in 0..6 {
+            frame(
+                app,
+                &ctx,
+                SIZE,
+                vec![
+                    egui::Event::PointerMoved(over),
+                    egui::Event::MouseWheel {
+                        phase: egui::TouchPhase::Move,
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, dy),
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        for _ in 0..30 {
+            rendered(app, &ctx, SIZE);
+        }
+    };
+    wheel(&mut app, 400.0);
+    assert_eq!(app.library_offset, 0.0);
+    assert_eq!(highlighted(&app), ["A/Day1"]);
+    // Scrolling during a glide stops it where you left it.
+    click(&mut app, &ctx, "C  ·  2", none);
+    wheel(&mut app, 400.0);
+    assert!(app.board.glide.is_none());
+    assert_eq!(app.library_offset, 0.0);
+    // Reduce motion jumps straight there.
+    set_reduce_motion(&ctx, true);
+    click(&mut app, &ctx, "B  ·  3", none);
+    assert!(app.board.glide.is_none());
+    assert_eq!(top(&mut app, "B"), Some(landed));
     app.runtime.shutdown();
 }

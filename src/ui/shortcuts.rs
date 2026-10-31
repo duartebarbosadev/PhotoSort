@@ -273,9 +273,6 @@ impl PhotoSortApp {
             _ => return,
         };
         self.navigate_axis(direction, modifiers.shift, command, horizontal);
-        if self.step == Step::Organize {
-            self.board_follow_active();
-        }
         // Easy Delete and Fix Rotation show the selected card beside their grid.
         if self.step == Step::EasyDelete {
             self.delete_panel = self.delete_current.is_some();

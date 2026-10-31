@@ -11,7 +11,7 @@ pub(super) enum Pending {
 }
 impl PhotoSortApp {
     /// F2 renames the current photo in place and Ctrl/Cmd+Shift+N makes a
-    /// new folder inside the folder shown, both in the Organize board.
+    /// new folder inside the folder clicked or shown, both in the Organize board.
     pub(super) fn organize_shortcut(&mut self, key: egui::Key, modifiers: egui::Modifiers) -> bool {
         let command = modifiers.command || modifiers.ctrl;
         let rename = key == egui::Key::F2 && modifiers.is_none();
