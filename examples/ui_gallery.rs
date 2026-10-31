@@ -1,5 +1,6 @@
 //! Headless screenshot gallery of the real application UI.
 //! Usage: ui_gallery <photo-folder> <new-output-dir> [max-photos]
+//! With GALLERY_ONLY=dialogs only the dialog shots are taken.
 //! Photos are copied into a temporary library; data and cache roots are
 //! temporary too, so nothing outside the output directory is written.
 use eframe::egui;
@@ -285,29 +286,67 @@ fn main() -> anyhow::Result<()> {
         eprintln!("{name}");
         Ok(())
     };
-    for (name, step, review, size) in shots {
-        shoot(&root, name, *step, *review, *size)?;
+    let dialogs_only = std::env::var("GALLERY_ONLY").is_ok_and(|v| v == "dialogs");
+    if !dialogs_only {
+        for (name, step, review, size) in shots {
+            shoot(&root, name, *step, *review, *size)?;
+        }
     }
     // Dialogs over the Cull grid.
-    for (name, open) in [
-        ("11-settings", Dialog::Settings),
-        ("15-about", Dialog::About),
-        ("16-organize-new-folder", Dialog::OrganizeNewFolder),
-        ("17-cull-compare", Dialog::Compare),
-        ("18-ai-models", Dialog::Models),
+    for (name, open, size) in [
+        ("11-settings", Dialog::Settings(0), [1440.0, 900.0]),
+        (
+            "11b-settings-appearance",
+            Dialog::Settings(1),
+            [1440.0, 900.0],
+        ),
+        ("11c-settings-steps", Dialog::Settings(2), [1440.0, 900.0]),
+        (
+            "11d-settings-performance",
+            Dialog::Settings(3),
+            [1440.0, 900.0],
+        ),
+        ("11e-settings-storage", Dialog::Settings(4), [1440.0, 900.0]),
+        (
+            "11f-settings-steps-small",
+            Dialog::Settings(2),
+            [760.0, 560.0],
+        ),
+        (
+            "11g-settings-storage-compact",
+            Dialog::Settings(4),
+            [600.0, 500.0],
+        ),
+        (
+            "11h-settings-unsaved",
+            Dialog::SettingsEdited(2),
+            [1440.0, 900.0],
+        ),
+        ("15-about", Dialog::About, [1440.0, 900.0]),
+        (
+            "16-organize-new-folder",
+            Dialog::OrganizeNewFolder,
+            [1440.0, 900.0],
+        ),
+        ("17-cull-compare", Dialog::Compare, [1440.0, 900.0]),
+        ("18-ai-models", Dialog::Models, [1440.0, 900.0]),
         // Last: it stages Trash marks, which the folder's saved session keeps.
-        ("12-plan-review", Dialog::PlanReview),
+        ("12-plan-review", Dialog::PlanReview, [1440.0, 900.0]),
     ] {
         let folder = root.clone();
         let mut harness = Harness::builder()
-            .with_size(egui::vec2(1440.0, 900.0))
+            .with_size(egui::vec2(size[0], size[1]))
             .with_pixels_per_point(2.0)
             .build_eframe(|cc| PhotoSortApp::new(cc, Some(folder)));
         settle(&mut harness);
         harness.state_mut().gallery_step(Step::Cull);
         settle(&mut harness);
         match open {
-            Dialog::Settings => harness.state_mut().gallery_settings(),
+            Dialog::Settings(page) => harness.state_mut().gallery_settings_page(page),
+            Dialog::SettingsEdited(page) => {
+                harness.state_mut().gallery_settings_page(page);
+                harness.state_mut().gallery_settings_edit();
+            }
             Dialog::PlanReview => harness.state_mut().gallery_plan_review(3),
             Dialog::About => harness.state_mut().gallery_about(),
             Dialog::Compare => harness.state_mut().gallery_compare(3),
@@ -324,6 +363,9 @@ fn main() -> anyhow::Result<()> {
         let image = harness.render().map_err(|e| anyhow::anyhow!("{e}"))?;
         image.save(out.join(format!("{name}.png")))?;
         eprintln!("{name}");
+    }
+    if dialogs_only {
+        return Ok(());
     }
     // The welcome screen, before any folder is chosen.
     let mut harness = Harness::builder()
@@ -460,7 +502,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 enum Dialog {
-    Settings,
+    Settings(usize),
+    SettingsEdited(usize),
     PlanReview,
     About,
     OrganizeNewFolder,

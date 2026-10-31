@@ -216,35 +216,39 @@ pub(super) fn floating_bar<R>(
     .inner
 }
 
-/// A pill-shaped toggle for filters and scopes, such as Easy Delete categories.
-pub(super) fn chip(ui: &mut egui::Ui, selected: bool, text: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(egui::RichText::new(text).color(if selected { INK } else { MUTED }))
-            .selected(selected)
-            .corner_radius(12)
-            .stroke(Stroke::new(1.0, if selected { ACCENT } else { LINE })),
-    )
-}
 /// An on/off switch with a sliding knob, followed by its label. Assistive
 /// technology sees a checkbox with the same label and state.
 pub(super) struct Switch<'a> {
     on: &'a mut bool,
     label: String,
+    show_label: bool,
 }
 impl<'a> Switch<'a> {
     pub fn new(on: &'a mut bool, label: impl Into<String>) -> Self {
         Self {
             on,
             label: label.into(),
+            show_label: true,
         }
+    }
+    /// Only the track is drawn; the label stays the accessible name, for a
+    /// switch whose label sits elsewhere in its row.
+    pub fn hide_label(mut self) -> Self {
+        self.show_label = false;
+        self
     }
 }
 impl egui::Widget for Switch<'_> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
         let track = egui::vec2(26.0, 15.0);
         let font = TextStyle::Body.resolve(ui.style());
-        let galley = ui.painter().layout_no_wrap(self.label.clone(), font, INK);
-        let gap = S2;
+        let shown = if self.show_label {
+            self.label.clone()
+        } else {
+            String::new()
+        };
+        let galley = ui.painter().layout_no_wrap(shown, font, INK);
+        let gap = if self.show_label { S2 } else { 0.0 };
         let height = track
             .y
             .max(galley.size().y)

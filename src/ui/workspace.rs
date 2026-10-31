@@ -2164,8 +2164,17 @@ impl PhotoSortApp {
     pub fn gallery_models(&mut self) {
         self.open_model_setup();
     }
-    pub fn gallery_settings(&mut self) {
-        self.preferences_draft = Some(self.preferences.clone());
+    /// Opens Settings on page `page` (0 General ... 4 Storage).
+    pub fn gallery_settings_page(&mut self, page: usize) {
+        let pages = preferences::Section::ALL;
+        self.open_settings(pages[page.min(pages.len() - 1)]);
+    }
+    /// Edits the open Settings draft, to show unsaved changes.
+    pub fn gallery_settings_edit(&mut self) {
+        if let Some(draft) = &mut self.preferences_draft {
+            draft.easy_delete.blur = 240.0;
+            draft.reduce_motion = !draft.reduce_motion;
+        }
     }
     /// Marks the first `count` photos for Trash and opens the plan review.
     /// Planning is a dry run; nothing is applied without the Apply button.
