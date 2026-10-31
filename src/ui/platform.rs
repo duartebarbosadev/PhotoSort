@@ -14,14 +14,13 @@ pub fn initialize_native_application() -> Result<(), std::io::Error> {
     }
     Ok(())
 }
+/// The 1024 px app icon artwork, also drawn as the in-window logo.
+pub(super) const APP_ICON_PNG: &[u8] = include_bytes!("../../resources/icons/app_icon.png");
 /// The window and Dock icon. eframe gives it to the window system and, on
 /// macOS, to the application itself, so an unbundled binary shows it too.
 pub fn app_icon() -> Result<egui::IconData, image::ImageError> {
-    let image = image::load_from_memory_with_format(
-        include_bytes!("../../resources/icons/app_icon.png"),
-        image::ImageFormat::Png,
-    )?
-    .into_rgba8();
+    let image =
+        image::load_from_memory_with_format(APP_ICON_PNG, image::ImageFormat::Png)?.into_rgba8();
     Ok(egui::IconData {
         width: image.width(),
         height: image.height(),

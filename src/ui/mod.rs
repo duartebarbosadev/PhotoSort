@@ -1,3 +1,4 @@
+mod brand;
 #[cfg(test)]
 mod test_frame;
 mod theme;
