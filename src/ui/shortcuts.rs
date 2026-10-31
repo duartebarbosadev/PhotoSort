@@ -139,6 +139,8 @@ impl PhotoSortApp {
         if self.application_shortcuts(ctx) || ctx.egui_wants_keyboard_input() || naming {
             return;
         }
+        // A focused text field keeps Cmd/Ctrl+C for its text (returned above).
+        self.copy_shortcut(ctx);
         self.video_keyboard(ctx);
         let guided = matches!(
             self.step,

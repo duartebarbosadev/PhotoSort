@@ -957,6 +957,23 @@ impl Pipeline {
         );
         Ok((Arc::new(pixels), prepared.warning))
     }
+    /// The whole photo as shown, upright, no larger than `edge` on either side.
+    pub fn render_whole(&mut self, media: &Media, edge: u32) -> Result<Arc<RgbaImage>> {
+        anyhow::ensure!(media.kind != MediaKind::Video, "Videos have no still image");
+        let key = Self::key(media)?;
+        let mut meta = self.metadata_for_key(media, &key, &|| false)?;
+        let prepared = self.canonical(media, &key, &mut meta, true, &|| false)?;
+        let request = super::inspection::Request {
+            slot: 0,
+            media: media.clone(),
+            region: super::inspection::Region::full(
+                prepared.image.width(),
+                prepared.image.height(),
+            ),
+            output_edge: edge,
+        };
+        self.inspect(&request)
+    }
     pub fn clear_memory(&mut self) {
         self.raw_levels.clear();
         self.colors.clear();

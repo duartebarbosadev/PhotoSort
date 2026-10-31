@@ -4,6 +4,7 @@ pub mod apple_image;
 pub mod cache;
 mod cache_record;
 pub mod catalog;
+pub mod clipboard;
 mod color;
 pub mod crash;
 pub mod eyes;

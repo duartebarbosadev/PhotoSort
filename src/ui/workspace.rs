@@ -1,5 +1,7 @@
 #[path = "browsing.rs"]
 mod browsing;
+#[path = "clipboard.rs"]
+mod clipboard;
 #[path = "collection_controls.rs"]
 mod collection_controls;
 #[path = "delete_review.rs"]
@@ -339,6 +341,9 @@ pub struct PhotoSortApp {
     /// A photo clicked inside a comparison of selected photos: D and Trash
     /// act on it alone. Without one they act on every selected photo.
     comparison_focus: Option<MediaId>,
+    copier: crate::core::clipboard::Copier,
+    /// A short message over the photos, such as what Cmd/Ctrl+C copied.
+    toast: Option<clipboard::Toast>,
     inspection_wanted: Vec<InspectionRequest>,
     inspection_frames: HashMap<u64, InspectionFrame>,
     view_started: Instant,
@@ -587,6 +592,8 @@ impl PhotoSortApp {
             sync_views: true,
             focused_slot: 0,
             comparison_focus: None,
+            copier: Default::default(),
+            toast: None,
             inspection_wanted: Vec::new(),
             inspection_frames: HashMap::new(),
             view_started: Instant::now(),
@@ -1762,6 +1769,7 @@ impl PhotoSortApp {
         if self.inspector && self.catalog.is_some() && ctx.content_rect().width() <= 1180.0 {
             self.inspector_drawer(ctx);
         }
+        self.show_toast(ctx);
         self.photo_drag_overlay(ctx);
         let dropped = ctx.input(|i| {
             i.raw
