@@ -192,6 +192,12 @@ fn main() -> anyhow::Result<()> {
             [1440.0, 900.0],
         ),
         (
+            "03h-organize-shortcuts-wide",
+            Some(Step::Organize),
+            false,
+            [1440.0, 900.0],
+        ),
+        (
             "03g-organize-faces-wide",
             Some(Step::Organize),
             false,
@@ -268,6 +274,14 @@ fn main() -> anyhow::Result<()> {
             }
             if name.contains("preparing") {
                 harness.state_mut().gallery_preparing_model();
+                for _ in 0..5 {
+                    harness.step();
+                }
+            }
+            if name.contains("shortcuts") {
+                // The Shortcuts button in the bottom bar opens its sheet.
+                use egui_kittest::kittest::Queryable;
+                harness.get_by_label("Keyboard shortcuts").click();
                 for _ in 0..5 {
                     harness.step();
                 }

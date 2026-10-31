@@ -9,37 +9,35 @@ pub(super) const HEADER_HEIGHT: f32 = 38.0;
 /// show only their icons.
 const ORGANIZE_COMPACT: f32 = 1100.0;
 
-impl Step {
-    /// The page icon in the bottom step bar.
-    fn icon(self) -> &'static str {
-        use egui_phosphor::regular as icon;
-        match self {
-            Step::Organize => icon::FOLDERS,
-            Step::EasyDelete => icon::BROOM,
-            Step::Rotation => icon::ARROW_CLOCKWISE,
-            Step::PickBest => icon::CROWN_SIMPLE,
-            Step::Cull => icon::STAR,
-        }
+/// Height of the bottom bar's step control.
+const STEP_HEIGHT: f32 = 28.0;
+/// Inset between the step control's container and its segments.
+const STEP_INSET: f32 = 3.0;
+/// A step's label in the bottom bar: "1. Organize", or just "1" when narrow.
+fn step_label(step: Step, compact: bool) -> String {
+    if compact {
+        (step.index() + 1).to_string()
+    } else {
+        format!("{}. {}", step.index() + 1, step.title())
     }
 }
-
-/// Widths of the bottom bar's page tabs: icon and name, or icon and number.
+/// Widths of the step control's segments.
 fn step_tab_widths(ui: &egui::Ui, steps: &[Step], compact: bool) -> Vec<f32> {
     steps
         .iter()
         .map(|step| {
-            if compact {
-                36.0
-            } else {
-                let text = ui
-                    .painter()
-                    .layout_no_wrap(step.title().into(), medium(10.5), INK)
-                    .size()
-                    .x;
-                (text + 2.0 * S4).max(64.0)
-            }
+            let text = ui
+                .painter()
+                .layout_no_wrap(step_label(*step, compact), semibold(11.5), INK)
+                .size()
+                .x;
+            text + 2.0 * if compact { S2 + 2.0 } else { S3 + 2.0 }
         })
         .collect()
+}
+/// The whole step control's width, container included.
+fn step_bar_width(ui: &egui::Ui, steps: &[Step], compact: bool) -> f32 {
+    step_tab_widths(ui, steps, compact).iter().sum::<f32>() + 2.0 * STEP_INSET
 }
 
 impl PhotoSortApp {
@@ -123,102 +121,119 @@ impl PhotoSortApp {
         }
     }
 
-    /// The workflow pages as tabs in the bottom bar, as in an editing suite.
+    /// The workflow steps as a segmented control in the bottom bar: one
+    /// rounded container, numbered labels, and an accent pill on the current
+    /// step that slides to the next one when the step changes.
     fn step_tabs(&mut self, ui: &mut egui::Ui, area: egui::Rect, compact: bool) {
         let steps = self.navigation_steps();
         let widths = step_tab_widths(ui, &steps, compact);
-        let total: f32 = widths.iter().sum();
-        let mut x = area.center().x - total / 2.0;
-        let height = area.height() - 8.0;
+        let total = step_bar_width(ui, &steps, compact);
+        let time = ui.style().animation_time;
+        let container = egui::Rect::from_center_size(
+            egui::pos2(area.center().x, area.center().y),
+            egui::vec2(total, STEP_HEIGHT),
+        );
+        let inner = container.shrink(STEP_INSET);
+        let mut x = inner.left();
+        // Interact first, so the pill can be painted under every label.
+        let mut tabs = Vec::with_capacity(steps.len());
         for (step, width) in steps.iter().zip(widths) {
             let rect = egui::Rect::from_min_size(
-                egui::pos2(x, area.center().y - height / 2.0),
-                egui::vec2(width, height),
+                egui::pos2(x, inner.top()),
+                egui::vec2(width, inner.height()),
             );
             x += width;
             let active = *step == self.step;
-            let response = ui
-                .interact(rect, egui::Id::new(("step-tab", *step)), Sense::click())
-                .on_hover_text(format!(
-                    "{} {} · {} · Ctrl/Cmd+Alt+{}",
-                    step.index() + 1,
+            let enabled = active || !self.busy;
+            let tip = if enabled {
+                format!(
+                    "{} · {}\nStep {} · Ctrl/Cmd+Alt+{}",
                     step.title(),
                     step.subtitle(),
+                    step.index() + 1,
                     step.index() + 1
-                ));
-            let name = format!("{} {}", step.index() + 1, step.title());
+                )
+            } else {
+                format!(
+                    "{} · available when the current task finishes",
+                    step.title()
+                )
+            };
+            let response = ui
+                .interact(rect, egui::Id::new(("step-tab", *step)), Sense::click())
+                .on_hover_text(tip);
+            let name = step_label(*step, false);
             response.widget_info(|| {
-                egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, &name)
+                egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, &name)
             });
-            let hover = ui
-                .ctx()
-                .animate_bool_responsive(response.id.with("hover"), response.hovered());
-            let painter = ui.painter();
-            let selected = ui
-                .ctx()
-                .animate_bool_responsive(response.id.with("active"), active);
-            let pill = rect.shrink2(egui::vec2(3.0, 1.0));
-            let lift = (selected + hover * 0.6).min(1.0);
-            if lift > 0.0 {
-                painter.rect_filled(pill, R_CONTROL + 3, CARD.gamma_multiply(lift));
-            }
-            let icon_color = if active {
-                ACCENT
-            } else {
-                lerp_color(MUTED, INK, hover)
-            };
-            let text_color = if active {
-                INK
-            } else {
-                lerp_color(MUTED, INK, hover)
-            };
-            if compact {
-                painter.text(
-                    rect.center() - egui::vec2(0.0, 8.0),
-                    Align2::CENTER_CENTER,
-                    step.icon(),
-                    FontId::proportional(15.0),
-                    icon_color,
-                );
-                painter.text(
-                    rect.center() + egui::vec2(0.0, 5.0),
-                    Align2::CENTER_CENTER,
-                    (step.index() + 1).to_string(),
-                    medium(9.5),
-                    text_color,
-                );
-            } else {
-                painter.text(
-                    rect.center() - egui::vec2(0.0, 9.0),
-                    Align2::CENTER_CENTER,
-                    step.icon(),
-                    FontId::proportional(15.0),
-                    icon_color,
-                );
-                painter.text(
-                    rect.center() + egui::vec2(0.0, 5.0),
-                    Align2::CENTER_CENTER,
-                    step.title(),
-                    if active {
-                        medium(10.5)
-                    } else {
-                        FontId::proportional(10.5)
-                    },
-                    text_color,
-                );
-            }
-            if selected > 0.0 {
-                // A short rounded indicator under the active page.
-                let width = 18.0 * selected;
-                let bar = egui::Rect::from_center_size(
-                    egui::pos2(rect.center().x, pill.bottom() - 3.0),
-                    egui::vec2(width, 3.0),
-                );
-                painter.rect_filled(bar, 2.0, ACCENT.gamma_multiply(selected));
-            }
-            if response.clicked() && !self.busy {
+            let ctx = ui.ctx();
+            let hover = ctx.animate_bool_with_time(
+                response.id.with("hover"),
+                enabled && !active && response.hovered(),
+                time,
+            );
+            let press = enabled && !active && response.is_pointer_button_down_on();
+            tabs.push((*step, rect, active, enabled, hover, press));
+            if response.clicked() && enabled && !active {
                 self.switch_step(*step);
             }
+        }
+        let painter = ui.painter();
+        let outer = egui::CornerRadius::same(R_CONTROL + 3);
+        let radius = egui::CornerRadius::same(R_CONTROL);
+        painter.rect(
+            container,
+            outer,
+            PANEL,
+            Stroke::new(1.0, LINE),
+            StrokeKind::Inside,
+        );
+        // Inactive steps have no frame of their own; hovering one fades in a
+        // faint backdrop so it still reads as clickable.
+        for &(_, rect, _, _, hover, press) in &tabs {
+            if hover > 0.0 {
+                let fill = if press { SELECTED } else { CARD_HOVER };
+                painter.rect_filled(rect, radius, fill.gamma_multiply(hover));
+            }
+        }
+        let mut pill = None;
+        if let Some(&(_, rect, ..)) = tabs.iter().find(|t| t.2) {
+            let ctx = ui.ctx();
+            let id = egui::Id::new("step-indicator");
+            let left = ctx.animate_value_with_time(id.with("left"), rect.left(), time);
+            let right = ctx.animate_value_with_time(id.with("right"), rect.right(), time);
+            let slid = egui::Rect::from_x_y_ranges(left..=right, rect.y_range());
+            pill = Some(slid);
+            painter.rect(
+                slid,
+                radius,
+                ACCENT,
+                Stroke::new(1.0, lerp_color(ACCENT, Color32::WHITE, 0.3)),
+                StrokeKind::Inside,
+            );
+            #[cfg(test)]
+            ctx.data_mut(|data| data.insert_temp(id, slid));
+        }
+        for (step, rect, active, enabled, hover, _) in tabs {
+            let rest = if enabled {
+                lerp_color(MUTED, INK, hover)
+            } else {
+                FAINT
+            };
+            // While the pill slides, a label takes the pill's text colour as
+            // far as the pill covers it.
+            let covered = pill.map_or(0.0, |pill| {
+                (pill.right().min(rect.right()) - pill.left().max(rect.left())).max(0.0)
+                    / rect.width()
+            });
+            let color = lerp_color(rest, ON_ACCENT, covered);
+            let font = if active && covered > 0.5 {
+                semibold(11.5)
+            } else {
+                medium(11.5)
+            };
+            let text = painter.layout_no_wrap(step_label(step, compact), font, color);
+            painter.galley(rect.center() - text.size() / 2.0, text, color);
         }
     }
 
@@ -339,11 +354,11 @@ impl PhotoSortApp {
                 if self.root.is_some() {
                     let steps = self.navigation_steps();
                     let mid = ui.ctx().content_rect().center().x;
-                    let labelled: f32 = step_tab_widths(ui, &steps, false).iter().sum();
+                    let labelled = step_bar_width(ui, &steps, false);
                     let compact = mid + labelled / 2.0 > right_edge
                         || mid - labelled / 2.0 < full.left() + 140.0;
-                    let width: f32 = if compact {
-                        step_tab_widths(ui, &steps, true).iter().sum()
+                    let width = if compact {
+                        step_bar_width(ui, &steps, true)
                     } else {
                         labelled
                     };
@@ -397,16 +412,42 @@ impl PhotoSortApp {
             .layout_no_wrap(status.clone(), font, MUTED)
             .size()
             .x;
-        let hint_room = ui.available_width() - status_width - S6;
+        // The status message has priority, then the Shortcuts button; hints
+        // use only what is left, dropping the least useful whole hints first
+        // instead of cutting one off.
+        let mut room = ui.available_width() - status_width - S3;
+        let sheet = self.root.is_some()
+            && room >= hints::shortcuts_button_width(ui, false) + ui.spacing().item_spacing.x;
+        let labelled = sheet && room > 260.0;
+        if sheet {
+            room -= hints::shortcuts_button_width(ui, labelled) + ui.spacing().item_spacing.x;
+        }
+        let mut shown = Vec::new();
+        if sheet && self.preferences.show_shortcuts {
+            room -= S3;
+            for hint in hints::step_hints(self.step) {
+                let width = hints::hint_width(ui, hint) + hints::HINT_GAP;
+                if width > room {
+                    break;
+                }
+                room -= width;
+                shown.push(hint);
+            }
+        }
         ui.add(egui::Label::new(RichText::new(&status).small().color(MUTED)).truncate())
             .on_hover_text(&status);
-        // The status message has priority; shortcut hints use only what is
-        // left and disappear before the message truncates.
-        if self.preferences.show_shortcuts && self.root.is_some() && hint_room > 200.0 {
-            let hint = preferences::workflow_hint(self.step);
-            ui.add_space(S3);
-            ui.add(egui::Label::new(RichText::new(hint).small().color(FAINT)).truncate())
-                .on_hover_text(hint);
+        if !shown.is_empty() {
+            ui.add_space(S1);
+            divider(ui);
+            ui.add_space(S1);
+            let spacing = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, hints::HINT_GAP);
+            for hint in shown {
+                hints::hint_row(ui, hint, MUTED);
+            }
+            ui.spacing_mut().item_spacing.x = spacing;
+        }
+        if sheet {
+            self.shortcuts_button(ui, labelled);
         }
     }
     /// Stop and cancel controls, progress and the photo count, added right
@@ -1241,7 +1282,7 @@ mod cull_navigation_tests {
 
 #[cfg(test)]
 mod step_bar_tests {
-    use super::super::compact_cull_tests::{fixture, rendered};
+    use super::super::compact_cull_tests::{click_label, fixture, rendered};
     use super::*;
     use crate::core::models::RotationSuggestion;
     use crate::core::pick_review::Cluster;
@@ -1276,6 +1317,144 @@ mod step_bar_tests {
             HashMap::from([(ids[2], 10.), (ids[3], 20.)]),
         )]);
         (temp, app, ids)
+    }
+    /// One frame at `time` seconds; returns the accessible nodes.
+    fn frame_at(
+        app: &mut PhotoSortApp,
+        ctx: &egui::Context,
+        time: f64,
+        events: Vec<egui::Event>,
+    ) -> Vec<(String, egui::Rect)> {
+        let out = ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1800.0, 900.0),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| app.update_workspace(ui, false),
+        );
+        out.platform_output
+            .accesskit_update
+            .unwrap()
+            .nodes
+            .into_iter()
+            .filter_map(|(_, n)| {
+                let b = n.bounds()?;
+                Some((
+                    n.label()?.to_owned(),
+                    egui::Rect::from_min_max(
+                        egui::pos2(b.x0 as f32, b.y0 as f32),
+                        egui::pos2(b.x1 as f32, b.y1 as f32),
+                    ),
+                ))
+            })
+            .collect()
+    }
+    fn indicator(ctx: &egui::Context) -> egui::Rect {
+        ctx.data(|d| d.get_temp(egui::Id::new("step-indicator")))
+            .expect("the step bar paints its indicator")
+    }
+    #[test]
+    fn step_buttons_switch_steps_but_wait_while_busy() {
+        let (_temp, mut app, _) = app();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let size = egui::vec2(1800.0, 900.0);
+        // Staged rotations would ask to resolve them before leaving.
+        app.decisions.clear();
+        app.busy = true;
+        click_label(&mut app, &ctx, size, "4. Pick Best");
+        assert_eq!(app.step, Step::Cull, "a busy app keeps its step");
+        app.busy = false;
+        click_label(&mut app, &ctx, size, "4. Pick Best");
+        assert_eq!(app.step, Step::PickBest);
+        app.runtime.shutdown();
+    }
+    #[test]
+    fn shortcut_hints_follow_the_preference_and_never_cut_a_hint() {
+        let (_temp, mut app, _) = app();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let hints: Vec<String> = hints::step_hints(Step::Cull)
+            .iter()
+            .map(hints::Hint::text)
+            .collect();
+        let shown = |nodes: &[(String, egui::Rect)]| {
+            hints
+                .iter()
+                .filter(|h| !found(nodes, h).is_empty())
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let nodes = rendered(&mut app, &ctx, egui::vec2(1800.0, 900.0));
+        let wide = shown(&nodes);
+        assert!(wide.len() >= 2, "{wide:?}");
+        // The most useful hints come first; a narrower bar drops from the end.
+        assert_eq!(wide, hints[..wide.len()]);
+        let steps = found(&nodes, "1. Organize")[0].left();
+        for hint in &wide {
+            assert!(
+                found(&nodes, hint)[0].right() < steps,
+                "{hint} overlaps the steps"
+            );
+        }
+        let narrow = shown(&rendered(&mut app, &ctx, egui::vec2(1200.0, 900.0)));
+        assert!(
+            narrow.len() < wide.len() && wide.starts_with(&narrow),
+            "{narrow:?}"
+        );
+        app.preferences.show_shortcuts = false;
+        let nodes = rendered(&mut app, &ctx, egui::vec2(1800.0, 900.0));
+        assert!(shown(&nodes).is_empty());
+        assert_eq!(
+            found(&nodes, "Keyboard shortcuts").len(),
+            1,
+            "the sheet stays reachable"
+        );
+        app.runtime.shutdown();
+    }
+    #[test]
+    fn the_step_indicator_slides_unless_motion_is_reduced() {
+        let (_temp, mut app, _) = app();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        for reduce in [true, false] {
+            set_reduce_motion(&ctx, reduce);
+            app.set_step(Step::Cull);
+            let mut time = if reduce { 0.0 } else { 100.0 };
+            for _ in 0..3 {
+                time += 1.0;
+                frame_at(&mut app, &ctx, time, Vec::new());
+            }
+            app.set_step(Step::Rotation);
+            time += 1.0 / 60.0;
+            let nodes = frame_at(&mut app, &ctx, time, Vec::new());
+            let target = *found(&nodes, "3. Fix Rotation")[0];
+            let moving = indicator(&ctx);
+            if reduce {
+                assert!(
+                    (moving.center().x - target.center().x).abs() < 3.0,
+                    "{moving:?}"
+                );
+            } else {
+                assert!(moving.center().x - target.center().x > 20.0, "{moving:?}");
+                time += 1.0;
+                frame_at(&mut app, &ctx, time, Vec::new());
+                let rest = indicator(&ctx);
+                assert!(
+                    (rest.center().x - target.center().x).abs() < 3.0,
+                    "{rest:?}"
+                );
+            }
+        }
+        app.runtime.shutdown();
     }
     #[test]
     fn rotation_pick_and_cull_bars_hold_their_actions_without_a_more_menu() {
