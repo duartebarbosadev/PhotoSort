@@ -1450,9 +1450,6 @@ impl PhotoSortApp {
     }
     fn navigate_selection(&mut self, delta: isize, extend: bool, include_marked: bool) {
         self.navigate_axis(delta, extend, include_marked, false);
-        if self.step == Step::Organize {
-            self.board_follow_active();
-        }
     }
     fn navigate_axis(
         &mut self,

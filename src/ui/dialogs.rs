@@ -92,7 +92,7 @@ impl PhotoSortApp {
                         ),
                         (
                             "Organize: Ctrl/Cmd+Shift+N",
-                            "New folder inside the folder shown",
+                            "New folder inside the folder you clicked",
                         ),
                         (
                             "Organize: hold \\",
