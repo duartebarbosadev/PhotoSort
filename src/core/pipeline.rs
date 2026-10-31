@@ -274,7 +274,11 @@ impl Pipeline {
         {
             self.written_since_prune += bytes.len() as u64;
             if self.written_since_prune >= self.disk_budget.min(32 * 1024 * 1024) {
-                super::cache::maintain(&self.disk, Some(self.disk_budget), cancelled)?;
+                super::cache::maintain_keeping_models(
+                    &self.disk,
+                    Some(self.disk_budget),
+                    cancelled,
+                )?;
                 self.written_since_prune = 0;
             }
         }
@@ -999,18 +1003,18 @@ impl Pipeline {
         clear: bool,
         cancelled: impl Fn() -> bool,
     ) -> Result<super::cache::Usage> {
-        let mut usage = super::cache::maintain(
-            &self.disk,
-            Some(if clear { 0 } else { self.disk_budget }),
-            cancelled,
-        )?;
+        let mut usage = if clear {
+            super::cache::maintain(&self.disk, Some(0), cancelled)?
+        } else {
+            super::cache::maintain_keeping_models(&self.disk, Some(self.disk_budget), cancelled)?
+        };
         usage.preview_bytes = self.stats.resident_bytes;
         usage.original_bytes = self.stats.detail_bytes;
         usage.metadata_entries = self.metadata.len();
         Ok(usage)
     }
     pub fn prune_disk(&self, max_bytes: u64) -> Result<()> {
-        super::cache::maintain(&self.disk, Some(max_bytes), || false).map(|_| ())
+        super::cache::maintain_keeping_models(&self.disk, Some(max_bytes), || false).map(|_| ())
     }
 }
 #[cfg(feature = "native-imaging")]

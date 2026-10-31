@@ -198,6 +198,12 @@ fn main() -> anyhow::Result<()> {
             [1440.0, 900.0],
         ),
         (
+            "06d-pick-best-preparing-wide",
+            Some(Step::PickBest),
+            false,
+            [1440.0, 900.0],
+        ),
+        (
             "01b-cull-analyzing-wide",
             Some(Step::Cull),
             false,
@@ -256,6 +262,12 @@ fn main() -> anyhow::Result<()> {
                     .find_map(|label| harness.query_all_by_label_contains(label).next())
                     .ok_or_else(|| anyhow::anyhow!("destination chip"))?;
                 chip.click();
+                for _ in 0..5 {
+                    harness.step();
+                }
+            }
+            if name.contains("preparing") {
+                harness.state_mut().gallery_preparing_model();
                 for _ in 0..5 {
                     harness.step();
                 }

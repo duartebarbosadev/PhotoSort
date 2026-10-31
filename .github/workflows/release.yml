@@ -105,7 +105,7 @@ jobs:
       # onnxruntime-osx-arm64-1.29.0.tgz; resources/SHA256SUMS pins the library inside.
       ORT_ARCHIVE_SHA256: d0706fc34f315d8c88639d0a8c81f2e09e815f282cabed3493c06a054352cf92
       # Prerelease holding the converted models (CONTRIBUTING.md#converted-models).
-      MODELS_RELEASE: models-1
+      MODELS_RELEASE: models-2
       # The tag this run releases: the one prepare created, or a pushed tag. Empty for a
       # test build.
       RELEASE_TAG: ${{ needs.prepare.outputs.tag || (github.ref_type == 'tag' && github.ref_name || '') }}

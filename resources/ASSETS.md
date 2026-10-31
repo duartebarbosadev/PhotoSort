@@ -9,14 +9,14 @@ A fresh clone gets them in one of four ways:
 
 - **In the app.** Menu → AI models downloads all seven models: DINOv2, SFace and orientation
   from their pinned upstream files, and the aesthetic and MediaPipe exports from this
-  repository's `models-1` prerelease. Downloads stream into private temporary files and are
+  repository's `models-2` prerelease. Downloads stream into private temporary files and are
   installed only after their exact size and SHA-256 match. Nothing is downloaded
   automatically.
 - **Import.** The same panel imports a prepared ONNX file and verifies it against
   `SHA256SUMS` (for example, from another copy of a full app bundle).
 - **Download the converted exports.** The aesthetic and MediaPipe files that release
   builds ship are assets of the
-  [`models-1` prerelease](https://github.com/duartebarbosadev/PhotoSort/releases/tag/models-1);
+  [`models-2` prerelease](https://github.com/duartebarbosadev/PhotoSort/releases/tag/models-2);
   check them with `shasum -a 256 -c --ignore-missing SHA256SUMS` from `resources/`.
 - **Recreate.** The aesthetic and MediaPipe exports can be rebuilt with the recipes below.
 
@@ -55,7 +55,7 @@ card (both in `licenses/`) and offer the corresponding source of the shipped fil
 is the pinned upstream revision plus `scripts/export_aesthetic.py` and
 `examples/fold_model.rs`. A release that cannot meet those terms should leave the model
 out; Pick Best then ranks without aesthetic scores. The same terms cover the copy that the
-app downloads from the `models-1` prerelease, whose notes name the licence; the model panel
+app downloads from the `models-2` prerelease, whose notes name the licence; the model panel
 states it beside the download.
 
 Default builds link Exiv2, which is GPL-2.0-or-later (see
@@ -75,12 +75,20 @@ The MediaPipe models come from Google's Face Landmarker float16 bundle:
 
 ```sh
 python scripts/export_aesthetic.py /path/to/pinned/beit/snapshot aesthetic-export.onnx
-cargo run --release --example fold_model -- aesthetic-export.onnx resources/models/aesthetic.onnx
+cargo run --release --example fold_model -- aesthetic-export.onnx aesthetic-folded.onnx
+python scripts/transpose_gemm_weights.py aesthetic-folded.onnx resources/models/aesthetic.onnx
 python scripts/normalize_faces.py /path/to/face_landmarker.task resources/models
 python scripts/explicit_pads.py resources/models/face_landmarks_detector.onnx landmarks.onnx
 mv landmarks.onnx resources/models/face_landmarks_detector.onnx
 python scripts/convert_blendshapes.py /path/to/face_landmarker.task resources/models/face_blendshapes.onnx
 ```
+
+`transpose_gemm_weights.py` stores the folded model's Gemm weights pre-transposed
+(`transB=1`). ONNX Runtime's Core ML converter otherwise transposes each one and writes it
+inline into the Core ML program, which Core ML then expands to about 1.2 GB of text: on an
+M-series Mac that took about 2 minutes to compile, 22 s to load from the prepared copy and
+1.8 GB on disk, against 3 s, 1 s and 1.0 GB after. Like `fold_model`, it only writes its
+output after ONNX Runtime returns bit-identical results (needs `onnx`, `onnxruntime`).
 
 `explicit_pads.py` gives pooling and convolution layers without padding explicit zero
 pads, which Core ML requires, and only writes its output after ONNX Runtime returns
@@ -95,8 +103,9 @@ Runtime does this at every first load and briefly needs about 3.5 GiB; with it t
 load peaks under 1 GiB and is about 7× faster. `fold_model` refuses to finish unless the
 folded graph gives bit-identical outputs. The pinned checksum was produced with ONNX
 Runtime 1.29.0 (export `6e6aa39e…`, 378,039,625 bytes → folded `862b59e3…`,
-534,515,358 bytes); another runtime version may serialize different bytes, which then
-needs a new checksum. Import only the folded file.
+534,515,358 bytes → transposed `0574cd73…`, 534,515,718 bytes, with onnx 1.23.2 and
+onnxruntime 1.23.2 for the check); another runtime version may serialize different bytes,
+which then needs a new checksum. Import only the final file.
 
 The face conversion converts constant half-precision buffers to exact float32 values and
 removes their redundant DEQUANTIZE operators. It does not train or quantize the models.

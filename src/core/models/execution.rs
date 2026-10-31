@@ -1,5 +1,6 @@
 //! Native provider construction belongs to the shared model registry only.
 use super::Backend;
+use crate::core::processing::PrepStep;
 use anyhow::{Result, ensure};
 use ort::{
     ep::{self, ExecutionProvider},
@@ -51,10 +52,10 @@ impl NativeSession {
 fn cached_model(
     path: &Path,
     kind: &str,
-    config: Option<&(PathBuf, u64)>,
+    root: Option<&PathBuf>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<crate::core::cache::compiled::Lease>> {
-    let Some((root, budget)) = config.filter(|(_, b)| *b > 0) else {
+    let Some(root) = root else {
         return Ok(None);
     };
     // Only the verified, self-contained catalog exports are cacheable. An
@@ -65,10 +66,12 @@ fn cached_model(
     else {
         return Ok(None);
     };
+    let started = std::time::Instant::now();
     ensure!(
         crate::core::model_assets::Inspector::default().verify(asset, path, &|| cancelled())?,
         "Custom model is not eligible for prepared-model caching"
     );
+    let verified = started.elapsed();
     let runtime = super::runtime_path().ok_or_else(|| anyhow::anyhow!("Missing native runtime"))?;
     let system = std::fs::read("/System/Library/CoreServices/SystemVersion.plist")?;
     let recipe = format!(
@@ -78,13 +81,23 @@ fn cached_model(
         blake3::hash(&system)
     );
     let key = crate::core::cache::compiled::key(path, &runtime, &recipe, cancelled)?;
-    Ok(Some(crate::core::cache::compiled::Lease::acquire(
+    let keyed = started.elapsed();
+    let lease = crate::core::cache::compiled::Lease::acquire(
         crate::core::cache::compiled::Format::CoreMl,
         root,
         &key,
-        *budget,
+        kind,
         cancelled,
-    )?))
+    )?;
+    tracing::info!(
+        model = kind,
+        verify_millis = verified.as_millis() as u64,
+        key_millis = (keyed - verified).as_millis() as u64,
+        acquire_millis = (started.elapsed() - keyed).as_millis() as u64,
+        reused = lease.reused,
+        "prepared-model cache checked"
+    );
+    Ok(Some(lease))
 }
 // On Apple Silicon at 2–4 CPU threads, separate MatMul/Add kernels are faster
 // for our BeIT aesthetic export. Other budgets/providers retain ORT defaults.
@@ -100,8 +113,9 @@ fn build(
     kind: &str,
     threads: usize,
     backend: Backend,
-    cache_config: Option<&(PathBuf, u64)>,
+    cache_config: Option<&PathBuf>,
     cancelled: &dyn Fn() -> bool,
+    step: &dyn Fn(Backend, PrepStep),
 ) -> Result<NativeSession> {
     #[cfg(target_os = "macos")]
     let mut cache = None;
@@ -132,6 +146,7 @@ fn build(
                 provider.is_available()?,
                 "Core ML is not included in this runtime"
             );
+            step(backend, PrepStep::Checking);
             match cached_model(path, kind, cache_config, cancelled) {
                 Ok(value) => cache = value,
                 Err(error) => {
@@ -198,6 +213,21 @@ fn build(
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     }
     ensure!(!cancelled(), "Model preparation cancelled");
+    #[cfg(target_os = "macos")]
+    let (cache_used, reused) = (
+        cache.is_some(),
+        cache.as_ref().is_some_and(|entry| entry.reused),
+    );
+    #[cfg(not(target_os = "macos"))]
+    let (cache_used, reused) = (false, false);
+    step(
+        backend,
+        match backend {
+            Backend::Cpu => PrepStep::Loading,
+            _ if reused => PrepStep::Reusing,
+            _ => PrepStep::Compiling,
+        },
+    );
     let session = match builder.commit_from_file(path) {
         Ok(session) => session,
         Err(error) => {
@@ -212,6 +242,10 @@ fn build(
         session.inputs().len() == 1,
         "Model must have one image input"
     );
+    // A reused copy is only rechecked here, which belongs to loading it.
+    if cfg!(target_os = "macos") && cache_used && !reused {
+        step(backend, PrepStep::Saving);
+    }
     #[cfg(target_os = "macos")]
     if let Some(entry) = &mut cache
         && let Err(error) = entry.complete(cancelled)
@@ -220,12 +254,6 @@ fn build(
             entry.invalidate();
         }
         cache_detail = format!(" · Prepared-model cache not retained: {error}");
-    }
-    #[cfg(target_os = "macos")]
-    if cache.as_ref().is_some_and(|entry| !entry.retained())
-        && !cache_detail.contains("not retained")
-    {
-        cache_detail = " · Prepared model exceeds disk budget; not retained".into();
     }
     ensure!(!cancelled(), "Model preparation cancelled");
     Ok(NativeSession {
@@ -273,10 +301,11 @@ pub(super) fn create(
     threads: usize,
     requested: Backend,
     cancelled: &dyn Fn() -> bool,
-    cache: Option<&(PathBuf, u64)>,
+    cache: Option<&PathBuf>,
+    step: &dyn Fn(Backend, PrepStep),
 ) -> Result<(NativeSession, Backend, String)> {
     let (session, backend, mut detail) = choose(requested, cancelled, |backend| {
-        build(path, kind, threads, backend, cache, cancelled)
+        build(path, kind, threads, backend, cache, cancelled, step)
     })?;
     detail.push_str(&session.cache_detail);
     Ok((session, backend, detail))
@@ -486,7 +515,6 @@ mod native_tests {
             .map(|m| pipeline.analysis(m, || false))
             .collect::<Result<Vec<_>>>()?;
         let decodes = pipeline.stats.decodes;
-        let budget = 1024 * cache::MIB;
         let control = Control::default();
         let config = RunConfig {
             threads: control.snapshot(),
@@ -494,7 +522,7 @@ mod native_tests {
         };
         let mut models = Models::with_processing(control.clone());
         models.configure(config);
-        models.configure_compiled_cache(model_cache.clone(), budget, false);
+        models.configure_compiled_cache(model_cache.clone(), false);
         let start = std::time::Instant::now();
         let first = assets
             .iter()
@@ -505,11 +533,12 @@ mod native_tests {
         assert!(control.status().iter().any(|s| s.backend == Backend::CoreMl && s.detail.contains("Prepared model cached")), "{:?}", control.status());
         let held = cache::maintain(&model_cache, Some(0), || false)?;
         assert!(held.disk_bytes > 0 && held.disk_bytes == held.pinned_disk_bytes);
-        models.configure_compiled_cache(model_cache.clone(), budget * 2, false);
+        // A cache request that does not clear (a new disk limit) keeps the session.
+        models.configure_compiled_cache(model_cache.clone(), false);
         assert_eq!(models.embedding(&assets[0])?, first[0]);
         assert_eq!(
             models.initializations, 1,
-            "Increasing budget reinitialized shared model"
+            "Changing the disk limit reinitialized shared model"
         );
         drop(models);
         let released = cache::maintain(&model_cache, None, || false)?;
@@ -518,7 +547,7 @@ mod native_tests {
 
         let mut models = Models::with_processing(control.clone());
         models.configure(config);
-        models.configure_compiled_cache(model_cache.clone(), budget, false);
+        models.configure_compiled_cache(model_cache.clone(), false);
         let start = std::time::Instant::now();
         let reused = assets
             .iter()
@@ -528,21 +557,11 @@ mod native_tests {
         assert_eq!(first, reused);
         assert!(control.status().iter().any(|s| s.backend == Backend::CoreMl && s.detail.contains("Prepared model reused")), "{:?}", control.status());
         assert_eq!(models.initializations, 1);
-        models.configure_compiled_cache(model_cache.clone(), budget / 2, false);
+        models.configure_compiled_cache(model_cache.clone(), true);
         assert!(
             models.sessions.is_empty(),
-            "Shrinking budget left native readers open"
+            "Clearing caches left native readers open"
         );
-        assert!(control.status().is_empty());
-        assert_eq!(
-            cache::maintain(&model_cache, None, || false)?.pinned_disk_bytes,
-            0
-        );
-        assert_eq!(models.embedding(&assets[0])?, first[0]);
-        assert_eq!(models.initializations, 2);
-        assert!(control.status()[0].detail.contains("Prepared model reused"));
-        models.configure_compiled_cache(model_cache.clone(), budget / 2, true);
-        assert!(models.sessions.is_empty());
         assert!(control.status().is_empty());
         assert_eq!(
             cache::maintain(&model_cache, Some(0), || false)?.disk_bytes,
@@ -556,7 +575,7 @@ mod native_tests {
         });
         let cpu = models.embedding(&assets[0])?;
         let initialized = models.initializations;
-        models.configure_compiled_cache(model_cache.clone(), 0, true);
+        models.configure_compiled_cache(model_cache.clone(), true);
         assert_eq!(models.embedding(&assets[0])?, cpu);
         assert_eq!(models.initializations, initialized);
         assert_eq!(control.status()[0].backend, Backend::Cpu);
@@ -564,8 +583,69 @@ mod native_tests {
         assert_eq!(pipeline.stats.decodes, decodes);
         println!(
             "{}",
-            serde_json::json!({"samples":7,"fresh_seven_ms":fresh_seven_ms,"reused_seven_ms":reused_seven_ms,"cache_bytes":released.disk_bytes,"exact_outputs":first == reused,"decodes":decodes,"clear_and_shrink_release_sessions":true,"cpu_session_preserved":true})
+            serde_json::json!({"samples":7,"fresh_seven_ms":fresh_seven_ms,"reused_seven_ms":reused_seven_ms,"cache_bytes":released.disk_bytes,"exact_outputs":first == reused,"decodes":decodes,"clear_releases_sessions":true,"cpu_session_preserved":true})
         );
+        Ok(())
+    }
+    #[test]
+    #[ignore = "Prepares installed models with Core ML twice, as two launches would"]
+    fn prepared_models_survive_relaunch() -> Result<()> {
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+        ort::init_from(super::super::runtime_path().unwrap())?.commit();
+        // PHOTOSORT_PREP_CACHE keeps the cache between two runs of this test,
+        // so the second run is a real relaunch in a new process.
+        let temp = tempfile::tempdir()?;
+        let root = std::env::var_os("PHOTOSORT_PREP_CACHE").map_or_else(
+            || temp.path().canonicalize().map(|p| p.join("cache")),
+            |p| Ok(PathBuf::from(p)),
+        )?;
+        let kinds = std::env::var("PHOTOSORT_PREP_MODELS").unwrap_or("aesthetic".into());
+        let mut timings = serde_json::Map::new();
+        let launches = std::env::var_os("PHOTOSORT_PREP_CACHE").map_or(2, |_| 1);
+        for launch in ["first", "second"].into_iter().take(launches) {
+            let control = Control::default();
+            for kind in kinds.split(',') {
+                let name = crate::core::model_assets::ALL
+                    .iter()
+                    .find(|a| a.name.trim_end_matches(".onnx") == kind || a.name.starts_with(kind))
+                    .map(|a| a.name)
+                    .unwrap();
+                let path = std::env::var_os("PHOTOSORT_MODEL_DIR").map_or_else(
+                    || crate::core::models::model_path(name).unwrap(),
+                    |dir| PathBuf::from(dir).join(name),
+                );
+                let kind: &'static str = Box::leak(kind.to_owned().into_boxed_str());
+                let started = std::time::Instant::now();
+                control.preparing(kind, Backend::CoreMl);
+                let (session, backend, detail) = create(
+                    &path,
+                    kind,
+                    4,
+                    Backend::CoreMl,
+                    &|| false,
+                    Some(&root),
+                    &|backend, step| control.step(kind, backend, step),
+                )?;
+                control.report(kind, backend, detail.clone());
+                let mut session = session;
+                let output = (kind == "aesthetic")
+                    .then(|| {
+                        let input: Vec<f32> = (0..3 * 384 * 384)
+                            .map(|i| ((i * 31) % 256) as f32 / 128. - 1.)
+                            .collect();
+                        let tensor =
+                            Tensor::from_array(([1, 3, 384, 384], input.into_boxed_slice()))?;
+                        run(&mut session, &tensor, 1)
+                    })
+                    .transpose()?;
+                timings.insert(
+                    format!("{launch}:{kind}"),
+                    serde_json::json!({"millis": started.elapsed().as_millis() as u64, "detail": detail, "output": output}),
+                );
+                drop(session);
+            }
+        }
+        println!("{}", serde_json::Value::Object(timings));
         Ok(())
     }
     #[test]
