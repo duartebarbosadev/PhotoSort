@@ -665,7 +665,6 @@ fn analysis_shortcut_respects_availability_modal_and_modifier_guards() {
 fn settings_access_keys_open_the_existing_draft_without_photo_work() {
     for step in Step::ALL {
         for (key, modifiers) in [
-            (egui::Key::F9, egui::Modifiers::NONE),
             (egui::Key::F10, egui::Modifiers::NONE),
             (egui::Key::Comma, egui::Modifiers::COMMAND),
             (egui::Key::Comma, egui::Modifiers::CTRL),
@@ -712,7 +711,7 @@ fn settings_access_keys_open_the_existing_draft_without_photo_work() {
 
 #[test]
 fn settings_access_respects_existing_modal_popup_repeat_and_modifier_guards() {
-    for key in [egui::Key::F9, egui::Key::F10] {
+    for key in [egui::Key::F10] {
         for modifiers in [
             egui::Modifiers::ALT,
             egui::Modifiers::SHIFT,
@@ -743,6 +742,8 @@ fn settings_access_respects_existing_modal_popup_repeat_and_modifier_guards() {
         }
     }
     assert!(application_key(egui::Key::Comma, egui::Modifiers::NONE).is_none());
+    // Cache usage is a Settings page now, with no key of its own.
+    assert!(application_key(egui::Key::F9, egui::Modifiers::NONE).is_none());
     assert!(
         application_key(
             egui::Key::Comma,

@@ -11,7 +11,7 @@ const ORGANIZE_COMPACT: f32 = 1100.0;
 
 impl Step {
     /// The page icon in the bottom step bar.
-    fn icon(self) -> &'static str {
+    pub(super) fn icon(self) -> &'static str {
         use egui_phosphor::regular as icon;
         match self {
             Step::Organize => icon::FOLDERS,

@@ -8,7 +8,6 @@ enum ApplicationKey {
     Find,
     About,
     Settings,
-    Caches,
     Analyze,
 }
 fn application_key(key: egui::Key, modifiers: egui::Modifiers) -> Option<ApplicationKey> {
@@ -22,7 +21,6 @@ fn application_key(key: egui::Key, modifiers: egui::Modifiers) -> Option<Applica
         egui::Key::S if command => Some(ApplicationKey::Analyze),
         egui::Key::F12 if !command => Some(ApplicationKey::About),
         egui::Key::F10 if !command => Some(ApplicationKey::Settings),
-        egui::Key::F9 if !command => Some(ApplicationKey::Caches),
         egui::Key::Comma if command => Some(ApplicationKey::Settings),
         _ => None,
     }
@@ -73,7 +71,6 @@ impl PhotoSortApp {
             }
             ApplicationKey::About => self.about = true,
             ApplicationKey::Settings => self.open_settings(preferences::Section::General),
-            ApplicationKey::Caches => self.open_settings(preferences::Section::Caches),
             ApplicationKey::Analyze => self.analyze_current_workflow(),
         }
         true
