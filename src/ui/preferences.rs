@@ -38,6 +38,30 @@ impl PhotoSortApp {
             self.runtime.cache.request(false);
         }
         self.preferences_section = Some(section);
+        self.forget_confirm = false;
+        self.forget_message = None;
+    }
+    /// Every folder, the open one included, opens next time as if it had never
+    /// been opened. The open folder keeps its current views until then.
+    pub(super) fn forget_remembered_folders(&mut self) {
+        self.forget_confirm = false;
+        match self
+            .runtime
+            .io(IoWork::ForgetViews(crate::core::session::data_dir()))
+        {
+            Ok(()) => {
+                self.views_forgotten = true;
+                self.forget_message =
+                    Some("Remembered folders forgotten. Each one opens fresh next time.".into());
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+    fn clear_recent_folders(&mut self) {
+        self.preferences.recent_folders.clear();
+        self.missing_recent.clear();
+        self.save_preferences();
+        self.forget_message = Some("Recent folders cleared.".into());
     }
 
     /// Drops RAW thumbnails and previews so they are requested again in the
@@ -431,6 +455,23 @@ impl PhotoSortApp {
                         if ui.add_enabled(!self.busy && !self.scanning, egui::Button::new("Clear reusable caches")).clicked() { self.runtime.cache.request(true); }
                     }
                     settings_note(ui, "Clear runs immediately in the background. Current reviews, staged choices, saved positions and downloaded models are kept.");
+                    ui.separator();
+                    settings_heading(ui, "Remembered folders");
+                    let idle = !self.busy && !self.scanning;
+                    if self.forget_confirm {
+                        ui.label("Forget the step and views saved for every folder?");
+                        ui.horizontal(|ui| {
+                            if ui.add_enabled(idle, egui::Button::new("Forget")).clicked() { self.forget_remembered_folders(); }
+                            if ui.button("Keep them").clicked() { self.forget_confirm = false; }
+                        });
+                    } else if ui.add_enabled(idle, egui::Button::new("Forget remembered folders")).clicked() {
+                        self.forget_confirm = true;
+                        self.forget_message = None;
+                    }
+                    settings_note(ui, "Every folder opens fresh in Organize. Staged changes and preferences are kept. The open folder keeps its views until you open it again.");
+                    if ui.add_enabled(!self.preferences.recent_folders.is_empty(), egui::Button::new("Clear recent folders")).clicked() { self.clear_recent_folders(); }
+                    settings_note(ui, "Empties the Recent folders list. The folders themselves are not touched.");
+                    if let Some(message) = &self.forget_message { ui.label(message); }
 
                     });
                 ui.separator();

@@ -52,6 +52,7 @@ fn run(publisher: &Publisher, rx: &Receiver<Message<IoWork>>) {
                     | IoWork::MergeSession { .. }
                     | IoWork::Checkpoint { .. }
                     | IoWork::SaveViews { .. }
+                    | IoWork::ForgetViews(_)
                     | IoWork::SavePreferences { .. }
             )
         {
@@ -160,6 +161,14 @@ impl Files<'_> {
             }
             IoWork::SaveViews { root, views } => {
                 self.save_views(&root, &views);
+                Ok(())
+            }
+            IoWork::ForgetViews(data) => {
+                if let Err(e) = views::forget_all(&data) {
+                    self.send(Event::ViewError(format!(
+                        "Remembered folders could not be forgotten: {e}"
+                    )));
+                }
                 Ok(())
             }
             IoWork::MergeSession { root, session } => self.merge_session(&root, session),
