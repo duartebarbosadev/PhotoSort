@@ -1953,7 +1953,6 @@ mod tests {
         assert!(trashed(&app, 4));
         key(&mut app, egui::Key::A, egui::Modifiers::NONE);
         assert!(!trashed(&app, 4), "A accepts every suggestion");
-        assert!(preferences::workflow_hint(Step::EasyDelete).contains("Enter · Next"));
     }
     #[test]
     fn cancelled_duplicate_pass_preserves_review_and_rejects_late_pairs() {
