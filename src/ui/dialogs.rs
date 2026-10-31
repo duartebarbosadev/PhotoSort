@@ -135,6 +135,10 @@ impl PhotoSortApp {
                             "Select a range in Cull browser; extend comparison in Review",
                         ),
                         (
+                            "Ctrl/Cmd + C",
+                            "Copy the selected photos to paste in a folder or another app",
+                        ),
+                        (
                             "Ctrl/Cmd + click / Ctrl/Cmd + A",
                             "Toggle browser selection / select all visible",
                         ),

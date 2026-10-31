@@ -108,7 +108,13 @@ wgpu = { version = "30", default-features = false, features = ["metal", "wgsl"] 
 libc = "0.2"
 # NTFS file identity (volume serial + file index); already used by walkdir.
 winapi-util = "0.1.11"
+# Copied photos: file list plus image formats in one clipboard write (already used by egui).
+clipboard-win = { version = "5.4", features = ["std"] }
 wgpu = { version = "30", default-features = false, features = ["dx12", "wgsl"] }
+
+[target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
+# Copied photos as a file list (already used by egui for text).
+arboard = { version = "3.7", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["vulkan", "gles", "wgsl"] }

@@ -596,19 +596,19 @@ impl PhotoSortApp {
 pub(super) fn workflow_hint(step: Step) -> &'static str {
     match step {
         Step::Organize => {
-            "Alt+1–5 · Grouping mode   Arrows · Browse   Shift+arrows · Compare   F2 · Rename   Hold \\ · Original   Shift+Enter · Review changes"
+            "Alt+1–5 · Grouping mode   Arrows · Browse   Shift+arrows · Compare   F2 · Rename   Hold \\ · Original   Ctrl/Cmd+C · Copy   Shift+Enter · Review changes"
         }
         Step::EasyDelete => {
-            "1/Left, 2/Right · Keep/Trash   Up/Down · Browse   Enter · Next   R · Undo   A · Accept all suggestions   Esc · Close photos   Shift+Enter · Review changes"
+            "1/Left, 2/Right · Keep/Trash   Up/Down · Browse   Enter · Next   R · Undo   A · Accept all suggestions   Esc · Close photos   Ctrl/Cmd+C · Copy   Shift+Enter · Review changes"
         }
         Step::Rotation => {
-            "Arrows · Browse   Q/E · Rotate   R · Undo   Enter · Next   Esc · Close photos   Shift+Enter · Review changes"
+            "Arrows · Browse   Q/E · Rotate   R · Undo   Enter · Next   Esc · Close photos   Ctrl/Cmd+C · Copy   Shift+Enter · Review changes"
         }
         Step::PickBest => {
-            "1–9 · Keep/Trash   Arrows · Group   Enter · Show/Next   R · Undo   A · Accept all suggestions   Esc · Close photos   Shift+Enter · Review changes"
+            "1–9 · Keep/Trash   Arrows · Group   Enter · Show/Next   R · Undo   A · Accept all suggestions   Esc · Close photos   Ctrl/Cmd+C · Copy   Shift+Enter · Review changes"
         }
         Step::Cull => {
-            "Left/Right · Cycle   Up/Down · Browse   Ctrl/Cmd+arrows · Bypass movement filters   D · Mark   R · Rotate   Ctrl/Cmd+0–5 · Rate   Shift+Enter · Review"
+            "Left/Right · Cycle   Up/Down · Browse   Ctrl/Cmd+arrows · Bypass movement filters   D · Mark   R · Rotate   Ctrl/Cmd+0–5 · Rate   Ctrl/Cmd+C · Copy   Shift+Enter · Review"
         }
     }
 }

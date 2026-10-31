@@ -3358,9 +3358,11 @@ name = "photosort"
 version = "3.0.0"
 dependencies = [
  "anyhow",
+ "arboard",
  "blake3",
  "cc",
  "chrono",
+ "clipboard-win",
  "dirs",
  "eframe",
  "egui-phosphor",

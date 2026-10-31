@@ -24,6 +24,11 @@ fn main() {
         cc::Build::new()
             .file("native/application.m")
             .compile("photosort_application");
+        println!("cargo:rerun-if-changed=native/clipboard.m");
+        cc::Build::new()
+            .file("native/clipboard.m")
+            .flag("-fobjc-arc")
+            .compile("photosort_clipboard");
         println!("cargo:rustc-link-lib=framework=AppKit");
         println!("cargo:rerun-if-changed=native/video.m");
         cc::Build::new()
