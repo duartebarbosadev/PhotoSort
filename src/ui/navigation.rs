@@ -46,7 +46,6 @@ impl PhotoSortApp {
     /// The title bar: brand and folder on the left, the staged-change review
     /// and app actions on the right. The steps live in the bottom page bar.
     pub(super) fn header(&mut self, root: &mut egui::Ui) {
-        use egui_phosphor::regular as icon;
         egui::Panel::top("header")
             .exact_size(HEADER_HEIGHT)
             .show_separator_line(false)
@@ -58,7 +57,7 @@ impl PhotoSortApp {
             .show(root, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().button_padding = egui::vec2(S2, 3.0);
-                    ui.label(RichText::new(icon::APERTURE).size(16.0).color(ACCENT));
+                    crate::ui::brand::app_logo(ui, 16.0);
                     ui.label(RichText::new("PhotoSort").font(semibold(12.5)));
                     let left_end = ui.min_rect().right();
                     let right_start = ui
@@ -927,7 +926,7 @@ impl PhotoSortApp {
         egui::ScrollArea::vertical().id_salt("welcome").show(ui, |ui| {
             ui.add_space((ui.available_height() * 0.12).max(S6));
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new(icon::APERTURE).size(52.0).color(ACCENT));
+                crate::ui::brand::app_logo(ui, 64.0);
                 ui.add_space(S4);
                 ui.label(
                     RichText::new("Make room for your best work.")

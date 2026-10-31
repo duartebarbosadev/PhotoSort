@@ -504,11 +504,7 @@ impl PhotoSortApp {
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(egui_phosphor::regular::APERTURE)
-                                .size(30.0)
-                                .color(ACCENT),
-                        );
+                        crate::ui::brand::app_logo(ui, 44.0);
                         ui.vertical(|ui| {
                             ui.label(RichText::new("PhotoSort").font(semibold(18.0)));
                             ui.label(
