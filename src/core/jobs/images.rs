@@ -233,12 +233,9 @@ impl ImageWorker {
         } = wiring;
         let subject_root = cache.clone();
         let pipeline = Pipeline::new(128 * 1024 * 1024, cache);
+        processing.remember_timings(subject_root.join("model-prepare-times.json"));
         let mut models = models::Models::with_processing(processing);
-        models.configure_compiled_cache(
-            subject_root.clone(),
-            u64::from(cache::Limits::default().disk_mib) * cache::MIB,
-            false,
-        );
+        models.configure_compiled_cache(subject_root.clone(), false);
         Self {
             raw_look,
             publisher,
@@ -340,11 +337,8 @@ impl ImageWorker {
         let Some(request) = self.cache_control.take() else {
             return false;
         };
-        self.models.configure_compiled_cache(
-            self.subject_root.clone(),
-            u64::from(request.limits.disk_mib) * cache::MIB,
-            request.clear,
-        );
+        self.models
+            .configure_compiled_cache(self.subject_root.clone(), request.clear);
         self.pipeline.configure_cache(request.limits);
         self.subject_persistent = request.limits.disk_mib > 0;
         if let Some(store) = &self.subject_store {

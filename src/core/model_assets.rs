@@ -64,9 +64,10 @@ pub const ALL: [Asset; 7] = [
         name: "aesthetic.onnx",
         title: "Aesthetic scoring",
         purpose: "Pick Best",
-        // Basic-level ORT folding of the pinned export (examples/fold_model.rs).
-        bytes: 534_515_358,
-        url: "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-1/aesthetic.onnx",
+        // Basic-level ORT folding of the pinned export (examples/fold_model.rs),
+        // then Gemm weights stored pre-transposed (scripts/transpose_gemm_weights.py).
+        bytes: 534_515_718,
+        url: "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-2/aesthetic.onnx",
         license: "AGPL-3.0 model card",
         download_note: Some(
             "This model is licensed under AGPL-3.0, unlike the others. Its licence and model card are on its Source page.",
@@ -82,7 +83,7 @@ pub const ALL: [Asset; 7] = [
         title: "Face detection",
         purpose: "People Organize, Easy Delete, Pick Best and Cull",
         bytes: 425_659,
-        url: "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-1/face_detector.onnx",
+        url: "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-2/face_detector.onnx",
         license: "MediaPipe / Apache-2.0",
         download_note: None,
         page: "https://github.com/google-ai-edge/mediapipe",
@@ -97,7 +98,7 @@ pub const ALL: [Asset; 7] = [
         purpose: "People Organize, Easy Delete, Pick Best and Cull",
         // Pooling pads made explicit for Core ML (scripts/explicit_pads.py).
         bytes: 4_996_107,
-        url: "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-1/face_landmarks_detector.onnx",
+        url: "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-2/face_landmarks_detector.onnx",
         license: "MediaPipe / Apache-2.0",
         download_note: None,
         page: "https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf",
@@ -112,7 +113,7 @@ pub const ALL: [Asset; 7] = [
         purpose: "Closed-eye checks in Easy Delete, Pick Best and Cull",
         // MediaPipe face_blendshapes.tflite via scripts/convert_blendshapes.py.
         bytes: 1_884_171,
-        url: "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-1/face_blendshapes.onnx",
+        url: "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-2/face_blendshapes.onnx",
         license: "MediaPipe / Apache-2.0",
         download_note: None,
         page: "https://github.com/google-ai-edge/mediapipe",
@@ -703,7 +704,7 @@ mod tests {
             assert_eq!(
                 asset.url,
                 format!(
-                    "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-1/{}",
+                    "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-2/{}",
                     asset.name
                 )
             );

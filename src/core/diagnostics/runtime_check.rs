@@ -442,18 +442,21 @@ mod backend_checks {
                         backend: Backend::CoreMl,
                         preparing: false,
                         detail: "Configured provider; graph operators may remain on CPU".into(),
+                        prep: None,
                     },
                     ModelStatus {
                         model: "face_landmarks",
                         backend: Backend::Cpu,
                         preparing: false,
                         detail: "CPU fallback after compilation failure".into(),
+                        prep: None,
                     },
                     ModelStatus {
                         model: "aesthetic",
                         backend: requested,
                         preparing: true,
                         detail: "Preparing model…".into(),
+                        prep: None,
                     },
                 ]);
                 assert_eq!(report.accelerated_models, usize::from(success));

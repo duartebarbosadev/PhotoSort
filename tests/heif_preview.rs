@@ -27,6 +27,7 @@ fn memory_only(path: std::path::PathBuf) -> Pipeline {
         previews_mib: 64,
         originals_mib: 128,
         disk_mib: 0,
+        ..Limits::default()
     });
     p
 }

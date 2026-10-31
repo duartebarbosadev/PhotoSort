@@ -3523,8 +3523,14 @@ mod tests {
             app.runtime
                 .processing
                 .preparing("dinov2", crate::core::processing::Backend::CoreMl);
+            app.runtime.processing.step(
+                "dinov2",
+                crate::core::processing::Backend::CoreMl,
+                crate::core::processing::PrepStep::Compiling,
+            );
             let nodes = labels(&mut app, 1440.0);
-            assert!(shows(&nodes, "Preparing AI models · first run only"));
+            assert!(shows(&nodes, "Preparing the similarity model"));
+            assert!(shows(&nodes, "Optimizing for this computer · 0:00"));
             app.runtime.processing.report(
                 "dinov2",
                 crate::core::processing::Backend::Cpu,
