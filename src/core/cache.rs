@@ -15,18 +15,34 @@ pub struct Limits {
     pub previews_mib: u32,
     pub originals_mib: u32,
     pub disk_mib: u32,
+    /// Which defaults these limits were saved with. Missing from files
+    /// written while the disk default was 1 GiB.
+    #[serde(default)]
+    pub defaults: u32,
 }
+/// The disk default went from 1 GiB to 4 GiB in defaults version 2.
+const DEFAULTS: u32 = 2;
+const OLD_DISK_DEFAULT_MIB: u32 = 1024;
 impl Default for Limits {
     fn default() -> Self {
         Self {
             previews_mib: 128,
             originals_mib: 256,
-            disk_mib: 1024,
+            disk_mib: 4096,
+            defaults: DEFAULTS,
         }
     }
 }
 impl Limits {
     pub fn normalize(&mut self) {
+        // Settings still on the old default move to the new one once; a
+        // limit chosen after that, 1 GiB included, is kept.
+        if self.defaults < DEFAULTS {
+            if self.disk_mib == OLD_DISK_DEFAULT_MIB {
+                self.disk_mib = Self::default().disk_mib;
+            }
+            self.defaults = DEFAULTS;
+        }
         self.previews_mib = self.previews_mib.clamp(32, 1024);
         self.originals_mib = self.originals_mib.clamp(64, 2048);
         self.disk_mib = self.disk_mib.min(32768);
@@ -154,9 +170,29 @@ fn owned(path: &Path) -> bool {
         && hash.bytes().all(|b| b.is_ascii_hexdigit())
         && matches!(suffix, "png" | "json" | "bin" | "tmp.png" | "tmp")
 }
+/// Measures the cache and, with a limit, evicts the oldest previews and AI
+/// evidence above it. A zero limit clears everything, prepared models included.
 pub fn maintain(
     path: &Path,
     max_bytes: Option<u64>,
+    cancelled: impl Fn() -> bool,
+) -> anyhow::Result<Usage> {
+    prune(path, max_bytes, max_bytes == Some(0), cancelled)
+}
+/// The same, but keeps prepared models even at a zero limit. They are slow to
+/// rebuild, so they sit outside the limit; a newer copy of the same model
+/// replaces an older one (see `compiled::Lease::complete`).
+pub fn maintain_keeping_models(
+    path: &Path,
+    max_bytes: Option<u64>,
+    cancelled: impl Fn() -> bool,
+) -> anyhow::Result<Usage> {
+    prune(path, max_bytes, false, cancelled)
+}
+fn prune(
+    path: &Path,
+    max_bytes: Option<u64>,
+    clear_models: bool,
     cancelled: impl Fn() -> bool,
 ) -> anyhow::Result<Usage> {
     let root = match std::fs::symlink_metadata(path) {
@@ -171,6 +207,7 @@ pub fn maintain(
     let namespace = compiled::namespace(path).ok();
     let mut files = Vec::new();
     let mut usage = Usage::default();
+    let mut photo_bytes = 0u64;
     for entry in std::fs::read_dir(path)? {
         anyhow::ensure!(
             !cancelled(),
@@ -185,16 +222,15 @@ pub fn maintain(
                 compiled::remove(&entry.path(), &cancelled)?;
                 continue;
             }
+            if lock.is_some() && max_bytes.is_some() && clear_models {
+                compiled::remove(&entry.path(), &cancelled)?;
+                continue;
+            }
             let (bytes, count) = compiled::usage(&entry.path(), &cancelled)?;
             usage.disk_bytes = usage.disk_bytes.saturating_add(bytes);
             usage.files += count;
             if lock.is_none() {
                 usage.pinned_disk_bytes = usage.pinned_disk_bytes.saturating_add(bytes);
-            } else if max_bytes.is_some() {
-                let stamp = std::fs::metadata(entry.path().join(".ready.bin"))
-                    .or_else(|_| entry.metadata())?
-                    .modified()?;
-                files.push((stamp, bytes, entry.path(), count, lock));
             }
             continue;
         }
@@ -204,31 +240,28 @@ pub fn maintain(
         let metadata = entry.metadata()?;
         usage.disk_bytes = usage.disk_bytes.saturating_add(metadata.len());
         usage.files += 1;
+        photo_bytes += metadata.len();
         if max_bytes.is_some() {
-            files.push((metadata.modified()?, metadata.len(), entry.path(), 1, None));
+            files.push((metadata.modified()?, metadata.len(), entry.path()));
         }
     }
     if let Some(max) = max_bytes {
+        // Only previews and AI evidence count against the limit.
         files.sort_unstable_by_key(|f| f.0);
-        for (_, bytes, file, count, lease) in files {
-            if usage.disk_bytes <= max && max != 0 {
+        for (_, bytes, file) in files {
+            if photo_bytes <= max && max != 0 {
                 break;
             }
             anyhow::ensure!(
                 !cancelled(),
                 "Cache maintenance cancelled; some reusable files may already have been removed"
             );
-            if lease.is_some() {
-                compiled::remove(&file, &cancelled)?;
-                usage.disk_bytes = usage.disk_bytes.saturating_sub(bytes);
-                usage.files -= count;
-                continue;
-            }
             // Recheck after enumeration. Do not remove a replaced directory or symlink.
             let meta = match std::fs::symlink_metadata(&file) {
                 Ok(m) => m,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     usage.disk_bytes = usage.disk_bytes.saturating_sub(bytes);
+                    photo_bytes = photo_bytes.saturating_sub(bytes);
                     usage.files -= 1;
                     continue;
                 }
@@ -243,6 +276,7 @@ pub fn maintain(
                 Err(e) => return Err(e.into()),
             }
             usage.disk_bytes = usage.disk_bytes.saturating_sub(bytes);
+            photo_bytes = photo_bytes.saturating_sub(bytes);
             usage.files -= 1;
         }
     }
@@ -252,6 +286,23 @@ pub fn maintain(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_one_gib_default_moves_to_four_gib_once_but_a_chosen_limit_stays() {
+        let mut old: Limits =
+            serde_json::from_str(r#"{"previews_mib":128,"originals_mib":256,"disk_mib":1024}"#)
+                .unwrap();
+        old.normalize();
+        assert_eq!(old.disk_mib, 4096);
+        let mut custom: Limits = serde_json::from_str(r#"{"disk_mib":2048}"#).unwrap();
+        custom.normalize();
+        assert_eq!(custom.disk_mib, 2048);
+        // Chosen again after the move, 1 GiB survives a save and reload.
+        old.disk_mib = 1024;
+        let mut reloaded: Limits =
+            serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
+        reloaded.normalize();
+        assert_eq!(reloaded.disk_mib, 1024);
+    }
     #[test]
     fn cancellation_is_scoped_to_accepted_tasks_and_configure_preserves_pending_clear() {
         let control = Control::default();

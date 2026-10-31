@@ -18,12 +18,11 @@ impl PhotoSortApp {
         self.status_scope = Some((Step::Organize, Some(mode)));
     }
     pub(super) fn workflow_status(&self) -> Cow<'_, str> {
-        if let Some(status) = self.preparing_model() {
-            return Cow::Owned(format!(
-                "Preparing {} · {} · first use can take minutes",
-                status.model,
-                status.backend.label()
-            ));
+        if let Some(note) = self.prep_note() {
+            return Cow::Owned(match note.step {
+                Some(step) => format!("{} · {step}", note.headline),
+                None => note.headline,
+            });
         }
         if self.step == Step::Organize
             && let Some(run) = self.analysis_run
@@ -104,17 +103,35 @@ mod tests {
             .processing
             .preparing("dinov2", crate::core::processing::Backend::CoreMl);
         app.analysis_run = Some(42);
-        assert!(app.workflow_status().contains("Preparing dinov2"));
+        assert!(
+            app.workflow_status()
+                .contains("Preparing the similarity model")
+        );
         app.cancel_analysis();
-        assert!(!app.workflow_status().contains("Preparing dinov2"));
+        assert!(!app.workflow_status().contains("Preparing the similarity"));
         app.rotation_run = Some(43);
-        assert!(app.workflow_status().contains("Apple Core ML"));
+        app.runtime.processing.step(
+            "dinov2",
+            crate::core::processing::Backend::CoreMl,
+            crate::core::processing::PrepStep::Checking,
+        );
+        assert!(
+            app.workflow_status()
+                .contains("Checking model files · 0:00")
+        );
+        // A 150 s compile is not photo work: the estimate leaves it out.
+        app.progress = Some((4, 79));
+        app.progress_started = Instant::now().checked_sub(Duration::from_secs(160));
+        app.progress_prep = (Duration::from_secs(150), Some(Instant::now()));
+        assert!(!app.progress_timing().unwrap().contains("left"));
+        app.progress_prep.1 = None;
+        assert!(app.progress_timing().unwrap().ends_with("about 4 min left"));
         app.runtime.processing.report(
             "dinov2",
             crate::core::processing::Backend::Cpu,
             "CPU fallback".into(),
         );
-        assert!(!app.workflow_status().contains("Preparing dinov2"));
+        assert!(!app.workflow_status().contains("Preparing the similarity"));
         assert_eq!(app.stats.decodes, 0);
         app.runtime.shutdown();
     }

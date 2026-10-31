@@ -307,6 +307,9 @@ pub struct PhotoSortApp {
     analysis_run: Option<u64>,
     progress: Option<(usize, usize)>,
     progress_started: Option<Instant>,
+    /// Time this progress run spent preparing models, and when the current
+    /// preparation began; excluded from the photo estimate.
+    progress_prep: (Duration, Option<Instant>),
     stats: Stats,
     plan: Option<Plan>,
     plan_rows: plan_review::Rows,
@@ -562,6 +565,7 @@ impl PhotoSortApp {
             analysis_run: None,
             progress: None,
             progress_started: None,
+            progress_prep: Default::default(),
             stats: Stats::default(),
             plan: None,
             plan_rows: plan_review::Rows::default(),
@@ -1957,6 +1961,39 @@ impl PhotoSortApp {
         self.progress_started = Instant::now().checked_sub(Duration::from_secs(40));
         self.set_status("Analyzing locally · previews stay available".into());
         self.filter_dirty = true;
+    }
+    /// Shows Pick Best's analysis while the aesthetic model compiles, 72 s
+    /// into a step that took 115 s last time, with the similarity model ready.
+    pub fn gallery_preparing_model(&mut self) {
+        use crate::core::processing::{Backend, ModelStatus, Prep, PrepStep};
+        self.gallery_running_analysis();
+        self.cull_group_run = None;
+        self.pick_run = self.analysis_run;
+        self.progress = Some((0, self.media.len().max(1)));
+        let now = Instant::now();
+        let ago = |seconds| now.checked_sub(Duration::from_secs(seconds)).unwrap_or(now);
+        self.progress_started = Some(ago(80));
+        self.progress_prep = (Duration::ZERO, Some(ago(74)));
+        for (model, prep) in [
+            ("dinov2", None),
+            (
+                "aesthetic",
+                Some(Prep {
+                    step: PrepStep::Compiling,
+                    started: ago(74),
+                    step_started: ago(72),
+                    usual: Some(Duration::from_secs(115)),
+                }),
+            ),
+        ] {
+            self.runtime.processing.show_status(ModelStatus {
+                model,
+                backend: Backend::CoreMl,
+                detail: String::new(),
+                preparing: prep.is_some(),
+                prep,
+            });
+        }
     }
     /// Groups Organize by faces with a synthetic result, so screenshots need
     /// no models: every fourth photo shows one person, the next another, and

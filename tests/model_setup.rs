@@ -108,7 +108,7 @@ fn pinned_orientation_download_installs_without_a_bundle_and_reuses_verification
 
 #[test]
 #[cfg(feature = "model-downloads")]
-#[ignore = "Downloads the three pinned MediaPipe models (7.3 MB) from the models-1 release"]
+#[ignore = "Downloads the three pinned MediaPipe models (7.3 MB) from the models-2 release"]
 fn pinned_converted_face_model_downloads_install_without_a_bundle() {
     for id in [Id::Detector, Id::Landmarks, Id::Blendshapes] {
         pinned_download(id);
@@ -117,7 +117,7 @@ fn pinned_converted_face_model_downloads_install_without_a_bundle() {
 
 #[test]
 #[cfg(feature = "model-downloads")]
-#[ignore = "Downloads the pinned 534.5 MB aesthetic model from the models-1 release"]
+#[ignore = "Downloads the pinned 534.5 MB aesthetic model from the models-2 release"]
 fn pinned_aesthetic_download_installs_without_a_bundle() {
     pinned_download(Id::Aesthetic);
 }

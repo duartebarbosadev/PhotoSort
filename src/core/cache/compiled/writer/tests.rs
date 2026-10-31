@@ -5,14 +5,8 @@ fn root() -> (tempfile::TempDir, PathBuf) {
     (temp, root)
 }
 fn ready(root: &Path, n: usize, bytes: &[u8]) -> Lease {
-    let mut entry = Lease::acquire(
-        Format::CoreMl,
-        root,
-        &format!("{n:064x}"),
-        1_000_000,
-        &|| false,
-    )
-    .unwrap();
+    let mut entry =
+        Lease::acquire(Format::CoreMl, root, &format!("{n:064x}"), "m", &|| false).unwrap();
     fs::create_dir_all(entry.path.join("native/weights")).unwrap();
     fs::write(entry.path.join("native/weights/model.bin"), bytes).unwrap();
     entry.complete(&|| false).unwrap();
@@ -26,26 +20,18 @@ fn stable_native_cache_reuses_verified_bytes_and_holds_a_process_lease() {
     assert!(!first.reused);
     assert!(first.retained());
     assert!(
-        Lease::acquire(
-            Format::CoreMl,
-            &root,
-            &format!("{:064x}", 1),
-            1_000_000,
-            &|| false
-        )
+        Lease::acquire(Format::CoreMl, &root, &format!("{:064x}", 1), "m", &|| {
+            false
+        })
         .is_err()
     );
     let active = crate::core::cache::maintain(&root, Some(0), || false).unwrap();
     assert!(active.disk_bytes > 0 && active.pinned_disk_bytes == active.disk_bytes);
     assert!(path.join("native/weights/model.bin").exists());
     drop(first);
-    let second = Lease::acquire(
-        Format::CoreMl,
-        &root,
-        &format!("{:064x}", 1),
-        1_000_000,
-        &|| false,
-    )
+    let second = Lease::acquire(Format::CoreMl, &root, &format!("{:064x}", 1), "m", &|| {
+        false
+    })
     .unwrap();
     assert!(second.reused);
     assert_eq!(second.path, path);
@@ -116,13 +102,9 @@ fn corrupt_incomplete_or_extra_native_files_are_regenerated_before_loading() {
             1 => fs::write(path.join(READY), b"torn").unwrap(),
             _ => fs::write(path.join("unexpected.bin"), b"extra").unwrap(),
         }
-        let fresh = Lease::acquire(
-            Format::CoreMl,
-            &root,
-            &format!("{:064x}", 1),
-            1_000_000,
-            &|| false,
-        )
+        let fresh = Lease::acquire(Format::CoreMl, &root, &format!("{:064x}", 1), "m", &|| {
+            false
+        })
         .unwrap();
         assert!(!fresh.reused);
         assert!(!path.join("native").exists());
@@ -138,44 +120,33 @@ fn cancelled_cache_validation_preserves_previously_complete_artifacts() {
     drop(old);
     let calls = std::cell::Cell::new(0);
     assert!(
-        Lease::acquire(
-            Format::CoreMl,
-            &root,
-            &format!("{:064x}", 1),
-            1_000_000,
-            &|| {
-                calls.set(calls.get() + 1);
-                calls.get() > 5
-            }
-        )
+        Lease::acquire(Format::CoreMl, &root, &format!("{:064x}", 1), "m", &|| {
+            calls.set(calls.get() + 1);
+            calls.get() > 5
+        })
         .is_err()
     );
     assert!(path.join(READY).exists());
     assert!(
-        Lease::acquire(
-            Format::CoreMl,
-            &root,
-            &format!("{:064x}", 1),
-            1_000_000,
-            &|| false
-        )
+        Lease::acquire(Format::CoreMl, &root, &format!("{:064x}", 1), "m", &|| {
+            false
+        })
         .unwrap()
         .reused
     );
 }
 #[test]
-fn zero_budget_foreign_directories_and_unsafe_keys_are_refused() {
+fn foreign_directories_and_unsafe_keys_are_refused() {
     let (temp, root) = root();
-    assert!(Lease::acquire(Format::CoreMl, &root, &format!("{:064x}", 1), 0, &|| false).is_err());
-    assert!(!root.exists());
     for key in [format!("../{:064x}", 1), "bad".into()] {
-        assert!(Lease::acquire(Format::CoreMl, &root, &key, 1000, &|| false).is_err());
+        assert!(Lease::acquire(Format::CoreMl, &root, &key, "m", &|| false).is_err());
     }
+    assert!(!root.exists());
     fs::create_dir_all(root.join(format!("{:064x}.coreml", 1))).unwrap();
     let foreign = root.join(format!("{:064x}.coreml/precious", 1));
     fs::write(&foreign, b"keep").unwrap();
     assert!(
-        Lease::acquire(Format::CoreMl, &root, &format!("{:064x}", 1), 1000, &|| {
+        Lease::acquire(Format::CoreMl, &root, &format!("{:064x}", 1), "m", &|| {
             false
         })
         .is_err()
@@ -195,7 +166,7 @@ fn native_cache_never_follows_or_deletes_link_targets() {
     fs::write(&photo, b"original").unwrap();
     std::os::unix::fs::symlink(&photo, path.join("foreign-link")).unwrap();
     assert!(
-        Lease::acquire(Format::CoreMl, &root, &format!("{:064x}", 1), 1000, &|| {
+        Lease::acquire(Format::CoreMl, &root, &format!("{:064x}", 1), "m", &|| {
             false
         })
         .is_err()
@@ -205,23 +176,9 @@ fn native_cache_never_follows_or_deletes_link_targets() {
     assert!(path.join("foreign-link").is_symlink());
 }
 #[test]
-fn oversize_and_failed_native_compilation_leave_no_persistent_artifact() {
+fn failed_native_compilation_leaves_no_persistent_artifact() {
     let (_temp, root) = root();
-    let mut entry =
-        Lease::acquire(Format::CoreMl, &root, &format!("{:064x}", 1), 64, &|| false).unwrap();
-    let path = entry.path.clone();
-    fs::write(path.join("weights"), [1; 100]).unwrap();
-    entry.complete(&|| false).unwrap();
-    assert!(!entry.retained());
-    assert!(
-        crate::core::cache::maintain(&root, Some(64), || false)
-            .unwrap()
-            .pinned_disk_bytes
-            > 64
-    );
-    drop(entry);
-    assert!(!path.exists());
-    let failed = Lease::acquire(Format::CoreMl, &root, &format!("{:064x}", 2), 1000, &|| {
+    let failed = Lease::acquire(Format::CoreMl, &root, &format!("{:064x}", 2), "m", &|| {
         false
     })
     .unwrap();
@@ -241,21 +198,38 @@ fn failed_session_invalidates_previously_complete_native_files() {
     assert!(!path.exists());
 }
 #[test]
-fn shared_budget_prunes_unused_native_and_flat_files_but_keeps_live_sessions() {
+fn prepared_models_stay_outside_the_disk_limit_until_a_newer_copy_replaces_them() {
     let (_temp, root) = root();
-    let live = ready(&root, 1, b"active weights");
-    let unused = ready(&root, 2, b"unused weights");
-    let unused_path = unused.path.clone();
-    drop(unused);
-    let flat = root.join(format!("{:064x}.bin", 3));
-    fs::write(&flat, [7; 100]).unwrap();
-    let live_bytes = usage(&live.path, &|| false).unwrap().0;
-    let result = crate::core::cache::maintain(&root, Some(live_bytes), || false).unwrap();
-    assert_eq!(result.disk_bytes, live_bytes);
-    assert_eq!(result.pinned_disk_bytes, live_bytes);
-    assert!(!flat.exists());
-    assert!(!unused_path.exists());
-    assert!(live.path.exists());
+    let acquire = |n: usize, model: &str| {
+        Lease::acquire(Format::CoreMl, &root, &format!("{n:064x}"), model, &|| {
+            false
+        })
+        .unwrap()
+    };
+    let save = |n: usize, model: &str| {
+        let mut entry = acquire(n, model);
+        fs::write(entry.path.join("weights"), [1; 600]).unwrap();
+        entry.complete(&|| false).unwrap();
+        entry.path.clone()
+    };
+    // However large, and however long unused, a prepared model survives
+    // previews filling the limit, even a zero one.
+    let old = save(1, "aesthetic");
+    let other = save(2, "dinov2");
+    let preview = root.join(format!("{:064x}.bin", 3));
+    fs::write(&preview, [7; 200]).unwrap();
+    crate::core::cache::maintain_keeping_models(&root, Some(0), || false).unwrap();
+    assert!(!preview.exists(), "previews still honour the disk limit");
+    assert!(acquire(1, "aesthetic").reused);
+    // An update gives the model a new copy: the old one goes, other models stay.
+    let legacy = root.join(format!("{:064x}.coreml", 4));
+    fs::create_dir(&legacy).unwrap();
+    fs::write(legacy.join(".owner"), OWNER).unwrap();
+    let held = acquire(5, "aesthetic");
+    let new = save(6, "aesthetic");
+    assert!(!old.exists() && !legacy.exists());
+    assert!(new.exists() && other.exists());
+    assert!(held.path.exists(), "a copy another window has open stays");
 }
 // Invoked in isolated test processes by the lifetime regression below.
 #[test]
@@ -269,23 +243,15 @@ fn cache_lease_process_probe() {
         let result = crate::core::cache::maintain(&root, Some(0), || false).unwrap();
         assert!(result.disk_bytes > 0 && result.pinned_disk_bytes == result.disk_bytes);
         assert!(
-            Lease::acquire(
-                Format::CoreMl,
-                &root,
-                &format!("{:064x}", 1),
-                1_000_000,
-                &|| false
-            )
+            Lease::acquire(Format::CoreMl, &root, &format!("{:064x}", 1), "m", &|| {
+                false
+            })
             .is_err()
         );
     } else {
-        let entry = Lease::acquire(
-            Format::CoreMl,
-            &root,
-            &format!("{:064x}", 1),
-            1_000_000,
-            &|| false,
-        )
+        let entry = Lease::acquire(Format::CoreMl, &root, &format!("{:064x}", 1), "m", &|| {
+            false
+        })
         .unwrap();
         assert!(entry.reused);
         if mode == "crash" {
