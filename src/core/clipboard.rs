@@ -7,7 +7,7 @@ use super::{
 use anyhow::{Context, Result};
 use image::RgbaImage;
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -82,7 +82,7 @@ impl Copier {
     }
 }
 
-#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn png(image: &RgbaImage) -> Result<Vec<u8>> {
     use image::{
         ImageEncoder,
@@ -99,7 +99,8 @@ fn png(image: &RgbaImage) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn path_text(path: &Path) -> Result<&str> {
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn path_text(path: &std::path::Path) -> Result<&str> {
     path.to_str()
         .with_context(|| format!("Cannot copy {path:?}: the path is not valid text"))
 }
