@@ -3,6 +3,8 @@ use crate::core::{cache_record, model::Fingerprint};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 const READY: &str = ".ready.bin";
+/// Which model a copy was prepared from, so a newer copy can replace it.
+const MODEL: &str = ".model";
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
 struct Record {
     path: PathBuf,
@@ -33,7 +35,13 @@ fn snapshot(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<Record>> {
         .into_iter()
         .filter(|p| {
             let relative = p.strip_prefix(path).unwrap();
-            ![Path::new(".owner"), Path::new(".lease"), Path::new(READY)].contains(&relative)
+            ![
+                Path::new(".owner"),
+                Path::new(".lease"),
+                Path::new(READY),
+                Path::new(MODEL),
+            ]
+            .contains(&relative)
         })
         .map(|p| {
             Ok(Record {
@@ -77,20 +85,26 @@ pub(crate) struct Lease {
     root: PathBuf,
     lock: Option<Lock>,
     keep: bool,
-    max_bytes: u64,
+    model: String,
 }
 impl Lease {
     pub fn acquire(
         format: Format,
         root: &Path,
         key: &str,
-        max_bytes: u64,
+        model: &str,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Self> {
-        ensure!(max_bytes > 0, "Persistent model cache is disabled");
         ensure!(
             key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit()),
             "Invalid model cache identity"
+        );
+        ensure!(
+            (1..=64).contains(&model.len())
+                && model
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_'),
+            "Invalid model name"
         );
         ensure!(!cancelled(), "Model cache cancelled");
         crate::core::operations::reject_symlink_components(root)?;
@@ -107,13 +121,14 @@ impl Lease {
         }
         let lock = lease(&path)?;
         drop(guard);
+        fs::write(path.join(MODEL), model)?;
         let mut result = Self {
             path,
             reused: false,
             root,
             lock: Some(lock),
             keep: false,
-            max_bytes,
+            model: model.into(),
         };
         let saved: Option<Vec<Record>> = cache_record::read(&result.path.join(READY))
             .and_then(|b| cache_record::decode(cache_record::Kind::Compiled, &b));
@@ -132,7 +147,10 @@ impl Lease {
             for entry in fs::read_dir(&result.path)? {
                 ensure!(!cancelled(), "Model cache cancelled");
                 let entry = entry?;
-                if [".lease", ".owner"].iter().any(|n| entry.file_name() == *n) {
+                if [".lease", ".owner", MODEL]
+                    .iter()
+                    .any(|n| entry.file_name() == *n)
+                {
                     continue;
                 }
                 if entry.file_type()?.is_dir() {
@@ -157,11 +175,44 @@ impl Lease {
             "Model preparation produced no cache artifacts"
         );
         self.publish(&records)?;
-        self.keep = usage(&self.path, cancelled)?.0 <= self.max_bytes;
-        // Active leases may temporarily exceed the budget, but are never evicted.
-        crate::core::cache::maintain(&self.root, Some(self.max_bytes), cancelled)?;
+        self.keep = true;
+        self.supersede(cancelled);
         Ok(())
     }
+    /// Removes this model's other copies, left by an earlier model file,
+    /// runtime or macOS, now that this one is ready. Copies from before
+    /// copies named their model go too. A copy another window has open stays.
+    fn supersede(&self, cancelled: &dyn Fn() -> bool) {
+        let Ok(guard) = namespace(&self.root) else {
+            return;
+        };
+        let Ok(entries) = fs::read_dir(&self.root) else {
+            return;
+        };
+        let mut removed = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path == self.path || !owned(&path) {
+                continue;
+            }
+            let model = fs::read_to_string(path.join(MODEL)).ok();
+            if model.is_some_and(|m| m != self.model) {
+                continue;
+            }
+            let Ok(lock) = lease(&path) else {
+                continue;
+            };
+            if remove(&path, cancelled).is_ok() {
+                removed += 1;
+            }
+            drop(lock);
+        }
+        drop(guard);
+        if removed > 0 {
+            tracing::info!(model = %self.model, removed, "older prepared-model copies removed");
+        }
+    }
+    #[cfg(test)]
     pub fn retained(&self) -> bool {
         self.keep
     }
@@ -181,7 +232,6 @@ impl Drop for Lease {
         } else {
             drop(self.lock.take());
         }
-        let _ = crate::core::cache::maintain(&self.root, Some(self.max_bytes), || false);
     }
 }
 

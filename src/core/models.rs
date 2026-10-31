@@ -31,7 +31,7 @@ impl RotationSuggestion {
 }
 pub struct Models {
     cpu_threads: usize,
-    compiled_cache: Option<(PathBuf, u64)>,
+    compiled_cache: Option<PathBuf>,
     backend: Backend,
     processing: Control,
     cancellation: Option<std::sync::Arc<dyn Fn() -> bool + Send + Sync>>,
@@ -66,12 +66,10 @@ impl Models {
             ..Self::default()
         }
     }
-    pub(crate) fn configure_compiled_cache(&mut self, root: PathBuf, budget: u64, clear: bool) {
-        let release = clear
-            || self
-                .compiled_cache
-                .as_ref()
-                .is_some_and(|(old, bytes)| old != &root || budget < *bytes);
+    /// Prepared models live in `root` regardless of the disk limit. Clearing
+    /// releases the sessions that hold them open so the copies can go.
+    pub(crate) fn configure_compiled_cache(&mut self, root: PathBuf, clear: bool) {
+        let release = clear || self.compiled_cache.as_ref().is_some_and(|old| old != &root);
         if release {
             #[cfg(feature = "onnx")]
             self.sessions.retain(|kind, (_, _, session, _)| {
@@ -83,7 +81,7 @@ impl Models {
                 }
             });
         }
-        self.compiled_cache = Some((root, budget));
+        self.compiled_cache = Some(root);
     }
     pub fn begin_run(
         &mut self,
@@ -234,6 +232,7 @@ impl Models {
                 .commit();
             self.sessions.remove(kind);
             self.processing.preparing(kind, self.backend);
+            let processing = self.processing.clone();
             let (session, backend, detail) = match execution::create(
                 path,
                 kind,
@@ -241,6 +240,7 @@ impl Models {
                 self.backend,
                 cancelled,
                 self.compiled_cache.as_ref(),
+                &|backend, step| processing.step(kind, backend, step),
             ) {
                 Ok(created) => created,
                 Err(error) => {
@@ -294,8 +294,15 @@ impl Models {
             Backend::Cpu,
             format!("CPU fallback after inference error: {error}"),
         );
-        let (mut session, _, _) =
-            execution::create(path, kind, self.cpu_threads, Backend::Cpu, cancelled, None)?;
+        let (mut session, _, _) = execution::create(
+            path,
+            kind,
+            self.cpu_threads,
+            Backend::Cpu,
+            cancelled,
+            None,
+            &|_, _| {},
+        )?;
         self.initializations += 1;
         let result = execution::run(&mut session, &tensor, batch);
         self.inferences += 1;

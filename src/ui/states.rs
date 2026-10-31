@@ -8,19 +8,37 @@ impl PhotoSortApp {
     /// Keeps the start time of the current progress run for elapsed/estimate.
     pub(super) fn track_progress_clock(&mut self) {
         match (self.progress, self.progress_started) {
-            (Some(_), None) => self.progress_started = Some(Instant::now()),
+            (Some(_), None) => {
+                self.progress_started = Some(Instant::now());
+                self.progress_prep = Default::default();
+            }
             (None, Some(_)) => self.progress_started = None,
+            _ => {}
+        }
+        match (self.preparing_model().is_some(), self.progress_prep.1) {
+            (true, None) => self.progress_prep.1 = Some(Instant::now()),
+            (false, Some(since)) => {
+                self.progress_prep.0 += since.elapsed();
+                self.progress_prep.1 = None;
+            }
             _ => {}
         }
     }
 
     /// "1:05 elapsed · about 2 min left", once there is enough to estimate.
+    /// Model preparation is not photo work: it is left out of the estimate,
+    /// and no estimate shows while a model prepares.
     pub(super) fn progress_timing(&self) -> Option<String> {
         let (done, total) = self.progress?;
         let elapsed = self.progress_started?.elapsed();
+        let working = elapsed.saturating_sub(self.progress_prep.0);
         let mut text = format!("{} elapsed", clock(elapsed));
-        if done >= 3 && done < total && elapsed >= Duration::from_secs(3) {
-            let left = elapsed.mul_f64((total - done) as f64 / done as f64);
+        if self.progress_prep.1.is_none()
+            && done >= 3
+            && done < total
+            && working >= Duration::from_secs(3)
+        {
+            let left = working.mul_f64((total - done) as f64 / done as f64);
             text.push_str(&format!(" · about {} left", rough(left)));
         }
         Some(text)
@@ -37,6 +55,24 @@ impl PhotoSortApp {
             .status()
             .into_iter()
             .find(|s| s.preparing)
+    }
+
+    /// What preparing the current model is doing, for the card and status bar.
+    pub(super) fn prep_note(&self) -> Option<PrepNote> {
+        let status = self.preparing_model()?;
+        let ready = self
+            .runtime
+            .processing
+            .status()
+            .iter()
+            .filter(|s| !s.preparing && !s.detail.starts_with("Initialization stopped"))
+            .count();
+        Some(prep_note(
+            &status,
+            ready,
+            self.runtime.processing.snapshot_run().backend,
+            Instant::now(),
+        ))
     }
 
     /// What the running analysis is for, in the words of the step that
@@ -103,9 +139,7 @@ impl PhotoSortApp {
                     "Comparing the analyzed photos…".to_owned()
                 }
             }),
-            preparing: self
-                .preparing_model()
-                .map(|status| format!("{} · {}", status.model, status.backend.label())),
+            preparing: self.prep_note(),
             cancellable: analyzing,
         }
     }
@@ -314,8 +348,8 @@ struct Activity {
     fraction: Option<f32>,
     /// What a pass without a count is doing.
     phase: Option<String>,
-    /// The model being prepared and where, while preparation runs.
-    preparing: Option<String>,
+    /// The model being prepared and its current step.
+    preparing: Option<PrepNote>,
     cancellable: bool,
 }
 
@@ -333,19 +367,32 @@ pub(super) fn organize_activity(mode: GroupMode) -> &'static str {
 /// was pressed.
 fn progress_card(ui: &mut egui::Ui, activity: &Activity, centred: bool) -> bool {
     let mut cancel = false;
-    let preparing = |ui: &mut egui::Ui, model: &str| {
+    let preparing = |ui: &mut egui::Ui, note: &PrepNote| {
         ui.add(
             egui::Label::new(
-                RichText::new(format!(
-                    "{}  Preparing AI models · first run only, can take a few minutes",
-                    icon::GEAR
-                ))
+                RichText::new(match &note.ready {
+                    Some(ready) => format!("{}  {} · {ready}", icon::GEAR, note.headline),
+                    None => format!("{}  {}", icon::GEAR, note.headline),
+                })
                 .small()
                 .color(ACCENT),
             )
             .wrap(),
         )
-        .on_hover_text(model);
+        .on_hover_text(&note.hover);
+        if let Some(step) = &note.step {
+            ui.add(
+                egui::Label::new(RichText::new(step).small().color(if note.slow {
+                    ACCENT
+                } else {
+                    MUTED
+                }))
+                .wrap(),
+            );
+        }
+        if let Some(advice) = note.advice {
+            ui.add(egui::Label::new(RichText::new(advice).small().color(MUTED)).wrap());
+        }
     };
     if centred {
         state_frame(ui, |ui| {
@@ -462,6 +509,116 @@ pub(super) fn notice_card(
     clicked
 }
 
+/// What the card and status bar say about one model being prepared.
+#[derive(Debug)]
+pub(super) struct PrepNote {
+    /// "Preparing the aesthetic scoring model".
+    pub headline: String,
+    /// "2 other models ready", for the card only.
+    pub ready: Option<String>,
+    /// "Optimizing for this computer · 1:12 · about 40 s left".
+    pub step: Option<String>,
+    /// Past the usual time for this step.
+    pub slow: bool,
+    /// What the user can do once the step is slow.
+    pub advice: Option<&'static str>,
+    /// The model's file name and where it runs.
+    pub hover: String,
+}
+
+/// The model in the words the models dialog uses.
+fn model_name(kind: &str) -> &str {
+    match kind {
+        "dinov2" => "similarity",
+        "aesthetic" => "aesthetic scoring",
+        "face_detector" => "face detection",
+        "face_landmarks" => "face landmarks",
+        "face_blendshapes" => "eye openness",
+        "sface" => "person recognition",
+        "orientation" => "orientation",
+        other => other,
+    }
+}
+
+pub(super) fn prep_note(
+    status: &crate::core::processing::ModelStatus,
+    ready: usize,
+    requested: crate::core::processing::Backend,
+    now: Instant,
+) -> PrepNote {
+    use crate::core::processing::{Backend, PrepStep};
+    let headline = format!("Preparing the {} model", model_name(status.model));
+    let ready = (ready > 0).then(|| {
+        format!(
+            "{ready} other {} ready",
+            if ready == 1 { "model" } else { "models" }
+        )
+    });
+    let hover = format!("{} · {}", status.model, status.backend.label());
+    let Some(prep) = status.prep else {
+        return PrepNote {
+            headline,
+            ready,
+            step: Some("Starting…".into()),
+            slow: false,
+            advice: None,
+            hover,
+        };
+    };
+    let elapsed = prep.elapsed(now);
+    let label = if prep.step == PrepStep::Loading && requested != Backend::Cpu {
+        "Accelerator unavailable, loading on the CPU instead"
+    } else {
+        prep.step.label()
+    };
+    let mut step = format!("{label} · {}", clock(elapsed));
+    let (slow, stalled) = (prep.slow(now), prep.stalled(now));
+    if stalled {
+        step.push_str(" · this may be stuck");
+    } else if slow && prep.usual.is_some() {
+        step.push_str(" · taking longer than usual");
+    } else if slow {
+        step.push_str(" · taking longer than expected");
+    } else if let Some(usual) = prep.usual.filter(|u| *u >= Duration::from_secs(5)) {
+        if usual > elapsed {
+            step.push_str(&format!(" · about {} left", rough(usual - elapsed)));
+        } else {
+            step.push_str(" · almost done");
+        }
+    }
+    // Native compilation is one call that cannot be interrupted; hashing can.
+    let native = matches!(
+        prep.step,
+        PrepStep::Compiling | PrepStep::Reusing | PrepStep::Loading
+    );
+    let advice = match (slow, stalled, native) {
+        (_, true, true) if status.backend != Backend::Cpu => Some(
+            "Closing waits for this step. If it never ends, force quit and choose CPU in Settings › AI execution.",
+        ),
+        (_, true, true) => {
+            Some("Closing waits for this step. If it never ends, force quit PhotoSort.")
+        }
+        (true, _, true) if status.backend != Backend::Cpu => Some(
+            "This step can't be interrupted; Cancel takes effect when it ends. CPU in Settings › AI execution skips it.",
+        ),
+        (true, _, true) => {
+            Some("This step can't be interrupted; Cancel takes effect when it ends.")
+        }
+        (true, _, false) => {
+            Some("Large models check slowly on a busy disk. Cancel stops right away.")
+        }
+        _ => None,
+    };
+    PrepNote {
+        headline,
+        ready,
+        step: Some(step),
+        slow,
+        advice,
+        hover,
+    }
+}
+
 fn clock(duration: Duration) -> String {
     let seconds = duration.as_secs();
     format!("{}:{:02}", seconds / 60, seconds % 60)
@@ -486,5 +643,49 @@ mod tests {
         assert_eq!(rough(Duration::from_secs(3)), "5 s");
         assert_eq!(rough(Duration::from_secs(42)), "45 s");
         assert_eq!(rough(Duration::from_secs(61)), "2 min");
+    }
+
+    #[test]
+    fn model_preparation_estimates_then_says_slow_then_possibly_stuck() {
+        use crate::core::processing::{Backend, ModelStatus, Prep, PrepStep};
+        let start = Instant::now();
+        let status = |usual| ModelStatus {
+            model: "aesthetic",
+            backend: Backend::CoreMl,
+            detail: String::new(),
+            preparing: true,
+            prep: Some(Prep {
+                step: PrepStep::Compiling,
+                started: start,
+                step_started: start,
+                usual,
+            }),
+        };
+        let at = |secs| start + Duration::from_secs(secs);
+        let known = status(Some(Duration::from_secs(120)));
+        let note = prep_note(&known, 2, Backend::Auto, at(80));
+        assert_eq!(note.headline, "Preparing the aesthetic scoring model");
+        assert_eq!(note.ready.as_deref(), Some("2 other models ready"));
+        assert_eq!(
+            note.step.as_deref(),
+            Some("Optimizing for this computer · 1:20 · about 40 s left")
+        );
+        assert!(!note.slow && note.advice.is_none());
+        let note = prep_note(&known, 0, Backend::Auto, at(200));
+        assert!(note.slow && note.step.unwrap().ends_with("taking longer than usual"));
+        assert!(
+            note.advice
+                .unwrap()
+                .contains("Cancel takes effect when it ends")
+        );
+        // With no earlier timing, a first compile gets five minutes before
+        // it is called slow, and fifteen before it may be stuck.
+        let first = status(None);
+        assert!(!prep_note(&first, 0, Backend::Auto, at(290)).slow);
+        let note = prep_note(&first, 0, Backend::Auto, at(310));
+        assert!(note.step.unwrap().ends_with("taking longer than expected"));
+        let note = prep_note(&first, 0, Backend::Auto, at(901));
+        assert!(note.step.unwrap().ends_with("this may be stuck"));
+        assert!(note.advice.unwrap().contains("force quit"));
     }
 }
