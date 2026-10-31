@@ -133,7 +133,7 @@ fn another_folder_opens_with_clean_views_in_every_step_and_keeps_app_wide_choice
         .collect();
     session.save(&b).unwrap();
     let mut views = Saved {
-        step: Some(Step::Organize),
+        step: Some(Step::Rotation),
         ..Default::default()
     };
     views.bookmarks.insert(
@@ -171,8 +171,8 @@ fn another_folder_opens_with_clean_views_in_every_step_and_keeps_app_wide_choice
 
     assert_eq!(app.root.as_ref(), Some(&b));
     assert_eq!(PathBuf::from(&app.output), b);
-    // The step stays where the user was.
-    assert_eq!(app.step, Step::Cull);
+    // B opens on the step it was left on.
+    assert_eq!(app.step, Step::Rotation);
     assert!(app.review);
     assert!(app.saved_views.bookmarks.is_empty());
     for step in Step::ALL {
@@ -192,6 +192,23 @@ fn another_folder_opens_with_clean_views_in_every_step_and_keeps_app_wide_choice
     assert!(!app.preferences.easy_delete_auto);
     assert_eq!(app.preferences.photo_size, 222.0);
     assert_eq!(app.delete_panel_width, Some(444.0));
+}
+
+#[test]
+fn a_folder_never_opened_before_starts_in_organize() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = library(&dir, "a");
+    let b = library(&dir, "b");
+    let mut app = app(&dir);
+    app.open_now(a);
+    settle(&mut app);
+    app.set_step(Step::Rotation);
+    app.open_now(b.clone());
+    settle(&mut app);
+    assert_eq!(app.root.as_ref(), Some(&b));
+    assert_eq!(app.step, Step::Organize);
+    assert!(!app.review);
+    app.runtime.shutdown();
 }
 
 #[test]
@@ -274,4 +291,47 @@ fn a_folder_chosen_while_changes_were_applied_still_opens_clean() {
     settle(&mut app);
     assert_eq!(app.root.as_ref(), Some(&b));
     assert_clean(&app);
+}
+
+#[test]
+fn a_folder_open_while_folders_are_forgotten_does_not_save_its_view_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = library(&dir, "a");
+    let mut app = app(&dir);
+    app.open_now(a.clone());
+    settle(&mut app);
+    let a_photo = app.media[1].id;
+    app.decisions.insert(a_photo, rating(4));
+    app.group_mode = GroupMode::Date;
+    app.query = "b".into();
+    app.filter_dirty = true;
+    settle(&mut app);
+    app.checkpoint_bookmarks();
+    let until = Instant::now() + worker_patience();
+    while !Saved::path(&a).exists() {
+        assert!(Instant::now() < until, "the view was never saved");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    // What "Forget remembered folders" does to this folder. Removing every
+    // folder's views is covered in core::views; doing it here would race
+    // other tests sharing the data folder.
+    app.views_forgotten = true;
+    std::fs::remove_file(Saved::path(&a)).unwrap();
+    // This visit keeps its view, but nothing saves it again, even on quit.
+    app.switch_step(Step::Cull);
+    app.checkpoint_bookmarks();
+    app.save_session();
+    assert_eq!(app.views_to_save(), Saved::default());
+    app.runtime.shutdown();
+    drop(app);
+
+    let mut relaunched = self::app(&dir);
+    relaunched.open_now(a.clone());
+    settle(&mut relaunched);
+    assert!(!relaunched.views_forgotten);
+    assert_eq!(relaunched.saved_views, Saved::default());
+    assert_clean(&relaunched);
+    // Staged changes are not views.
+    assert_eq!(relaunched.decisions[&a_photo].rating, Some(4));
 }

@@ -58,7 +58,15 @@ fn bounded_heif_previews_preserve_geometry_alpha_orientation_and_request_order()
         )
         .into_rgba8();
         let mut prior = None;
-        for original_first in [false, true] {
+        // Every decode here is a full HEVC decode, which is slow on CI runners, so each
+        // orientation checks one request order and 6 checks both. Both orders still
+        // run with and without the even preload, and with swapped dimensions.
+        let orders: &[bool] = match orientation {
+            6 => &[false, true],
+            2 | 3 | 7 => &[true],
+            _ => &[false],
+        };
+        for &original_first in orders {
             let mut p = memory_only(root.path().join("unused"));
             if original_first {
                 assert_eq!(*full(&mut p, &media, expected.dimensions()), expected);

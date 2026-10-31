@@ -44,7 +44,7 @@ walkdir = "2.5"
 dirs = "6"
 blake3 = "1.8"
 trash = "5.2"
-quick-xml = "0.38"
+quick-xml = "0.41"
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "coreml", "cuda", "directml"], optional = true }
 
 tempfile = "3"

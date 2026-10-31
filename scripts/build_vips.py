@@ -19,6 +19,29 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = "8.18.7"
 SHA256 = "5baaead3b0bb20ffdb9e9ff09aa9fda08620923df77b63b436654cb5e0b3bf94"
 URL = f"https://github.com/libvips/libvips/releases/download/v{VERSION}/vips-{VERSION}.tar.xz"
+# Build tools from PyPI, pinned by hash. ninja lists every wheel it publishes; pip takes the platform's.
+BUILD_TOOLS = """\
+meson==1.12.1 --hash=sha256:930bc7542cbd9f57009e182fd014eba48cf1a0180a7b9006d2d32d8f168d8b02
+ninja==1.13.2 \\
+    --hash=sha256:fd82e26c0706ad4ab88e5fdd26f3fab0a987a90f810160f6c322e752c6af298b \\
+    --hash=sha256:d775a5e43e9088f507a6250d57fcf5678eb31268c545feb5064ffeee33735622 \\
+    --hash=sha256:81d95081c0ad7c95f67bf682220361ed2a32659d7861b4766b03433c58f22516 \\
+    --hash=sha256:227cbc3ae3e5e429692388103cae8c09451df086cd2d342dae0795af0d162547 \\
+    --hash=sha256:1684c60d031c54c1d049541b64243c0c567dca5463dbd77682a8901780af293d \\
+    --hash=sha256:65a24341b5ac09fcadcc37082660be40a94174e51a937fabf6e2cae26225fa2c \\
+    --hash=sha256:aa3d2ae5706a2c4d1e93edc951d1c6cbb45107413c404f8fde1741239efbc9a0 \\
+    --hash=sha256:919572cbc3f233261ecd41fe1f3efc9d44aa02464a4588867e06a8b4f6f416ea \\
+    --hash=sha256:0e083700470c02ca154a855ae6d692d03564f5064cae52e113896f9ccc078418 \\
+    --hash=sha256:59d71c3e15b6b6f3d903eb0c27285544e0747ca59925ada7037bb1af781ad4b3 \\
+    --hash=sha256:f90f84affc441e219f15fe52532806c1c9dbd22fb66c3addddce88a3deaabab7 \\
+    --hash=sha256:b2f687437fac460b27b7eadc99039b1163016fb4ba7276e2782a192d9f24ee0e \\
+    --hash=sha256:09de9ab04f7352f51570c73fd4913acb1e6c24be0a72cd8b80243d4d3ed04925 \\
+    --hash=sha256:6a87bf42b123abe2f37737300185f0a303a891899da85d73a3613ee80547e578 \\
+    --hash=sha256:915bd482c4be41c75120fd67a22e0bb3f0fbb3bbc5f95b89787deadd59e27ef2 \\
+    --hash=sha256:792cadbb9decfd1f776d4d0a6930feb46d08302eb57c176bcf26b09de5748e9f \\
+    --hash=sha256:1293f4078278b70d0ee4b6cc8f3a9e030656c9b2f59909970343c4fe76070118 \\
+    --hash=sha256:1db9852e528efa7702f5123969f86678663e46d57ff28ab13f5fd84d64a85fb1
+"""
 DEPENDENCIES = ["glib-2.0", "gio-2.0", "libjpeg", "libpng", "libtiff-4", "lcms2", "zlib"]
 
 
@@ -74,7 +97,10 @@ def main():
         venv.EnvBuilder(with_pip=True).create(tools)
         binaries = tools / ("Scripts" if os.name == "nt" else "bin")
         python = binaries / ("python.exe" if os.name == "nt" else "python")
-        subprocess.run([str(python), "-m", "pip", "install", "meson==1.12.1", "ninja==1.13.2"], check=True)
+        requirements = work / "build-tools.txt"
+        requirements.write_text(BUILD_TOOLS)
+        subprocess.run([str(python), "-m", "pip", "install", "--require-hashes", "--only-binary=:all:",
+                        "-r", str(requirements)], check=True)
         env = os.environ.copy()
         env["PATH"] = str(binaries) + os.pathsep + env.get("PATH", "")
         build = work / "build"

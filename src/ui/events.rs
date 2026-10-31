@@ -89,6 +89,8 @@ impl PhotoSortApp {
             Event::Saved => {}
             Event::Checkpointed(result) => self.on_checkpointed(result),
             Event::ViewError(error) | Event::PreferencesError(error) => {
+                // A failed forget must not leave its success line behind.
+                self.forget_message = None;
                 self.error = Some(error);
             }
             Event::Error(e) => self.on_error(e),
@@ -217,16 +219,22 @@ impl PhotoSortApp {
         self.scanning = false;
         // A folder chosen in place of another opens with clean views, even
         // ones it saved itself; reopening or reloading the same folder keeps
-        // them. Its staged changes come from its session either way.
+        // them. It goes back to the step it was left on, and a folder never
+        // opened before starts in Organize. Its staged changes come from its
+        // session either way.
         let views = if self
             .switched_from
             .take()
             .is_some_and(|previous| self.root.as_ref() != Some(&previous))
         {
-            Default::default()
+            crate::core::views::Saved {
+                step: Some(views.step.unwrap_or(Step::Organize)),
+                ..Default::default()
+            }
         } else {
             views
         };
+        self.views_forgotten = false;
         self.load_bookmarks(views);
         if let Some(mut review) = self.rotation_reload.take() {
             review.retain(|id| self.index.contains_key(&id));
@@ -739,7 +747,7 @@ impl PhotoSortApp {
         // The pre-apply bookmark is already in the durable operation
         // context. Do not enqueue that old identity snapshot here.
         self.saved_views.relocate(&report.relocated);
-        if let Some(root) = self.root.clone() {
+        if let Some(root) = self.root.clone().filter(|_| !self.views_forgotten) {
             let _ = self.runtime.io(IoWork::SaveViews {
                 root,
                 views: self.saved_views.clone(),

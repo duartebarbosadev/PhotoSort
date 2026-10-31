@@ -34,15 +34,29 @@ fn isolated_root(kind: &str) -> Option<PathBuf> {
     if !cfg!(any(test, feature = "test-isolation")) {
         return None;
     }
-    static ROOT: std::sync::OnceLock<Option<tempfile::TempDir>> = std::sync::OnceLock::new();
+    static ROOT: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    // Statics are never dropped, so the folder is removed when the process exits.
+    // nextest runs every test in its own process, which would otherwise leave
+    // one folder behind per test.
+    extern "C" fn remove_root() {
+        if let Some(Some(path)) = ROOT.get() {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+    unsafe extern "C" {
+        fn atexit(callback: extern "C" fn()) -> std::ffi::c_int;
+    }
     let root = ROOT.get_or_init(|| {
-        tempfile::Builder::new()
+        let dir = tempfile::Builder::new()
             .prefix("photosort-test-")
             .tempdir()
-            .ok()
+            .ok()?;
+        // SAFETY: registers a plain function with the C runtime, once per process.
+        unsafe { atexit(remove_root) };
+        Some(dir.keep())
     });
     // Journals refuse symlinked paths; macOS temp lives under the /var link.
-    let path = root.as_ref()?.path();
+    let path = root.as_deref()?;
     Some(
         path.canonicalize()
             .unwrap_or_else(|_| path.to_path_buf())
