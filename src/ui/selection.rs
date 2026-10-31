@@ -169,7 +169,7 @@ impl PhotoSortApp {
         if !self.selection_ready() && !self.scene_selection_ready() {
             return;
         }
-        let shown = self.board_select_all_order();
+        let shown = self.board_shown_order();
         let order = shown.as_deref().unwrap_or(&self.filtered);
         self.selection.all(&self.media, order);
         self.comparison_focus = None;

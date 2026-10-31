@@ -83,7 +83,6 @@ impl PhotoSortApp {
                             "Current / date + similarity / visual / faces / location",
                         ),
                         ("F / S", "Cull folder / similarity-group navigator"),
-                        ("F9", "Open cache usage and controls"),
                         ("F10 / Ctrl/Cmd + ,", "Open Settings"),
                         ("F12", "About PhotoSort"),
                         (
@@ -92,7 +91,7 @@ impl PhotoSortApp {
                         ),
                         (
                             "Organize: Ctrl/Cmd+Shift+N",
-                            "New folder inside the folder shown",
+                            "New folder inside the folder you clicked",
                         ),
                         (
                             "Organize: hold \\",

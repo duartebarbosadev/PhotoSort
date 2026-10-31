@@ -4,7 +4,7 @@ use crate::test_support::worker_patience;
 fn settings_errors_are_bounded_and_dismissible_without_hiding_footer_or_losing_draft() {
     for size in [egui::vec2(600., 500.), egui::vec2(1440., 990.)] {
         let (_dir, mut app) = fixture();
-        app.open_settings(Section::Caches);
+        app.open_settings(Section::Storage);
         app.preferences_draft.as_mut().unwrap().navigation.rating = Some(5);
         let error = "Open folder failed: /unavailable/long cache folder café/".repeat(20);
         app.error = Some(error.clone());
@@ -44,7 +44,7 @@ fn settings_errors_are_bounded_and_dismissible_without_hiding_footer_or_losing_d
             "Settings",
             "Dismiss error",
             "General",
-            "Caches",
+            "Storage",
             "Cancel",
             "Save settings",
         ] {
@@ -114,7 +114,7 @@ fn cache_folder_settings_uses_injected_location_in_every_workflow_without_extra_
                 Ok(())
             }),
         );
-        app.open_settings(Section::Caches);
+        app.open_settings(Section::Storage);
         assert!(!app.runtime.cache.take().unwrap().clear);
         app.runtime.cache.finish(Ok(Default::default()), false);
         app.preferences_draft.as_mut().unwrap().navigation.rating = Some(5);
@@ -127,7 +127,7 @@ fn cache_folder_settings_uses_injected_location_in_every_workflow_without_extra_
         );
         for step in Step::ALL {
             app.step = step;
-            app.open_settings(Section::Caches);
+            app.open_settings(Section::Storage);
             let ctx = egui::Context::default();
             theme_install(&ctx);
             ctx.enable_accesskit();
@@ -385,6 +385,18 @@ fn settings_preserve_live_history_and_render_compactly_without_image_or_analysis
     assert!(!output.shapes.is_empty());
     assert!(app.analysis_run.is_none() && app.metadata_run.is_none() && app.requested.is_empty());
     assert!(app.preferences_draft.is_some());
+    // Clearing recent folders acts at once and is not an unsaved change; a
+    // draft edit marks only the page that owns it.
+    app.clear_recent_folders();
+    let mut draft = app.preferences_draft.take().unwrap();
+    draft.recent_folders = vec![dir.path().to_path_buf()];
+    assert!(!pages::has_pending(&draft, &app.preferences));
+    draft.cache.disk_mib += 1;
+    let pending: Vec<_> = Section::ALL
+        .into_iter()
+        .filter(|s| s.pending(&draft, &app.preferences))
+        .collect();
+    assert_eq!(pending, [Section::Storage]);
 }
 #[test]
 fn clearing_shared_caches_preserves_every_workflows_review_and_bookmark_state() {
@@ -470,13 +482,13 @@ fn settings_access_reuses_draft_and_requests_usage_once_without_clearing() {
     app.runtime.shutdown();
     app.runtime.cache.take();
     app.runtime.cache.finish(Ok(Default::default()), false);
-    app.open_settings(Section::Caches);
+    app.open_settings(Section::Storage);
     let request = app.runtime.cache.take().expect("one usage request");
     assert!(!request.clear);
     app.runtime.cache.finish(Ok(Default::default()), false);
     app.preferences_draft.as_mut().unwrap().navigation.rating = Some(5);
     app.open_settings(Section::General);
-    app.open_settings(Section::Caches);
+    app.open_settings(Section::Storage);
     assert!(
         app.runtime.cache.take().is_none(),
         "section navigation repeated cache work"
@@ -497,9 +509,9 @@ fn settings_access_cache_and_general_anchors_keep_footer_visible_at_small_sizes(
         ctx.enable_accesskit();
         let mut time = 0.;
         for (section, label) in [
-            (Section::Caches, "Shared caches"),
-            (Section::General, "Application updates"),
-            (Section::Caches, "Shared caches"),
+            (Section::Storage, "Disk cache limit"),
+            (Section::General, "Check for updates daily"),
+            (Section::Storage, "Disk cache limit"),
         ] {
             app.open_settings(section);
             let mut output = None;
@@ -518,7 +530,7 @@ fn settings_access_cache_and_general_anchors_keep_footer_visible_at_small_sizes(
                 ));
             }
             let tree = output.unwrap().platform_output.accesskit_update.unwrap();
-            for label in [label, "General", "Caches", "Cancel", "Save settings"] {
+            for label in [label, "General", "Storage", "Cancel", "Save settings"] {
                 let node = tree
                     .nodes
                     .iter()
@@ -588,4 +600,47 @@ fn switching_the_raw_look_reloads_only_raw_previews() {
     assert!(app.textures.contains_key(&(MediaId(2), false)));
     assert_eq!(app.requested, [(MediaId(2), true)].into_iter().collect());
     app.runtime.shutdown();
+}
+#[test]
+fn first_visit_to_each_settings_page_draws_the_dialog_in_place() {
+    for size in [egui::vec2(600., 500.), egui::vec2(1440., 900.)] {
+        let (_dir, mut app) = fixture();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let mut time = 0.;
+        let mut save = |app: &mut PhotoSortApp| {
+            time += 0.1;
+            let output = ctx.run_test(
+                egui::RawInput {
+                    time: Some(time),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ui| {
+                    let ctx = &ui.ctx().clone();
+                    app.preferences_dialog(ctx)
+                },
+            );
+            let tree = output.platform_output.accesskit_update.unwrap();
+            let node = &tree
+                .nodes
+                .iter()
+                .find(|(_, n)| n.label() == Some("Save settings"))
+                .unwrap()
+                .1;
+            node.bounds().unwrap()
+        };
+        app.open_settings(Section::General);
+        let mut settled = save(&mut app);
+        for _ in 0..8 {
+            settled = save(&mut app);
+        }
+        // The frame shown on the first visit is already the settled layout.
+        for section in Section::ALL {
+            app.open_settings(section);
+            assert_eq!(save(&mut app), settled, "{section:?} at {size:?}");
+        }
+        app.runtime.shutdown();
+    }
 }

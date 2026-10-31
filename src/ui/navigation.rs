@@ -9,6 +9,20 @@ pub(super) const HEADER_HEIGHT: f32 = 38.0;
 /// show only their icons.
 const ORGANIZE_COMPACT: f32 = 1100.0;
 
+impl Step {
+    /// The step's icon, as shown in Settings.
+    pub(super) fn icon(self) -> &'static str {
+        use egui_phosphor::regular as icon;
+        match self {
+            Step::Organize => icon::FOLDERS,
+            Step::EasyDelete => icon::BROOM,
+            Step::Rotation => icon::ARROW_CLOCKWISE,
+            Step::PickBest => icon::CROWN_SIMPLE,
+            Step::Cull => icon::STAR,
+        }
+    }
+}
+
 /// Height of the bottom bar's step control.
 const STEP_HEIGHT: f32 = 28.0;
 /// Inset between the step control's container and its segments.
