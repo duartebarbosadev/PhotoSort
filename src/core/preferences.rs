@@ -3,7 +3,7 @@ use super::{metadata::atomic_write, model::Step};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -179,5 +179,51 @@ fn path_key(path: &Path) -> std::ffi::OsString {
     #[cfg(not(windows))]
     {
         path.as_os_str().into()
+    }
+}
+/// Menu labels for folders: the folder name, plus as much of the parent path
+/// as it takes to tell apart folders that share a name ("samples · tests").
+pub fn folder_labels(paths: &[impl AsRef<Path>]) -> Vec<String> {
+    let parents: Vec<Vec<String>> = paths
+        .iter()
+        .map(|p| {
+            let parent = p.as_ref().parent().unwrap_or(Path::new(""));
+            parent
+                .components()
+                .rev()
+                .filter(|c| !matches!(c, Component::RootDir))
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect()
+        })
+        .collect();
+    let label = |i: usize, depth: usize| {
+        let name = paths[i].as_ref().file_name().map_or_else(
+            || paths[i].as_ref().to_string_lossy(),
+            |n| n.to_string_lossy(),
+        );
+        if depth == 0 {
+            return name.into_owned();
+        }
+        let shown: Vec<&str> = parents[i][..depth]
+            .iter()
+            .rev()
+            .map(String::as_str)
+            .collect();
+        format!("{name} · {}", shown.join(std::path::MAIN_SEPARATOR_STR))
+    };
+    let mut depths = vec![0; paths.len()];
+    loop {
+        let labels: Vec<String> = (0..paths.len()).map(|i| label(i, depths[i])).collect();
+        let mut grew = false;
+        for i in 0..paths.len() {
+            let shared = labels.iter().filter(|l| **l == labels[i]).count() > 1;
+            if shared && depths[i] < parents[i].len() {
+                depths[i] += 1;
+                grew = true;
+            }
+        }
+        if !grew {
+            return labels;
+        }
     }
 }

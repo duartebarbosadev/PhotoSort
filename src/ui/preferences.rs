@@ -237,14 +237,10 @@ impl PhotoSortApp {
                     ui.separator();
                     ui.label("Recent folders");
                     let mut selected = None;
-                    for path in recent {
+                    let labels = crate::core::preferences::folder_labels(&recent);
+                    for (path, label) in recent.into_iter().zip(labels) {
                         if ui
-                            .add_enabled(
-                                !self.busy,
-                                egui::Button::new(
-                                    path.file_name().unwrap_or_default().to_string_lossy(),
-                                ),
-                            )
+                            .add_enabled(!self.busy, egui::Button::new(label))
                             .on_hover_text(path.display().to_string())
                             .clicked()
                         {

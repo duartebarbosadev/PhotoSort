@@ -1022,8 +1022,8 @@ impl PhotoSortApp {
                 if !recent.is_empty() {
                     ui.add_space(S6);
                     welcome_section(ui, column, "Recent folders", |ui| {
-                        for path in recent {
-                            let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                        let labels = crate::core::preferences::folder_labels(&recent);
+                        for (path, name) in recent.into_iter().zip(labels) {
                             let row = ui
                                 .add_enabled(
                                     !self.busy,
