@@ -110,6 +110,9 @@ pub(super) struct Board {
     /// The board's search field is open in a narrow header, where it is
     /// otherwise a magnifier button.
     pub(super) searching: bool,
+    /// The frame in which the folder sidebar was drawn at the window's edge;
+    /// the board then leaves it out.
+    pub(super) sidebar_frame: Option<u64>,
 }
 
 /// The space between Organize's panels, and under the bar above them.
@@ -2493,8 +2496,11 @@ impl PhotoSortApp {
             }
         }
     }
-    /// The middle of Organize: photos grouped under their destination folder.
-    pub(super) fn organize_board(&mut self, ui: &mut egui::Ui) {
+    /// Organize's folder sidebar, flush with the window's left edge from the
+    /// top bar to the page bar, on its own warm grey like a desktop app's
+    /// sidebar. Drawn before the middle of the window; the board draws it
+    /// itself when it was not.
+    pub(super) fn organize_sidebar(&mut self, ui: &mut egui::Ui) {
         // A step switch earlier in this frame (the step tabs, a shortcut)
         // leaves `filtered` holding the previous step's photos, and the
         // sections from the last Organize visit, until the next refilter.
@@ -2514,23 +2520,30 @@ impl PhotoSortApp {
             self.refilter();
         }
         self.update_people(ui.ctx());
+        self.board.sidebar_frame = Some(ui.ctx().cumulative_frame_nr());
         egui::Panel::left("organize_folder_panel")
             .resizable(true)
+            .show_separator_line(false)
             .default_size(240.0)
             .size_range(180.0..=380.0)
-            .frame(
-                egui::Frame::new()
-                    .fill(PANEL)
-                    .corner_radius(R_SURFACE)
-                    .inner_margin(S2)
-                    .outer_margin(egui::Margin {
-                        left: 0,
-                        right: BOARD_GAP as i8,
-                        top: 0,
-                        bottom: 0,
-                    }),
-            )
-            .show(ui, |ui| self.board_tree(ui));
+            .frame(egui::Frame::new().fill(SIDEBAR).inner_margin(egui::Margin {
+                left: S2 as i8,
+                right: S2 as i8,
+                top: S3 as i8,
+                bottom: S2 as i8,
+            }))
+            .show(ui, |ui| {
+                if self.busy {
+                    ui.disable();
+                }
+                self.board_tree(ui);
+            });
+    }
+    /// The middle of Organize: photos grouped under their destination folder.
+    pub(super) fn organize_board(&mut self, ui: &mut egui::Ui) {
+        if self.board.sidebar_frame != Some(ui.ctx().cumulative_frame_nr()) {
+            self.organize_sidebar(ui);
+        }
         // The clicked photo, large, on the right.
         // The board keeps room for a row of tiles and its header; the preview
         // gives way in a narrow window.
@@ -2544,8 +2557,9 @@ impl PhotoSortApp {
             .frame(
                 egui::Frame::new()
                     .fill(PANEL)
+                    .stroke(Stroke::new(1.0, EDGE))
                     .corner_radius(R_SURFACE)
-                    .inner_margin(S2)
+                    .inner_margin(S2 - 1.0)
                     .outer_margin(egui::Margin {
                         left: BOARD_GAP as i8,
                         right: 0,
@@ -3119,7 +3133,7 @@ fn folder_row(
     if selected {
         painter.rect_filled(rect, R_CONTROL, SELECTED);
     } else if hover > 0.0 {
-        painter.rect_filled(rect, R_CONTROL, CARD.gamma_multiply(hover));
+        painter.rect_filled(rect, R_CONTROL, CARD_HOVER.gamma_multiply(hover));
     }
     let x = rect.left() + 8.0 + depth as f32 * 14.0;
     match faces {
@@ -3132,7 +3146,7 @@ fn folder_row(
             let behind = if selected {
                 SELECTED
             } else {
-                lerp_color(PANEL, CARD, hover)
+                lerp_color(SIDEBAR, CARD_HOVER, hover)
             };
             super::people::paint_faces(painter, slot, faces, behind);
         }

@@ -392,8 +392,9 @@ impl PhotoSortApp {
                 ui.set_clip_rect(area.intersect(ui.clip_rect()));
                 egui::Frame::new()
                     .fill(PANEL)
+                    .stroke(Stroke::new(1.0, EDGE))
                     .corner_radius(R_SURFACE)
-                    .inner_margin(S2)
+                    .inner_margin(S2 - 1.0)
                     .show(ui, |ui| {
                         ui.set_min_size(ui.available_size());
                         ui.horizontal(|ui| {

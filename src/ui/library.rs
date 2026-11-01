@@ -600,7 +600,7 @@ fn badge(painter: &egui::Painter, anchor: egui::Pos2, align: Align2, text: &str,
 
 /// A loading thumbnail's placeholder: a shade lighter than its tile, so a
 /// photo arriving brightens the tile instead of flashing dark first.
-pub(super) const WELL: Color32 = Color32::from_rgb(0x2D, 0x2D, 0x31);
+pub(super) const WELL: Color32 = Color32::from_rgb(0x33, 0x32, 0x2F);
 
 /// How far a thumbnail has faded in. The first frame with pixels starts the
 /// fade, so a scrolling grid fills softly instead of popping; thumbnails that
