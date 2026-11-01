@@ -2497,7 +2497,7 @@ impl PhotoSortApp {
         }
     }
     /// Organize's folder sidebar, flush with the window's left edge from the
-    /// top bar to the page bar, on its own warm grey like a desktop app's
+    /// top of the window to the page bar, on its own warm grey like a desktop app's
     /// sidebar. Drawn before the middle of the window; the board draws it
     /// itself when it was not.
     pub(super) fn organize_sidebar(&mut self, ui: &mut egui::Ui) {
@@ -2533,6 +2533,7 @@ impl PhotoSortApp {
                 bottom: S2 as i8,
             }))
             .show(ui, |ui| {
+                self.sidebar_title_band(ui, S3);
                 if self.busy {
                     ui.disable();
                 }
@@ -2543,6 +2544,10 @@ impl PhotoSortApp {
     pub(super) fn organize_board(&mut self, ui: &mut egui::Ui) {
         if self.board.sidebar_frame != Some(ui.ctx().cumulative_frame_nr()) {
             self.organize_sidebar(ui);
+        } else if self.board.sections.last().map_or(0, |s| s.range.end) != self.filtered.len() {
+            // The bar, drawn after the sidebar, changed what is shown.
+            self.filter_dirty = true;
+            self.refilter();
         }
         // The clicked photo, large, on the right.
         // The board keeps room for a row of tiles and its header; the preview
@@ -4689,6 +4694,9 @@ mod tests {
                 if step == Step::Organize {
                     // Search and the photo filter sit over the board.
                     assert!(found(&nodes, "Show")[0].top() > HEADER_HEIGHT);
+                    // Wide windows run the folder sidebar up beside the bar.
+                    let folders = found(&nodes, "FOLDERS")[0];
+                    assert_eq!(folders.top() < HEADER_HEIGHT, width > 1180.0, "at {width}");
                 }
             }
         }
