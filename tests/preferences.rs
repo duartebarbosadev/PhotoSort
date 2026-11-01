@@ -1,7 +1,7 @@
 use photosort::core::{
     jobs::{IoWork, Runtime},
     model::Step,
-    preferences::Preferences,
+    preferences::{Preferences, folder_labels},
     startup::Options,
 };
 use std::ffi::OsString;
@@ -32,6 +32,30 @@ fn history_is_bounded_deduplicated_and_last_folder_skips_missing_entries() {
     assert_eq!(p.recent_folders[0], dir.path().join("8"));
     std::fs::remove_dir(dir.path().join("8")).unwrap();
     assert_eq!(p.last_existing_folder(), Some(dir.path().join("11")));
+}
+#[test]
+fn folders_sharing_a_name_show_just_enough_parent_path_to_tell_apart() {
+    let sep = std::path::MAIN_SEPARATOR_STR;
+    let root = std::path::Path::new(sep);
+    let paths = [
+        root.join("2024/photos/samples"),
+        root.join("2023/photos/samples"),
+        root.join("Desktop/samples"),
+        root.join("trips"),
+        root.join("x/samples"),
+        root.join("y/x/samples"),
+    ];
+    assert_eq!(
+        folder_labels(&paths),
+        [
+            format!("samples · 2024{sep}photos"),
+            format!("samples · 2023{sep}photos"),
+            "samples · Desktop".into(),
+            "trips".into(),
+            "samples · x".into(),
+            format!("samples · y{sep}x"),
+        ]
+    );
 }
 #[test]
 fn accepted_preference_writes_survive_folder_epochs_and_shutdown_without_touching_bookmarks() {
