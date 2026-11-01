@@ -4607,8 +4607,13 @@ mod tests {
             app.runtime.cancel_analysis();
             app.analysis_run = None;
             if step == Step::Cull {
-                // A selection adds its menu to Cull's bar.
-                rendered(&mut app, &ctx, egui::vec2(1280.0, 800.0));
+                // A selection adds its menu to Cull's bar. Cull's list
+                // comes from a worker, so wait until it shows photos.
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while app.filtered.is_empty() && std::time::Instant::now() < deadline {
+                    rendered(&mut app, &ctx, egui::vec2(1280.0, 800.0));
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
                 app.select_library(app.media[app.filtered[0]].id, false, false);
                 app.review = false;
             }
