@@ -1703,6 +1703,15 @@ impl PhotoSortApp {
         if shown && !expanded {
             self.inspector = false;
         }
+        // Organize's folder sidebar runs flush along the window's left edge,
+        // whenever the board is shown.
+        if self.root.is_some()
+            && self.step == Step::Organize
+            && !self.media.is_empty()
+            && !self.filtered.is_empty()
+        {
+            self.organize_sidebar(root);
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG))
             .show(root, |ui| {

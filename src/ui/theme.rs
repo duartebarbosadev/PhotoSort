@@ -1,37 +1,43 @@
-//! Visual system ("Grade"). A neutral graphite surround, like a colour
-//! grading suite, keeps colour judgement honest: no tint competes with the
-//! photographs. Panels step up in small, even increments; one warm orange
-//! marks focus, the active page and the primary action. Selection is a lifted
-//! neutral. Type is Inter (compact); icons are Phosphor.
+//! Visual system ("Grade"). Quiet, low-contrast surfaces in the spirit of a
+//! calm desktop app: a neutral near-black canvas keeps colour judgement
+//! honest behind the photographs, the folder sidebar sits on a slightly
+//! lighter warm grey, and panels are soft cards one small step above the
+//! canvas with a barely-there edge. Secondary text is a muted warm grey. One
+//! warm orange marks focus, the active page and the primary action.
+//! Selection is a lifted neutral. Type is Inter (compact); icons are Phosphor.
 use eframe::egui::{self, Color32, CornerRadius, FontFamily, FontId, Stroke, TextStyle};
 
 const fn rgb(hex: u32) -> Color32 {
     Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
-/// Surround behind photographs and the main canvas.
-pub const BG: Color32 = rgb(0x121213);
-/// The title and page bars that frame the window.
-pub const CHROME: Color32 = rgb(0x161618);
-/// Bars and panels.
-pub const PANEL: Color32 = rgb(0x1C1C1E);
+/// Surround behind photographs and the main canvas. Neutral, so no tint
+/// competes with the photographs.
+pub const BG: Color32 = rgb(0x181818);
+/// The title and page bars that frame the window: the canvas with a hint of
+/// warmth.
+pub const CHROME: Color32 = rgb(0x1C1B1A);
+/// Panels and cards: one quiet step above the canvas.
+pub const PANEL: Color32 = rgb(0x1F1E1D);
+/// The folder sidebar: a slightly lighter warm grey than the panels beside it.
+pub const SIDEBAR: Color32 = rgb(0x262523);
 /// Floating bars and popovers, one step above the panels.
-pub const ELEVATED: Color32 = rgb(0x252528);
+pub const ELEVATED: Color32 = rgb(0x292826);
 /// Raised controls and tiles.
-pub const CARD: Color32 = rgb(0x262629);
-pub const CARD_HOVER: Color32 = rgb(0x303034);
+pub const CARD: Color32 = rgb(0x2B2A28);
+pub const CARD_HOVER: Color32 = rgb(0x353432);
 /// Hairlines inside menus and lists; panels are separated by tone instead.
-pub const LINE: Color32 = rgb(0x2E2E32);
-/// A barely-there edge that catches light on raised surfaces.
-pub const EDGE: Color32 = Color32::from_rgba_premultiplied(9, 9, 9, 9);
-pub const INK: Color32 = rgb(0xDCDCDF);
-pub const MUTED: Color32 = rgb(0x8E8E95);
-pub const FAINT: Color32 = rgb(0x5C5C63);
+pub const LINE: Color32 = rgb(0x2D2C2A);
+/// A barely-there edge that catches light on cards and raised surfaces.
+pub const EDGE: Color32 = Color32::from_rgba_premultiplied(13, 13, 13, 13);
+pub const INK: Color32 = rgb(0xE9E7E3);
+pub const MUTED: Color32 = rgb(0xA8A49E);
+pub const FAINT: Color32 = rgb(0x6E6A65);
 /// The one accent: focus, the active page, the primary action per screen.
 pub const ACCENT: Color32 = rgb(0xE8873A);
 /// Text and icons drawn on an accent fill.
 pub const ON_ACCENT: Color32 = rgb(0x17120E);
 /// Selected toggles and rows: a lifted neutral, never a muddy tint.
-pub const SELECTED: Color32 = rgb(0x3A3A40);
+pub const SELECTED: Color32 = rgb(0x3B3936);
 /// Translucent accent for text selection.
 pub const ACCENT_SOFT: Color32 = Color32::from_rgba_premultiplied(58, 34, 15, 64);
 pub const RED: Color32 = rgb(0xE5554F);
