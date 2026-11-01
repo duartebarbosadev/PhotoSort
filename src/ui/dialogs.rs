@@ -191,7 +191,7 @@ impl PhotoSortApp {
                         ui.label(format!(
                             "{}: {}",
                             step.title(),
-                            preferences::workflow_hint(step)
+                            hints::workflow_hint(step)
                         ));
                     }
                     ui.label("All analysis runs on your computer. Nothing is uploaded.");
