@@ -113,8 +113,12 @@ clipboard-win = { version = "5.4", features = ["std"] }
 wgpu = { version = "30", default-features = false, features = ["dx12", "wgsl"] }
 
 [target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
-# Copied photos as a file list (already used by egui for text).
-arboard = { version = "3.7", default-features = false }
+# Copied photos: file list plus image data in one clipboard offer. arboard
+# (used by egui for text) writes one format at a time, so PhotoSort owns the
+# selection itself: x11rb on X11 (already used by arboard and winit) and
+# wl-clipboard-rs on Wayland compositors with data-control.
+x11rb = "0.13.2"
+wl-clipboard-rs = "0.9.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["vulkan", "gles", "wgsl"] }
