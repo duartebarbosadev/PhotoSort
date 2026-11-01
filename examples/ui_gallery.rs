@@ -193,6 +193,33 @@ fn main() -> anyhow::Result<()> {
             false,
             [640.0, 700.0],
         ),
+        // Comparing in a compact window: the preview keeps to its column.
+        (
+            "10d-organize-compare-compact",
+            Some(Step::Organize),
+            false,
+            [900.0, 700.0],
+        ),
+        // Narrower, the preview opens over the board from its header.
+        (
+            "10e-organize-compare-narrow-preview",
+            Some(Step::Organize),
+            false,
+            [640.0, 700.0],
+        ),
+        // Narrowest, the folders fold into a popover on the board's header.
+        (
+            "10f-organize-folders-narrow",
+            Some(Step::Organize),
+            false,
+            [600.0, 700.0],
+        ),
+        (
+            "03i-organize-compare-details-wide",
+            Some(Step::Organize),
+            false,
+            [1300.0, 900.0],
+        ),
         (
             "03e-organize-grouping-wide",
             Some(Step::Organize),
@@ -284,6 +311,18 @@ fn main() -> anyhow::Result<()> {
                 harness.state_mut().gallery_select(3);
                 settle(&mut harness);
             }
+            if name.contains("details") {
+                harness.state_mut().gallery_details(true);
+                settle(&mut harness);
+            }
+            if name.contains("preview") {
+                harness.state_mut().gallery_organize_preview_overlay();
+                settle(&mut harness);
+            }
+            if name.contains("folders-narrow") {
+                harness.state_mut().gallery_organize_folders_popover();
+                settle(&mut harness);
+            }
             if name.contains("destination") {
                 // The destination chip in the Organize toolbar opens its popover.
                 use egui_kittest::kittest::Queryable;
@@ -323,10 +362,18 @@ fn main() -> anyhow::Result<()> {
         eprintln!("{name}");
         Ok(())
     };
-    let dialogs_only = std::env::var("GALLERY_ONLY").is_ok_and(|v| v == "dialogs");
+    let only = std::env::var("GALLERY_ONLY").ok();
+    let dialogs_only = only.as_deref() == Some("dialogs");
     if !dialogs_only {
         for (name, step, review, size) in shots {
+            // Any other GALLERY_ONLY value picks the shots whose name has it.
+            if only.as_deref().is_some_and(|only| !name.contains(only)) {
+                continue;
+            }
             shoot(&root, name, *step, *review, *size)?;
+        }
+        if only.is_some() {
+            return Ok(());
         }
     }
     // Dialogs over the Cull grid.

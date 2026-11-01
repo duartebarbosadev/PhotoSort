@@ -539,6 +539,22 @@ impl PhotoSortApp {
         ui.spacing_mut().slider_width = 60.0;
         // A small handle suits the floating bar.
         ui.spacing_mut().interact_size.y = 14.0;
+        // In a wrapping row the slider, its caption and the percentage move
+        // to the next line together rather than run past the edge.
+        let caption = ui
+            .painter()
+            .layout_no_wrap(
+                "Zoom 100%".into(),
+                egui::TextStyle::Body.resolve(ui.style()),
+                MUTED,
+            )
+            .size()
+            .x;
+        // (A wrapping row reports its whole width as available.)
+        let left = ui.max_rect().right() - ui.cursor().left();
+        if ui.layout().main_wrap && left < 60.0 + caption + 3.0 * ui.spacing().item_spacing.x {
+            ui.end_row();
+        }
         // The slider's lowest position is Fit.
         if ui
             .add(
