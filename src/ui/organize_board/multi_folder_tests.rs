@@ -54,9 +54,11 @@ fn context() -> egui::Context {
 /// A click on the sidebar row or board item labelled `label`.
 fn click(app: &mut PhotoSortApp, ctx: &egui::Context, label: &str, modifiers: egui::Modifiers) {
     let nodes = rendered(app, ctx, SIZE);
+    // The topmost of rows with the same name, such as two "Empty" folders.
     let pos = nodes
         .iter()
-        .find(|(l, _)| l == label)
+        .filter(|(l, _)| l == label)
+        .min_by(|a, b| a.1.top().total_cmp(&b.1.top()))
         .unwrap_or_else(|| panic!("Missing {label}; labels {:?}", nodes))
         .1
         .center();

@@ -56,6 +56,8 @@ mod shortcuts;
 mod states;
 #[path = "status.rs"]
 mod status;
+#[path = "top_bar.rs"]
+mod top_bar;
 #[path = "tree_controls.rs"]
 mod tree_controls;
 #[path = "video.rs"]
@@ -276,6 +278,11 @@ pub struct PhotoSortApp {
     review: bool,
     inspector: bool,
     was_wide: bool,
+    /// How much the top bar gives up to fit, and what each fit needed.
+    bar_fit: top_bar::Fit,
+    bar_needs: top_bar::BarNeeds,
+    /// macOS: the window's own buttons sat in the top bar last frame.
+    window_buttons: bool,
     companions: bool,
     group_mode: GroupMode,
     pending_location_layout: Option<crate::core::geography::Layout>,
@@ -547,6 +554,9 @@ impl PhotoSortApp {
             review: false,
             inspector: true,
             was_wide: true,
+            bar_fit: Default::default(),
+            bar_needs: Default::default(),
+            window_buttons: false,
             companions: true,
             group_mode: GroupMode::Current,
             pending_location_layout: None,
@@ -1708,28 +1718,12 @@ impl PhotoSortApp {
                         ui.spacing_mut().item_spacing = egui::vec2(8.0, 5.0);
                     }
                     if self.busy { ui.disable(); }
-                    // The step's controls sit on a panel strip above the photos.
-                    egui::Frame::new()
-                        .fill(PANEL)
-                        // Organize's, Easy Delete's, Fix Rotation's and Pick Best's
-                        // bars have no context line: as much room below as above.
-                        .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: if matches!(self.step, Step::Organize | Step::EasyDelete | Step::Rotation | Step::PickBest) { 6 } else { 2 } })
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            if self.group_task.is_some() {
-                                ui.horizontal(|ui| {
-                                    ui.spinner();
-                                    ui.label("Updating groups…");
-                                    if ui.button("Cancel group update").clicked() { self.cancel_group_edit(); }
-                                });
-                            }
-                            self.toolbar(ui);
-                        });
+                    // The step's controls live in the top bar.
                     let margin: i8 = if compact { 8 } else { 12 };
                     // Organize's panels sit as far below the bar as they are
                     // from each other.
                     let top = if self.step == Step::Organize {
-                        (organize_board::BOARD_GAP - ui.spacing().item_spacing.y).max(0.0) as i8
+                        organize_board::BOARD_GAP as i8
                     } else {
                         margin
                     };
@@ -1737,6 +1731,10 @@ impl PhotoSortApp {
                         .inner_margin(egui::Margin { left: margin, right: margin, top, bottom: margin })
                         .show(ui, |ui| {
                             ui.set_min_size(ui.available_size());
+                            // Cull says when a filter hides some photos.
+                            if self.step == Step::Cull {
+                                self.cull_filter_notice(ui);
+                            }
                             self.navigator_panel(ui);
                             if self.step == Step::PickBest && self.pick_run.is_some() {
                                 self.working_state(ui, "Finding similar photos", "Grouping bursts and near-identical frames, then scoring each photo.");

@@ -178,18 +178,39 @@ impl PhotoSortApp {
         }
         true
     }
-    pub(super) fn app_menu(&mut self, ui: &mut egui::Ui) {
+    /// The app menu. `compact` shows only its icon; `open_folder` adds Open
+    /// folder, when the bar has no room for its own button.
+    pub(super) fn app_menu(&mut self, ui: &mut egui::Ui, compact: bool, open_folder: bool) {
+        use egui_phosphor::regular as icon;
         let available = matches!(
             self.runtime.updates.state(),
             crate::core::updates::State::Available(_)
         );
-        ui.menu_button(
-            if available {
-                "Menu · Update available"
+        let name = if available {
+            "Menu · Update available"
+        } else {
+            "Menu"
+        };
+        let menu = ui.menu_button(
+            if compact {
+                RichText::new(icon::LIST)
+                    .size(15.0)
+                    .color(if available { ACCENT } else { INK })
             } else {
-                "Menu"
+                RichText::new(name)
             },
             |ui| {
+                if open_folder {
+                    if ui
+                        .add_enabled(!self.busy, egui::Button::new("Open folder…"))
+                        .on_hover_text("Ctrl/Cmd+O")
+                        .clicked()
+                    {
+                        self.select_folder();
+                        ui.close();
+                    }
+                    ui.separator();
+                }
                 if ui
                     .button(if available {
                         "Update available…"
@@ -254,6 +275,10 @@ impl PhotoSortApp {
                 }
             },
         );
+        let menu = named(menu.response, egui::WidgetType::Button, name);
+        if compact {
+            menu.on_hover_text(name);
+        }
     }
     pub(super) fn preferences_dialog(&mut self, ctx: &egui::Context) {
         if let Some(mut draft) = self.preferences_draft.take() {

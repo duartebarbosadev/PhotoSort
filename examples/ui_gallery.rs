@@ -174,6 +174,19 @@ fn main() -> anyhow::Result<()> {
             false,
             [900.0, 700.0],
         ),
+        // The smallest window: the top bar's tightest fit.
+        (
+            "07b-cull-grid-narrow",
+            Some(Step::Cull),
+            false,
+            [640.0, 700.0],
+        ),
+        (
+            "10c-organize-narrow",
+            Some(Step::Organize),
+            false,
+            [640.0, 700.0],
+        ),
         (
             "03e-organize-grouping-wide",
             Some(Step::Organize),

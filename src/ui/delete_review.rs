@@ -243,6 +243,28 @@ impl PhotoSortApp {
             })
             .collect();
         let selected = tabs.iter().position(|t| *t == self.delete_tab());
+        // An overflowing bar picks the group from a menu instead.
+        if self.bar_fit == super::top_bar::Fit::Overflow {
+            let mut clicked = None;
+            egui::ComboBox::from_id_salt("delete_tabs_menu")
+                .selected_text(selected.map_or("All", |i| segments[i].shown.as_str()))
+                .show_ui(ui, |ui| {
+                    for (index, segment) in segments.iter().enumerate() {
+                        if ui
+                            .selectable_label(selected == Some(index), &segment.shown)
+                            .clicked()
+                        {
+                            clicked = Some(index);
+                        }
+                    }
+                });
+            if let Some(clicked) = clicked
+                && Some(clicked) != selected
+            {
+                self.set_delete_tab(tabs[clicked]);
+            }
+            return;
+        }
         if let Some(clicked) = segmented(
             ui,
             ui.id().with("delete_tabs"),

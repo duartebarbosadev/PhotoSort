@@ -218,58 +218,68 @@ impl PhotoSortApp {
     /// whether thumbnails carry file names. Both are app-wide preferences,
     /// also in Settings, and apply to every step.
     pub(super) fn cull_view_options(&mut self, ui: &mut egui::Ui) {
-        use crate::core::preferences::StripPosition;
         use egui_phosphor::regular as icon;
         let response = icon_button(ui, icon::SLIDERS_HORIZONTAL, "View options");
         egui::Popup::menu(&response)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
                 ui.set_min_width(220.0);
-                ui.label(caption("Photo strip in Review"));
-                let positions = [StripPosition::Bottom, StripPosition::Left];
-                let segments: Vec<Segment> = positions
-                    .iter()
-                    .map(|position| {
-                        let (glyph, name) = match position {
-                            StripPosition::Bottom => (icon::SQUARE_HALF_BOTTOM, "Bottom"),
-                            StripPosition::Left => (icon::SQUARE_HALF, "Left"),
-                        };
-                        Segment {
-                            shown: format!("{glyph}  {name}"),
-                            name: format!("Photo strip: {name}"),
-                            hover: None,
-                        }
-                    })
-                    .collect();
-                let current = positions
-                    .iter()
-                    .position(|p| *p == self.preferences.strip_position);
-                if let Some(index) = segmented(
-                    ui,
-                    egui::Id::new("cull-strip-position"),
-                    &segments,
-                    current,
-                    button_row_height(ui),
-                ) && self.preferences.strip_position != positions[index]
-                {
-                    self.preferences.strip_position = positions[index];
-                    self.save_preferences();
-                }
-                ui.add_space(S2);
-                ui.label(caption("Thumbnails"));
-                let mut names = self.preferences.show_filenames;
-                if ui.add(Switch::new(&mut names, "Show filenames")).changed() {
-                    self.preferences.show_filenames = names;
-                    self.save_preferences();
-                }
+                self.cull_view_option_controls(ui);
             });
+    }
+    /// The view options themselves, also in the bar's view menu when it has
+    /// no room for their own button.
+    pub(super) fn cull_view_option_controls(&mut self, ui: &mut egui::Ui) {
+        use crate::core::preferences::StripPosition;
+        use egui_phosphor::regular as icon;
+        ui.label(caption("Photo strip in Review"));
+        let positions = [StripPosition::Bottom, StripPosition::Left];
+        let segments: Vec<Segment> = positions
+            .iter()
+            .map(|position| {
+                let (glyph, name) = match position {
+                    StripPosition::Bottom => (icon::SQUARE_HALF_BOTTOM, "Bottom"),
+                    StripPosition::Left => (icon::SQUARE_HALF, "Left"),
+                };
+                Segment {
+                    shown: format!("{glyph}  {name}"),
+                    name: format!("Photo strip: {name}"),
+                    hover: None,
+                }
+            })
+            .collect();
+        let current = positions
+            .iter()
+            .position(|p| *p == self.preferences.strip_position);
+        if let Some(index) = segmented(
+            ui,
+            egui::Id::new("cull-strip-position"),
+            &segments,
+            current,
+            button_row_height(ui),
+        ) && self.preferences.strip_position != positions[index]
+        {
+            self.preferences.strip_position = positions[index];
+            self.save_preferences();
+        }
+        ui.add_space(S2);
+        ui.label(caption("Thumbnails"));
+        let mut names = self.preferences.show_filenames;
+        if ui.add(Switch::new(&mut names, "Show filenames")).changed() {
+            self.preferences.show_filenames = names;
+            self.save_preferences();
+        }
     }
     pub(super) fn browse_controls(&mut self, ui: &mut egui::Ui) {
         // One row at every size: filters live in a popover that shows how many
         // are active, so photos keep the vertical space.
         let overlay = true;
+        let fit = self.bar_fit;
         self.search_field(ui);
-        self.filter_combo(ui);
+        // An overflowing bar moves the photo filter into Filters & sort.
+        if fit < super::top_bar::Fit::Overflow {
+            self.filter_combo(ui);
+        }
         if overlay {
             let active = [
                 self.browse.rating != RatingFilter::All,
@@ -285,13 +295,17 @@ impl PhotoSortApp {
             } else {
                 format!("Filters & sort · {active}")
             };
-            let response = icon_text_button(
-                ui,
-                true,
-                active > 0 || self.browse_filters_open,
-                egui_phosphor::regular::FUNNEL,
-                &label,
-            );
+            let selected = active > 0 || self.browse_filters_open;
+            let response = if fit >= super::top_bar::Fit::Icons {
+                let glyph = if active == 0 {
+                    egui_phosphor::regular::FUNNEL.to_owned()
+                } else {
+                    format!("{} {active}", egui_phosphor::regular::FUNNEL)
+                };
+                super::top_bar::bar_icon(ui, true, selected, &glyph, &label).on_hover_text(&label)
+            } else {
+                icon_text_button(ui, true, selected, egui_phosphor::regular::FUNNEL, &label)
+            };
             let mut open = self.browse_filters_open;
             if response.clicked() {
                 open = !open;
@@ -308,6 +322,12 @@ impl PhotoSortApp {
                 .show(|ui| {
                     ui.set_width(width);
                     ui.heading("Filters & sort");
+                    if fit == super::top_bar::Fit::Overflow {
+                        ui.horizontal(|ui| {
+                            ui.label("Show");
+                            self.filter_combo(ui);
+                        });
+                    }
                     egui::ScrollArea::vertical()
                         .max_height(height)
                         .show(ui, |ui| self.browse_filter_controls(ui));

@@ -121,6 +121,15 @@ fn run(options: photosort::core::startup::Options) -> eframe::Result {
         .with_title("PhotoSort")
         .with_inner_size([1440.0, 960.0])
         .with_min_inner_size([640.0, 600.0]);
+    // macOS: one bar. The window draws behind a transparent title bar and the
+    // close, minimise and zoom buttons sit in PhotoSort's own top bar. Other
+    // systems keep their native title bar.
+    if cfg!(target_os = "macos") {
+        viewport = viewport
+            .with_fullsize_content_view(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false);
+    }
     match photosort::ui::app_icon() {
         Ok(icon) => viewport = viewport.with_icon(icon),
         Err(error) => tracing::warn!(%error, "app icon unavailable"),

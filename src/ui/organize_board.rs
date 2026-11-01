@@ -3856,9 +3856,11 @@ mod tests {
         let size = egui::vec2(1400.0, 900.0);
         let name = app.media[app.filtered[0]].name();
         let nodes = rendered(&mut app, &ctx, size);
+        // The tile, not the preview's title of the same name.
         let over = nodes
             .iter()
-            .find(|(label, _)| *label == name)
+            .filter(|(label, _)| *label == name)
+            .max_by(|a, b| a.1.area().total_cmp(&b.1.area()))
             .unwrap_or_else(|| panic!("{name} missing: {nodes:?}"))
             .1
             .center();
@@ -4200,10 +4202,12 @@ mod tests {
         ctx.enable_accesskit();
         let size = egui::vec2(1400.0, 1100.0);
         let nodes = rendered(&mut app, &ctx, size);
+        // The tile, not the preview's title of the same name.
         let tile = |name: &str| {
             nodes
                 .iter()
-                .find(|(label, _)| label == name)
+                .filter(|(label, _)| label == name)
+                .max_by(|a, b| a.1.area().total_cmp(&b.1.area()))
                 .unwrap_or_else(|| panic!("tile {name}"))
                 .1
         };
@@ -4574,65 +4578,121 @@ mod tests {
     }
 
     #[test]
-    fn organize_top_bar_has_no_more_menu_and_fits_every_width() {
+    fn one_top_bar_holds_every_step_and_fits_every_width() {
         use super::super::compact_cull_tests::rendered;
+        use super::super::top_bar::HEADER_HEIGHT;
         let (_temp, mut app) = organize();
         let ctx = egui::Context::default();
         theme_install(&ctx);
         ctx.enable_accesskit();
-        for width in [760.0, 900.0, 1000.0, 1100.0, 1280.0, 1440.0, 1800.0] {
-            let size = egui::vec2(width, 800.0);
-            let nodes = rendered(&mut app, &ctx, size);
-            assert!(found(&nodes, "More actions").is_empty(), "at {width}");
-            let bar = [
-                "Show original",
-                "Reset changes",
-                "Analyze library · Ctrl/Cmd+S",
-                "Details",
-            ];
-            let rects: Vec<egui::Rect> = bar
-                .iter()
-                .map(|name| {
-                    let rects = found(&nodes, name);
-                    assert_eq!(rects.len(), 1, "{name} at {width}");
-                    *rects[0]
-                })
-                .collect();
-            for (name, rect) in bar.iter().zip(&rects) {
-                assert!(
-                    rect.left() >= 0.0 && rect.right() <= width,
-                    "{name} {rect:?} outside the window at {width}"
-                );
-            }
-            for pair in rects.windows(2) {
-                assert!(
-                    pair[0].right() <= pair[1].left() + 0.5,
-                    "{pair:?} overlap at {width}"
-                );
-                // One line: no button sits lower than its neighbours.
-                assert!(
-                    (pair[0].center().y - pair[1].center().y).abs() < 1.0,
-                    "{pair:?} out of line at {width}"
-                );
-            }
-            // Search and the photo filter sit over the board, not in the bar.
-            let filter = *found(&nodes, "Show")[0];
-            assert!(filter.top() > rects[0].bottom(), "at {width}");
-        }
-        // No step has a More menu: Analyze is an icon in every bar.
-        for step in [Step::EasyDelete, Step::Rotation, Step::PickBest, Step::Cull] {
+        let analyze = "Analyze library · Ctrl/Cmd+S";
+        let cases: [(Step, &[&str]); 5] = [
+            (
+                Step::Organize,
+                &["Show original", "Reset changes", analyze, "Details"],
+            ),
+            (Step::EasyDelete, &[analyze, "Details"]),
+            (
+                Step::Rotation,
+                &["Suggestions only", "Detect rotations again · Ctrl/Cmd+S"],
+            ),
+            (Step::PickBest, &[analyze, "Details"]),
+            (
+                Step::Cull,
+                &["Filters & sort", "Library navigator", analyze],
+            ),
+        ];
+        for (step, controls) in cases {
             app.set_step(step);
             app.runtime.cancel_analysis();
             app.analysis_run = None;
-            let nodes = rendered(&mut app, &ctx, egui::vec2(1280.0, 800.0));
-            assert!(found(&nodes, "More actions").is_empty(), "{step:?}");
-            let analyze = if step == Step::Rotation {
-                "Detect rotations again · Ctrl/Cmd+S"
+            if step == Step::Cull {
+                // A selection adds its menu to Cull's bar. Cull's list
+                // comes from a worker, so wait until it shows photos.
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while app.filtered.is_empty() && std::time::Instant::now() < deadline {
+                    rendered(&mut app, &ctx, egui::vec2(1280.0, 800.0));
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                app.select_library(app.media[app.filtered[0]].id, false, false);
+                app.review = false;
+            }
+            for width in [640.0, 760.0, 1000.0, 1280.0, 1800.0] {
+                let nodes = rendered(&mut app, &ctx, egui::vec2(width, 800.0));
+                assert!(
+                    found(&nodes, "More actions").is_empty(),
+                    "{step:?} at {width}"
+                );
+                let mut rects: Vec<(&str, egui::Rect)> = ["Review changes", "Menu"]
+                    .iter()
+                    .chain(controls)
+                    .map(|name| {
+                        let rects = found(&nodes, name);
+                        assert_eq!(rects.len(), 1, "{name}, {step:?} at {width}");
+                        (*name, *rects[0])
+                    })
+                    .collect();
+                // One bar: every control sits on it, inside the window, and
+                // none overlaps another.
+                for (name, rect) in &rects {
+                    assert!(
+                        rect.bottom() <= HEADER_HEIGHT
+                            && rect.left() >= 0.0
+                            && rect.right() <= width,
+                        "{name} {rect:?} off the bar, {step:?} at {width}"
+                    );
+                }
+                if step == Step::Cull {
+                    assert!(
+                        nodes.iter().any(|(name, r)| name.starts_with("1 selected")
+                            && r.bottom() <= HEADER_HEIGHT
+                            && r.right() <= width),
+                        "selection at {width}: {:?}",
+                        nodes
+                            .iter()
+                            .filter(|(_, r)| r.bottom() <= HEADER_HEIGHT)
+                            .collect::<Vec<_>>()
+                    );
+                }
+                // Nothing in the bar is cut off or drawn over another.
+                rects = nodes
+                    .iter()
+                    .filter(|(_, r)| r.bottom() <= HEADER_HEIGHT && r.width() < width / 2.0)
+                    .map(|(name, r)| (name.as_str(), *r))
+                    .collect();
+                rects.sort_by(|a, b| a.1.left().total_cmp(&b.1.left()));
+                for (i, (_, a)) in rects.iter().enumerate() {
+                    for (_, b) in &rects[i + 1..] {
+                        // A label inside its own slot is not an overlap.
+                        let nested =
+                            a.expand(0.5).contains_rect(*b) || b.expand(0.5).contains_rect(*a);
+                        assert!(
+                            nested || a.intersect(*b).width() <= 0.5,
+                            "{a:?} and {b:?} overlap, {step:?} at {width}: {rects:?}"
+                        );
+                    }
+                }
+                if step == Step::Organize {
+                    // Search and the photo filter sit over the board.
+                    assert!(found(&nodes, "Show")[0].top() > HEADER_HEIGHT);
+                }
+            }
+        }
+        // Faces adds its own menu; a narrow bar moves it into a popover.
+        app.set_step(Step::Organize);
+        app.group_mode = GroupMode::Faces;
+        for (width, inline) in [(1800.0, true), (640.0, false)] {
+            let nodes = rendered(&mut app, &ctx, egui::vec2(width, 800.0));
+            let menu = if inline {
+                "Keep in their folders"
             } else {
-                "Analyze library · Ctrl/Cmd+S"
+                "More grouping options"
             };
-            assert_eq!(found(&nodes, analyze).len(), 1, "{step:?}");
-            assert!(found(&nodes, "Reset changes").is_empty(), "{step:?}");
+            let rect = *found(&nodes, menu)[0];
+            assert!(
+                rect.bottom() <= HEADER_HEIGHT && rect.right() <= width,
+                "{menu} at {width}"
+            );
         }
         app.runtime.shutdown();
     }
