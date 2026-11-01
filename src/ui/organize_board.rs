@@ -113,6 +113,49 @@ pub(super) struct Board {
     /// The frame in which the folder sidebar was drawn at the window's edge;
     /// the board then leaves it out.
     pub(super) sidebar_frame: Option<u64>,
+    /// What fits beside the board in this window.
+    pub(super) layout: BoardLayout,
+    /// The preview, when it does not fit beside the board, is open over it.
+    pub(super) preview_open: bool,
+    /// The folders, when the sidebar does not fit, are open in a popover.
+    pub(super) folders_open: bool,
+}
+
+/// What sits beside Organize's board. As the window narrows the preview
+/// gives way first and opens over the board on request; then the folder
+/// sidebar folds into a button on the board's header.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct BoardLayout {
+    pub sidebar: bool,
+    pub preview: bool,
+}
+
+impl Default for BoardLayout {
+    fn default() -> Self {
+        Self {
+            sidebar: true,
+            preview: true,
+        }
+    }
+}
+
+/// The board keeps at least this width beside the preview: its header and
+/// two rows of small tiles.
+const BOARD_MIN: f32 = 300.0;
+/// Beside the sidebar alone the board keeps a little more, so a narrow
+/// window gives the photos the room rather than the folder list.
+const BOARD_MIN_BESIDE_SIDEBAR: f32 = 360.0;
+/// The narrowest the preview gets: its controls need about this in two rows.
+const PREVIEW_MIN: f32 = 330.0;
+
+/// What fits in `room` (the width for the sidebar, board and preview) with a
+/// `sidebar` this wide.
+pub(super) fn board_layout(room: f32, sidebar: f32) -> BoardLayout {
+    let sidebar_fits = room >= sidebar + BOARD_MIN_BESIDE_SIDEBAR;
+    BoardLayout {
+        sidebar: sidebar_fits,
+        preview: sidebar_fits && room >= sidebar + BOARD_MIN + BOARD_GAP + PREVIEW_MIN,
+    }
 }
 
 /// The space between Organize's panels, and under the bar above them.
@@ -1144,6 +1187,12 @@ impl PhotoSortApp {
         }
         self.board.renaming = Some((id, stem));
         self.board.rename_focus = true;
+        // The name is edited in the preview's title, so a folded-away
+        // preview opens for it.
+        if !self.board.layout.preview {
+            self.board.preview_open = true;
+            self.inspector = false;
+        }
     }
     /// Stages the typed name; the file is renamed when the changes are
     /// reviewed and applied.
@@ -1801,6 +1850,124 @@ impl PhotoSortApp {
     /// useful size, with its name, folder and the usual mark, rating and zoom
     /// controls. Scroll to zoom, drag to pan, double-click for 1:1.
     fn board_preview(&mut self, ui: &mut egui::Ui) {
+        // The preview keeps the width it was given: nothing in it can widen
+        // it over the board or past the window.
+        let rect = ui.available_rect_before_wrap();
+        let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+        inner.set_clip_rect(ui.clip_rect().intersect(rect));
+        self.board_preview_inside(&mut inner);
+        ui.advance_cursor_after_rect(rect);
+    }
+    /// The preview over the right of the board (`board`), when it does not
+    /// fit beside it and was opened from the board's header. It gives way to
+    /// the Details drawer, which opens in the same place.
+    fn board_preview_overlay(&mut self, ctx: &egui::Context, board: egui::Rect) {
+        let drawer =
+            self.inspector && self.catalog.is_some() && ctx.content_rect().width() <= 1180.0;
+        if !self.board.preview_open || drawer {
+            return;
+        }
+        let width = (board.width() * 0.85).clamp(PREVIEW_MIN.min(board.width()), 480.0);
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(board.right() - width, board.top()),
+            egui::vec2(width, board.height()),
+        );
+        egui::Area::new(egui::Id::new("organize-preview-overlay"))
+            .order(egui::Order::Middle)
+            .fixed_pos(rect.min)
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .stroke(Stroke::new(1.0, EDGE))
+                    .corner_radius(R_SURFACE)
+                    .shadow(egui::Shadow {
+                        offset: [-6, 0],
+                        blur: 18,
+                        spread: 0,
+                        color: Color32::from_black_alpha(140),
+                    })
+                    .inner_margin(S2 - 1.0)
+                    .show(ui, |ui| {
+                        let inner = rect.shrink(S2 - 1.0);
+                        ui.set_width(inner.width());
+                        ui.set_height(inner.height());
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Preview").font(semibold(13.0)));
+                            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                                if icon_button(ui, egui_phosphor::regular::X, "Close preview")
+                                    .clicked()
+                                {
+                                    self.board.preview_open = false;
+                                }
+                            });
+                        });
+                        self.board_preview(ui);
+                    });
+            });
+    }
+    /// The board header's button for the preview when it does not fit beside
+    /// the board: it opens the preview over the board, and closes it again.
+    fn board_preview_toggle(&mut self, ui: &mut egui::Ui) {
+        use egui_phosphor::regular as icon;
+        let open = self.board.preview_open;
+        let response = named(
+            ui.add(
+                egui::Button::new(RichText::new(icon::SIDEBAR_SIMPLE).color(if open {
+                    ACCENT
+                } else {
+                    INK
+                }))
+                .frame(open)
+                .selected(open)
+                .min_size(egui::vec2(28.0, 0.0)),
+            ),
+            egui::WidgetType::Button,
+            if open { "Hide preview" } else { "Show preview" },
+        )
+        .on_hover_text("The clicked photo, over the board");
+        if response.clicked() {
+            self.board.preview_open = !open;
+            // The Details drawer opens in the same place.
+            if self.board.preview_open {
+                self.inspector = false;
+            }
+        }
+    }
+    /// The board header's button for the folders when the sidebar does not
+    /// fit: they open in a popover below it, as Cull's navigator does.
+    fn board_folders_button(&mut self, ui: &mut egui::Ui) {
+        use egui_phosphor::regular as icon;
+        let response = named(
+            ui.add(
+                egui::Button::new(RichText::new(icon::FOLDERS).color(INK))
+                    .selected(self.board.folders_open)
+                    .min_size(egui::vec2(28.0, 0.0)),
+            ),
+            egui::WidgetType::Button,
+            "Folders",
+        )
+        .on_hover_text("Folders · drag photos onto one to move them");
+        let mut open = self.board.folders_open;
+        if response.clicked() {
+            open = !open;
+        }
+        let width = 280.0_f32.min(ui.ctx().content_rect().width() - 32.0);
+        let height = (ui.ctx().content_rect().height() - 200.0).clamp(160.0, 480.0);
+        egui::Popup::from_response(&response)
+            .open_bool(&mut open)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .width(width)
+            .show(|ui| {
+                ui.set_width(width);
+                ui.set_height(height);
+                if self.busy {
+                    ui.disable();
+                }
+                self.board_tree(ui);
+            });
+        self.board.folders_open = open;
+    }
+    fn board_preview_inside(&mut self, ui: &mut egui::Ui) {
         // A click on the preview's empty space lets go of a clicked photo,
         // so D marks every selected photo again. Registered first, so every
         // photo and control drawn over it keeps its clicks.
@@ -2206,7 +2373,16 @@ impl PhotoSortApp {
             ui.set_height(28.0);
             // The size slider is placed first, from the right; the title and
             // counts then get only the room left of it and truncate there.
+            // Folded away in a narrow window: the folders at the left, the
+            // preview at the right.
+            if !self.board.layout.sidebar {
+                self.board_folders_button(ui);
+            }
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                if !self.board.layout.preview {
+                    self.board_preview_toggle(ui);
+                    ui.add_space(S2);
+                }
                 self.size_slider(ui);
                 ui.add_space(S3);
                 self.board_filter(ui);
@@ -2499,8 +2675,10 @@ impl PhotoSortApp {
     /// Organize's folder sidebar, flush with the window's left edge from the
     /// top of the window to the page bar, on its own warm grey like a desktop app's
     /// sidebar. Drawn before the middle of the window; the board draws it
-    /// itself when it was not.
-    pub(super) fn organize_sidebar(&mut self, ui: &mut egui::Ui) {
+    /// itself when it was not. `room` is the width for the sidebar, board and
+    /// preview together: when the sidebar does not fit beside a usable board,
+    /// the board's header offers the folders in a popover instead.
+    pub(super) fn organize_sidebar(&mut self, ui: &mut egui::Ui, room: f32) {
         // A step switch earlier in this frame (the step tabs, a shortcut)
         // leaves `filtered` holding the previous step's photos, and the
         // sections from the last Organize visit, until the next refilter.
@@ -2521,6 +2699,16 @@ impl PhotoSortApp {
         }
         self.update_people(ui.ctx());
         self.board.sidebar_frame = Some(ui.ctx().cumulative_frame_nr());
+        let sidebar = egui::PanelState::load(ui.ctx(), egui::Id::new("organize_folder_panel"))
+            .map_or(240.0, |panel| panel.size().x);
+        self.board.layout = board_layout(room, sidebar);
+        if self.board.layout.preview {
+            self.board.preview_open = false;
+        }
+        if !self.board.layout.sidebar {
+            return;
+        }
+        self.board.folders_open = false;
         egui::Panel::left("organize_folder_panel")
             .resizable(true)
             .show_separator_line(false)
@@ -2543,36 +2731,39 @@ impl PhotoSortApp {
     /// The middle of Organize: photos grouped under their destination folder.
     pub(super) fn organize_board(&mut self, ui: &mut egui::Ui) {
         if self.board.sidebar_frame != Some(ui.ctx().cumulative_frame_nr()) {
-            self.organize_sidebar(ui);
+            self.organize_sidebar(ui, ui.available_width());
         } else if self.board.sections.last().map_or(0, |s| s.range.end) != self.filtered.len() {
             // The bar, drawn after the sidebar, changed what is shown.
             self.filter_dirty = true;
             self.refilter();
         }
-        // The clicked photo, large, on the right.
-        // The board keeps room for a row of tiles and its header; the preview
-        // gives way in a narrow window.
-        // Its controls need about 330 points in two rows.
-        let widest = (ui.available_width() - 290.0).clamp(330.0, 1100.0);
-        let preview_width = (ui.available_width() * 0.42).clamp(330.0, widest.min(900.0));
-        egui::Panel::right("organize_preview_panel")
-            .resizable(true)
-            .default_size(preview_width)
-            .size_range(330.0..=widest)
-            .frame(
-                egui::Frame::new()
-                    .fill(PANEL)
-                    .stroke(Stroke::new(1.0, EDGE))
-                    .corner_radius(R_SURFACE)
-                    .inner_margin(S2 - 1.0)
-                    .outer_margin(egui::Margin {
-                        left: BOARD_GAP as i8,
-                        right: 0,
-                        top: 0,
-                        bottom: 0,
-                    }),
-            )
-            .show(ui, |ui| self.board_preview(ui));
+        // The clicked photo, large, on the right, when it fits beside a
+        // usable board; otherwise it opens over the board on request.
+        if self.board.layout.preview {
+            let widest = (ui.available_width() - BOARD_MIN - BOARD_GAP).clamp(PREVIEW_MIN, 1100.0);
+            let preview_width = (ui.available_width() * 0.42).clamp(PREVIEW_MIN, widest.min(900.0));
+            egui::Panel::right("organize_preview_panel")
+                .resizable(true)
+                .default_size(preview_width)
+                .size_range(PREVIEW_MIN..=widest)
+                .frame(
+                    egui::Frame::new()
+                        .fill(PANEL)
+                        .stroke(Stroke::new(1.0, EDGE))
+                        .corner_radius(R_SURFACE)
+                        .inner_margin(S2 - 1.0)
+                        .outer_margin(egui::Margin {
+                            left: BOARD_GAP as i8,
+                            right: 0,
+                            top: 0,
+                            bottom: 0,
+                        }),
+                )
+                .show(ui, |ui| self.board_preview(ui));
+        } else {
+            let board = ui.available_rect_before_wrap();
+            self.board_preview_overlay(ui.ctx(), board);
+        }
         let pending = self.board_pending();
         if self.analysis_run.is_some() {
             self.analysis_banner(ui);
@@ -4522,6 +4713,104 @@ mod tests {
             .filter(|(s, _)| s == label)
             .map(|(_, rect)| rect)
             .collect()
+    }
+
+    #[test]
+    fn the_sidebar_board_and_preview_never_overlap_at_any_width() {
+        use super::super::compact_cull_tests::rendered;
+        let (_temp, mut app) = organize();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let panel = |id: &str| {
+            egui::PanelState::load(&ctx, egui::Id::new(id)).map(|p| p.outer_rect.x_range())
+        };
+        for details in [false, true] {
+            // One photo, then three compared side by side in the preview.
+            for count in [1, 3] {
+                app.gallery_select(count);
+                for width in [600.0, 640.0, 760.0, 900.0, 1000.0, 1180.0, 1300.0, 1800.0] {
+                    app.inspector = details;
+                    let nodes = rendered(&mut app, &ctx, egui::vec2(width, 800.0));
+                    let case = format!("{count} selected at {width}, details {details}");
+                    let layout = app.board.layout;
+                    // The preview gives way first, then the sidebar; each
+                    // leaves a button on the board's header.
+                    assert!(layout.sidebar || !layout.preview, "{case}");
+                    assert_eq!(found(&nodes, "Folders").len(), !layout.sidebar as usize);
+                    assert_eq!(
+                        found(&nodes, "Show preview").len(),
+                        !layout.preview as usize
+                    );
+                    let left = if layout.sidebar {
+                        panel("organize_folder_panel").unwrap().max
+                    } else {
+                        0.0
+                    };
+                    let right = if layout.preview {
+                        panel("organize_preview_panel").unwrap().min + BOARD_GAP
+                    } else {
+                        width
+                    };
+                    let tiles: Vec<_> = nodes
+                        .iter()
+                        .filter(|(label, r)| label.starts_with("photo-") && r.height() > 40.0)
+                        .collect();
+                    assert!(!tiles.is_empty(), "{case}");
+                    for (label, rect) in tiles {
+                        assert!(
+                            rect.left() >= left - 0.5 && rect.right() <= right + 0.5,
+                            "{label} {rect:?} outside the board {left}..{right}, {case}"
+                        );
+                    }
+                    // Nothing runs past the window, the preview's controls
+                    // included.
+                    for (label, rect) in &nodes {
+                        assert!(rect.right() <= width + 0.5, "{label} {rect:?}, {case}");
+                    }
+                }
+            }
+        }
+        // A compact window still compares beside the board; a narrow one
+        // keeps the sidebar; the narrowest gives the board the whole width.
+        assert_eq!(board_layout(900.0 - 16.0, 240.0), BoardLayout::default());
+        assert!(board_layout(640.0 - 16.0, 240.0).sidebar);
+        assert!(!board_layout(600.0 - 16.0, 240.0).sidebar);
+        app.runtime.shutdown();
+    }
+
+    #[test]
+    fn a_narrow_board_opens_the_preview_and_folders_from_its_header() {
+        use super::super::compact_cull_tests::{click_label, frame, rendered};
+        let (_temp, mut app) = organize();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        app.gallery_select(1);
+        let size = egui::vec2(600.0, 800.0);
+        let nodes = rendered(&mut app, &ctx, size);
+        assert!(found(&nodes, "Close preview").is_empty());
+        assert!(found(&nodes, "New folder").is_empty());
+        // The preview opens over the board and closes again.
+        click_label(&mut app, &ctx, size, "Show preview");
+        let nodes = rendered(&mut app, &ctx, size);
+        assert_eq!(found(&nodes, "Close preview").len(), 1);
+        assert_eq!(found(&nodes, "Hide preview").len(), 1);
+        click_label(&mut app, &ctx, size, "Close preview");
+        assert!(!app.board.preview_open);
+        // F2 renames in the preview's title, so it opens for it.
+        frame(&mut app, &ctx, size, key(egui::Key::F2, Default::default()));
+        assert!(app.board.renaming.is_some() && app.board.preview_open);
+        app.board.renaming = None;
+        app.board.preview_open = false;
+        // The folders open in a popover, with the sidebar's tools.
+        click_label(&mut app, &ctx, size, "Folders");
+        let nodes = rendered(&mut app, &ctx, size);
+        assert_eq!(found(&nodes, "New folder").len(), 1);
+        // A wider window brings the sidebar back and closes the popover.
+        rendered(&mut app, &ctx, egui::vec2(1000.0, 800.0));
+        assert!(app.board.layout.sidebar && !app.board.folders_open);
+        app.runtime.shutdown();
     }
 
     #[test]

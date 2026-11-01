@@ -1689,26 +1689,28 @@ impl PhotoSortApp {
         // Details slides in and out beside the photos in wide windows;
         // narrow windows use the drawer instead.
         let shown = self.inspector && self.catalog.is_some() && wide;
+        // The width for a sidebar and the photos beside it: inside the
+        // margins below, and beside Details.
+        let details = if shown {
+            egui::PanelState::load(ctx, egui::Id::new("inspector")).map_or(300.0, |p| p.size().x)
+        } else {
+            0.0
+        };
+        let room = root.available_width() - details - if compact { 16.0 } else { 24.0 };
         // Organize's folder sidebar runs flush along the window's left edge,
-        // whenever the board is shown; the bar starts beside it.
+        // whenever the board is shown and leaves it room; the bar starts
+        // beside it.
         let sidebar = (self.step, self.navigator.enabled, self.review);
         if self.root.is_some()
             && self.step == Step::Organize
             && !self.media.is_empty()
             && !self.filtered.is_empty()
         {
-            self.organize_sidebar(root);
+            self.organize_sidebar(root, room);
         }
         // So does Cull's library navigator, when the photos area beside it
-        // (inside the margins below, and beside Details) has room.
+        // has room.
         if self.root.is_some() {
-            let details = if shown {
-                egui::PanelState::load(ctx, egui::Id::new("inspector"))
-                    .map_or(300.0, |p| p.size().x)
-            } else {
-                0.0
-            };
-            let room = root.available_width() - details - if compact { 16.0 } else { 24.0 };
             self.navigator_sidebar(root, room);
         }
         if tall {
@@ -2172,6 +2174,18 @@ impl PhotoSortApp {
             self.set_active(first);
         }
         self.review = true;
+    }
+    /// Opens or closes Details.
+    pub fn gallery_details(&mut self, open: bool) {
+        self.inspector = open;
+    }
+    /// Opens Organize's preview over the board, when it does not fit beside it.
+    pub fn gallery_organize_preview_overlay(&mut self) {
+        self.board.preview_open = true;
+    }
+    /// Opens Organize's folders popover, when the sidebar does not fit.
+    pub fn gallery_organize_folders_popover(&mut self) {
+        self.board.folders_open = true;
     }
     /// Selects the first `count` shown photos, as Shift+arrows would.
     pub fn gallery_select(&mut self, count: usize) {
