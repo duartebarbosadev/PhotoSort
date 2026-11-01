@@ -127,7 +127,7 @@ impl PhotoSortApp {
     pub(super) fn inspector_drawer(&mut self, ctx: &egui::Context) {
         let screen = ctx.content_rect();
         let width = (screen.width() * 0.85).min(320.0);
-        let top = screen.top() + navigation::HEADER_HEIGHT;
+        let top = screen.top() + top_bar::HEADER_HEIGHT;
         let height = screen.bottom() - navigation::STATUS_HEIGHT - top;
         egui::Area::new(egui::Id::new("inspector-drawer"))
             .order(egui::Order::Middle)

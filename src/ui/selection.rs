@@ -340,7 +340,9 @@ impl PhotoSortApp {
         let font = egui::TextStyle::Button.resolve(ui.style());
         let pad = 2.0 * ui.spacing().button_padding.x + ui.spacing().item_spacing.x;
         let label = format!("{} selected", self.selection.len());
-        let compare = (2..=9).contains(&self.selection.len());
+        // An overflowing bar leaves Compare to the selection menu.
+        let compare =
+            (2..=9).contains(&self.selection.len()) && self.bar_fit < super::top_bar::Fit::Overflow;
         let menu = format!("{label}  {}", egui_phosphor::regular::CARET_DOWN);
         let needed: f32 = [menu.clone(), "Compare selected".into()]
             .into_iter()

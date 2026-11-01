@@ -3,11 +3,6 @@ use super::*;
 /// Height of the bottom page bar (status, step tabs, progress); photos and
 /// controls must end above it.
 pub(super) const STATUS_HEIGHT: f32 = 44.0;
-/// Height of the title bar.
-pub(super) const HEADER_HEIGHT: f32 = 38.0;
-/// Below this toolbar width, Organize's Show original and Reset changes
-/// show only their icons.
-const ORGANIZE_COMPACT: f32 = 1100.0;
 
 impl Step {
     /// The step's icon, as shown in Settings.
@@ -55,86 +50,6 @@ fn step_bar_width(ui: &egui::Ui, steps: &[Step], compact: bool) -> f32 {
 }
 
 impl PhotoSortApp {
-    /// The title bar: brand and folder on the left, the staged-change review
-    /// and app actions on the right. The steps live in the bottom page bar.
-    pub(super) fn header(&mut self, root: &mut egui::Ui) {
-        egui::Panel::top("header")
-            .exact_size(HEADER_HEIGHT)
-            .show_separator_line(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(CHROME)
-                    .inner_margin(egui::Margin::symmetric(S3 as i8, 0)),
-            )
-            .show(root, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().button_padding = egui::vec2(S2, 3.0);
-                    crate::ui::brand::app_logo(ui, 16.0);
-                    ui.label(RichText::new("PhotoSort").font(semibold(12.5)));
-                    let left_end = ui.min_rect().right();
-                    let right_start = ui
-                        .with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            self.header_actions(ui);
-                            ui.min_rect().left()
-                        })
-                        .inner;
-                    // The library name sits centred, like a project title.
-                    if let Some(root) = &self.root {
-                        let mid = ui.ctx().content_rect().center().x;
-                        let half = (mid - left_end).min(right_start - mid) - S4;
-                        let name = root.file_name().unwrap_or_default().to_string_lossy();
-                        let galley =
-                            ui.painter()
-                                .layout_no_wrap(name.to_string(), medium(12.0), INK);
-                        let width = galley.size().x.min(2.0 * half);
-                        if width > 40.0 {
-                            let rect = egui::Rect::from_center_size(
-                                egui::pos2(mid, ui.max_rect().center().y),
-                                egui::vec2(width, HEADER_HEIGHT - 8.0),
-                            );
-                            ui.put(
-                                rect,
-                                egui::Label::new(RichText::new(name).font(medium(12.0))).truncate(),
-                            )
-                            .on_hover_text(root.display().to_string());
-                        }
-                    }
-                });
-            });
-    }
-    fn header_actions(&mut self, ui: &mut egui::Ui) {
-        use egui_phosphor::regular as icon;
-        self.app_menu(ui);
-        if icon_button(ui, icon::FOLDER_OPEN, "Open folder… (Ctrl/Cmd+O)").clicked() && !self.busy
-        {
-            self.select_folder();
-        }
-        if self.catalog.is_some() || self.retry_plan.is_some() {
-            // Accent only when there is something to review, so the title
-            // bar doubles as the staged-change indicator.
-            let staged = self.staged_change_count();
-            let button = if staged > 0 || self.retry_plan.is_some() {
-                primary(if staged > 0 {
-                    format!(
-                        "Review {staged} {}",
-                        if staged == 1 { "change" } else { "changes" }
-                    )
-                } else {
-                    "Review changes".into()
-                })
-            } else {
-                egui::Button::new(RichText::new("Review changes").color(MUTED))
-            };
-            if ui
-                .add_enabled(!self.busy, button)
-                .on_hover_text("See every staged change before applying · Shift+Enter")
-                .clicked()
-            {
-                self.review_changes();
-            }
-        }
-    }
-
     /// The workflow steps as a segmented control in the bottom bar: one
     /// rounded container, numbered labels, and an accent pill on the current
     /// step that slides to the next one when the step changes.
@@ -538,9 +453,12 @@ impl PhotoSortApp {
     /// Organize's own controls, inline in the context bar: how photos are
     /// grouped and where they go. Folders are edited on the board itself and
     /// every change is reviewed with Review changes.
-    fn organize_controls(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn organize_controls(&mut self, ui: &mut egui::Ui) {
         use egui_phosphor::regular as icon;
-        ui.label(RichText::new("Group by").color(MUTED));
+        let fit = self.bar_fit;
+        if fit < top_bar::Fit::Tight {
+            ui.label(RichText::new("Group by").color(MUTED));
+        }
         wrap_before(ui, ui.spacing().combo_width + 2.0 * S3);
         egui::ComboBox::from_id_salt("grouping")
             .selected_text(self.group_mode.title())
@@ -554,7 +472,9 @@ impl PhotoSortApp {
                         ui.close();
                     }
                 }
-            });
+            })
+            .response
+            .on_hover_text("Group by");
         if let Some(hint) = self.organize_hint() {
             named(
                 ui.label(RichText::new(icon::INFO).color(MUTED)),
@@ -563,6 +483,24 @@ impl PhotoSortApp {
             )
             .on_hover_text(hint);
         }
+        let more = (self.automatic_organize_mode() && self.model_issue.is_some())
+            || matches!(self.group_mode, GroupMode::Location | GroupMode::Faces)
+            || self.scene_editing();
+        if fit == top_bar::Fit::Overflow && more {
+            top_bar::overflow_popover(
+                ui,
+                egui::Id::new("organize-more"),
+                "More grouping options",
+                |ui| self.organize_more_controls(ui),
+            );
+        } else {
+            self.organize_more_controls(ui);
+        }
+        self.destination_chip(ui);
+    }
+    /// The grouping's own options: AI models when missing, location levels,
+    /// photos without people, and scene corrections.
+    fn organize_more_controls(&mut self, ui: &mut egui::Ui) {
         if self.automatic_organize_mode()
             && self.model_issue.is_some()
             && ui
@@ -590,7 +528,6 @@ impl PhotoSortApp {
                 self.compare_selection();
             }
         }
-        self.destination_chip(ui);
     }
     /// Where the organized folders are made, and whether a photo's RAW, JPEG
     /// and edit files move together, in one popover chip.
@@ -603,16 +540,16 @@ impl PhotoSortApp {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Choose a folder".into());
         let label = format!("Organize into {name}");
-        let chip = ui
-            .add(egui::Button::new(format!(
-                "{}  {label}  {}",
-                icon::FOLDER_SIMPLE,
-                icon::CARET_DOWN
-            )))
-            .on_hover_text(format!(
-                "New folders are made inside {}",
-                super::inspector::readable_path(&output)
-            ));
+        // A tight bar keeps only the folder icon; the name is in the tooltip.
+        let shown = if self.bar_fit >= top_bar::Fit::Tight {
+            format!("{}  {}", icon::FOLDER_SIMPLE, icon::CARET_DOWN)
+        } else {
+            format!("{}  {label}  {}", icon::FOLDER_SIMPLE, icon::CARET_DOWN)
+        };
+        let chip = ui.add(egui::Button::new(shown)).on_hover_text(format!(
+            "Organize into {name}\nNew folders are made inside {}",
+            super::inspector::readable_path(&output)
+        ));
         chip.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
         egui::Popup::menu(&chip)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
@@ -711,8 +648,13 @@ impl PhotoSortApp {
     }
     /// The library search field; Ctrl/Cmd+F focuses it.
     pub(super) fn search_field(&mut self, ui: &mut egui::Ui) {
-        wrap_before(ui, 150.0 + 2.0 * S3);
-        self.search_box(ui, 150.0, BG);
+        let width = if self.bar_fit >= top_bar::Fit::Tight {
+            110.0
+        } else {
+            150.0
+        };
+        wrap_before(ui, width + 2.0 * S3);
+        self.search_box(ui, width, BG);
     }
     /// The search text field itself, `width` wide on a `fill` background.
     pub(super) fn search_box(
@@ -730,7 +672,10 @@ impl PhotoSortApp {
                     egui_phosphor::regular::MAGNIFYING_GLASS
                 ))
                 .background_color(fill)
-                .desired_width(width),
+                .desired_width(width)
+                // Its full width even at the end of a full bar, so the bar
+                // sees it does not fit instead of squeezing it.
+                .min_size(egui::vec2(width, 0.0)),
         );
         if response.changed() {
             self.query = query;
@@ -757,220 +702,6 @@ impl PhotoSortApp {
                 if f == Filter::Rated {
                     self.start_metadata_index();
                 }
-            }
-        }
-    }
-    pub(super) fn toolbar(&mut self, ui: &mut egui::Ui) {
-        let before = (
-            self.query.clone(),
-            self.filter,
-            self.browse.clone(),
-            self.library_layout,
-            self.review,
-            self.inspector,
-            self.group_mode,
-            self.delete_categories.clone(),
-            self.rotation_queue_only,
-            self.pick_current,
-        );
-        use egui_phosphor::regular as icon;
-        // Right group first (view switch, Details); the step's controls then
-        // get exactly the width left over and wrap within it.
-        let mut row = ui.available_rect_before_wrap();
-        row.max.y = row.min.y + ui.spacing().interact_size.y;
-        // The bar's text buttons show only their icons in a narrow bar.
-        let compact = row.width() < ORGANIZE_COMPACT;
-        let right = ui
-            .scope_builder(
-                egui::UiBuilder::new()
-                    .max_rect(row)
-                    .layout(egui::Layout::right_to_left(Align::Center)),
-                |ui| {
-                    if icon_text_button(ui, true, self.inspector, icon::INFO, "Details")
-                        .on_hover_text("Photo details · I")
-                        .clicked()
-                    {
-                        self.inspector ^= true;
-                    }
-                    // No step has a More menu: Analyze and the step's own
-                    // actions sit in the bar. Organize previews the clicked
-                    // photo beside its folders, Easy Delete, Fix Rotation and
-                    // Pick Best the clicked card beside their grid, so none of
-                    // them has a view switch.
-                    if self.step == Step::Organize {
-                        self.organize_bar_actions(ui, compact);
-                    } else {
-                        ui.add_space(S1);
-                        self.analyze_icon_button(ui);
-                        if !matches!(
-                            self.step,
-                            Step::EasyDelete | Step::Rotation | Step::PickBest
-                        ) {
-                            ui.add_space(S1);
-                            self.view_switch(ui);
-                        }
-                    }
-                    if self.step == Step::Cull {
-                        self.cull_view_options(ui);
-                    }
-                },
-            )
-            .response
-            .rect;
-        let left_room = row.with_max_x((right.left() - S3).max(row.left()));
-        let left = ui
-            .scope_builder(
-                egui::UiBuilder::new()
-                    .max_rect(left_room)
-                    .layout(egui::Layout::left_to_right(Align::Center).with_main_wrap(true)),
-                |ui| {
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                    match self.step {
-                        Step::Organize => self.organize_controls(ui),
-                        Step::EasyDelete => self.delete_controls(ui),
-                        Step::Rotation => self.rotation_controls(ui),
-                        Step::PickBest => {}
-                        Step::Cull => self.browse_controls(ui),
-                    }
-                    if self.analysis_run.is_some()
-                        && icon_text_button(ui, true, false, icon::STOP, "Cancel analysis")
-                            .clicked()
-                    {
-                        self.cancel_analysis();
-                    }
-                    // Organize searches from its board, over the photos.
-                    if !matches!(self.step, Step::Organize | Step::PickBest | Step::Cull) {
-                        self.search_field(ui);
-                    }
-                },
-            )
-            .response
-            .rect;
-        ui.advance_cursor_after_rect(left.union(right));
-        // Organize, Easy Delete, Fix Rotation and Pick Best have no context
-        // line, so the bar ends right under its row.
-        if !matches!(
-            self.step,
-            Step::Organize | Step::EasyDelete | Step::Rotation | Step::PickBest
-        ) {
-            ui.add_space(2.0);
-            self.step_context(ui);
-            ui.add_space(S1);
-        }
-        let after = (
-            self.query.clone(),
-            self.filter,
-            self.browse.clone(),
-            self.library_layout,
-            self.review,
-            self.inspector,
-            self.group_mode,
-            self.delete_categories.clone(),
-            self.rotation_queue_only,
-            self.pick_current,
-        );
-        if before != after {
-            self.pending_bookmark = None;
-        }
-    }
-    /// Organize's buttons at the right of the bar, before Details: Show
-    /// original, Reset changes and Analyze.
-    fn organize_bar_actions(&mut self, ui: &mut egui::Ui, compact: bool) {
-        ui.add_space(S1);
-        self.analyze_icon_button(ui);
-        ui.add_space(S2);
-        self.reset_button(ui, compact);
-        self.original_button(ui, compact);
-    }
-    /// Analyze as a row-high icon in the bar, so its buttons stay on one
-    /// line. While analysis runs, Cancel analysis takes its place on the left.
-    fn analyze_icon_button(&mut self, ui: &mut egui::Ui) {
-        if self.analysis_run.is_some() {
-            return;
-        }
-        let button = ui.add_enabled(
-            self.can_start_analysis(),
-            egui::Button::new(RichText::new(egui_phosphor::regular::SPARKLE).size(15.0))
-                .frame(false)
-                .min_size(egui::vec2(28.0, 0.0)),
-        );
-        // Fix Rotation's analysis detects the photos' orientation.
-        let name = if self.step == Step::Rotation {
-            "Detect rotations again · Ctrl/Cmd+S"
-        } else {
-            "Analyze library · Ctrl/Cmd+S"
-        };
-        if named(button, egui::WidgetType::Button, name)
-            .on_hover_text(name)
-            .clicked()
-        {
-            self.analyze_current_workflow();
-        }
-    }
-    /// One quiet line under the toolbar with what the current photo needs.
-    fn step_context(&mut self, ui: &mut egui::Ui) {
-        if self.step == Step::Cull {
-            self.cull_filter_notice(ui);
-        }
-    }
-    /// One segmented view switch: library layouts, then Review. Narrow
-    /// windows show icons only; names stay for tooltips and AT.
-    fn view_switch(&mut self, ui: &mut egui::Ui) {
-        use egui_phosphor::regular as icon;
-        let narrow = ui.available_width() < 720.0;
-        let layouts: &[library::Layout] = if self.step == Step::Cull {
-            &library::Layout::ALL
-        } else {
-            &[library::Layout::Grid]
-        };
-        let mut segments: Vec<Segment> = layouts
-            .iter()
-            .map(|layout| {
-                let (glyph, title) = match layout {
-                    library::Layout::Grid => (icon::SQUARES_FOUR, layout.title()),
-                    library::Layout::List => (icon::LIST, layout.title()),
-                    library::Layout::Icons => (icon::DOTS_NINE, layout.title()),
-                };
-                Segment {
-                    shown: if narrow {
-                        glyph.to_owned()
-                    } else {
-                        format!("{glyph}  {title}")
-                    },
-                    name: title.to_owned(),
-                    hover: narrow.then(|| title.to_owned()),
-                }
-            })
-            .collect();
-        segments.push(Segment {
-            shown: if narrow {
-                icon::IMAGE.to_owned()
-            } else {
-                format!("{}  Review", icon::IMAGE)
-            },
-            name: "Review".into(),
-            hover: Some("One photo at a time, or a selection side by side".into()),
-        });
-        let current = if self.review {
-            Some(layouts.len())
-        } else if self.step == Step::Cull {
-            layouts.iter().position(|l| *l == self.library_layout)
-        } else {
-            Some(0)
-        };
-        if let Some(index) = segmented(
-            ui,
-            egui::Id::new(("view-switch", self.step == Step::Cull)),
-            &segments,
-            current,
-            button_row_height(ui),
-        ) {
-            if index == layouts.len() {
-                self.open_review();
-            } else if self.step == Step::Cull {
-                self.set_library_layout(layouts[index]);
-            } else {
-                self.review = false;
             }
         }
     }

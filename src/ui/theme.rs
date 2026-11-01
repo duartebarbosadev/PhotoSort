@@ -409,6 +409,10 @@ pub(super) fn segmented(
 /// In a wrapping row, start a new line unless `width` still fits. Combo boxes
 /// and text fields do not take part in the row's own wrapping decision.
 pub(super) fn wrap_before(ui: &mut egui::Ui, width: f32) {
+    // A row that never wraps (the top bar) makes room by its fit instead.
+    if !ui.layout().main_wrap() {
+        return;
+    }
     // In a wrapping layout available_width() is the whole row; measure what is
     // left before the row's right edge instead.
     let left = ui.max_rect().right() - ui.cursor().left();

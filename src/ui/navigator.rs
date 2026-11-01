@@ -73,17 +73,28 @@ impl PhotoSortApp {
         // Review temporarily hides the tree but keeps its presentation bookmark.
         // Show actual visibility here so one click always opens the navigator.
         let mut visible = self.navigator.enabled && !self.review;
-        if icon_text_button(
-            ui,
-            true,
-            visible,
-            egui_phosphor::regular::TREE_VIEW,
-            "Library navigator",
-        )
-        .on_hover_text(
-            "Browse folders, capture dates and similarity groups without moving files · F/S",
-        )
-        .clicked()
+        let button = if self.bar_fit >= super::top_bar::Fit::Icons {
+            super::top_bar::bar_icon(
+                ui,
+                true,
+                visible,
+                egui_phosphor::regular::TREE_VIEW,
+                "Library navigator",
+            )
+        } else {
+            icon_text_button(
+                ui,
+                true,
+                visible,
+                egui_phosphor::regular::TREE_VIEW,
+                "Library navigator",
+            )
+        };
+        if button
+            .on_hover_text(
+                "Browse folders, capture dates and similarity groups without moving files · F/S",
+            )
+            .clicked()
         {
             visible = !visible;
             self.set_navigator(self.navigator.mode, visible);

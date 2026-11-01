@@ -14,6 +14,30 @@ pub fn initialize_native_application() -> Result<(), std::io::Error> {
     }
     Ok(())
 }
+/// macOS: centres the window's close, minimise and zoom buttons in the top
+/// bar, `inset` points from the left. False when there is no native window
+/// to place them in (tests, the gallery, full screen) or on other systems,
+/// which keep their own title bar.
+pub(super) fn place_window_buttons(height: f32, inset: f32) -> bool {
+    #[cfg(target_os = "macos")]
+    // SAFETY: called from the UI thread, which is the main thread; the native
+    // side checks and only moves the buttons of this app's own windows.
+    return unsafe { photosort_window_place_buttons(height.into(), inset.into()) };
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (height, inset);
+        false
+    }
+}
+/// macOS: a double-click on the top bar zooms or minimises the window, as set
+/// for title bars in System Settings.
+pub(super) fn title_bar_double_click() {
+    #[cfg(target_os = "macos")]
+    // SAFETY: called from the UI thread, which is the main thread.
+    unsafe {
+        photosort_window_title_double_click();
+    }
+}
 /// The 1024 px app icon artwork, also drawn as the in-window logo.
 pub(super) const APP_ICON_PNG: &[u8] = include_bytes!("../../resources/icons/app_icon.png");
 /// The window and Dock icon. eframe gives it to the window system and, on
@@ -91,6 +115,8 @@ unsafe extern "C" {
         context: *mut std::ffi::c_void,
     ) -> bool;
     fn photosort_quit_remove(context: *mut std::ffi::c_void);
+    fn photosort_window_place_buttons(height: f64, inset: f64) -> bool;
+    fn photosort_window_title_double_click();
 }
 #[cfg(target_os = "macos")]
 extern "C" fn request_quit(context: *mut std::ffi::c_void) {

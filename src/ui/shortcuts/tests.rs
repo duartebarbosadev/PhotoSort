@@ -109,7 +109,7 @@ fn organize_mode_keys_share_toolbar_state_without_repeating_expensive_work() {
                 let ctx = &ui.ctx().clone();
                 {
                     app.keyboard(ctx);
-                    egui::CentralPanel::default().show(ui, |ui| app.toolbar(ui));
+                    app.header(ui);
                 }
             });
             assert_eq!(app.group_mode, expected);
@@ -387,7 +387,7 @@ fn find_shortcut_replaces_existing_query_in_the_real_toolbar() {
                         let ctx = &ui.ctx().clone();
                         {
                             app.keyboard(ctx);
-                            egui::CentralPanel::default().show(ui, |ui| app.toolbar(ui));
+                            app.header(ui);
                         }
                     });
                 };
