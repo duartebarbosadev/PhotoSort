@@ -112,6 +112,33 @@ pub(super) fn overflow_popover(
 }
 
 impl PhotoSortApp {
+    /// The top of a sidebar that runs up beside the bar. On macOS it holds
+    /// the window's buttons and, like the bar, moves and zooms the window;
+    /// elsewhere the sidebar's contents start at the top.
+    pub(super) fn sidebar_title_band(&self, ui: &mut egui::Ui, top_margin: f32) {
+        if !self.window_buttons {
+            return;
+        }
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(ui.max_rect().left(), ui.max_rect().top() - top_margin),
+            egui::pos2(
+                ui.max_rect().right(),
+                ui.max_rect().top() + HEADER_HEIGHT - top_margin,
+            ),
+        );
+        let title = ui.interact(
+            rect,
+            egui::Id::new("sidebar-title-bar"),
+            Sense::click_and_drag(),
+        );
+        if title.drag_started() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+        if title.double_clicked() {
+            crate::ui::platform::title_bar_double_click();
+        }
+        ui.add_space(HEADER_HEIGHT - top_margin);
+    }
     /// The one bar above the photos. Left: the app icon and the folder, then
     /// the step's own controls. Right: the step's actions, a divider, then
     /// Review changes, Open folder and Menu. When the window narrows, labels
@@ -150,7 +177,11 @@ impl PhotoSortApp {
                     if title.double_clicked() {
                         crate::ui::platform::title_bar_double_click();
                     }
-                    bar.min.x += BUTTONS_ROOM - S3;
+                    // A sidebar beside the bar holds them instead.
+                    let beside = bar.left() - S3 > ui.ctx().content_rect().left() + 0.5;
+                    if !beside {
+                        bar.min.x += BUTTONS_ROOM - S3;
+                    }
                 }
                 if self.root.is_none() {
                     let mut ui = ui.new_child(

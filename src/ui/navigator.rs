@@ -1,6 +1,11 @@
 //! Presentation only: tree construction/projection belongs to the browse worker.
 use super::*;
 use crate::core::browsing::tree::{Key, Mode};
+/// The photos area must be this wide to keep the navigator beside it.
+const INLINE_WIDTH: f32 = 780.;
+/// Context data: the frame in which the navigator was drawn as a sidebar.
+const SIDEBAR_FRAME: &str = "navigator_sidebar_frame";
+
 impl PhotoSortApp {
     pub(super) fn set_navigator(&mut self, mode: Mode, enabled: bool) {
         self.navigator.mode = mode;
@@ -120,6 +125,42 @@ impl PhotoSortApp {
                 open && frame.saturating_add(1) >= ctx.cumulative_frame_nr()
             })
     }
+    /// Cull's library navigator as a sidebar flush with the window's left
+    /// edge, from the top of the window to the page bar, like Organize's
+    /// folders.
+    /// Drawn before the middle of the window when the photos area (`room`
+    /// wide) has space for it; [`Self::navigator_panel`] shows the popover
+    /// otherwise.
+    pub(super) fn navigator_sidebar(&mut self, root: &mut egui::Ui, room: f32) {
+        if self.step != Step::Cull || !self.navigator.enabled || self.review || room < INLINE_WIDTH
+        {
+            return;
+        }
+        let frame = root.ctx().cumulative_frame_nr();
+        let popup_state = self.navigator_popup_id();
+        root.ctx().data_mut(|data| {
+            data.remove::<(bool, u64)>(popup_state);
+            data.insert_temp(egui::Id::new(SIDEBAR_FRAME), frame);
+        });
+        egui::Panel::left("library_tree_panel")
+            .resizable(true)
+            .show_separator_line(false)
+            .default_size(220.)
+            .size_range(180.0..=300.0)
+            .frame(egui::Frame::new().fill(SIDEBAR).inner_margin(egui::Margin {
+                left: S2 as i8,
+                right: S2 as i8,
+                top: S3 as i8,
+                bottom: S2 as i8,
+            }))
+            .show(root, |ui| {
+                self.sidebar_title_band(ui, S3);
+                if self.busy {
+                    ui.disable();
+                }
+                self.navigator_contents(ui, ui.available_height());
+            });
+    }
     pub(super) fn navigator_panel(&mut self, ui: &mut egui::Ui) {
         let popup_state = self.navigator_popup_id();
         if self.step != Step::Cull || !self.navigator.enabled || self.review {
@@ -127,7 +168,15 @@ impl PhotoSortApp {
                 .data_mut(|data| data.remove::<(bool, u64)>(popup_state));
             return;
         }
-        if ui.available_width() >= 780. {
+        let frame = ui.ctx().cumulative_frame_nr();
+        if ui
+            .ctx()
+            .data(|d| d.get_temp::<u64>(egui::Id::new(SIDEBAR_FRAME)))
+            == Some(frame)
+        {
+            return;
+        }
+        if ui.available_width() >= INLINE_WIDTH {
             ui.ctx()
                 .data_mut(|data| data.remove::<(bool, u64)>(popup_state));
             egui::Panel::left("library_tree_panel")
@@ -302,19 +351,36 @@ impl PhotoSortApp {
                             ) {
                                 self.navigator_changed();
                             }
+                            // Name on the left and its count on the right, as in
+                            // Organize's sidebar; both stay in the accessible name.
                             let label = format!("{}  ·  {}", node.label, node.count);
+                            let shown = match &node.key {
+                                Key::Folder(path) => self.browse.folder.shows(path),
+                                key => selected.as_ref() == Some(key),
+                            };
                             let response = ui.add_sized(
                                 [ui.available_width(), row_height],
-                                egui::Button::selectable(
-                                    match &node.key {
-                                        Key::Folder(path) => self.browse.folder.shows(path),
-                                        key => selected.as_ref() == Some(key),
-                                    },
-                                    label,
-                                )
-                                .truncate()
-                                .sense(tree_controls::pointer_sense(false)),
+                                egui::Button::selectable(shown, node.label.as_str())
+                                    .right_text(
+                                        RichText::new(node.count.to_string())
+                                            .size(10.5)
+                                            .color(MUTED),
+                                    )
+                                    .truncate()
+                                    .sense(tree_controls::pointer_sense(false)),
                             );
+                            let response = {
+                                let enabled = response.enabled();
+                                response.widget_info(|| {
+                                    egui::WidgetInfo::selected(
+                                        egui::WidgetType::Button,
+                                        enabled,
+                                        shown,
+                                        &label,
+                                    )
+                                });
+                                response
+                            };
                             keyboard.focus_on_click(&response);
                             #[cfg(test)]
                             ui.ctx().data_mut(|d| {

@@ -67,6 +67,12 @@ fn main() -> anyhow::Result<()> {
             [1440.0, 900.0],
         ),
         (
+            "01c-cull-navigator-wide",
+            Some(Step::Cull),
+            false,
+            [1440.0, 900.0],
+        ),
+        (
             "02-cull-review-wide",
             Some(Step::Cull),
             true,
@@ -268,6 +274,10 @@ fn main() -> anyhow::Result<()> {
             }
             harness.state_mut().gallery_review(review);
             settle(&mut harness);
+            if name.contains("navigator") {
+                harness.state_mut().gallery_navigator();
+                settle(&mut harness);
+            }
             harness.state_mut().gallery_close_model_dialog();
             settle(&mut harness);
             if name.contains("compare") {

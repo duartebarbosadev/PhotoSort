@@ -1678,12 +1678,47 @@ impl PhotoSortApp {
         self.was_wide = wide;
         let compact = ctx.content_rect().width() < 1000.0;
         self.track_progress_clock();
-        self.header(root);
         self.footer(root);
+        // In wide windows the sidebars reach the top of the window; in
+        // narrower ones the bar keeps the full width for its controls and
+        // they start below it.
+        let tall = wide;
+        if !tall {
+            self.header(root);
+        }
         // Details slides in and out beside the photos in wide windows;
         // narrow windows use the drawer instead.
-        let wide = ctx.content_rect().width() > 1180.0;
         let shown = self.inspector && self.catalog.is_some() && wide;
+        // Organize's folder sidebar runs flush along the window's left edge,
+        // whenever the board is shown; the bar starts beside it.
+        let sidebar = (self.step, self.navigator.enabled, self.review);
+        if self.root.is_some()
+            && self.step == Step::Organize
+            && !self.media.is_empty()
+            && !self.filtered.is_empty()
+        {
+            self.organize_sidebar(root);
+        }
+        // So does Cull's library navigator, when the photos area beside it
+        // (inside the margins below, and beside Details) has room.
+        if self.root.is_some() {
+            let details = if shown {
+                egui::PanelState::load(ctx, egui::Id::new("inspector"))
+                    .map_or(300.0, |p| p.size().x)
+            } else {
+                0.0
+            };
+            let room = root.available_width() - details - if compact { 16.0 } else { 24.0 };
+            self.navigator_sidebar(root, room);
+        }
+        if tall {
+            self.header(root);
+            // A step or navigator change in the bar redraws the frame, so
+            // the sidebars drawn before it follow at once.
+            if (self.step, self.navigator.enabled, self.review) != sidebar {
+                ctx.request_discard("sidebar changed in the top bar");
+            }
+        }
         let mut expanded = shown;
         egui::Panel::right("inspector")
             .show_separator_line(false)
@@ -1702,15 +1737,6 @@ impl PhotoSortApp {
         // Dragging the edge past its minimum closes Details.
         if shown && !expanded {
             self.inspector = false;
-        }
-        // Organize's folder sidebar runs flush along the window's left edge,
-        // whenever the board is shown.
-        if self.root.is_some()
-            && self.step == Step::Organize
-            && !self.media.is_empty()
-            && !self.filtered.is_empty()
-        {
-            self.organize_sidebar(root);
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG))
@@ -1952,6 +1978,10 @@ impl PhotoSortApp {
     /// open it whenever a step would analyze.
     pub fn gallery_close_model_dialog(&mut self) {
         self.model_dialog = false;
+    }
+    /// Opens Cull's library navigator beside the photos.
+    pub fn gallery_navigator(&mut self) {
+        self.set_navigator(self.navigator.mode, true);
     }
     /// Shows or hides file names under thumbnails (preference, not saved).
     pub fn gallery_show_filenames(&mut self, show: bool) {
