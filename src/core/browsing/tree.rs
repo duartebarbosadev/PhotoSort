@@ -22,6 +22,14 @@ impl Mode {
             Self::Groups => "Groups",
         }
     }
+    /// One entry of the mode, in a sentence.
+    pub fn entry(self) -> &'static str {
+        match self {
+            Self::Folders => "folder",
+            Self::Dates => "date",
+            Self::Groups => "group",
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Key {

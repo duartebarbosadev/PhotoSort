@@ -54,7 +54,6 @@ fn change_every_view(app: &mut PhotoSortApp) {
     app.single_view_stash = vec![first];
     app.review = app.step == Step::Organize;
     app.inspector = false;
-    app.library_layout = crate::core::views::Layout::List;
     app.query = "b".into();
     app.filter = Filter::Rated;
     app.browse.rating = RatingFilter::AtLeast(2);

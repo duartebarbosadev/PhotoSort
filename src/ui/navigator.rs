@@ -5,40 +5,187 @@ use crate::core::browsing::tree::{Key, Mode};
 const INLINE_WIDTH: f32 = 780.;
 /// Context data: the frame in which the navigator was drawn as a sidebar.
 const SIDEBAR_FRAME: &str = "navigator_sidebar_frame";
+/// A navigator row: as tall as one in Organize's folders.
+const ROW: f32 = 26.0;
+/// The sidebar's width and the range it can be dragged to, as Organize's.
+const SIDEBAR_WIDTH: f32 = 240.;
+const SIDEBAR_WIDTHS: std::ops::RangeInclusive<f32> = 180.0..=380.0;
+/// The sidebar's grey and margins, as Organize's folders.
+fn sidebar_frame() -> egui::Frame {
+    egui::Frame::new().fill(SIDEBAR).inner_margin(egui::Margin {
+        left: S2 as i8,
+        right: S2 as i8,
+        top: S3 as i8,
+        bottom: S2 as i8,
+    })
+}
+
+/// Where Cull's photos are, for the navigator, like Organize's folder
+/// sidebar: the folder or day you are looking at is highlighted, and one
+/// clicked is scrolled to rather than shown alone.
+#[derive(Default)]
+pub(super) struct Spy {
+    /// The folder or date you are looking at: the active photo's while it
+    /// is on screen, otherwise the topmost photo's.
+    pub(super) current: Option<Key>,
+    /// One just clicked: highlighted until the photos scroll or the active
+    /// photo changes from where they were (recorded on the first frame
+    /// after the click).
+    hold: Option<Option<(f32, Option<MediaId>)>>,
+    /// The photos' scroll offset and active photo when last followed.
+    seen: Option<(f32, Option<MediaId>)>,
+    /// The photos were last scrolled by hand rather than by a new active photo.
+    scrolled: bool,
+    /// The navigator scrolls `current` into view once after it changes.
+    pub(super) reveal: bool,
+    /// A folder or date the photos scroll to once they are up to date.
+    pub(super) scroll_to: Option<Key>,
+}
 
 impl PhotoSortApp {
-    pub(super) fn set_navigator(&mut self, mode: Mode, enabled: bool) {
-        self.navigator.mode = mode;
+    pub(super) fn set_navigator(&mut self, enabled: bool) {
         self.navigator.enabled = enabled;
-        if enabled {
-            self.review = false;
-        }
         self.navigator_changed();
+    }
+    /// Lists folders or capture dates. Nothing chosen in one carries over
+    /// to the other: both only scroll the photos.
+    pub(super) fn set_navigator_mode(&mut self, mode: Mode) {
+        if self.navigator.mode != mode {
+            self.navigator.mode = mode;
+            self.spy = Default::default();
+            self.spy.reveal = true;
+            self.navigator_changed();
+        }
     }
     fn navigator_changed(&mut self) {
         self.pending_bookmark = None;
         self.filter_dirty = true;
         self.library_reveal = true;
     }
+    /// What the navigator highlights: the folder or date you are looking
+    /// at, or else the library folder.
     fn navigator_key(&self) -> Option<Key> {
+        let current = self.spy.current.clone().filter(|key| {
+            matches!(
+                (key, self.navigator.mode),
+                (Key::Folder(_), Mode::Folders) | (Key::Date(_), Mode::Dates)
+            )
+        });
         match self.navigator.mode {
-            Mode::Folders => self.browse.folder.path.clone().map(Key::Folder),
-            Mode::Dates => self.browse.date.clone().map(Key::Date),
-            Mode::Groups => self.browse.group.map(Key::Group),
+            Mode::Folders => current.or_else(|| self.root.clone().map(Key::Folder)),
+            _ => current,
         }
     }
-    fn select_navigation_node(&mut self, key: Key) {
+    /// The folder or calendar day a shown photo belongs to, in the
+    /// navigator's current list.
+    fn navigator_place(&self, index: usize) -> Option<Key> {
+        let media = &self.media[index];
+        match self.navigator.mode {
+            Mode::Dates => {
+                let metadata = self.metadata.get(&media.id);
+                let captured = crate::core::dates::capture_millis(media, metadata);
+                let date = crate::core::dates::calendar(captured, metadata);
+                Some(Key::Date(date.unwrap_or_default()))
+            }
+            _ => media.path.parent().map(|p| Key::Folder(p.to_path_buf())),
+        }
+    }
+    /// Whether a shown photo is in folder or date `key`, subfolders and the
+    /// days of a month or year included.
+    fn navigator_holds(&self, key: &Key, index: usize) -> bool {
         match key {
-            Key::Folder(path) => self.browse.folder.show_only(Some(path)),
-            Key::Date(date) => self.browse.date = Some(date),
-            Key::Group(group) => self.browse.group = Some(group),
+            Key::Folder(path) => self.media[index].path.starts_with(path),
+            Key::Date(scope) => match self.navigator_place(index) {
+                Some(Key::Date(date)) => crate::core::browsing::tree::date_matches(
+                    Some(scope),
+                    (!date.is_empty()).then_some(date.as_str()),
+                ),
+                _ => false,
+            },
+            Key::Group(_) => false,
         }
-        self.navigator_changed();
     }
-    /// A click on a folder in the navigator, by the Organize sidebar's rules:
-    /// a plain click shows just that folder; Ctrl/Cmd adds it to the folders
-    /// shown, or takes it away again; Shift shows the folders listed from the
-    /// last one clicked through this one, added to those shown with Ctrl/Cmd.
+    /// Scrolls the photos to a folder or date, the first of its photos in
+    /// the order shown, and highlights it. A folder hidden by "Show only"
+    /// brings every folder back first; one with no photos leaves the
+    /// photos where they are.
+    pub(super) fn go_to(&mut self, key: Key) {
+        if let Key::Folder(path) = key {
+            if self.browse.folder.path.is_some() && !self.browse.folder.shows(&path) {
+                self.browse.folder.show_only(None);
+                self.navigator_changed();
+            }
+            return self.go_to_place(Key::Folder(path));
+        }
+        self.go_to_place(key);
+    }
+    fn go_to_place(&mut self, key: Key) {
+        self.pending_bookmark = None;
+        self.spy.current = Some(key.clone());
+        self.spy.hold = Some(None);
+        self.spy.scroll_to = Some(key);
+    }
+    /// The position in the photos shown to scroll to for a folder or date
+    /// clicked in the navigator, once the photos are up to date.
+    pub(super) fn take_folder_scroll(&mut self) -> Option<usize> {
+        if self.filter_dirty || self.browse_run.is_some() {
+            return None;
+        }
+        let key = self.spy.scroll_to.take()?;
+        self.filtered
+            .iter()
+            .position(|i| self.navigator_holds(&key, *i))
+    }
+    /// Follows the folder or date you are looking at, as Organize's sidebar
+    /// does: the active photo's while it is on screen (`active`), or the
+    /// topmost photo's (`top`) once you scroll by hand. One just clicked
+    /// stays highlighted until you scroll or move to another photo.
+    pub(super) fn follow_photos(&mut self, active: bool, top: Option<usize>, offset: f32) {
+        let now = (offset, self.active);
+        let by_hand = match self.spy.seen.replace(now) {
+            Some((_, was)) if was != self.active => false,
+            Some((then, _)) if (then - offset).abs() > 0.5 => true,
+            _ => self.spy.scrolled,
+        };
+        self.spy.scrolled = by_hand;
+        if self.spy.scroll_to.is_some() {
+            return;
+        }
+        match self.spy.hold {
+            Some(None) => {
+                self.spy.hold = Some(Some(now));
+                return;
+            }
+            Some(Some(then)) if then == now => return,
+            Some(Some(_)) => self.spy.hold = None,
+            None => {}
+        }
+        let active = active
+            .then(|| self.active.and_then(|id| self.index.get(&id)).copied())
+            .flatten()
+            .and_then(|index| self.navigator_place(index));
+        let top = top
+            .and_then(|position| self.filtered.get(position).copied())
+            .and_then(|index| self.navigator_place(index));
+        let current = if by_hand { top } else { active.or(top) };
+        if current.is_some() && current != self.spy.current {
+            self.spy.current = current;
+            self.spy.reveal = true;
+        }
+    }
+    /// Whether the navigator highlights `path`: every folder shown when
+    /// "Show only" picked several, otherwise the one you are looking at.
+    fn navigator_highlighted(&self, path: &std::path::Path) -> bool {
+        if self.browse.folder.folders().count() > 1 {
+            return self.browse.folder.shows(path);
+        }
+        self.navigator_key() == Some(Key::Folder(path.to_path_buf()))
+    }
+    /// A Ctrl/Cmd or Shift click on a folder in the navigator, by the
+    /// Organize sidebar's rules: Ctrl/Cmd shows only the folders chosen,
+    /// adding this one or taking it away again; Shift shows the folders
+    /// listed from the last one clicked through this one, added to those
+    /// shown with Ctrl/Cmd.
     fn choose_navigator_folder(
         &mut self,
         view: &crate::core::browsing::tree::View,
@@ -67,17 +214,14 @@ impl PhotoSortApp {
                 _ => None,
             });
             folder.show_span(span.collect(), toggle);
-        } else if toggle {
-            folder.toggle(path);
         } else {
-            folder.show_only(Some(path));
+            folder.toggle(path);
         }
         self.navigator_changed();
     }
     pub(super) fn navigator_controls(&mut self, ui: &mut egui::Ui) {
-        // Review temporarily hides the tree but keeps its presentation bookmark.
-        // Show actual visibility here so one click always opens the navigator.
-        let mut visible = self.navigator.enabled && !self.review;
+        // Every Cull view, Review included, shows the same navigator.
+        let mut visible = self.navigator.enabled;
         let button = if self.bar_fit >= super::top_bar::Fit::Icons {
             super::top_bar::bar_icon(
                 ui,
@@ -96,25 +240,23 @@ impl PhotoSortApp {
             )
         };
         if button
-            .on_hover_text(
-                "Browse folders, capture dates and similarity groups without moving files · F/S",
-            )
+            .on_hover_text("Folders and capture dates, to jump between them · F")
             .clicked()
         {
             visible = !visible;
-            self.set_navigator(self.navigator.mode, visible);
+            self.set_navigator(visible);
         }
-        if let Some(date) = self.browse.date.clone() {
-            let label = if date.is_empty() {
-                "Unknown date"
-            } else {
-                &date
-            };
-            if ui.button(format!("Date: {label} ×")).clicked() {
-                self.browse.date = None;
-                self.navigator_changed();
-            }
+    }
+    /// The width Review's left photo strip takes from the photos, so the
+    /// navigator keeps to its sidebar only while the photo itself has room.
+    fn review_strip_width(&self, ctx: &egui::Context) -> f32 {
+        if !self.review
+            || self.preferences.strip_position != crate::core::preferences::StripPosition::Left
+        {
+            return 0.0;
         }
+        let (id, default) = super::review::side_strip_panel(self.preferences.compact_strip);
+        egui::PanelState::load(ctx, egui::Id::new(id)).map_or(default, |p| p.size().x)
     }
     fn navigator_popup_id(&self) -> egui::Id {
         egui::Id::new(("navigator_popup_open", &self.root))
@@ -132,7 +274,9 @@ impl PhotoSortApp {
     /// wide) has space for it; [`Self::navigator_panel`] shows the popover
     /// otherwise.
     pub(super) fn navigator_sidebar(&mut self, root: &mut egui::Ui, room: f32) {
-        if self.step != Step::Cull || !self.navigator.enabled || self.review || room < INLINE_WIDTH
+        if self.step != Step::Cull
+            || !self.navigator.enabled
+            || room - self.review_strip_width(root.ctx()) < INLINE_WIDTH
         {
             return;
         }
@@ -145,14 +289,9 @@ impl PhotoSortApp {
         egui::Panel::left("library_tree_panel")
             .resizable(true)
             .show_separator_line(false)
-            .default_size(220.)
-            .size_range(180.0..=300.0)
-            .frame(egui::Frame::new().fill(SIDEBAR).inner_margin(egui::Margin {
-                left: S2 as i8,
-                right: S2 as i8,
-                top: S3 as i8,
-                bottom: S2 as i8,
-            }))
+            .default_size(SIDEBAR_WIDTH)
+            .size_range(SIDEBAR_WIDTHS)
+            .frame(sidebar_frame())
             .show(root, |ui| {
                 self.sidebar_title_band(ui, S3);
                 if self.busy {
@@ -163,7 +302,7 @@ impl PhotoSortApp {
     }
     pub(super) fn navigator_panel(&mut self, ui: &mut egui::Ui) {
         let popup_state = self.navigator_popup_id();
-        if self.step != Step::Cull || !self.navigator.enabled || self.review {
+        if self.step != Step::Cull || !self.navigator.enabled {
             ui.ctx()
                 .data_mut(|data| data.remove::<(bool, u64)>(popup_state));
             return;
@@ -176,35 +315,36 @@ impl PhotoSortApp {
         {
             return;
         }
-        if ui.available_width() >= INLINE_WIDTH {
+        if ui.available_width() - self.review_strip_width(ui.ctx()) >= INLINE_WIDTH {
             ui.ctx()
                 .data_mut(|data| data.remove::<(bool, u64)>(popup_state));
             egui::Panel::left("library_tree_panel")
                 .resizable(true)
-                .default_size(220.)
-                .size_range(180.0..=300.0)
+                .show_separator_line(false)
+                .default_size(SIDEBAR_WIDTH)
+                .size_range(SIDEBAR_WIDTHS)
+                .frame(sidebar_frame())
                 .show(ui, |ui| self.navigator_contents(ui, ui.available_height()));
         } else {
             // A stacked tree can consume the entire photo viewport in a short
             // window. Reuse the same virtualized navigator in a bounded overlay.
-            let selected = self.navigator_key().and_then(|key| {
-                let view = self.browse_tree.as_ref()?;
-                let index = view.tree.lookup.get(&key)?;
-                Some(view.tree.nodes[*index].label.clone())
-            });
+            // Names what "Show only" keeps, if anything; otherwise stays put
+            // while the photos scroll.
             let several = self.browse.folder.folders().count();
-            let label = match selected {
-                _ if self.navigator.mode == Mode::Folders && several > 1 => {
-                    format!("Folders: {several} folders")
-                }
-                Some(label) => format!("{}: {label}", self.navigator.mode.title()),
-                None => format!("Browse {}", self.navigator.mode.title().to_lowercase()),
+            let label = match &self.browse.folder.path {
+                _ if several > 1 => format!("Folders: {several} folders"),
+                Some(path) => format!(
+                    "Folders: {}",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                None if self.navigator.mode == Mode::Dates => "Browse dates".to_owned(),
+                None => "Browse folders".to_owned(),
             };
             let width = ui.available_width().clamp(240., 420.);
             let height = (ui.ctx().content_rect().height() - 180.).clamp(160., 420.);
             let response = ui
                 .add(egui::Button::new(label).truncate())
-                .on_hover_text("Browse folders, dates and groups. Counts cover the whole library.");
+                .on_hover_text("The library's folders. Counts cover the whole library.");
             #[cfg(test)]
             ui.ctx()
                 .data_mut(|d| d.insert_temp(egui::Id::new("test_navigator_toggle"), response.rect));
@@ -218,6 +358,7 @@ impl PhotoSortApp {
                 .open_bool(&mut open)
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .width(width)
+                .frame(egui::Frame::popup(ui.style()).fill(SIDEBAR))
                 .show(|ui| {
                     ui.set_width(width);
                     self.navigator_contents(ui, height);
@@ -236,78 +377,74 @@ impl PhotoSortApp {
         );
     }
     fn navigator_body(&mut self, ui: &mut egui::Ui, height: f32) {
+        use egui_phosphor::regular as icon;
+        let selected = self.navigator_key();
+        let mode = self.navigator.mode;
+        let view = self.browse_tree.clone().filter(|v| v.mode == mode);
+        // A header like Organize's folders: what it lists, then steps to the
+        // neighbouring entry at the same level.
         ui.horizontal(|ui| {
-            for mode in Mode::ALL {
-                if ui
-                    .selectable_label(self.navigator.mode == mode, mode.title())
-                    .clicked()
-                    && self.navigator.mode != mode
-                {
-                    self.set_navigator(mode, true);
+            ui.spacing_mut().item_spacing.x = S3;
+            for choice in [Mode::Folders, Mode::Dates] {
+                let current = mode == choice;
+                let text = caption(choice.title()).color(if current { INK } else { FAINT });
+                let response =
+                    ui.add(egui::Button::new(text).frame(false))
+                        .on_hover_text(match choice {
+                            Mode::Dates => "Capture dates. Counts cover the whole library.",
+                            _ => "The library's folders. Counts cover the whole library.",
+                        });
+                let response = named(response, egui::WidgetType::Button, choice.title());
+                if response.clicked() {
+                    self.set_navigator_mode(choice);
                 }
             }
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let node = selected.as_ref().and_then(|key| {
+                    let view = view.as_ref()?;
+                    view.tree.lookup.get(key).map(|i| &view.tree.nodes[*i])
+                });
+                let steps = [
+                    ("Next", icon::CARET_DOWN, node.and_then(|n| n.next)),
+                    ("Previous", icon::CARET_UP, node.and_then(|n| n.previous)),
+                ];
+                for (name, glyph, index) in steps {
+                    let response = ui.add_enabled(
+                        index.is_some(),
+                        egui::Button::new(RichText::new(glyph).size(13.0))
+                            .frame(false)
+                            .min_size(egui::vec2(22.0, 20.0)),
+                    );
+                    if named(response, egui::WidgetType::Button, name)
+                        .on_hover_text(format!("{name} {} at the same level", mode.entry()))
+                        .clicked()
+                        && let Some((index, view)) = index.zip(view.as_ref())
+                    {
+                        self.go_to(view.tree.nodes[index].key.clone());
+                    }
+                }
+            });
         });
-        ui.label(
-            RichText::new("Counts cover the whole library")
-                .small()
-                .color(MUTED),
-        );
-        let mut selected = self.navigator_key();
-        let Some(view) = self
-            .browse_tree
-            .clone()
-            .filter(|v| v.mode == self.navigator.mode)
-        else {
+        ui.add_space(S1);
+        let Some(view) = view else {
             ui.spinner();
             return;
         };
-        let waiting = self.browse_run.is_some() || self.filter_dirty;
-        ui.horizontal(|ui| {
-            if ui
-                .selectable_label(
-                    selected.is_none(),
-                    format!("All {}", self.navigator.mode.title().to_lowercase()),
-                )
-                .clicked()
-            {
-                match self.navigator.mode {
-                    Mode::Folders => self.browse.folder.show_only(None),
-                    Mode::Dates => self.browse.date = None,
-                    Mode::Groups => self.browse.group = None,
-                }
-                self.navigator_changed();
-            }
-            let node = selected
-                .as_ref()
-                .and_then(|key| view.tree.lookup.get(key))
-                .map(|i| &view.tree.nodes[*i]);
-            for (name, index) in [
-                ("Previous", node.and_then(|n| n.previous)),
-                ("Next", node.and_then(|n| n.next)),
-            ] {
-                if ui
-                    .add_enabled(!waiting && index.is_some(), egui::Button::new(name).small())
-                    .on_hover_text("Select the adjacent folder, date or group at the same level")
-                    .clicked()
-                {
-                    self.select_navigation_node(view.tree.nodes[index.unwrap()].key.clone());
-                }
-            }
-        });
         if view.tree.nodes.is_empty() {
-            ui.label(if self.navigator.mode == Mode::Groups {
-                "Analyze the library to find similarity groups."
+            ui.label(if mode == Mode::Dates {
+                "No capture dates yet."
             } else {
-                "No entries in this library."
+                "No folders in this library."
             });
             return;
         }
         // Navigation only changes the query against this cached tree. Keep it
         // responsive while the worker replaces an older projection/filter result.
         ui.scope(|ui| {
-            let row_height = button_row_height(ui);
-            let max_height = (height - 78.).max(24.);
-            let salt = ("library_tree", self.navigator.mode);
+            let row_height = ROW;
+            let max_height = (height - 70.).max(24.);
+            let salt = ("library_tree", mode);
             let keyboard = tree_controls::Keyboard::new(ui, salt, max_height, row_height);
             if let Some(result) = keyboard.navigate(
                 ui,
@@ -316,11 +453,15 @@ impl PhotoSortApp {
                 &mut self.navigator.collapsed,
             ) {
                 if selected.as_ref() != Some(&result.key) {
-                    self.select_navigation_node(result.key.clone());
-                    selected = Some(result.key);
+                    self.go_to(result.key);
                 } else if result.expansion_changed {
                     self.navigator_changed();
                 }
+            }
+            if std::mem::take(&mut self.spy.reveal)
+                && let Some(key) = selected.clone()
+            {
+                keyboard.reveal(ui, key);
             }
             let scroll = keyboard.scroll(
                 ui,
@@ -340,10 +481,58 @@ impl PhotoSortApp {
                     for row in range {
                         let i = view.visible[row];
                         let node = &view.tree.nodes[i];
-                        ui.horizontal(|ui| {
-                            ui.add_space((node.depth.min(12) * 12) as f32);
-                            if tree_controls::expander(
+                        ui.scope(|ui| {
+                            let folder = match &node.key {
+                                Key::Folder(path) => Some(path),
+                                _ => None,
+                            };
+                            let top = folder.is_some_and(|path| self.root.as_ref() == Some(path));
+                            let highlighted = match folder {
+                                Some(path) => self.navigator_highlighted(path),
+                                None => selected.as_ref() == Some(&node.key),
+                            };
+                            // The library folder by its name, as Organize's
+                            // top row; dates as words.
+                            let label = match &node.key {
+                                Key::Folder(path) if top => path
+                                    .file_name()
+                                    .map_or(node.label.clone(), |n| n.to_string_lossy().into_owned()),
+                                Key::Date(date) => date_label(date),
+                                _ => node.label.clone(),
+                            };
+                            // Organize's folder row, one step in for the
+                            // caret that opens and closes the folder.
+                            let depth = node.depth.min(12);
+                            let response = super::organize_board::folder_row(
                                 ui,
+                                ROW,
+                                &label,
+                                if top {
+                                    icon::HARD_DRIVES
+                                } else if folder.is_none() {
+                                    icon::CALENDAR_BLANK
+                                } else if node.count == 0 {
+                                    icon::FOLDER_DASHED
+                                } else {
+                                    icon::FOLDER_SIMPLE
+                                },
+                                depth + 1,
+                                node.count,
+                                highlighted,
+                                false,
+                                None,
+                                None,
+                            );
+                            let caret = egui::Rect::from_center_size(
+                                egui::pos2(
+                                    response.rect.left() + 13.0 + depth as f32 * 14.0,
+                                    response.rect.center().y,
+                                ),
+                                egui::vec2(16.0, ROW),
+                            );
+                            if tree_controls::caret(
+                                ui,
+                                caret,
                                 &view.tree,
                                 i,
                                 &mut self.navigator.collapsed,
@@ -351,36 +540,6 @@ impl PhotoSortApp {
                             ) {
                                 self.navigator_changed();
                             }
-                            // Name on the left and its count on the right, as in
-                            // Organize's sidebar; both stay in the accessible name.
-                            let label = format!("{}  ·  {}", node.label, node.count);
-                            let shown = match &node.key {
-                                Key::Folder(path) => self.browse.folder.shows(path),
-                                key => selected.as_ref() == Some(key),
-                            };
-                            let response = ui.add_sized(
-                                [ui.available_width(), row_height],
-                                egui::Button::selectable(shown, node.label.as_str())
-                                    .right_text(
-                                        RichText::new(node.count.to_string())
-                                            .size(10.5)
-                                            .color(MUTED),
-                                    )
-                                    .truncate()
-                                    .sense(tree_controls::pointer_sense(false)),
-                            );
-                            let response = {
-                                let enabled = response.enabled();
-                                response.widget_info(|| {
-                                    egui::WidgetInfo::selected(
-                                        egui::WidgetType::Button,
-                                        enabled,
-                                        shown,
-                                        &label,
-                                    )
-                                });
-                                response
-                            };
                             keyboard.focus_on_click(&response);
                             #[cfg(test)]
                             ui.ctx().data_mut(|d| {
@@ -389,25 +548,6 @@ impl PhotoSortApp {
                                     response.rect,
                                 )
                             });
-                            if let Key::Group(group) = &node.key {
-                                let group = *group;
-                                if response
-                                    .dnd_hover_payload::<super::grouping::PhotoDrag>()
-                                    .is_some()
-                                {
-                                    ui.painter().rect_stroke(
-                                        response.rect,
-                                        R_CONTROL,
-                                        Stroke::new(2.0, ACCENT),
-                                        StrokeKind::Inside,
-                                    );
-                                }
-                                if let Some(drag) =
-                                    response.dnd_release_payload::<super::grouping::PhotoDrag>()
-                                {
-                                    self.drop_on_group(&drag, group);
-                                }
-                            }
                             response.context_menu(|ui| {
                                 if tree_controls::menu(
                                     ui,
@@ -417,53 +557,39 @@ impl PhotoSortApp {
                                 ) {
                                     self.navigator_changed();
                                 }
-                                if let Key::Group(group) = node.key {
-                                    let count = self.group_members(group).len();
-                                    ui.separator();
-                                    if ui
-                                        .add_enabled(
-                                            (2..=9).contains(&count),
-                                            egui::Button::new(format!("Compare these {count}")),
-                                        )
-                                        .on_disabled_hover_text("Comparison shows 2 to 9 photos")
-                                        .clicked()
-                                    {
-                                        self.compare_group(group);
-                                        ui.close();
-                                    }
+                                let Some(path) = folder else {
+                                    return;
+                                };
+                                ui.separator();
+                                if ui.button("Show only this folder").clicked() {
+                                    self.browse.folder.show_only(Some(path.clone()));
+                                    self.navigator_changed();
+                                    ui.close();
+                                }
+                                if self.browse.folder.path.is_some()
+                                    && ui.button("Show every folder").clicked()
+                                {
+                                    self.browse.folder.show_only(None);
+                                    self.navigator_changed();
+                                    ui.close();
                                 }
                             });
-                            if response
-                                .on_hover_text(match &node.key {
-                                    Key::Folder(p) => format!(
-                                        "{} · Ctrl/Cmd-click to show it with other folders",
-                                        p.display()
-                                    ),
-                                    Key::Date(d) => {
-                                        if d.is_empty() {
-                                            "Unknown capture date".into()
-                                        } else {
-                                            d.clone()
-                                        }
-                                    }
-                                    Key::Group(g) => format!("Similarity group {g}"),
-                                })
-                                .clicked()
-                            {
+                            let hover = match folder {
+                                Some(path) => format!(
+                                    "{} · click to scroll to it · Ctrl/Cmd-click to show only the folders you choose",
+                                    path.display()
+                                ),
+                                None => format!("{label} · click to scroll to its photos"),
+                            };
+                            if response.on_hover_text(hover).clicked() {
                                 let modifiers = ui.input(|i| i.modifiers);
-                                match &node.key {
-                                    Key::Folder(path)
-                                        if modifiers.shift
-                                            || modifiers.command
-                                            || modifiers.ctrl =>
+                                match folder {
+                                    Some(path)
+                                        if modifiers.shift || modifiers.command || modifiers.ctrl =>
                                     {
-                                        self.choose_navigator_folder(
-                                            &view,
-                                            path.clone(),
-                                            modifiers,
-                                        );
+                                        self.choose_navigator_folder(&view, path.clone(), modifiers);
                                     }
-                                    key => self.select_navigation_node(key.clone()),
+                                    _ => self.go_to(node.key.clone()),
                                 }
                             }
                         });
@@ -484,6 +610,24 @@ impl PhotoSortApp {
             keyboard.finish(ui, output.inner_rect);
         });
     }
+}
+
+/// A date in the navigator as words: the year, a month by name, a day with
+/// its weekday ("2025", "October", "Fri 24").
+fn date_label(date: &str) -> String {
+    use chrono::{Datelike, NaiveDate};
+    if date.is_empty() {
+        return "Unknown date".into();
+    }
+    if let Ok(day) = NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+        return format!("{} {}", day.format("%a"), day.day());
+    }
+    if let Ok(month) = NaiveDate::parse_from_str(&format!("{date}-01"), "%Y-%m-%d")
+        && date.len() == 7
+    {
+        return month.format("%B").to_string();
+    }
+    date.into()
 }
 
 #[cfg(test)]

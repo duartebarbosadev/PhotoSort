@@ -183,8 +183,7 @@ fn wide_review_gives_photos_space_and_reuses_the_existing_filter_panel() {
     click_label(&mut app, &ctx, size, "Cancel metadata reading");
     assert!(app.metadata_run.is_none());
     // Return to the wide browser: the same panel and its filter survive.
-    app.set_library_layout(library::Layout::Grid);
-    app.review = false;
+    app.show_grid();
     let nodes = rendered(&mut app, &ctx, size);
     assert!(nodes.iter().any(|(label, _)| label == "Filters & sort · 1"));
     assert!(!nodes.iter().any(|(label, _)| label == "Any rating"));
@@ -204,8 +203,8 @@ fn compact_cull_workspace_keeps_photos_visible_with_navigator_and_filters() {
         egui::vec2(1000., 600.),
         egui::vec2(1440., 900.),
     ] {
-        for layout in library::Layout::ALL {
-            app.set_library_layout(layout);
+        for review in [false, true] {
+            app.review = review;
             let nodes = rendered(&mut app, &ctx, size);
             let footer = size.y - navigation::STATUS_HEIGHT;
             let photos: Vec<_> = nodes
@@ -217,7 +216,7 @@ fn compact_cull_workspace_keeps_photos_visible_with_navigator_and_filters() {
                     && b.bottom() < footer
                     && b.left() >= 0.
                     && b.right() <= size.x),
-                "No complete photo row visible at {size:?}/{layout:?}; footer {footer}; photo bounds {photos:?}"
+                "No complete photo row visible at {size:?}/review {review}; footer {footer}; photo bounds {photos:?}"
             );
         }
     }
@@ -377,7 +376,7 @@ fn compact_navigator_selects_scope_and_metadata_cancel_stays_outside_filters() {
     let size = egui::vec2(640., 600.);
     click_label(&mut app, &ctx, size, "Browse folders");
     let nodes = rendered(&mut app, &ctx, size);
-    for label in ["Folders", "Dates", "Groups", "A  ·  4", "Empty  ·  0"] {
+    for label in ["Previous", "Next", "A  ·  4", "Empty  ·  0"] {
         let b = nodes
             .iter()
             .find(|(s, _)| s == label)
@@ -388,11 +387,15 @@ fn compact_navigator_selects_scope_and_metadata_cancel_stays_outside_filters() {
             "Navigator control {label} is outside the window: {b:?}"
         );
     }
+    // A folder scrolls the photos to it rather than hiding the others.
     click_label(&mut app, &ctx, size, "A  ·  4");
-    assert_eq!(app.filtered.len(), 4);
+    assert_eq!(app.filtered.len(), 9);
+    assert_eq!(app.browse.folder.path, None);
     assert_eq!(
-        app.browse.folder.path,
-        Some(app.root.as_ref().unwrap().join("A"))
+        app.spy.current,
+        Some(crate::core::browsing::tree::Key::Folder(
+            app.root.as_ref().unwrap().join("A")
+        ))
     );
     // Dismiss through the public UI: the browser and its nested context menu
     // deliberately have independent popup owners.
@@ -425,15 +428,16 @@ fn compact_navigator_selects_scope_and_metadata_cancel_stays_outside_filters() {
     );
     click_label(&mut app, &ctx, size, "Cancel metadata reading");
     assert!(app.metadata_run.is_none());
-    assert_eq!(app.filtered.len(), 4);
+    assert_eq!(app.filtered.len(), 9);
     assert!(Arc::ptr_eq(&catalog, app.catalog.as_ref().unwrap()));
     assert!(app.decisions.is_empty());
 }
 
 #[test]
-fn navigator_activation_checkbox_reveals_browser_from_review_at_both_sizes() {
+fn navigator_opens_beside_review_and_follows_between_views_at_both_sizes() {
     for size in [egui::vec2(640., 600.), egui::vec2(1440., 960.)] {
         let (_temp, mut app) = fixture();
+        app.preferences.strip_position = crate::core::preferences::StripPosition::Left;
         app.review = true;
         app.navigator.enabled = false;
         let active = app.media[0].id;
@@ -453,14 +457,14 @@ fn navigator_activation_checkbox_reveals_browser_from_review_at_both_sizes() {
         ctx.enable_accesskit();
         click_label(&mut app, &ctx, size, "Library navigator");
         assert!(
-            app.navigator.enabled && !app.review,
-            "Navigator remained hidden in Review at {size:?}"
+            app.navigator.enabled && app.review,
+            "Opening the navigator left Review at {size:?}"
         );
         let nodes = rendered(&mut app, &ctx, size);
         let expected = if size.x < 1000. {
             "Browse folders"
         } else {
-            "Counts cover the whole library"
+            "Previous"
         };
         assert!(
             nodes.iter().any(|(label, _)| label == expected),
@@ -471,15 +475,14 @@ fn navigator_activation_checkbox_reveals_browser_from_review_at_both_sizes() {
         assert_eq!(app.decisions[&active].rating, Some(4));
         assert!(Arc::ptr_eq(&catalog, app.catalog.as_ref().unwrap()));
         let saved = app.capture_bookmark();
-        assert!(saved.navigator.enabled && !saved.review);
+        assert!(saved.navigator.enabled && saved.review);
+        // Switching to a grid view and back keeps it open in both.
+        app.show_grid();
+        assert!(app.navigator.enabled);
+        app.open_review();
+        assert!(app.navigator.enabled && app.review);
         click_label(&mut app, &ctx, size, "Library navigator");
-        assert!(!app.navigator.enabled && !app.review);
-        // Returning to Review hides the tree but retains its saved enabled state.
-        // The checkbox reflects visibility and opens it again in one click.
-        app.navigator.enabled = true;
-        app.review = true;
-        click_label(&mut app, &ctx, size, "Library navigator");
-        assert!(app.navigator.enabled && !app.review);
+        assert!(!app.navigator.enabled && app.review);
         assert_eq!(app.decisions[&active].rating, Some(4));
     }
 }
@@ -665,4 +668,75 @@ fn a_restored_filter_says_how_many_items_are_hidden_and_clears_in_one_click() {
     assert!(!nodes.iter().any(|(label, _)| label == "Clear filters"));
     assert!(app.decisions.is_empty());
     app.runtime.shutdown();
+}
+
+#[test]
+fn compact_strip_fits_more_photos_and_best_links_its_similar_group() {
+    let size = egui::vec2(1440., 900.);
+    let (_temp, mut app) = fixture_with(24);
+    app.preferences.strip_position = crate::core::preferences::StripPosition::Left;
+    app.review = true;
+    let ids: Vec<MediaId> = app.filtered.iter().map(|i| app.media[*i].id).collect();
+    // The second shown photo is the best of a group of three.
+    for (id, score) in ids.iter().zip([60.0, 90.0, 70.0]) {
+        app.analysis.insert(
+            *id,
+            crate::core::analysis::Analysis {
+                score,
+                ..Default::default()
+            },
+        );
+    }
+    app.publish_groups(Arc::new(ids[..3].iter().map(|id| (*id, 5)).collect()));
+    settle(&mut app);
+    app.active = Some(ids[0]);
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+    let shown = |app: &PhotoSortApp, nodes: &[(String, egui::Rect)]| {
+        ids.iter()
+            .filter(|id| {
+                let name = app.media[app.index[id]].name();
+                nodes
+                    .iter()
+                    .any(|(label, rect)| *label == name && window.contains_rect(*rect))
+            })
+            .count()
+    };
+    app.preferences.compact_strip = false;
+    let nodes = rendered(&mut app, &ctx, size);
+    let large = shown(&app, &nodes);
+    click_label(
+        &mut app,
+        &ctx,
+        size,
+        "Large thumbnails · click for compact rows",
+    );
+    assert!(app.preferences.compact_strip);
+    let nodes = rendered(&mut app, &ctx, size);
+    let compact = shown(&app, &nodes);
+    assert!(
+        compact >= large * 2,
+        "Compact rows show {compact} photos, large tiles {large}"
+    );
+    // A photo that lost says where it stands and goes to the winner.
+    let chip = nodes
+        .iter()
+        .find(|(label, _)| label.contains("of 3 · Go to best"))
+        .map(|(label, _)| label.clone())
+        .expect("group chip on a photo that lost");
+    assert!(chip.starts_with("3rd of 3"), "{chip}");
+    click_label(&mut app, &ctx, size, &chip);
+    assert_eq!(app.active, Some(ids[1]));
+    // The winner offers to compare the whole group.
+    let nodes = rendered(&mut app, &ctx, size);
+    let chip = nodes
+        .iter()
+        .find(|(label, _)| label.contains("Best of 3 · Compare all"))
+        .map(|(label, _)| label.clone())
+        .expect("group chip on the best photo");
+    click_label(&mut app, &ctx, size, &chip);
+    assert_eq!(app.comparison, ids[..3].to_vec());
+    assert!(app.review);
 }

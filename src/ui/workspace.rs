@@ -56,6 +56,8 @@ mod shortcuts;
 mod states;
 #[path = "status.rs"]
 mod status;
+#[path = "swipe.rs"]
+mod swipe;
 #[path = "top_bar.rs"]
 mod top_bar;
 #[path = "tree_controls.rs"]
@@ -199,7 +201,12 @@ pub struct PhotoSortApp {
     scene_undo: Option<Arc<crate::core::manual_groups::ManualGroups>>,
     cull_groups: Arc<HashMap<MediaId, usize>>,
     /// The highest-scoring photo of each Cull group with two or more photos.
-    group_best: HashSet<MediaId>,
+    /// Each similarity group's best photo and size; see `similar_group`.
+    group_best: HashMap<usize, (MediaId, usize)>,
+    /// The folder Cull's navigator highlights and scrolls the photos to.
+    spy: navigator::Spy,
+    /// Swipe compare, while it is open.
+    swipe: Option<swipe::Swipe>,
     automatic_groups: Arc<HashMap<MediaId, usize>>,
     manual_groups: Arc<crate::core::manual_groups::ManualGroups>,
     scene_groups: Arc<crate::core::manual_groups::ManualGroups>,
@@ -265,7 +272,6 @@ pub struct PhotoSortApp {
     navigation_index: Option<Arc<crate::core::navigation::Index>>,
     navigation_notice: Option<String>,
     browse_folders: Arc<Vec<crate::core::browsing::Folder>>,
-    library_layout: library::Layout,
     library_reveal: bool,
     browse_ready: bool,
     browse_run: Option<u64>,
@@ -483,7 +489,9 @@ impl PhotoSortApp {
             scene_choices: Vec::new(),
             scene_undo: None,
             cull_groups: Arc::default(),
-            group_best: HashSet::new(),
+            group_best: HashMap::new(),
+            spy: Default::default(),
+            swipe: None,
             automatic_groups: Arc::default(),
             manual_groups: Arc::default(),
             scene_groups: Arc::default(),
@@ -542,7 +550,6 @@ impl PhotoSortApp {
             navigation_index: None,
             navigation_notice: None,
             browse_folders: Default::default(),
-            library_layout: Default::default(),
             library_reveal: true,
             browse_ready: false,
             browse_run: None,
@@ -733,6 +740,8 @@ impl PhotoSortApp {
         self.face_groups = None;
         self.cull_groups = Arc::default();
         self.group_best.clear();
+        self.spy = Default::default();
+        self.swipe = None;
         self.analysis_failures.clear();
         self.single_view_stash.clear();
         self.automatic_groups = Arc::default();
@@ -1974,7 +1983,79 @@ impl PhotoSortApp {
             self.pick_review.stage_new_suggestions(&mut self.decisions);
             self.view_data_ready.insert(Step::PickBest);
         }
+        // Cull's similarity groups, as an analysis would find them: the
+        // night city frames, the island pair and the street burst, each with
+        // its best photo.
+        let groups: Vec<(usize, &str, f64)> = vec![
+            (1, "20230428_035435_IMG_4666.JPG", 88.2),
+            (1, "20230428_034640_IMG_4658.JPG", 74.5),
+            (1, "20230428_035435_IMG_4666 copy.JPG", 70.1),
+            (2, "GAB00915.jpg", 81.0),
+            (2, "GAB00915 (2).jpg", 63.4),
+            (3, "DSC01231.jpg", 84.0),
+            (3, "DSC01232.jpg", 61.0),
+            (3, "DSC01233.jpg", 52.0),
+        ];
+        let mut cull_groups = HashMap::new();
+        for (group, name, score) in groups {
+            if let Some(id) = id(name) {
+                cull_groups.insert(id, group);
+                self.analysis.insert(
+                    id,
+                    crate::core::analysis::Analysis {
+                        score,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        if !cull_groups.is_empty() {
+            self.publish_groups(Arc::new(cull_groups));
+        }
         self.filter_dirty = true;
+    }
+    /// Reviews the best photo of the first similarity group shown.
+    pub fn gallery_review_group_best(&mut self) {
+        self.refilter();
+        let best = self.filtered.iter().find_map(|i| {
+            let (_, best, _) = self.similar_group(self.media[*i].id)?;
+            Some(best)
+        });
+        if let Some(best) = best {
+            self.comparison.clear();
+            self.set_active(best);
+        }
+    }
+    /// Lists capture dates in Cull's navigator.
+    pub fn gallery_navigator_dates(&mut self) {
+        self.set_navigator_mode(crate::core::browsing::tree::Mode::Dates);
+    }
+    /// Groups Cull's photos into similar sets.
+    pub fn gallery_group_similar(&mut self) {
+        self.browse.group_sort = crate::core::browsing::GroupSort::Time;
+        self.filter_dirty = true;
+    }
+    /// Opens swipe compare: over the photos selected, or else over the
+    /// street burst.
+    pub fn gallery_swipe(&mut self) {
+        self.refilter();
+        if self.selection.len() < 2 {
+            let burst: Vec<MediaId> = ["DSC01231.jpg", "DSC01232.jpg", "DSC01233.jpg"]
+                .iter()
+                .filter_map(|name| self.media.iter().find(|m| m.name() == *name))
+                .map(|m| m.id)
+                .collect();
+            self.selection.replace(burst.iter().copied());
+            if let Some(first) = burst.first() {
+                self.set_active(*first);
+            }
+        }
+        self.open_swipe();
+    }
+    /// Shows Review's left strip as compact rows or large tiles (preference,
+    /// not saved).
+    pub fn gallery_compact_strip(&mut self, compact: bool) {
+        self.preferences.compact_strip = compact;
     }
     /// Closes the Local AI models dialog. Builds without the native runtime
     /// open it whenever a step would analyze.
@@ -1983,7 +2064,7 @@ impl PhotoSortApp {
     }
     /// Opens Cull's library navigator beside the photos.
     pub fn gallery_navigator(&mut self) {
-        self.set_navigator(self.navigator.mode, true);
+        self.set_navigator(true);
     }
     /// Shows or hides file names under thumbnails (preference, not saved).
     pub fn gallery_show_filenames(&mut self, show: bool) {
@@ -2341,7 +2422,6 @@ fn pressed_keys(ctx: &egui::Context, rotation: bool) -> Vec<(egui::Key, egui::Mo
                         | egui::Key::E
                         | egui::Key::I
                         | egui::Key::F
-                        | egui::Key::S
                         | egui::Key::A
                         | egui::Key::F1
                         | egui::Key::F2

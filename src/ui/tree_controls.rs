@@ -3,27 +3,42 @@ use super::*;
 use crate::core::browsing::tree::{Expansion, Key, Navigation, NavigationResult, Tree};
 use std::collections::BTreeSet;
 
-pub(super) fn expander(
+/// The caret that opens and closes a tree node, drawn over the start of its
+/// sidebar row at `rect`; returns whether it opened or closed the node.
+pub(super) fn caret(
     ui: &mut egui::Ui,
+    rect: egui::Rect,
     tree: &Tree,
     index: usize,
     collapsed: &mut BTreeSet<Key>,
     keyboard: &Keyboard,
 ) -> bool {
+    use egui_phosphor::regular as icon;
     let node = &tree.nodes[index];
     if !node.expandable(index) {
-        ui.add_space(22.);
         return false;
     }
     let closed = collapsed.contains(&node.key);
     let response = ui
-        .add_sized(
-            [18., button_row_height(ui)],
-            egui::Button::new(if closed { ">" } else { "⌄" })
-                .frame(false)
-                .sense(pointer_sense(false)),
+        .interact(
+            rect,
+            ui.id().with(("tree_caret", &node.key)),
+            pointer_sense(false),
         )
         .on_hover_text(if closed { "Expand" } else { "Collapse" });
+    let label = if closed { "Expand" } else { "Collapse" };
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        if closed {
+            icon::CARET_RIGHT
+        } else {
+            icon::CARET_DOWN
+        },
+        FontId::proportional(11.0),
+        if response.hovered() { INK } else { FAINT },
+    );
     #[cfg(test)]
     ui.ctx().data_mut(|d| {
         d.insert_temp(
@@ -149,6 +164,10 @@ impl Keyboard {
             egui::Key::PageDown => Some(Navigation::Advance(page)),
             _ => None,
         }
+    }
+    /// Scrolls the row of `key` into view on the next [`Self::scroll`].
+    pub(super) fn reveal(&self, ui: &egui::Ui, key: Key) {
+        ui.ctx().data_mut(|d| d.insert_temp(self.reveal_id(), key));
     }
     pub(super) fn navigate_once(
         &self,

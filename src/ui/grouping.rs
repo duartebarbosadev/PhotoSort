@@ -29,6 +29,31 @@ impl PhotoSortApp {
             && !self.plan_open
             && self.departure.is_none()
     }
+    /// A Cull photo's similarity group when it has a best photo: the
+    /// group, its best photo and how many photos it holds, counting those a
+    /// filter hides.
+    pub(super) fn similar_group(&self, id: MediaId) -> Option<(usize, MediaId, usize)> {
+        if self.step != Step::Cull {
+            return None;
+        }
+        let group = *self.cull_groups.get(&id)?;
+        let (best, size) = *self.group_best.get(&group)?;
+        Some((group, best, size))
+    }
+    /// The photo's place in its group by score: 1 for the best photo.
+    pub(super) fn group_rank(&self, id: MediaId, group: usize) -> usize {
+        let score = |id: &MediaId| self.analysis.get(id).map_or(f64::NEG_INFINITY, |a| a.score);
+        let own = score(&id);
+        1 + self
+            .cull_groups
+            .iter()
+            .filter(|(other, g)| {
+                **g == group
+                    && **other != id
+                    && (score(other) > own || (score(other) == own && other.0 < id.0))
+            })
+            .count()
+    }
     pub(super) fn publish_groups(&mut self, groups: Arc<HashMap<MediaId, usize>>) {
         // Restore a group filter by photo identity, not yesterday's AI numbering.
         let anchor = self.browse.group.and_then(|group| {
@@ -197,7 +222,7 @@ impl PhotoSortApp {
             self.selection.ordered(&self.media, &self.filtered)
         }
     }
-    /// Dragging photos onto a navigator group: Cull, with groups to move into.
+    /// Dragging photos onto a similar set's header: Cull, with groups to move into.
     pub(super) fn photo_drag_enabled(&self) -> bool {
         !self.review
             && match self.step {
@@ -235,15 +260,13 @@ impl PhotoSortApp {
                 "Move {count} {} to a folder",
                 if count == 1 { "item" } else { "items" }
             )
-        } else if self.navigator.enabled
-            && self.navigator.mode == crate::core::browsing::tree::Mode::Groups
-        {
+        } else if self.grouped_view() {
             format!(
-                "Move {count} {} to a group",
+                "Move {count} {} to a similar set",
                 if count == 1 { "photo" } else { "photos" }
             )
         } else {
-            "Open the navigator's Groups view to drop here".to_owned()
+            "Group similar photos into sets, then drop on a set".to_owned()
         };
         let painter = ctx.layer_painter(egui::LayerId::new(
             egui::Order::Tooltip,
@@ -368,11 +391,12 @@ mod tests;
 /// Photos being dragged from the grid onto a similarity group.
 pub(super) struct PhotoDrag(pub(super) Vec<MediaId>);
 
-/// The best-scoring member of every group that has a choice to make.
+/// The best-scoring member of every group that has a choice to make, by
+/// group, with how many photos the group holds.
 fn group_best(
     groups: &HashMap<MediaId, usize>,
     analysis: &HashMap<MediaId, crate::core::analysis::Analysis>,
-) -> HashSet<MediaId> {
+) -> HashMap<usize, (MediaId, usize)> {
     let mut best: HashMap<usize, (f64, MediaId, usize)> = HashMap::new();
     for (id, group) in groups {
         let score = analysis.get(id).map_or(f64::NEG_INFINITY, |a| a.score);
@@ -383,8 +407,22 @@ fn group_best(
             (entry.0, entry.1) = (score, *id);
         }
     }
-    best.into_values()
-        .filter(|(score, _, members)| *members > 1 && score.is_finite())
-        .map(|(_, id, _)| id)
+    best.into_iter()
+        .filter(|(_, (score, _, members))| *members > 1 && score.is_finite())
+        .map(|(group, (_, id, members))| (group, (id, members)))
         .collect()
+}
+
+/// A similarity group's mark in Review's photo strip: muted hues that stay
+/// clear of the accent, Trash red and Keep green.
+pub(super) fn group_color(group: usize) -> Color32 {
+    const HUES: [Color32; 6] = [
+        Color32::from_rgb(0x5F, 0xA8, 0xA6),
+        Color32::from_rgb(0x8F, 0x86, 0xC9),
+        Color32::from_rgb(0x6A, 0x93, 0xD6),
+        Color32::from_rgb(0xB0, 0xA8, 0x5E),
+        Color32::from_rgb(0xC2, 0x82, 0xA4),
+        Color32::from_rgb(0x7F, 0xA8, 0x74),
+    ];
+    HUES[group % HUES.len()]
 }

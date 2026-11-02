@@ -6,13 +6,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Layout {
-    List,
-    Icons,
-    #[default]
-    Grid,
-}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GroupMode {
     #[default]
@@ -36,11 +29,16 @@ pub struct Bookmark {
     pub comparison: Vec<MediaId>,
     pub review: bool,
     pub inspector: bool,
-    pub layout: Layout,
     pub query: String,
     pub filter: browsing::Filter,
     pub browse: browsing::Options,
     pub navigator: browsing::tree::State,
+    /// Saved since a click in Cull's navigator scrolls to a folder. Older
+    /// views kept the folder clicked as a filter, and could filter by a date
+    /// or show the Groups navigator, which no longer exists: they open with
+    /// every folder shown. Missing from older views, so false.
+    #[serde(default)]
+    pub navigator_scrolls: bool,
     pub group_anchor: Option<MediaId>,
     pub group_mode: GroupMode,
     pub delete_current: Option<MediaId>,
@@ -92,11 +90,11 @@ impl Default for Bookmark {
             comparison: vec![],
             review: false,
             inspector: true,
-            layout: Layout::Grid,
             query: String::new(),
             filter: Default::default(),
             browse: Default::default(),
             navigator: Default::default(),
+            navigator_scrolls: true,
             group_anchor: None,
             group_mode: GroupMode::Current,
             delete_current: None,
@@ -394,5 +392,15 @@ mod tests {
         }
         // Nothing left to forget is not an error.
         super::forget_all(data.path()).unwrap();
+    }
+    #[test]
+    fn a_view_saved_in_the_removed_list_or_icons_layout_opens_as_the_grid() {
+        for layout in ["List", "Icons"] {
+            let json = format!(r#"{{"layout":"{layout}","review":false,"query":"a"}}"#);
+            let view: super::Bookmark = serde_json::from_str(&json).unwrap();
+            assert!(!view.review);
+            assert_eq!(view.query, "a");
+            assert!(!view.navigator_scrolls);
+        }
     }
 }

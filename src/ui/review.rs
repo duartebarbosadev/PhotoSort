@@ -1,3 +1,4 @@
+use super::library::LineKind;
 use super::*;
 
 impl PhotoSortApp {
@@ -128,7 +129,7 @@ impl PhotoSortApp {
                 .unwrap_or_default()
         }
     }
-    fn set_view(&mut self, slot: u64, view: InspectionView) {
+    pub(super) fn set_view(&mut self, slot: u64, view: InspectionView) {
         self.pending_bookmark = None;
         if self.sync_views {
             self.inspection_view = view;
@@ -206,10 +207,12 @@ impl PhotoSortApp {
             && self.preferences.strip_position == crate::core::preferences::StripPosition::Left
             && ui.available_width() >= 640.0;
         if side_strip {
-            egui::Panel::left("review_side_strip")
+            let rows = self.preferences.compact_strip;
+            let (id, default) = side_strip_panel(rows);
+            egui::Panel::left(id)
                 .resizable(true)
-                .default_size(150.0)
-                .size_range(100.0..=300.0)
+                .default_size(default)
+                .size_range(if rows { 140.0..=340.0 } else { 100.0..=300.0 })
                 .frame(egui::Frame::new().inner_margin(egui::Margin {
                     left: 0,
                     right: 8,
@@ -219,7 +222,7 @@ impl PhotoSortApp {
                 .show(ui, |ui| self.side_strip(ui));
         }
         let show_filmstrip = !side_strip && !beside_grid && ui.available_height() >= 360.0;
-        let filmstrip_height = FILMSTRIP + if self.strip_names() { STRIP_NAME } else { 0.0 };
+        let filmstrip_height = FILMSTRIP + 26.0 + if self.strip_names() { STRIP_NAME } else { 0.0 };
         let short = ui.ctx().content_rect().height() < 760.0;
         let controls_height = match (compact, short) {
             (true, true) => 80.0,
@@ -295,50 +298,54 @@ impl PhotoSortApp {
         // wheel for zoom, so its scroll affordance must stay discoverable.
         let scroll_style = ui.spacing().scroll;
         ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
-        egui::ScrollArea::vertical()
-            .id_salt("inspection_canvas")
-            .scroll_bar_visibility(if rows > 1 {
-                egui::scroll_area::ScrollBarVisibility::AlwaysVisible
-            } else {
-                egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded
-            })
-            .scroll_source(egui::scroll_area::ScrollSource {
-                scroll_bar: true,
-                drag: egui::scroll_area::DragScroll::Never,
-                mouse_wheel: false,
-            })
-            .max_height(height)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for row in 0..rows {
-                    if follow_focus && row == self.focused_slot as usize / columns {
-                        ui.scroll_to_rect(
-                            egui::Rect::from_min_size(
-                                ui.next_widget_position(),
-                                egui::vec2(ui.available_width(), row_height),
-                            ),
-                            Some(Align::Center),
-                        );
-                    }
-                    ui.horizontal(|ui| {
-                        let width = (ui.available_width()
-                            - ui.spacing().item_spacing.x * columns.saturating_sub(1) as f32)
-                            / columns as f32;
-                        for column in 0..columns {
-                            let slot = row * columns + column;
-                            if let Some(id) = ids.get(slot) {
-                                self.photo_canvas(
-                                    ui,
-                                    *id,
-                                    slot as u64,
-                                    egui::vec2(width, row_height),
-                                    self.step != Step::Rotation || slot == 1,
-                                );
-                            }
+        if self.step == Step::Cull && self.swipe_shown() {
+            self.swipe_canvas(ui, egui::vec2(ui.available_width(), height));
+        } else {
+            egui::ScrollArea::vertical()
+                .id_salt("inspection_canvas")
+                .scroll_bar_visibility(if rows > 1 {
+                    egui::scroll_area::ScrollBarVisibility::AlwaysVisible
+                } else {
+                    egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded
+                })
+                .scroll_source(egui::scroll_area::ScrollSource {
+                    scroll_bar: true,
+                    drag: egui::scroll_area::DragScroll::Never,
+                    mouse_wheel: false,
+                })
+                .max_height(height)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for row in 0..rows {
+                        if follow_focus && row == self.focused_slot as usize / columns {
+                            ui.scroll_to_rect(
+                                egui::Rect::from_min_size(
+                                    ui.next_widget_position(),
+                                    egui::vec2(ui.available_width(), row_height),
+                                ),
+                                Some(Align::Center),
+                            );
                         }
-                    });
-                }
-            });
+                        ui.horizontal(|ui| {
+                            let width = (ui.available_width()
+                                - ui.spacing().item_spacing.x * columns.saturating_sub(1) as f32)
+                                / columns as f32;
+                            for column in 0..columns {
+                                let slot = row * columns + column;
+                                if let Some(id) = ids.get(slot) {
+                                    self.photo_canvas(
+                                        ui,
+                                        *id,
+                                        slot as u64,
+                                        egui::vec2(width, row_height),
+                                        self.step != Step::Rotation || slot == 1,
+                                    );
+                                }
+                            }
+                        });
+                    }
+                });
+        }
         ui.spacing_mut().scroll = scroll_style;
         if background.is_some_and(|response| response.clicked()) {
             self.comparison_focus = None;
@@ -440,6 +447,7 @@ impl PhotoSortApp {
         );
         if show_filmstrip {
             ui.add_space(S1);
+            self.photos_header(ui, true);
             self.filmstrip(ui);
         }
     }
@@ -641,58 +649,260 @@ impl PhotoSortApp {
                 }
                 let start = (viewport.min.x / stride).floor().max(0.0) as usize;
                 let end = ((viewport.max.x / stride).ceil() as usize + 1).min(self.filtered.len());
-                for position in start..end {
-                    let rect = egui::Rect::from_min_size(
-                        origin + egui::vec2(position as f32 * stride, 0.0),
-                        egui::vec2(WIDTH, HEIGHT + name),
-                    );
+                let cells: Vec<(usize, egui::Rect)> = (start..end)
+                    .map(|position| {
+                        let rect = egui::Rect::from_min_size(
+                            origin + egui::vec2(position as f32 * stride, 0.0),
+                            egui::vec2(WIDTH, HEIGHT + name),
+                        );
+                        (position, rect)
+                    })
+                    .collect();
+                self.group_marks(ui, &cells, 0.0);
+                for (position, rect) in cells {
                     self.strip_tile(ui, position, rect, egui::vec2(WIDTH, HEIGHT));
                 }
             });
     }
-    /// The photo strip as a vertical column beside the canvas.
+    /// The photo strip as a vertical column beside the canvas: compact rows
+    /// (or small thumbnails without names), or large tiles.
     fn side_strip(&mut self, ui: &mut egui::Ui) {
-        let name = if self.strip_names() { STRIP_NAME } else { 0.0 };
-        let width = (ui.available_width() - 10.0).max(60.0);
-        let height = (width * 0.66).round();
-        let stride = height + name + ui.spacing().item_spacing.y;
+        self.photos_header(ui, true);
+        let names = self.strip_names();
+        let compact = self.preferences.compact_strip;
+        let spacing = ui.spacing().item_spacing;
+        // One column leaves room on its left for the group marks.
+        let single = !compact || names;
+        let gutter = if single && !self.group_best.is_empty() && self.step == Step::Cull {
+            GROUP_GUTTER
+        } else {
+            0.0
+        };
+        let width = (ui.available_width() - 10.0 - gutter).max(60.0);
+        let (columns, cell, image) = if compact && names {
+            (1, egui::vec2(width, STRIP_ROW), None)
+        } else if compact {
+            let columns = ((width + spacing.x) / (STRIP_THUMB + spacing.x))
+                .floor()
+                .max(1.0) as usize;
+            let side = ((width - spacing.x * (columns - 1) as f32) / columns as f32).floor();
+            (
+                columns,
+                egui::vec2(side, side * 0.8),
+                Some(egui::vec2(side, side * 0.8)),
+            )
+        } else {
+            let name = if names { STRIP_NAME } else { 0.0 };
+            let height = (width * 0.66).round();
+            (
+                1,
+                egui::vec2(width, height + name),
+                Some(egui::vec2(width, height)),
+            )
+        };
+        // Rows sit closer together than tiles.
+        let gap = if image.is_none() { 2.0 } else { spacing.y };
+        let stride_x = cell.x + spacing.x;
+        let lines = self.photo_lines(columns, cell.y, gap, super::library::SET_HEADER);
         let selection_key = egui::Id::new("side_strip_selection");
         let previous = ui.data(|data| data.get_temp::<MediaId>(selection_key));
         let follow = previous != self.active;
         if let Some(active) = self.active {
             ui.data_mut(|data| data.insert_temp(selection_key, active));
         }
-        egui::ScrollArea::vertical()
-            .id_salt("review_side_strip")
-            .auto_shrink([false, false])
-            .show_viewport(ui, |ui, viewport| {
-                let origin = ui.max_rect().min;
-                ui.set_min_size(egui::vec2(
-                    width,
-                    (self.filtered.len() as f32 * stride - ui.spacing().item_spacing.y).max(0.0),
-                ));
-                if follow
-                    && let Some(position) = self
-                        .filtered
-                        .iter()
-                        .position(|index| Some(self.media[*index].id) == self.active)
+        let mut scroll = egui::ScrollArea::vertical()
+            .id_salt(("review_side_strip", compact, names))
+            .auto_shrink([false, false]);
+        // A folder clicked in the navigator comes to the top of the strip;
+        // the photo under review stays.
+        let mut folder = false;
+        if let Some(position) = self.take_folder_scroll() {
+            scroll = scroll.vertical_scroll_offset(lines.section_top(position));
+            folder = true;
+        }
+        let output = scroll.show_viewport(ui, |ui, viewport| {
+            let origin = ui.max_rect().min;
+            let at = |position: usize| {
+                egui::Rect::from_min_size(
+                    origin
+                        + egui::vec2(
+                            gutter + (position % columns) as f32 * stride_x,
+                            lines.top(position),
+                        ),
+                    cell,
+                )
+            };
+            ui.set_min_size(egui::vec2(gutter + width, lines.height()));
+            if follow
+                && !folder
+                && let Some(position) = self
+                    .filtered
+                    .iter()
+                    .position(|index| Some(self.media[*index].id) == self.active)
+            {
+                ui.scroll_to_rect(at(position), Some(Align::Center));
+            }
+            let mut cells = Vec::new();
+            for line in lines.visible(viewport.top(), viewport.bottom()) {
+                match line.kind {
+                    LineKind::Header { group, start, end } => {
+                        let rect = egui::Rect::from_min_size(
+                            origin + egui::vec2(0.0, line.top),
+                            egui::vec2(gutter + width, super::library::SET_HEADER),
+                        );
+                        self.set_header(ui, rect, group, end - start);
+                    }
+                    LineKind::Cells { start, end } => {
+                        for position in start..end {
+                            let rect = egui::Rect::from_min_size(
+                                origin
+                                    + egui::vec2(
+                                        gutter + (position - start) as f32 * stride_x,
+                                        line.top,
+                                    ),
+                                cell,
+                            );
+                            cells.push((position, rect));
+                        }
+                    }
+                }
+            }
+            // Under the photos, so a group's band shows around them.
+            self.group_marks(ui, &cells, gutter);
+            for (position, rect) in cells {
+                match image {
+                    Some(image) => self.strip_tile(ui, position, rect, image),
+                    None => self.strip_row(ui, self.filtered[position], rect),
+                }
+            }
+            viewport
+        });
+        self.follow_lines(&lines, output.inner);
+    }
+    pub(super) fn set_compact_strip(&mut self, compact: bool) {
+        if self.preferences.compact_strip != compact {
+            self.preferences.compact_strip = compact;
+            self.save_preferences();
+        }
+    }
+    /// Where a reviewed photo stands in its similarity group, beside its
+    /// label: the best photo offers to compare the whole group, any other
+    /// photo goes to the best one.
+    fn group_chip(&mut self, ui: &mut egui::Ui, id: MediaId, at: egui::Pos2, clip: egui::Rect) {
+        use egui_phosphor::regular as icon;
+        let Some((group, best, size)) = self.similar_group(id) else {
+            return;
+        };
+        let (text, hover) = if best == id {
+            (
+                format!("{} Best of {size} · Compare all", icon::CROWN_SIMPLE),
+                format!(
+                    "The best scored of {size} similar photos. Compare them side by side; the others are marked in the strip."
+                ),
+            )
+        } else {
+            let rank = ordinal(self.group_rank(id, group));
+            (
+                format!("{rank} of {size} · Go to best"),
+                format!(
+                    "{} scored best of these {size} similar photos.",
+                    self.index
+                        .get(&best)
+                        .map_or_else(String::new, |i| self.media[*i].name())
+                ),
+            )
+        };
+        let color = super::grouping::group_color(group);
+        let galley = ui.painter().layout_no_wrap(text.clone(), medium(10.5), INK);
+        let size_px = galley.size() + egui::vec2(22.0, 6.0);
+        let chip = Align2::LEFT_CENTER.anchor_size(at, size_px);
+        if !clip.contains_rect(chip) {
+            return;
+        }
+        let response = ui
+            .interact(chip, ui.id().with(("group-chip", id)), Sense::click())
+            .on_hover_text(hover);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &text));
+        let painter = ui.painter();
+        let fill = if response.hovered() {
+            Color32::from_black_alpha(200)
+        } else {
+            Color32::from_black_alpha(150)
+        };
+        painter.rect_filled(chip, chip.height() / 2.0, fill);
+        painter.circle_filled(chip.left_center() + egui::vec2(9.0, 0.0), 3.0, color);
+        painter.galley(chip.min + egui::vec2(16.0, 3.0), galley, INK);
+        if response.clicked() {
+            self.pending_bookmark = None;
+            if best == id {
+                self.compare_group(group);
+            } else {
+                self.comparison.clear();
+                self.set_active(best);
+            }
+        }
+    }
+    /// Ties the photos of each similarity group together in a strip: a bar
+    /// in the `gutter` beside one column, else a line under the photos.
+    /// The shown photo's group gets a soft band too, so its best photo and
+    /// the ones it beat read as one set.
+    fn group_marks(&self, ui: &egui::Ui, cells: &[(usize, egui::Rect)], gutter: f32) {
+        if self.step != Step::Cull || self.group_best.is_empty() {
+            return;
+        }
+        let group_of = |position: usize| {
+            let id = self.media[self.filtered[position]].id;
+            self.similar_group(id).map(|(group, ..)| group)
+        };
+        let current = self
+            .active
+            .and_then(|id| self.similar_group(id))
+            .map(|(group, ..)| group);
+        let painter = ui.painter();
+        let beside = gutter > 0.0;
+        // Consecutive photos of one group, by their first and last cell.
+        let mut runs: Vec<(usize, egui::Rect, egui::Rect)> = Vec::new();
+        for (position, rect) in cells {
+            let Some(group) = group_of(*position) else {
+                continue;
+            };
+            match runs.last_mut() {
+                Some((g, _, last))
+                    if *g == group
+                        && *position > 0
+                        && group_of(*position - 1) == Some(group)
+                        && (beside || (rect.top() - last.top()).abs() < 1.0) =>
                 {
-                    let rect = egui::Rect::from_min_size(
-                        origin + egui::vec2(0.0, position as f32 * stride),
-                        egui::vec2(width, height),
-                    );
-                    ui.scroll_to_rect(rect, Some(Align::Center));
+                    *last = *rect
                 }
-                let start = (viewport.min.y / stride).floor().max(0.0) as usize;
-                let end = ((viewport.max.y / stride).ceil() as usize + 1).min(self.filtered.len());
-                for position in start..end {
-                    let rect = egui::Rect::from_min_size(
-                        origin + egui::vec2(0.0, position as f32 * stride),
-                        egui::vec2(width, height + name),
+                _ => runs.push((group, *rect, *rect)),
+            }
+        }
+        for (group, first, last) in runs {
+            let color = super::grouping::group_color(group);
+            let shown = current == Some(group);
+            let strength = if shown { 1.0 } else { 0.45 };
+            if beside {
+                if shown {
+                    let band = egui::Rect::from_min_max(
+                        egui::pos2(first.left() - gutter, first.top() - 2.0),
+                        egui::pos2(last.right() + 2.0, last.bottom() + 2.0),
                     );
-                    self.strip_tile(ui, position, rect, egui::vec2(width, height));
+                    painter.rect_filled(band, R_CONTROL, color.gamma_multiply(0.12));
                 }
-            });
+                let bar = egui::Rect::from_min_max(
+                    egui::pos2(first.left() - gutter + 2.0, first.top() + 3.0),
+                    egui::pos2(first.left() - gutter + 5.0, last.bottom() - 3.0),
+                );
+                painter.rect_filled(bar, 1.5, color.gamma_multiply(strength));
+            } else {
+                let line = egui::Rect::from_min_max(
+                    egui::pos2(first.left() + 3.0, first.bottom() + 1.5),
+                    egui::pos2(last.right() - 3.0, first.bottom() + 4.0),
+                );
+                painter.rect_filled(line, 1.25, color.gamma_multiply(strength));
+            }
+        }
     }
 
     pub(super) fn photo_canvas(
@@ -1007,13 +1217,21 @@ impl PhotoSortApp {
                     104.0
                 };
             }
-            ui.painter().with_clip_rect(label_clip).text(
+            let shown = ui.painter().with_clip_rect(label_clip).text(
                 rect.left_top() + egui::vec2(10.0, 14.0),
                 Align2::LEFT_CENTER,
                 label,
                 FontId::proportional(11.0),
                 MUTED,
             );
+            if self.comparison_ids().len() == 1 {
+                self.group_chip(
+                    ui,
+                    id,
+                    shown.right_center() + egui::vec2(8.0, 0.0),
+                    label_clip,
+                );
+            }
         }
         if let Some(warning) = self.image_warnings.get(&id) {
             let area = egui::Rect::from_min_size(
@@ -1127,6 +1345,21 @@ fn paint_region(
     view: InspectionView,
     turns: u8,
 ) {
+    paint_region_clipped(ui, texture, rect, rect, source, region, view, turns);
+}
+/// [`paint_region`] showing only the part inside `clip`, as swipe compare
+/// does either side of its divider.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn paint_region_clipped(
+    ui: &egui::Ui,
+    texture: &TextureHandle,
+    rect: egui::Rect,
+    clip: egui::Rect,
+    source: [u32; 2],
+    region: inspection::Region,
+    view: InspectionView,
+    turns: u8,
+) {
     let scale = view.scale(
         source,
         [rect.width(), rect.height()],
@@ -1159,7 +1392,7 @@ fn paint_region(
     }
     mesh.indices = vec![0, 1, 2, 0, 2, 3];
     ui.painter()
-        .with_clip_rect(rect)
+        .with_clip_rect(clip.intersect(rect))
         .add(egui::Shape::mesh(mesh));
 }
 
@@ -1205,6 +1438,12 @@ impl PhotoSortApp {
 const FILMSTRIP: f32 = 72.0;
 /// Height of a file name under a strip tile.
 const STRIP_NAME: f32 = 15.0;
+/// Height of a row in the compact left strip.
+const STRIP_ROW: f32 = 44.0;
+/// The smallest thumbnail in the compact left strip without names.
+const STRIP_THUMB: f32 = 72.0;
+/// Room beside a one-column strip for its similarity group marks.
+const GROUP_GUTTER: f32 = 9.0;
 
 /// Keep/Trash toggle for one side of a guided comparison.
 fn decision_button(side: usize, keep: bool) -> egui::Button<'static> {
@@ -1308,4 +1547,26 @@ impl PhotoSortApp {
             }
         }
     }
+}
+
+/// The left strip's panel and its starting width: rows want more width than
+/// tiles, so each style keeps its own.
+pub(super) fn side_strip_panel(rows: bool) -> (&'static str, f32) {
+    if rows {
+        ("review_side_strip_rows", 210.0)
+    } else {
+        ("review_side_strip", 150.0)
+    }
+}
+
+/// "1st", "2nd", "3rd", "4th" ... for a photo's place in its group.
+fn ordinal(n: usize) -> String {
+    let suffix = match (n % 10, n % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
 }
