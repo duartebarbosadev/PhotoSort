@@ -164,7 +164,7 @@ impl PhotoSortApp {
                         ),
                         (
                             "C / 1-9 / Esc",
-                            "Swipe compare: the 2-9 photos compared or selected in slices with dividers / show one whole, again for the slices / close",
+                            "Swipe compare: the 2-9 photos compared or selected in slices with dividers / show one whole, again for the slices (Ctrl/Cmd + 0-5 rates it) / close",
                         ),
                         (
                             "1-9 / F3",

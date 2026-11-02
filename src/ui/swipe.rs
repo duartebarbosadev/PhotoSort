@@ -60,14 +60,22 @@ impl Swipe {
 impl PhotoSortApp {
     /// C opens or closes swipe compare over the photos being compared, or
     /// the 2 to 9 selected, and does nothing for fewer; while it is open,
-    /// 1 to 9 show one photo whole and Esc closes it. Returns whether it
-    /// took the key.
+    /// 1 to 9 show one photo whole, Ctrl/Cmd and 0 to 5 rate it, and Esc
+    /// closes it. Returns whether it took the key.
     pub(super) fn swipe_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
-        if !matches!(self.step, Step::Cull | Step::Organize)
-            || modifiers.command
-            || modifiers.ctrl
-            || modifiers.alt
-        {
+        if !matches!(self.step, Step::Cull | Step::Organize) || modifiers.alt {
+            return false;
+        }
+        if modifiers.command || modifiers.ctrl {
+            // Ctrl/Cmd and 0 to 5 rate the photo you are looking at, not
+            // every photo selected for the comparison.
+            let digit = super::shortcuts::digit(pressed).filter(|n| *n <= 5);
+            if self.swipe.is_some()
+                && let (Some(stars), Some(id)) = (digit, self.active)
+            {
+                self.rating(id, stars as u8);
+                return true;
+            }
             return false;
         }
         match pressed {
@@ -495,9 +503,17 @@ mod tests {
         press(&mut app, egui::Key::Num3, none);
         assert_eq!(app.swipe.as_ref().unwrap().solo, Some(2));
         assert_eq!(app.active, Some(ids[2]));
-        // Ctrl/Cmd and a number still rate the photo shown.
+        // Ctrl/Cmd and a number rate the photo shown, and only that one,
+        // even while the photos shown are being refreshed.
+        app.browse_run = Some(u64::MAX);
         press(&mut app, egui::Key::Num2, egui::Modifiers::COMMAND);
+        app.browse_run = None;
         assert_eq!(app.decisions[&ids[2]].rating, Some(2));
+        assert!(
+            ids[..2]
+                .iter()
+                .all(|id| app.decisions.get(id).is_none_or(|d| d.rating.is_none()))
+        );
         // The same number again goes back to the slices.
         press(&mut app, egui::Key::Num3, none);
         assert_eq!(app.swipe.as_ref().unwrap().solo, None);
