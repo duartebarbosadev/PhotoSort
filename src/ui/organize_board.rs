@@ -2130,18 +2130,22 @@ impl PhotoSortApp {
             (size.x - gap.x * (columns - 1) as f32) / columns as f32,
             ((size.y - gap.y * (rows - 1) as f32) / rows as f32).max(60.0),
         );
-        ui.allocate_ui(size, |ui| {
-            for row in 0..rows {
-                ui.horizontal(|ui| {
-                    for column in 0..columns {
-                        let slot = row * columns + column;
-                        if let Some(id) = ids.get(slot) {
-                            self.photo_canvas(ui, *id, slot as u64, cell, true);
+        if self.swipe_shown() {
+            self.swipe_canvas(ui, size);
+        } else {
+            ui.allocate_ui(size, |ui| {
+                for row in 0..rows {
+                    ui.horizontal(|ui| {
+                        for column in 0..columns {
+                            let slot = row * columns + column;
+                            if let Some(id) = ids.get(slot) {
+                                self.photo_canvas(ui, *id, slot as u64, cell, true);
+                            }
                         }
-                    }
-                });
-            }
-        });
+                    });
+                }
+            });
+        }
         let row = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
             if narrow {
                 ui.horizontal_wrapped(|ui| add(ui));
@@ -3298,7 +3302,7 @@ impl PhotoSortApp {
 /// wide enough for two faces, so names line up; a person's folder shows their
 /// face there, others the folder icon. `hint` shows on hover when it fits.
 #[allow(clippy::too_many_arguments)]
-fn folder_row(
+pub(super) fn folder_row(
     ui: &mut egui::Ui,
     height: f32,
     title: &str,

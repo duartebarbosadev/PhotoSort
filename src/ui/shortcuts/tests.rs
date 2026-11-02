@@ -260,34 +260,27 @@ fn view_keys_share_actions_and_never_become_ratings_or_guided_choices() {
         let mut app = app(step);
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        app.library_layout = library::Layout::Grid;
+        let review = app.review;
         let _ = ctx.run_test(input(&[(egui::Key::Num1, egui::Modifiers::ALT)]), |ui| {
             let ctx = &ui.ctx().clone();
             app.keyboard(ctx)
         });
         assert_eq!(app.active, Some(MediaId(7)));
         assert!(app.decisions.is_empty());
-        assert_eq!(
-            app.library_layout,
-            if step == Step::Cull {
-                library::Layout::List
-            } else {
-                library::Layout::Grid
-            }
-        );
+        assert_eq!(app.review, review);
         assert_eq!(app.stats.decodes, 0);
     }
     let mut app = app(Step::Cull);
     let ctx = egui::Context::default();
     theme_install(&ctx);
-    for (key, mode) in [(egui::Key::F, Mode::Folders), (egui::Key::S, Mode::Groups)] {
+    {
+        let key = egui::Key::F;
         app.navigator.enabled = false;
         let _ = ctx.run_test(input(&[(key, egui::Modifiers::NONE)]), |ui| {
             let ctx = &ui.ctx().clone();
             app.keyboard(ctx)
         });
         assert!(app.navigator.enabled && !app.review);
-        assert_eq!(app.navigator.mode, mode);
         assert!(app.filter_dirty);
         let _ = ctx.run_test(input(&[(key, egui::Modifiers::NONE)]), |ui| {
             let ctx = &ui.ctx().clone();
@@ -298,8 +291,8 @@ fn view_keys_share_actions_and_never_become_ratings_or_guided_choices() {
     assert!(app.analysis_run.is_none() && app.requested.is_empty());
 }
 #[test]
-fn navigator_activation_shares_review_transition_without_image_or_model_work() {
-    for mode in Mode::ALL {
+fn navigator_opens_beside_review_without_image_or_model_work() {
+    {
         let mut app = app(Step::Cull);
         app.review = true;
         app.comparison = vec![MediaId(7)];
@@ -310,9 +303,8 @@ fn navigator_activation_shares_review_transition_without_image_or_model_work() {
                 ..Default::default()
             },
         );
-        app.set_navigator(mode, true);
-        assert!(!app.review && app.navigator.enabled);
-        assert_eq!(app.navigator.mode, mode);
+        app.set_navigator(true);
+        assert!(app.review && app.navigator.enabled);
         assert_eq!(app.active, Some(MediaId(7)));
         assert_eq!(app.comparison, vec![MediaId(7)]);
         assert_eq!(app.decisions[&MediaId(7)].rating, Some(4));
@@ -486,7 +478,6 @@ fn search_focus_handles_text_input_but_dialogs_and_busy_state_keep_ownership() {
         },
     );
     assert!(app.decisions.is_empty());
-    assert_eq!(app.library_layout, library::Layout::Grid);
     let _ = ctx.run_test(input(&[(egui::Key::F12, egui::Modifiers::NONE)]), |ui| {
         let ctx = &ui.ctx().clone();
         app.keyboard(ctx)

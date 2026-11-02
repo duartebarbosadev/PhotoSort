@@ -57,7 +57,7 @@ fn settle(app: &mut PhotoSortApp) {
     assert!(app.error.is_none(), "{:?}", app.error);
 }
 #[test]
-fn correction_updates_every_layout_and_saved_session_without_image_work_or_losing_decisions() {
+fn correction_updates_every_view_and_saved_session_without_image_work_or_losing_decisions() {
     let (dir, mut app) = fixture();
     app.decisions.insert(
         MediaId(2),
@@ -66,8 +66,8 @@ fn correction_updates_every_layout_and_saved_session_without_image_work_or_losin
             ..Default::default()
         },
     );
-    for layout in crate::core::views::Layout::ALL {
-        app.library_layout = layout;
+    for review in [false, true] {
+        app.review = review;
         app.selection.single(MediaId(2));
         app.active = Some(MediaId(2));
         app.move_selected_group(Some(app.cull_groups[&MediaId(0)]));
@@ -528,7 +528,12 @@ fn each_group_with_a_choice_marks_its_best_scoring_photo() {
     let best = super::group_best(&groups, &analysis);
     // Group 8 has one photo, so nothing to choose; group 9 ties on score
     // and resolves to the lower id every time.
-    assert_eq!(best, [MediaId(2), MediaId(5)].into_iter().collect());
+    assert_eq!(
+        best,
+        [(7, (MediaId(2), 3)), (9, (MediaId(5), 2))]
+            .into_iter()
+            .collect()
+    );
     assert!(super::group_best(&groups, &HashMap::new()).is_empty());
 }
 
@@ -551,29 +556,23 @@ fn dropping_photos_on_a_group_moves_them_like_the_groups_menu() {
 }
 
 #[test]
-fn dragging_a_tile_onto_a_navigator_group_moves_it() {
-    use crate::core::browsing::tree::{self, Key, Mode};
+fn grouped_grid_shows_each_similar_set_and_takes_photos_dropped_on_its_header() {
     let (_dir, mut app) = fixture();
-    app.navigator = tree::State {
-        enabled: true,
-        mode: Mode::Groups,
-        ..Default::default()
-    };
-    let entries: Vec<_> = app
-        .media
-        .iter()
-        .map(|m| tree::Entry {
-            path: &m.path,
-            date: None,
-            group: app.cull_groups.get(&m.id).copied(),
-        })
-        .collect();
-    let built = tree::build(Mode::Groups, &[], entries.into_iter(), || false).unwrap();
-    app.browse_tree = Some(Arc::new(
-        Arc::new(built).project(&app.navigator, || false).unwrap(),
-    ));
-    app.filtered = (0..app.media.len()).collect();
-    let target = app.cull_groups[&MediaId(4)];
+    // Scores make the higher id of each pair its best photo.
+    for m in &app.media {
+        app.analysis.insert(
+            m.id,
+            crate::core::analysis::Analysis {
+                score: m.id.0 as f64,
+                ..Default::default()
+            },
+        );
+    }
+    app.publish_groups(app.cull_groups.clone());
+    app.browse.group_sort = crate::core::browsing::GroupSort::Time;
+    app.filter_dirty = true;
+    settle(&mut app);
+    assert!(app.grouped_view());
     let ctx = egui::Context::default();
     theme_install(&ctx);
     ctx.enable_accesskit();
@@ -591,10 +590,7 @@ fn dragging_a_tile_onto_a_navigator_group_moves_it() {
                 ..Default::default()
             },
             |ui| {
-                egui::CentralPanel::default().show(ui, |ui| {
-                    app.navigator_panel(ui);
-                    app.library(ui);
-                });
+                egui::CentralPanel::default().show(ui, |ui| app.library(ui));
                 app.photo_drag_overlay(ui.ctx());
             },
         )
@@ -614,12 +610,23 @@ fn dragging_a_tile_onto_a_navigator_group_moves_it() {
         ((tile.x0 + tile.x1) / 2.0) as f32,
         ((tile.y0 + tile.y1) / 2.0) as f32,
     );
-    let row = ctx
-        .data(|d| {
-            d.get_temp::<egui::Rect>(egui::Id::new(("test_navigator_node", &Key::Group(target))))
-        })
-        .expect("group row");
-    let to = row.center();
+    // One header per similar set, naming its best photo.
+    let headers: Vec<_> = tree
+        .nodes
+        .iter()
+        .filter_map(|(_, n)| n.label().filter(|l| l.starts_with("Similar set")))
+        .collect();
+    assert_eq!(headers.len(), 3, "{headers:?}");
+    let header = tree
+        .nodes
+        .iter()
+        .find(|(_, n)| n.label() == Some("Similar set of 2 · best 5.jpg"))
+        .and_then(|(_, n)| n.bounds())
+        .expect("header of the set of 4.jpg and 5.jpg");
+    let to = egui::pos2(
+        ((header.x0 + header.x1) / 2.0) as f32,
+        ((header.y0 + header.y1) / 2.0) as f32,
+    );
     let button = |pos, pressed| egui::Event::PointerButton {
         pos,
         button: egui::PointerButton::Primary,

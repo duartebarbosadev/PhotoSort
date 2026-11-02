@@ -281,7 +281,6 @@ impl PhotoSortApp {
         String,
         Filter,
         crate::core::browsing::Options,
-        library::Layout,
         bool,
         bool,
         GroupMode,
@@ -293,7 +292,6 @@ impl PhotoSortApp {
             self.query.clone(),
             self.filter,
             self.browse.clone(),
-            self.library_layout,
             self.review,
             self.inspector,
             self.group_mode,
@@ -408,12 +406,11 @@ impl PhotoSortApp {
             // beside their grid, so they have no view switch.
             Step::Cull => {
                 ui.add_space(S1);
-                // The tightest bar folds View options into the view menu.
+                // The tightest bar folds the view switch into a menu.
                 if fit == Fit::Overflow {
                     self.view_menu(ui);
                 } else {
                     self.view_switch(ui, icons);
-                    self.cull_view_options(ui);
                 }
             }
             Step::EasyDelete | Step::Rotation | Step::PickBest => {}
@@ -488,101 +485,72 @@ impl PhotoSortApp {
     fn view_menu(&mut self, ui: &mut egui::Ui) {
         use egui_phosphor::regular as icon;
         let views = [
-            (Some(library::Layout::List), icon::LIST),
-            (Some(library::Layout::Icons), icon::DOTS_NINE),
-            (Some(library::Layout::Grid), icon::SQUARES_FOUR),
-            (None, icon::IMAGE),
+            (false, icon::SQUARES_FOUR, "Grid"),
+            (true, icon::IMAGE, "Review"),
         ];
-        let title = |view: Option<library::Layout>| view.map_or("Review", |l| l.title());
-        let current = (!self.review).then_some(self.library_layout);
-        let glyph = views
-            .iter()
-            .find(|(view, _)| *view == current)
-            .map_or(icon::SQUARES_FOUR, |(_, glyph)| glyph);
+        let (_, glyph, title) = views[usize::from(self.review)];
         let menu = ui.menu_button(
             RichText::new(format!("{glyph} {}", icon::CARET_DOWN)).size(14.0),
             |ui| {
-                for (view, glyph) in views {
+                for (review, glyph, title) in views {
                     if ui
-                        .selectable_label(current == view, format!("{glyph}  {}", title(view)))
+                        .selectable_label(self.review == review, format!("{glyph}  {title}"))
                         .clicked()
                     {
-                        match view {
-                            Some(layout) => self.set_library_layout(layout),
-                            None => self.open_review(),
+                        if review {
+                            self.open_review();
+                        } else {
+                            self.show_grid();
                         }
                         ui.close();
                     }
                 }
-                ui.separator();
-                self.cull_view_option_controls(ui);
             },
         );
         named(
             menu.response,
             egui::WidgetType::Button,
-            &format!("View: {}", title(current)),
+            &format!("View: {title}"),
         )
         .on_hover_text("Change the view");
     }
 
-    /// One segmented view switch: library layouts, then Review. `narrow`
-    /// shows icons only; names stay for tooltips and AT.
+    /// One segmented view switch: Grid, then Review. `narrow` shows icons
+    /// only; names stay for tooltips and AT.
     fn view_switch(&mut self, ui: &mut egui::Ui, narrow: bool) {
         use egui_phosphor::regular as icon;
-        let layouts: &[library::Layout] = if self.step == Step::Cull {
-            &library::Layout::ALL
-        } else {
-            &[library::Layout::Grid]
-        };
-        let mut segments: Vec<Segment> = layouts
-            .iter()
-            .map(|layout| {
-                let (glyph, title) = match layout {
-                    library::Layout::Grid => (icon::SQUARES_FOUR, layout.title()),
-                    library::Layout::List => (icon::LIST, layout.title()),
-                    library::Layout::Icons => (icon::DOTS_NINE, layout.title()),
-                };
-                Segment {
-                    shown: if narrow {
-                        glyph.to_owned()
-                    } else {
-                        format!("{glyph}  {title}")
-                    },
-                    name: title.to_owned(),
-                    hover: narrow.then(|| title.to_owned()),
-                }
-            })
-            .collect();
-        segments.push(Segment {
-            shown: if narrow {
-                icon::IMAGE.to_owned()
-            } else {
-                format!("{}  Review", icon::IMAGE)
+        let segments: Vec<Segment> = [
+            (icon::SQUARES_FOUR, "Grid", None),
+            (
+                icon::IMAGE,
+                "Review",
+                Some("One photo at a time, or a selection side by side"),
+            ),
+        ]
+        .into_iter()
+        .map(
+            |(glyph, title, hover): (&str, &str, Option<&str>)| Segment {
+                shown: if narrow {
+                    glyph.to_owned()
+                } else {
+                    format!("{glyph}  {title}")
+                },
+                name: title.to_owned(),
+                hover: hover.or(narrow.then_some(title)).map(str::to_owned),
             },
-            name: "Review".into(),
-            hover: Some("One photo at a time, or a selection side by side".into()),
-        });
-        let current = if self.review {
-            Some(layouts.len())
-        } else if self.step == Step::Cull {
-            layouts.iter().position(|l| *l == self.library_layout)
-        } else {
-            Some(0)
-        };
+        )
+        .collect();
         if let Some(index) = segmented(
             ui,
             egui::Id::new(("view-switch", self.step == Step::Cull)),
             &segments,
-            current,
+            Some(usize::from(self.review)),
             button_row_height(ui),
         ) {
-            if index == layouts.len() {
+            if index == 1 {
                 self.open_review();
-            } else if self.step == Step::Cull {
-                self.set_library_layout(layouts[index]);
             } else {
-                self.review = false;
+                self.show_grid();
             }
         }
     }

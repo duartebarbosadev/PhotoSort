@@ -54,7 +54,6 @@ fn step_views_preserve_filters_selection_scroll_and_zoom_without_pipeline_work()
     app.query.clear();
     app.browse.rating = crate::core::browsing::RatingFilter::Exactly(1);
     app.browse.sort = crate::core::browsing::Sort::Newest;
-    app.library_layout = crate::core::views::Layout::List;
     app.review = false;
     settle(&mut app);
     app.selection.single(b);
@@ -72,7 +71,6 @@ fn step_views_preserve_filters_selection_scroll_and_zoom_without_pipeline_work()
     assert!(app.selection.contains(b));
     assert_eq!(app.selection.len(), 1);
     assert_eq!(app.filtered.len(), 1);
-    assert_eq!(app.library_layout, crate::core::views::Layout::List);
     assert!(!app.review);
     assert_eq!(app.inspection_view.zoom, 2.0);
     assert_eq!(app.library_restore_offset, Some(20.0));

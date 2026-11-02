@@ -44,6 +44,10 @@ pub struct Preferences {
     pub strip_position: StripPosition,
     /// File names under thumbnails in every step's grid and photo strip.
     pub show_filenames: bool,
+    /// Review's photo strip on the left lists photos as compact rows, a
+    /// small thumbnail with its name beside it, rather than large tiles.
+    /// Without names the rows become a grid of small thumbnails.
+    pub compact_strip: bool,
     /// The height of the photos in every step's grid, in points: one size
     /// that every step's size slider shows and changes.
     pub photo_size: f32,
@@ -96,6 +100,7 @@ impl Default for Preferences {
             reduce_motion: false,
             strip_position: StripPosition::Bottom,
             show_filenames: true,
+            compact_strip: true,
             photo_size: PHOTO_SIZE,
             intro_shown: false,
         }

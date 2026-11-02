@@ -77,12 +77,11 @@ impl PhotoSortApp {
                         ("Ctrl/Cmd + O", "Open a library"),
                         ("Ctrl/Cmd + F", "Focus library search (except Pick Best)"),
                         ("Ctrl/Cmd + S", "Analyze this step; detect in Fix Rotation"),
-                        ("Alt + 1 / 2 / 3", "Cull list / icons / grid"),
                         (
                             "Organize: Alt + 1–5",
                             "Current / date + similarity / visual / faces / location",
                         ),
-                        ("F / S", "Cull folder / similarity-group navigator"),
+                        ("F", "Cull folder and date navigator"),
                         ("F10 / Ctrl/Cmd + ,", "Open Settings"),
                         ("F12", "About PhotoSort"),
                         (
@@ -162,6 +161,10 @@ impl PhotoSortApp {
                         (
                             "0 / A / Double-click canvas",
                             "Fit / actual size / toggle actual size",
+                        ),
+                        (
+                            "C / 1-9 / Esc",
+                            "Swipe compare: the 2-9 photos compared or selected in slices with dividers / show one whole, again for the slices / close",
                         ),
                         (
                             "1-9 / F3",

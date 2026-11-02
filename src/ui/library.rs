@@ -1,17 +1,5 @@
 use super::*;
 
-pub(super) use crate::core::views::Layout;
-impl Layout {
-    pub const ALL: [Self; 3] = [Self::List, Self::Icons, Self::Grid];
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::List => "List",
-            Self::Icons => "Icons",
-            Self::Grid => "Grid",
-        }
-    }
-}
-
 impl PhotoSortApp {
     fn browse_group_label(&self, id: MediaId) -> Option<String> {
         (self.step == Step::Cull
@@ -45,24 +33,82 @@ impl PhotoSortApp {
             Step::PickBest => return self.pick_grid(ui),
             _ => {}
         }
-        if self.step != Step::Cull || self.library_layout == Layout::Grid {
-            self.grid(ui);
-        } else {
-            self.library_rows(ui);
-        }
+        self.grid(ui);
     }
-    fn library_scroll(
+    /// Cull's photos break into similarity sections, each under a header.
+    pub(super) fn grouped_view(&self) -> bool {
+        self.step == Step::Cull
+            && self.browse.group_sort != crate::core::browsing::GroupSort::Flat
+            && !self.group_best.is_empty()
+    }
+    /// The lines of a grid or strip of `columns`: rows of photos, and with
+    /// [`Self::grouped_view`] a header before each similar set and before
+    /// the photos between them.
+    pub(super) fn photo_lines(&self, columns: usize, row: f32, gap: f32, header: f32) -> Lines {
+        let mut lines = Lines {
+            columns: columns.max(1),
+            row,
+            gap,
+            count: self.filtered.len(),
+            sections: None,
+        };
+        if !self.grouped_view() {
+            return lines;
+        }
+        let set = |position: usize| {
+            let id = self.media[self.filtered[position]].id;
+            self.similar_group(id).map(|(group, ..)| group)
+        };
+        let mut sections = Vec::new();
+        let mut top = 0.0;
+        let mut start = 0;
+        while start < self.filtered.len() {
+            let group = set(start);
+            let mut end = start + 1;
+            while end < self.filtered.len() && set(end) == group {
+                end += 1;
+            }
+            sections.push(Line {
+                top,
+                kind: LineKind::Header { group, start, end },
+            });
+            top += header;
+            for first in (start..end).step_by(lines.columns) {
+                sections.push(Line {
+                    top,
+                    kind: LineKind::Cells {
+                        start: first,
+                        end: (first + lines.columns).min(end),
+                    },
+                });
+                top += row + gap;
+            }
+            start = end;
+        }
+        lines.sections = Some((sections, top));
+        lines
+    }
+    /// A Cull grid or strip's scroll area, scrolled to what it must show
+    /// once: a saved position, a folder chosen in the navigator, or the
+    /// active photo when it changed off screen.
+    pub(super) fn photos_scroll(
         &mut self,
         ui: &egui::Ui,
-        row_height: f32,
-        columns: usize,
+        lines: &Lines,
         id: egui::Id,
+        restore: bool,
     ) -> egui::ScrollArea {
         let mut scroll = egui::ScrollArea::vertical()
             .id_salt(id)
             .auto_shrink([false, false]);
-        if let Some(offset) = self.library_restore_offset.take() {
+        if restore && let Some(offset) = self.library_restore_offset.take() {
             return scroll.vertical_scroll_offset(offset);
+        }
+        if self.step == Step::Cull
+            && let Some(position) = self.take_folder_scroll()
+        {
+            self.library_reveal = false;
+            return scroll.vertical_scroll_offset(lines.section_top(position));
         }
         if self.step == Step::Cull
             && std::mem::take(&mut self.library_reveal)
@@ -71,7 +117,7 @@ impl PhotoSortApp {
                 .and_then(|id| self.index.get(&id))
                 .and_then(|index| self.filtered.iter().position(|i| i == index))
         {
-            let top = (position / columns) as f32 * (row_height + ui.spacing().item_spacing.y);
+            let top = lines.top(position);
             let offset = egui::scroll_area::State::load(
                 ui.ctx(),
                 ui.make_persistent_id(egui::IdSalt::new(id)),
@@ -79,171 +125,34 @@ impl PhotoSortApp {
             .map_or(0.0, |state| state.offset.y);
             if top < offset {
                 scroll = scroll.vertical_scroll_offset(top);
-            } else if top + row_height > offset + ui.available_height() {
+            } else if top + lines.row > offset + ui.available_height() {
                 scroll = scroll
-                    .vertical_scroll_offset((top + row_height - ui.available_height()).max(0.0));
+                    .vertical_scroll_offset((top + lines.row - ui.available_height()).max(0.0));
             }
         }
         scroll
     }
-    fn library_rows(&mut self, ui: &mut egui::Ui) {
-        let icons = self.library_layout == Layout::Icons;
-        let height = if icons { 88.0 } else { 40.0 };
-        let width = ui.available_width();
-        let output = self
-            .library_scroll(ui, height, 1, egui::Id::new(("library_rows", icons)))
-            .show_rows(ui, height, self.filtered.len(), |ui, range| {
-                for row in range {
-                    let index = self.filtered[row];
-                    let media = self.media[index].clone();
-                    let id = media.id;
-                    let active = self.active == Some(id);
-                    let comparison = self.comparison.contains(&id);
-                    let selected = self.library_selection_mode() && self.selection.contains(id);
-                    let rejected = self.decision(id).rejected;
-                    let texture = self.texture(id, false);
-                    let (rect, response) =
-                        ui.allocate_exact_size(egui::vec2(width, height), self.tile_sense());
-                    response.widget_info(|| {
-                        egui::WidgetInfo::selected(
-                            egui::WidgetType::Button,
-                            true,
-                            active || selected,
-                            media.name(),
-                        )
-                    });
-                    let hover = ui
-                        .ctx()
-                        .animate_bool_responsive(response.id.with("hover"), response.hovered());
-                    ui.painter()
-                        .rect_filled(rect, R_CONTROL, lerp_color(CARD, CARD_HOVER, hover));
-                    ring(
-                        ui,
-                        response.id,
-                        rect,
-                        R_CONTROL,
-                        active,
-                        comparison || selected,
-                    );
-                    let size = rect.height() - 8.0;
-                    let image = egui::Rect::from_min_size(
-                        rect.min + egui::vec2(4.0, 4.0),
-                        egui::vec2(size, size),
-                    );
-                    let shown = reveal(ui, id, texture.is_some());
-                    let fill = lerp_color(CARD, CARD_HOVER, hover);
-                    if texture.is_none() || shown < 1.0 {
-                        ui.painter().rect_filled(image, 5.0, WELL);
-                    }
-                    if let Some(texture) = texture {
-                        let drawn = paint_image_tinted(
-                            ui,
-                            &texture,
-                            image,
-                            1.0,
-                            Vec2::ZERO,
-                            self.preview_turns(id),
-                            Color32::from_white_alpha((shown * 255.0) as u8),
-                        );
-                        round_corners(ui.painter(), drawn, 5.0, fill);
-                    } else if self.requested.contains(&(id, false)) {
-                        shimmer(ui, image);
-                    } else {
-                        ui.painter().text(
-                            image.center(),
-                            Align2::CENTER_CENTER,
-                            if self.failures.contains_key(&id) {
-                                egui_phosphor::regular::IMAGE_BROKEN
-                            } else if media.kind == MediaKind::Video {
-                                egui_phosphor::regular::FILM_STRIP
-                            } else {
-                                egui_phosphor::regular::IMAGE
-                            },
-                            FontId::proportional(if icons { 22.0 } else { 14.0 }),
-                            FAINT,
-                        );
-                    }
-                    let left = image.right() + 10.0;
-                    let rating = self.selected_rating(id);
-                    let trailing = if rejected {
-                        "Marked for Trash".into()
-                    } else {
-                        "★".repeat(rating as usize)
-                    };
-                    let group = self.browse_group_label(id);
-                    let label_width = if group.is_some() {
-                        175.0
-                    } else if rejected {
-                        105.0
-                    } else {
-                        75.0
-                    };
-                    let trailing =
-                        group.map_or_else(|| trailing.clone(), |g| format!("{g} · {trailing}"));
-                    let text_rect = egui::Rect::from_min_max(
-                        egui::pos2(left, rect.top()),
-                        egui::pos2(rect.right() - label_width - 8.0, rect.bottom()),
-                    );
-                    let painter = ui.painter().with_clip_rect(text_rect);
-                    painter.text(
-                        egui::pos2(
-                            left,
-                            if icons {
-                                rect.top() + 23.0
-                            } else {
-                                rect.center().y
-                            },
-                        ),
-                        Align2::LEFT_CENTER,
-                        media.name(),
-                        FontId::proportional(12.0),
-                        if rejected { MUTED } else { INK },
-                    );
-                    if icons {
-                        let parent = media.path.parent().and_then(|p| {
-                            self.root
-                                .as_ref()
-                                .and_then(|root| p.strip_prefix(root).ok())
-                        });
-                        let folder = parent
-                            .filter(|p| !p.as_os_str().is_empty())
-                            .map(|p| p.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "Library root".into());
-                        painter.text(
-                            egui::pos2(left, rect.top() + 47.0),
-                            Align2::LEFT_CENTER,
-                            folder,
-                            FontId::proportional(10.0),
-                            MUTED,
-                        );
-                        painter.text(
-                            egui::pos2(left, rect.top() + 66.0),
-                            Align2::LEFT_CENTER,
-                            format!("{:.1} MB", media.fingerprint.bytes as f64 / 1048576.0),
-                            FontId::proportional(10.0),
-                            MUTED,
-                        );
-                    }
-                    ui.painter().text(
-                        egui::pos2(rect.right() - 9.0, rect.center().y),
-                        Align2::RIGHT_CENTER,
-                        trailing,
-                        FontId::proportional(11.0),
-                        if rejected { RED } else { ACCENT },
-                    );
-                    // List rows have no selection circle.
-                    self.library_response(
-                        ui,
-                        response.on_hover_text(media.path.display().to_string()),
-                        id,
-                        None,
-                    );
-                }
+    /// After a Cull grid or strip is drawn: the navigator follows the
+    /// photos, as Organize's sidebar follows its board.
+    pub(super) fn follow_lines(&mut self, lines: &Lines, viewport: egui::Rect) {
+        if self.step != Step::Cull || !self.navigator.enabled {
+            return;
+        }
+        let active = self
+            .active
+            .and_then(|id| self.index.get(&id))
+            .and_then(|index| self.filtered.iter().position(|i| i == index))
+            .is_some_and(|position| {
+                let top = lines.top(position);
+                top + lines.row > viewport.top() && top < viewport.bottom()
             });
-        self.library_offset = output.state.offset.y;
+        let top = lines.position_at(viewport.top() + lines.row * 0.25);
+        self.follow_photos(active, top, viewport.top());
     }
-
     pub(super) fn grid(&mut self, ui: &mut egui::Ui) {
+        if self.step == Step::Cull {
+            self.photos_header(ui, false);
+        }
         let gap = ui.spacing().item_spacing.x;
         let columns = ((ui.available_width() + gap) / 200.0).floor().max(1.0) as usize;
         let cell_width =
@@ -251,23 +160,129 @@ impl PhotoSortApp {
         // Hiding file names gives a denser, image-only grid.
         let captioned = self.preferences.show_filenames;
         let row_height = cell_width * 0.75 + if captioned { CAPTION } else { 0.0 };
-        let rows = self.filtered.len().div_ceil(columns);
-        let scroll = self.library_scroll(ui, row_height, columns, egui::Id::new("library_grid"));
-        let output = scroll.show_rows(ui, row_height, rows, |ui, range| {
-            for row in range {
-                ui.horizontal(|ui| {
-                    for column in 0..columns {
-                        let pos = row * columns + column;
-                        if let Some(&index) = self.filtered.get(pos) {
-                            self.card(ui, index, cell_width, row_height, captioned);
+        let lines = self.photo_lines(columns, row_height, ui.spacing().item_spacing.y, SET_HEADER);
+        let scroll = self.photos_scroll(ui, &lines, egui::Id::new("library_grid"), true);
+        let output = scroll.show_viewport(ui, |ui, viewport| {
+            let origin = ui.max_rect().min;
+            ui.set_min_size(egui::vec2(ui.available_width(), lines.height()));
+            for line in lines.visible(viewport.top(), viewport.bottom()) {
+                let left = origin + egui::vec2(0.0, line.top);
+                match line.kind {
+                    LineKind::Header { group, start, end } => {
+                        let rect = egui::Rect::from_min_size(
+                            left,
+                            egui::vec2(ui.available_width(), SET_HEADER),
+                        );
+                        self.set_header(ui, rect, group, end - start);
+                    }
+                    LineKind::Cells { start, end } => {
+                        for (column, position) in (start..end).enumerate() {
+                            let rect = egui::Rect::from_min_size(
+                                left + egui::vec2(column as f32 * (cell_width + gap), 0.0),
+                                egui::vec2(cell_width, row_height),
+                            );
+                            let index = self.filtered[position];
+                            ui.scope_builder(
+                                egui::UiBuilder::new().id_salt(position).max_rect(rect),
+                                |ui| self.card(ui, index, cell_width, row_height, captioned),
+                            );
                         }
                     }
-                });
+                }
             }
+            viewport
         });
         self.library_offset = output.state.offset.y;
+        self.follow_lines(&lines, output.inner);
     }
-
+    /// The header of one section of a grouped grid or strip: a similar set
+    /// with its colour, size and best photo, or the photos between sets.
+    /// Photos dropped on a set's header move into it.
+    pub(super) fn set_header(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        group: Option<usize>,
+        shown: usize,
+    ) {
+        use egui_phosphor::regular as icon;
+        let response = ui.interact(
+            rect,
+            ui.id().with(("set-header", group, rect.top() as i32)),
+            Sense::click(),
+        );
+        let painter = ui.painter_at(rect);
+        let y = rect.center().y + 2.0;
+        let Some(group) = group else {
+            painter.text(
+                egui::pos2(rect.left() + 2.0, y),
+                Align2::LEFT_CENTER,
+                format!("Not in a similar set · {shown}"),
+                medium(10.5),
+                FAINT,
+            );
+            return;
+        };
+        let (best, size) = self.group_best[&group];
+        let color = super::grouping::group_color(group);
+        painter.circle_filled(egui::pos2(rect.left() + 6.0, y), 3.5, color);
+        let best_name = self
+            .index
+            .get(&best)
+            .map_or_else(String::new, |i| self.media[*i].name());
+        let mut job = egui::text::LayoutJob::default();
+        job.append(
+            &format!("Similar set · {size} photos"),
+            0.0,
+            egui::TextFormat::simple(medium(11.0), INK),
+        );
+        job.append(
+            &format!("   {} Best: {best_name}", icon::CROWN_SIMPLE),
+            0.0,
+            egui::TextFormat::simple(FontId::proportional(10.5), MUTED),
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 18.0);
+        let galley = painter.layout_job(job);
+        painter.galley(
+            egui::pos2(rect.left() + 16.0, y - galley.size().y / 2.0),
+            galley,
+            INK,
+        );
+        let name = format!("Similar set of {size} · best {best_name}");
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+        if response
+            .dnd_hover_payload::<super::grouping::PhotoDrag>()
+            .is_some()
+        {
+            ui.painter().rect_stroke(
+                rect,
+                R_CONTROL,
+                Stroke::new(2.0, ACCENT),
+                StrokeKind::Inside,
+            );
+        }
+        if let Some(drag) = response.dnd_release_payload::<super::grouping::PhotoDrag>() {
+            self.drop_on_group(&drag, group);
+        }
+        let count = self.group_members(group).len();
+        response
+            .on_hover_text(
+                "Drop photos here to move them into this set. Right-click to compare it.",
+            )
+            .context_menu(|ui| {
+                if ui
+                    .add_enabled(
+                        (2..=9).contains(&count),
+                        egui::Button::new(format!("Compare these {count}")),
+                    )
+                    .on_disabled_hover_text("Comparison shows 2 to 9 photos")
+                    .clicked()
+                {
+                    self.compare_group(group);
+                    ui.close();
+                }
+            });
+    }
     /// A photo tile, shared by grids and photo strips. With `captioned` it
     /// carries a two-line caption (name and detail) under the image;
     /// otherwise it is image-only. Its tooltip always gives the file's path.
@@ -373,12 +388,14 @@ impl PhotoSortApp {
                 RED,
             );
         }
-        if self.step == Step::Cull && self.group_best.contains(&id) {
+        if let Some((_, best, size)) = self.similar_group(id)
+            && best == id
+        {
             badge(
                 &painter,
                 image_rect.left_bottom() + egui::vec2(S1, -S1),
                 Align2::LEFT_BOTTOM,
-                &format!("{} Best", icon::CROWN_SIMPLE),
+                &format!("{} Best of {size}", icon::CROWN_SIMPLE),
                 ACCENT,
             );
         }
@@ -457,6 +474,133 @@ impl PhotoSortApp {
             response.on_hover_text(media.path.display().to_string()),
             id,
             Some(check),
+        );
+    }
+    /// One row of Review's compact strip: a small thumbnail with the name
+    /// and one line of facts beside it. Clicks, drags and the context menu
+    /// behave as on a tile.
+    pub(super) fn strip_row(&mut self, ui: &mut egui::Ui, index: usize, rect: egui::Rect) {
+        use egui_phosphor::regular as icon;
+        let media = self.media[index].clone();
+        let id = media.id;
+        let texture = self.texture(id, false);
+        let d = self.decision(id);
+        let active = self.active == Some(id);
+        let comparison = self.comparison.contains(&id);
+        let response = ui.interact(rect, ui.id().with(("strip-row", id)), self.tile_sense());
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, media.name())
+        });
+        let painter = ui.painter_at(rect);
+        let hover = ui
+            .ctx()
+            .animate_bool_responsive(response.id.with("hover"), response.hovered());
+        if active || hover > 0.0 {
+            let fill = if active {
+                SELECTED
+            } else {
+                CARD_HOVER.gamma_multiply(hover)
+            };
+            painter.rect_filled(rect, R_CONTROL, fill);
+        }
+        let thumb = egui::Rect::from_min_size(
+            rect.min + egui::vec2(S1, S1),
+            egui::vec2(rect.height() * 1.25, rect.height()) - egui::vec2(0.0, 2.0 * S1),
+        );
+        let shown = reveal(ui, id, texture.is_some());
+        let mut drawn = thumb;
+        if texture.is_none() || shown < 1.0 {
+            painter.rect_filled(thumb, 5.0, WELL);
+        }
+        if let Some(texture) = texture {
+            drawn = paint_image_tinted(
+                ui,
+                &texture,
+                thumb,
+                1.0,
+                Vec2::ZERO,
+                self.preview_turns(id),
+                Color32::from_white_alpha((shown * 255.0) as u8),
+            );
+        } else if self.requested.contains(&(id, false)) {
+            shimmer(ui, thumb);
+        }
+        if d.rejected {
+            painter.rect_stroke(drawn, 3.0, Stroke::new(2.0, RED), StrokeKind::Inside);
+        }
+        let left = thumb.right() + S2;
+        let text = egui::Rect::from_min_max(
+            egui::pos2(left, rect.top()),
+            egui::pos2(rect.right() - S1, rect.bottom()),
+        );
+        let clip = painter.with_clip_rect(text);
+        clip.text(
+            egui::pos2(left, rect.center().y - 7.0),
+            Align2::LEFT_CENTER,
+            media.name(),
+            FontId::proportional(11.5),
+            if active {
+                INK
+            } else {
+                lerp_color(MUTED, INK, 0.5)
+            },
+        );
+        // Most telling first: Trash, then a group's best, then the rating.
+        let rating = self.selected_rating(id);
+        let mut job = egui::text::LayoutJob::default();
+        let add = |job: &mut egui::text::LayoutJob, text: &str, color: Color32| {
+            if !job.text.is_empty() {
+                job.append(" · ", 0.0, egui::TextFormat::simple(medium(10.5), FAINT));
+            }
+            job.append(text, 0.0, egui::TextFormat::simple(medium(10.5), color));
+        };
+        if d.rejected {
+            add(&mut job, &format!("{} Trash", icon::TRASH), RED);
+        }
+        if let Some((_, best, size)) = self.similar_group(id)
+            && best == id
+        {
+            add(
+                &mut job,
+                &format!("{} Best of {size}", icon::CROWN_SIMPLE),
+                ACCENT,
+            );
+        }
+        if rating > 0 {
+            add(&mut job, &"★".repeat(rating as usize), ACCENT);
+        }
+        if job.text.is_empty() {
+            let kind = media
+                .path
+                .extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_uppercase();
+            add(
+                &mut job,
+                &format!(
+                    "{kind} · {:.1} MB",
+                    media.fingerprint.bytes as f64 / 1048576.0
+                ),
+                FAINT,
+            );
+        }
+        job.wrap = egui::text::TextWrapping::truncate_at_width(text.width());
+        let galley = ui.painter().layout_job(job);
+        clip.galley(egui::pos2(left, rect.center().y + 1.0), galley, MUTED);
+        ring(
+            ui,
+            response.id,
+            rect,
+            R_CONTROL,
+            false,
+            comparison && !active,
+        );
+        self.library_response(
+            ui,
+            response.on_hover_text(media.path.display().to_string()),
+            id,
+            None,
         );
     }
     /// All layouts use the same selection, comparison and staged mutation paths.
@@ -794,8 +938,7 @@ mod tests {
             for turns in [0, 1, 2, 3] {
                 app.decisions.entry(id).or_default().turns = turns;
                 app.rotation_review.replace_suggestions(vec![(id, turns)]);
-                for layout in [Layout::List, Layout::Icons, Layout::Grid] {
-                    app.library_layout = layout;
+                {
                     let output = ctx.run_test(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
@@ -901,7 +1044,6 @@ mod tests {
         }
         for step in [Step::Cull, Step::EasyDelete] {
             app.step = step;
-            app.library_layout = Layout::Grid;
             let output = ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
@@ -918,7 +1060,7 @@ mod tests {
         }
     }
     #[test]
-    fn list_and_icons_virtualize_and_share_requests_focus_and_comparison() {
+    fn grid_virtualizes_and_keeps_requests_focus_and_comparison() {
         let temp = tempfile::tempdir().unwrap();
         let mut app =
             PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
@@ -940,7 +1082,6 @@ mod tests {
         app.filtered = (0..app.media.len()).collect();
         app.active = Some(MediaId(1));
         app.comparison = vec![MediaId(1), MediaId(2)];
-        app.library_layout = Layout::List;
         let ctx = egui::Context::default();
         theme_install(&ctx);
         let render = |app: &mut PhotoSortApp, width| {
@@ -959,10 +1100,7 @@ mod tests {
                         egui::CentralPanel::default().show(ui, |ui| {
                             app.library(ui);
                             assert!(ui.min_rect().right() <= width);
-                            let salt = egui::Id::new((
-                                "library_rows",
-                                app.library_layout == Layout::Icons,
-                            ));
+                            let salt = egui::Id::new("library_grid");
                             offset = egui::scroll_area::State::load(
                                 ctx,
                                 ui.make_persistent_id(egui::IdSalt::new(salt)),
@@ -986,18 +1124,10 @@ mod tests {
             first, app.requested,
             "redraw must not request the same thumbnails twice"
         );
-        app.library_layout = Layout::Icons;
-        for width in [360.0, 576.0, 960.0] {
-            render(&mut app, width);
-        }
-        assert_eq!(
-            first, app.requested,
-            "icon layout must reuse list thumbnail requests"
-        );
         assert_eq!(app.active, Some(MediaId(1)));
         assert_eq!(app.comparison, vec![MediaId(1), MediaId(2)]);
         assert!(app.decisions.is_empty());
-        app.set_active(MediaId(4));
+        app.set_active(MediaId(0));
         assert_eq!(
             render(&mut app, 576.0),
             0.0,
@@ -1016,5 +1146,122 @@ mod tests {
             app.requested.len() < 40,
             "revealing focus must stay virtualized"
         );
+    }
+}
+
+/// A section header's height in a grouped grid or strip.
+pub(super) const SET_HEADER: f32 = 26.0;
+
+/// The lines of a Cull grid or strip, see [`PhotoSortApp::photo_lines`].
+/// Without sections every line is a row of photos of one height, computed
+/// as needed, so a library of any size costs nothing to lay out.
+pub(super) struct Lines {
+    pub(super) columns: usize,
+    /// A row of photos' height.
+    pub(super) row: f32,
+    gap: f32,
+    count: usize,
+    /// Headers and rows of photos, with the height of them all.
+    sections: Option<(Vec<Line>, f32)>,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Line {
+    pub(super) top: f32,
+    pub(super) kind: LineKind,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum LineKind {
+    /// A similar set (or `None`, photos in no set) shown from `start` to `end`.
+    Header {
+        group: Option<usize>,
+        start: usize,
+        end: usize,
+    },
+    /// Photos `start..end`, side by side.
+    Cells { start: usize, end: usize },
+}
+impl Lines {
+    fn stride(&self) -> f32 {
+        self.row + self.gap
+    }
+    fn rows(&self) -> usize {
+        self.count.div_ceil(self.columns)
+    }
+    pub(super) fn height(&self) -> f32 {
+        match &self.sections {
+            Some((_, height)) => *height,
+            None => (self.rows() as f32 * self.stride() - self.gap).max(0.0),
+        }
+    }
+    fn row_line(&self, row: usize) -> Line {
+        let start = row * self.columns;
+        Line {
+            top: row as f32 * self.stride(),
+            kind: LineKind::Cells {
+                start,
+                end: (start + self.columns).min(self.count),
+            },
+        }
+    }
+    /// The lines between `top` and `bottom`.
+    pub(super) fn visible(&self, top: f32, bottom: f32) -> Vec<Line> {
+        match &self.sections {
+            Some((lines, _)) => {
+                let first = lines
+                    .partition_point(|line| line.top <= top)
+                    .saturating_sub(1);
+                lines[first..]
+                    .iter()
+                    .take_while(|line| line.top < bottom)
+                    .copied()
+                    .collect()
+            }
+            None => {
+                let first = (top / self.stride()).floor().max(0.0) as usize;
+                let last = ((bottom / self.stride()).ceil() as usize + 1).min(self.rows());
+                (first..last).map(|row| self.row_line(row)).collect()
+            }
+        }
+    }
+    /// The top of the row holding `position`.
+    pub(super) fn top(&self, position: usize) -> f32 {
+        match &self.sections {
+            Some((lines, _)) => {
+                let first = |line: &Line| match line.kind {
+                    LineKind::Header { start, .. } | LineKind::Cells { start, .. } => start,
+                };
+                let at = lines
+                    .partition_point(|line| first(line) <= position)
+                    .saturating_sub(1);
+                lines[at..]
+                    .iter()
+                    .find(|line| {
+                        matches!(line.kind, LineKind::Cells { start, end } if (start..end).contains(&position))
+                    })
+                    .map_or(0.0, |line| line.top)
+            }
+            None => (position / self.columns) as f32 * self.stride(),
+        }
+    }
+    /// The top of the row holding `position`, or of its section's header
+    /// when it is the first photo there.
+    pub(super) fn section_top(&self, position: usize) -> f32 {
+        match &self.sections {
+            Some((lines, _)) => lines
+                .iter()
+                .find(
+                    |line| matches!(line.kind, LineKind::Header { start, .. } if start == position),
+                )
+                .map_or_else(|| self.top(position), |line| line.top),
+            None => self.top(position),
+        }
+    }
+    /// The first photo on the line at `y`, or on the next line with photos.
+    pub(super) fn position_at(&self, y: f32) -> Option<usize> {
+        let lines = self.visible(y, y + self.stride() * 2.0);
+        lines.into_iter().find_map(|line| match line.kind {
+            LineKind::Cells { start, end } if start < end => Some(start),
+            _ => None,
+        })
     }
 }

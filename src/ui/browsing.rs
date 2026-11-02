@@ -214,61 +214,114 @@ impl PhotoSortApp {
             Err(error) => self.error = Some(error),
         }
     }
-    /// Quick view options in Cull: where Review's photo strip sits and
-    /// whether thumbnails carry file names. Both are app-wide preferences,
-    /// also in Settings, and apply to every step.
-    pub(super) fn cull_view_options(&mut self, ui: &mut egui::Ui) {
-        use egui_phosphor::regular as icon;
-        let response = icon_button(ui, icon::SLIDERS_HORIZONTAL, "View options");
-        egui::Popup::menu(&response)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .show(|ui| {
-                ui.set_min_width(220.0);
-                self.cull_view_option_controls(ui);
-            });
-    }
-    /// The view options themselves, also in the bar's view menu when it has
-    /// no room for their own button.
-    pub(super) fn cull_view_option_controls(&mut self, ui: &mut egui::Ui) {
+    /// The line above Cull's photos, in the grid and over Review's strip:
+    /// how many photos are shown, then small toggles for how they are
+    /// shown. All are app-wide preferences, also in Settings, except the
+    /// similar-set sections, which are part of the folder's view.
+    pub(super) fn photos_header(&mut self, ui: &mut egui::Ui, strip: bool) {
         use crate::core::preferences::StripPosition;
         use egui_phosphor::regular as icon;
-        ui.label(caption("Photo strip in Review"));
-        let positions = [StripPosition::Bottom, StripPosition::Left];
-        let segments: Vec<Segment> = positions
-            .iter()
-            .map(|position| {
-                let (glyph, name) = match position {
-                    StripPosition::Bottom => (icon::SQUARE_HALF_BOTTOM, "Bottom"),
-                    StripPosition::Left => (icon::SQUARE_HALF, "Left"),
-                };
-                Segment {
-                    shown: format!("{glyph}  {name}"),
-                    name: format!("Photo strip: {name}"),
-                    hover: None,
+        ui.horizontal(|ui| {
+            ui.set_height(22.0);
+            let count = self.filtered.len();
+            let mut text = format!("{count} {}", if count == 1 { "photo" } else { "photos" });
+            if self.grouped_view() {
+                let sets = self
+                    .group_best
+                    .keys()
+                    .filter(|group| !self.group_members(**group).is_empty())
+                    .count();
+                text.push_str(&format!(
+                    " · {sets} similar {}",
+                    if sets == 1 { "set" } else { "sets" }
+                ));
+            }
+            ui.add(egui::Label::new(RichText::new(text).small().color(MUTED)).truncate());
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.add_space(4.0);
+                let left = self.preferences.strip_position == StripPosition::Left;
+                if strip {
+                    if left
+                        && header_toggle(
+                            ui,
+                            icon::ROWS,
+                            self.preferences.compact_strip,
+                            if self.preferences.compact_strip {
+                                "Compact rows · click for large thumbnails"
+                            } else {
+                                "Large thumbnails · click for compact rows"
+                            },
+                        )
+                        .clicked()
+                    {
+                        self.set_compact_strip(!self.preferences.compact_strip);
+                    }
+                    let (glyph, hover) = if left {
+                        (
+                            icon::SQUARE_HALF,
+                            "Strip on the left · click to move it to the bottom",
+                        )
+                    } else {
+                        (
+                            icon::SQUARE_HALF_BOTTOM,
+                            "Strip at the bottom · click to move it to the left",
+                        )
+                    };
+                    if header_toggle(ui, glyph, false, hover).clicked() {
+                        self.preferences.strip_position = if left {
+                            StripPosition::Bottom
+                        } else {
+                            StripPosition::Left
+                        };
+                        self.save_preferences();
+                    }
                 }
-            })
-            .collect();
-        let current = positions
-            .iter()
-            .position(|p| *p == self.preferences.strip_position);
-        if let Some(index) = segmented(
-            ui,
-            egui::Id::new("cull-strip-position"),
-            &segments,
-            current,
-            button_row_height(ui),
-        ) && self.preferences.strip_position != positions[index]
-        {
-            self.preferences.strip_position = positions[index];
-            self.save_preferences();
-        }
-        ui.add_space(S2);
-        ui.label(caption("Thumbnails"));
-        let mut names = self.preferences.show_filenames;
-        if ui.add(Switch::new(&mut names, "Show filenames")).changed() {
-            self.preferences.show_filenames = names;
-            self.save_preferences();
-        }
+                let names = self.preferences.show_filenames;
+                if header_toggle(
+                    ui,
+                    icon::TEXT_AA,
+                    names,
+                    if names {
+                        "File names shown · click to hide them"
+                    } else {
+                        "File names hidden · click to show them"
+                    },
+                )
+                .clicked()
+                {
+                    self.preferences.show_filenames = !names;
+                    self.save_preferences();
+                }
+                let grouped = self.browse.group_sort != GroupSort::Flat;
+                let ready = !self.group_best.is_empty();
+                let toggle = ui.add_enabled_ui(ready, |ui| {
+                    header_toggle(
+                        ui,
+                        icon::STACK,
+                        grouped && ready,
+                        if grouped {
+                            "Grouped into similar sets · click to show the photos in one run"
+                        } else {
+                            "Group similar photos into sets"
+                        },
+                    )
+                });
+                let toggle = toggle
+                    .inner
+                    .on_disabled_hover_text("Analyze the library to find similar photos");
+                if toggle.clicked() {
+                    self.browse.group_sort = if grouped {
+                        GroupSort::Flat
+                    } else {
+                        GroupSort::Time
+                    };
+                    self.pending_bookmark = None;
+                    self.filter_dirty = true;
+                    self.library_reveal = true;
+                }
+            });
+        });
     }
     pub(super) fn browse_controls(&mut self, ui: &mut egui::Ui) {
         // One row at every size: filters live in a popover that shows how many
@@ -600,6 +653,27 @@ impl PhotoSortApp {
             }
         });
     }
+}
+
+/// A small icon in a photos header that shows a setting and changes it.
+/// Its tooltip is also its accessible name.
+fn header_toggle(ui: &mut egui::Ui, glyph: &str, on: bool, hover: &str) -> egui::Response {
+    let response = ui
+        .add(
+            egui::Button::new(
+                RichText::new(glyph)
+                    .size(14.0)
+                    .color(if on { INK } else { MUTED }),
+            )
+            .frame(on)
+            .selected(on)
+            .min_size(egui::vec2(24.0, 22.0)),
+        )
+        .on_hover_text(hover);
+    let enabled = response.enabled();
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, hover));
+    response
 }
 
 #[cfg(test)]

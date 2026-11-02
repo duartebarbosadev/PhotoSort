@@ -20,11 +20,11 @@ impl PhotoSortApp {
             comparison,
             review: self.review,
             inspector: self.inspector,
-            layout: self.library_layout,
             query: self.query.clone(),
             filter: self.filter,
             browse: self.browse.clone(),
             navigator: self.navigator.clone(),
+            navigator_scrolls: true,
             group_anchor: self.browse.group.and_then(|group| {
                 self.media
                     .iter()
@@ -118,11 +118,15 @@ impl PhotoSortApp {
             };
             self.browse = view.browse.clone();
             self.navigator = view.navigator.clone();
+            forget_old_navigation(
+                &mut self.browse,
+                &mut self.navigator,
+                view.navigator_scrolls,
+            );
             // Group numbers belong to an analysis run. Resolve the saved member afterwards.
             if view.group_anchor.is_some() {
                 self.browse.group = None;
             }
-            self.library_layout = view.layout;
             self.review = view.review;
             // Narrow windows show Details as a drawer over the photos; only
             // reopen it on request, never from a view saved in a wide window.
@@ -279,7 +283,6 @@ impl PhotoSortApp {
         self.single_view_stash.clear();
         self.review = self.step != Step::Organize;
         self.inspector = view.inspector && self.was_wide;
-        self.library_layout = view.layout;
         self.query = view.query;
         self.filter = view.filter;
         self.browse = view.browse;
@@ -315,6 +318,23 @@ impl PhotoSortApp {
         };
         self.review = self.step != Step::Organize;
         self.prepare_bookmark();
+    }
+}
+
+/// The navigator lists folders or dates, and neither filters any more; a
+/// view saved before a navigator click scrolled also shows every folder.
+fn forget_old_navigation(
+    browse: &mut crate::core::browsing::Options,
+    navigator: &mut crate::core::browsing::tree::State,
+    scrolls: bool,
+) {
+    use crate::core::browsing::tree::Mode;
+    if navigator.mode == Mode::Groups {
+        navigator.mode = Mode::Folders;
+    }
+    browse.date = None;
+    if !scrolls {
+        browse.folder = Default::default();
     }
 }
 

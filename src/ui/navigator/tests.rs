@@ -1,6 +1,20 @@
 use super::*;
 use crate::core::browsing::{Query, Seed, tree};
 use crate::test_support::worker_patience;
+
+/// A library of `count` empty folders under `/absent`.
+fn folder_tree(count: usize) -> tree::Tree {
+    let folders: Vec<_> = std::iter::once(crate::core::browsing::Folder {
+        path: "/absent".into(),
+        label: "Library root".into(),
+    })
+    .chain((0..count).map(|i| crate::core::browsing::Folder {
+        path: format!("/absent/{i:06}").into(),
+        label: format!("{i:06}"),
+    }))
+    .collect();
+    tree::build(Mode::Folders, &folders, std::iter::empty(), || false).unwrap()
+}
 fn settle(app: &mut PhotoSortApp) {
     let deadline = Instant::now() + worker_patience();
     loop {
@@ -35,7 +49,7 @@ fn folder_expansion_navigator_context_menu_survives_compact_popup() {
             .collect();
         app.active = Some(app.media[0].id);
         app.catalog = Some(catalog);
-        app.set_navigator(Mode::Folders, true);
+        app.set_navigator(true);
         settle(&mut app);
         let tree = app.browse_tree.as_ref().unwrap().tree.clone();
         let ctx = egui::Context::default();
@@ -137,7 +151,7 @@ fn folder_expansion_navigator_context_menu_survives_compact_popup() {
         assert!(app.decisions.is_empty() && app.plan.is_none() && app.requested.is_empty());
         assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
         if width < 780.0 {
-            app.review = true;
+            app.navigator.enabled = false;
             frame(&mut app, vec![]);
             assert!(
                 !app.navigator_popup_open(&ctx),
@@ -167,7 +181,7 @@ fn tree_keyboard_navigator_reuses_worker_tree_and_accepts_input_during_refilter(
             .collect();
         app.active = Some(app.media[0].id);
         app.catalog = Some(catalog);
-        app.set_navigator(Mode::Folders, true);
+        app.set_navigator(true);
         settle(&mut app);
         let tree = app.browse_tree.as_ref().unwrap().tree.clone();
         let ctx = egui::Context::default();
@@ -231,7 +245,8 @@ fn tree_keyboard_navigator_reuses_worker_tree_and_accepts_input_during_refilter(
         );
         settle(&mut app);
         assert!(Arc::ptr_eq(&tree, &app.browse_tree.as_ref().unwrap().tree));
-        assert!(app.filtered.is_empty());
+        // Moving through folders scrolls to them; nothing is filtered out.
+        assert_eq!(app.filtered, vec![0]);
         assert!(app.decisions.is_empty() && app.plan.is_none() && app.requested.is_empty());
         assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
     }
@@ -256,7 +271,8 @@ fn navigator_selection_and_expansion_resume_without_creating_file_decisions() {
     app.catalog = Some(catalog);
     app.navigator.enabled = true;
     app.navigator.collapsed.insert(Key::Folder(library.clone()));
-    app.select_navigation_node(Key::Folder(library.join("child")));
+    // "Show only this folder" from its menu.
+    app.browse.folder.show_only(Some(library.join("child")));
     settle(&mut app);
     assert_eq!(app.filtered, vec![0]);
     assert_eq!(app.browse_tree.as_ref().unwrap().visible, vec![0]);
@@ -268,6 +284,17 @@ fn navigator_selection_and_expansion_resume_without_creating_file_decisions() {
     app.prepare_bookmark();
     assert_eq!(app.navigator, saved.navigator);
     assert_eq!(app.browse.folder, saved.browse.folder);
+    // A view saved before a navigator click scrolled kept the folder
+    // clicked, maybe a date or the Dates tab: it opens with every folder.
+    let mut old = saved.clone();
+    old.navigator_scrolls = false;
+    old.navigator.mode = Mode::Groups;
+    old.browse.date = Some("2024-01-01".into());
+    app.saved_views.bookmarks.insert(Step::Cull, old);
+    app.prepare_bookmark();
+    assert_eq!(app.navigator.mode, Mode::Folders);
+    assert_eq!(app.browse.date, None);
+    assert_eq!(app.browse.folder, Default::default());
     assert!(app.decisions.is_empty() && app.plan.is_none());
     assert_eq!(app.stats.decodes, 0);
     assert!(app.requested.is_empty());
@@ -279,22 +306,9 @@ fn responsive_navigator_keeps_scroll_across_panel_and_popup_without_image_work()
     app.step = Step::Cull;
     app.navigator = tree::State {
         enabled: true,
-        mode: Mode::Groups,
         ..Default::default()
     };
-    let tree = Arc::new(
-        tree::build(
-            Mode::Groups,
-            &[],
-            (0..1000).map(|g| tree::Entry {
-                path: std::path::Path::new("/absent/photo.jpg"),
-                date: None,
-                group: Some(g),
-            }),
-            || false,
-        )
-        .unwrap(),
-    );
+    let tree = Arc::new(folder_tree(1000));
     app.browse_tree = Some(Arc::new(tree.project(&app.navigator, || false).unwrap()));
     app.filter_dirty = false;
     let ctx = egui::Context::default();
@@ -415,23 +429,9 @@ fn large_navigator_renders_only_visible_rows_at_compact_and_wide_sizes() {
     app.step = Step::Cull;
     app.navigator = tree::State {
         enabled: true,
-        mode: Mode::Groups,
         ..Default::default()
     };
-    let path = std::path::Path::new("/absent/photo.jpg");
-    let tree = Arc::new(
-        tree::build(
-            Mode::Groups,
-            &[],
-            (0..100_000).map(|g| tree::Entry {
-                path,
-                date: None,
-                group: Some(g),
-            }),
-            || false,
-        )
-        .unwrap(),
-    );
+    let tree = Arc::new(folder_tree(100_000));
     app.browse_tree = Some(Arc::new(tree.project(&app.navigator, || false).unwrap()));
     app.filter_dirty = false;
     for width in [480., 800., 1200.] {
@@ -491,7 +491,7 @@ fn empty_filtered_scope_keeps_navigation_available_and_other_workflows_stay_isol
         std::thread::sleep(Duration::from_millis(1));
     }
     app.filter_dirty = false;
-    app.select_navigation_node(Key::Folder("/absent/empty".into()));
+    app.browse.folder.show_only(Some("/absent/empty".into()));
     assert!(app.filtered.is_empty());
     let ctx = egui::Context::default();
     theme_install(&ctx);
@@ -571,11 +571,27 @@ fn cull_navigator_shows_several_folders_chosen_with_ctrl_cmd_or_shift() {
         names
     };
     let none = egui::Modifiers::default();
+    let highlighted = |app: &PhotoSortApp| match app.navigator_key() {
+        Some(Key::Folder(path)) => path.strip_prefix(&root).unwrap().display().to_string(),
+        _ => panic!("nothing highlighted"),
+    };
+    // A plain click scrolls to the folder and highlights it; every photo
+    // stays.
     click(&mut app, "B", none);
-    assert_eq!(shown(&app), ["B"]);
-    assert_eq!(app.filtered.len(), 5);
-    // Cmd (macOS) or Ctrl adds a folder; the photos of both are shown.
+    assert!(shown(&app).is_empty());
+    assert_eq!(app.filtered.len(), 9);
+    assert_eq!(highlighted(&app), "B");
+    // The highlight then follows the photo you move to.
+    let other = app.media[app.filtered[1]].id;
+    assert_ne!(app.active, Some(other));
+    app.set_active(other);
+    rendered(&mut app, &ctx, size);
+    assert_eq!(highlighted(&app).replace('\\', "/"), "A/Day1");
+    // Cmd (macOS) or Ctrl shows only the folders chosen.
     click(&mut app, "A/Day1", egui::Modifiers::COMMAND);
+    assert_eq!(shown(&app), ["A/Day1"]);
+    assert_eq!(app.filtered.len(), 4);
+    click(&mut app, "B", egui::Modifiers::CTRL);
     assert_eq!(shown(&app), ["A/Day1", "B"]);
     assert_eq!(app.filtered.len(), 9);
     assert!(
@@ -586,25 +602,28 @@ fn cull_navigator_shows_several_folders_chosen_with_ctrl_cmd_or_shift() {
     // And takes one away again.
     click(&mut app, "B", egui::Modifiers::CTRL);
     assert_eq!(shown(&app), ["A/Day1"]);
-    assert_eq!(app.filtered.len(), 4);
-    // Shift shows the folders listed from the last one clicked through
-    // this one; Cmd/Ctrl with Shift adds them.
-    click(&mut app, "A", none);
+    // Shift adds the folders listed from the last one clicked through this one.
     click(&mut app, "B", egui::Modifiers::SHIFT);
-    assert_eq!(shown(&app), ["A", "A/Day1", "B"]);
+    assert_eq!(shown(&app), ["A/Day1", "B"]);
+    // A plain click on a folder that is hidden shows every folder again.
     click(&mut app, "Empty", none);
-    click(&mut app, "B", egui::Modifiers::SHIFT);
-    assert_eq!(shown(&app), ["B", "Empty"]);
-    click(&mut app, "A/Day1", egui::Modifiers::COMMAND);
-    click(
-        &mut app,
-        "Empty",
-        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+    assert!(shown(&app).is_empty());
+    assert_eq!(app.filtered.len(), 9);
+    assert_eq!(highlighted(&app), "Empty");
+    // Dates scroll too, and nothing chosen in one list carries over.
+    app.set_navigator_mode(Mode::Dates);
+    rendered(&mut app, &ctx, size);
+    assert_eq!(
+        app.navigator_key().map(|k| matches!(k, Key::Date(_))),
+        Some(true)
     );
-    assert_eq!(shown(&app), ["A/Day1", "B", "Empty"]);
-    // A plain click shows one folder again.
-    click(&mut app, "A/Day1", none);
-    assert_eq!(shown(&app), ["A/Day1"]);
-    assert!(app.browse.folder.also.is_empty());
+    let day = app.navigator_place(app.filtered[4]).unwrap();
+    app.go_to(day.clone());
+    rendered(&mut app, &ctx, size);
+    assert_eq!(app.navigator_key(), Some(day));
+    assert_eq!(app.filtered.len(), 9);
+    assert_eq!(app.browse.date, None);
+    app.set_navigator_mode(Mode::Folders);
+    assert_eq!(app.navigator_key(), Some(Key::Folder(root.clone())));
     app.runtime.shutdown();
 }

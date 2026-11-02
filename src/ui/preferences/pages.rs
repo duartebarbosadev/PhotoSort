@@ -62,6 +62,7 @@ impl Section {
             Section::Appearance => {
                 d.strip_position != s.strip_position
                     || d.show_filenames != s.show_filenames
+                    || d.compact_strip != s.compact_strip
                     || d.raw_look != s.raw_look
                     || d.reduce_motion != s.reduce_motion
                     || d.show_shortcuts != s.show_shortcuts
@@ -883,6 +884,19 @@ fn appearance_page(ui: &mut egui::Ui, draft: &mut Preferences) {
                         (StripPosition::Bottom, "Bottom", None),
                         (StripPosition::Left, "Left", None),
                     ],
+                );
+            },
+        );
+        rows.row(
+            "Left strip",
+            "Compact rows fit many more photos beside the photo.",
+            Some("Rows show a small thumbnail with its name beside it; without file names they become a grid of small thumbnails. The strip's own button switches too."),
+            |ui| {
+                choice(
+                    ui,
+                    "strip-style",
+                    &mut draft.compact_strip,
+                    &[(true, "Rows", None), (false, "Thumbnails", None)],
                 );
             },
         );

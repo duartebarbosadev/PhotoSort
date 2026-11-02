@@ -34,6 +34,7 @@ const ARROWS: &[Cap] = &[Left, Right, Up, Down];
 const REVIEW: Hint = hint(&[&[Shift, Enter]], "Review");
 const CLOSE: Hint = hint(&[&[Esc]], "Close photos");
 const COPY: Hint = hint(&[&[Command, Key("C")]], "Copy");
+const SWIPE: Hint = hint(&[&[Key("C")]], "Swipe compare");
 
 const ORGANIZE: &[Hint] = &[
     hint(&[ARROWS], "Browse"),
@@ -42,6 +43,7 @@ const ORGANIZE: &[Hint] = &[
     hint(&[&[Key("\\")]], "Hold for original"),
     hint(&[&[Shift, Left, Right, Up, Down]], "Compare"),
     hint(&[&[Alt, Key("1–5")]], "Grouping mode"),
+    SWIPE,
     COPY,
 ];
 const EASY_DELETE: &[Hint] = &[
@@ -80,8 +82,10 @@ const CULL: &[Hint] = &[
     hint(&[&[Key("D")]], "Mark"),
     hint(&[&[Command, Key("0–5")]], "Rate"),
     hint(&[&[Key("R")]], "Rotate"),
+    SWIPE,
     REVIEW,
     hint(&[&[Command, Left, Right, Up, Down]], "Bypass filters"),
+    hint(&[&[Key("F")]], "Folders"),
     COPY,
 ];
 /// Shortcuts that work on every step, for the sheet.

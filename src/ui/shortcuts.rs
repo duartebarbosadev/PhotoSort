@@ -1,6 +1,5 @@
 //! Application shortcuts share the existing navigation and departure actions.
 use super::*;
-use crate::core::browsing::tree::Mode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ApplicationKey {
@@ -75,8 +74,8 @@ impl PhotoSortApp {
         }
         true
     }
-    pub(super) fn set_library_layout(&mut self, layout: library::Layout) {
-        self.library_layout = layout;
+    /// Leaves Review for the grid.
+    pub(super) fn show_grid(&mut self) {
         self.review = false;
         self.library_reveal = true;
         self.pending_bookmark = None;
@@ -105,22 +104,12 @@ impl PhotoSortApp {
             return false;
         }
         if modifiers.alt {
-            let layout = match key {
-                egui::Key::Num1 => library::Layout::List,
-                egui::Key::Num2 => library::Layout::Icons,
-                egui::Key::Num3 => library::Layout::Grid,
-                _ => return false,
-            };
-            self.set_library_layout(layout);
-            return true;
+            return false;
         }
-        let mode = match key {
-            egui::Key::F => Mode::Folders,
-            egui::Key::S => Mode::Groups,
-            _ => return false,
-        };
-        let enabled = !self.navigator.enabled || self.navigator.mode != mode || self.review;
-        self.set_navigator(mode, enabled);
+        if key != egui::Key::F {
+            return false;
+        }
+        self.set_navigator(!self.navigator.enabled);
         true
     }
 
@@ -150,6 +139,7 @@ impl PhotoSortApp {
             if self.workflow_shortcut(pressed, modifiers)
                 || self.organize_shortcut(pressed, modifiers)
                 || self.view_shortcut(pressed, modifiers)
+                || self.swipe_key(pressed, modifiers)
             {
                 continue;
             }
@@ -373,7 +363,7 @@ fn command_chord_allowed(key: egui::Key) -> bool {
     ) || matches!(digit(key), Some(0..=5))
 }
 
-fn digit(key: egui::Key) -> Option<usize> {
+pub(super) fn digit(key: egui::Key) -> Option<usize> {
     Some(match key {
         egui::Key::Num0 => 0,
         egui::Key::Num1 => 1,

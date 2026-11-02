@@ -72,6 +72,13 @@ fn main() -> anyhow::Result<()> {
             false,
             [1440.0, 900.0],
         ),
+        // The navigator's capture dates.
+        (
+            "01d-cull-navigator-dates-wide",
+            Some(Step::Cull),
+            false,
+            [1440.0, 900.0],
+        ),
         (
             "02-cull-review-wide",
             Some(Step::Cull),
@@ -150,6 +157,54 @@ fn main() -> anyhow::Result<()> {
             true,
             [1440.0, 900.0],
         ),
+        // The left strip's large tiles, the style before compact rows.
+        (
+            "02e-cull-review-left-strip-large",
+            Some(Step::Cull),
+            true,
+            [1440.0, 900.0],
+        ),
+        // The library navigator stays beside Review and its strip.
+        (
+            "02f-cull-review-left-strip-navigator",
+            Some(Step::Cull),
+            true,
+            [1440.0, 900.0],
+        ),
+        // With less room it folds into its popover button.
+        (
+            "02g-cull-review-left-strip-navigator-medium",
+            Some(Step::Cull),
+            true,
+            [900.0, 700.0],
+        ),
+        // A group's best photo: the strip bands its group together.
+        (
+            "02h-cull-review-left-strip-group-best",
+            Some(Step::Cull),
+            true,
+            [1440.0, 900.0],
+        ),
+        // Similar photos in sets, each under a header.
+        (
+            "02i-cull-grid-grouped",
+            Some(Step::Cull),
+            false,
+            [1440.0, 900.0],
+        ),
+        (
+            "02j-cull-review-left-strip-grouped",
+            Some(Step::Cull),
+            true,
+            [1440.0, 900.0],
+        ),
+        // Swipe compare: one photo over the other, a divider between.
+        (
+            "02k-cull-review-swipe",
+            Some(Step::Cull),
+            true,
+            [1440.0, 900.0],
+        ),
         (
             "07-cull-grid-compact",
             Some(Step::Cull),
@@ -213,6 +268,13 @@ fn main() -> anyhow::Result<()> {
             Some(Step::Organize),
             false,
             [600.0, 700.0],
+        ),
+        // Swipe compare in Organize's preview.
+        (
+            "03k-organize-compare-swipe-wide",
+            Some(Step::Organize),
+            false,
+            [1440.0, 900.0],
         ),
         (
             "03i-organize-compare-details-wide",
@@ -284,6 +346,9 @@ fn main() -> anyhow::Result<()> {
         harness
             .state_mut()
             .gallery_show_filenames(!name.contains("no-names"));
+        harness
+            .state_mut()
+            .gallery_compact_strip(!name.contains("strip-large"));
         if let Some(step) = step {
             harness.state_mut().gallery_step(step);
             settle(&mut harness);
@@ -305,10 +370,26 @@ fn main() -> anyhow::Result<()> {
                 harness.state_mut().gallery_navigator();
                 settle(&mut harness);
             }
+            if name.contains("dates") {
+                harness.state_mut().gallery_navigator_dates();
+                settle(&mut harness);
+            }
+            if name.contains("grouped") {
+                harness.state_mut().gallery_group_similar();
+                settle(&mut harness);
+            }
+            if name.contains("group-best") {
+                harness.state_mut().gallery_review_group_best();
+                settle(&mut harness);
+            }
             harness.state_mut().gallery_close_model_dialog();
             settle(&mut harness);
             if name.contains("compare") {
                 harness.state_mut().gallery_select(3);
+                settle(&mut harness);
+            }
+            if name.contains("swipe") {
+                harness.state_mut().gallery_swipe();
                 settle(&mut harness);
             }
             if name.contains("details") {
