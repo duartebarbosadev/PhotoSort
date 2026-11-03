@@ -59,6 +59,8 @@ fn render(media: &Media, cache: PathBuf, limits: super::cache::Limits) -> Result
 /// A pipeline for one copy. Its originals budget holds the whole photo, so
 /// the full-size decode is reused instead of decoded again to scale it; it
 /// is dropped with the copy, so no memory is kept beyond that one photo.
+/// `Limits::normalize` clamps the budget to 2 GiB: a larger decode still
+/// happens twice.
 fn copy_pipeline(cache: PathBuf, limits: super::cache::Limits) -> Pipeline {
     let mut pipeline = Pipeline::new(64 * 1024 * 1024, cache);
     pipeline.configure_cache(super::cache::Limits {

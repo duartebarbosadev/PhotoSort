@@ -203,6 +203,8 @@ pub struct PhotoSortApp {
     /// The highest-scoring photo of each Cull group with two or more photos.
     /// Each similarity group's best photo and size; see `similar_group`.
     group_best: HashMap<usize, (MediaId, usize)>,
+    /// Cull groups with a photo scored since their best was picked.
+    group_best_stale: HashSet<usize>,
     /// The folder Cull's navigator highlights and scrolls the photos to.
     spy: navigator::Spy,
     /// Swipe compare, while it is open.
@@ -490,6 +492,7 @@ impl PhotoSortApp {
             scene_undo: None,
             cull_groups: Arc::default(),
             group_best: HashMap::new(),
+            group_best_stale: HashSet::new(),
             spy: Default::default(),
             swipe: None,
             automatic_groups: Arc::default(),
@@ -740,6 +743,7 @@ impl PhotoSortApp {
         self.face_groups = None;
         self.cull_groups = Arc::default();
         self.group_best.clear();
+        self.group_best_stale.clear();
         self.spy = Default::default();
         self.swipe = None;
         self.analysis_failures.clear();
@@ -961,13 +965,9 @@ impl PhotoSortApp {
                 drained = true;
                 break;
             };
-            // A failed save is reported even after its folder was left.
-            if envelope.epoch != self.runtime.epoch()
-                && !matches!(
-                    envelope.event,
-                    Event::ViewError(_) | Event::PreferencesError(_)
-                )
-            {
+            // Workers stamp a failed save with the folder open when it is
+            // reported, so only news about a folder already left is dropped.
+            if envelope.epoch != self.runtime.epoch() {
                 continue;
             }
             if self.handle_event(ctx, envelope.event).is_break() {
@@ -978,6 +978,7 @@ impl PhotoSortApp {
         if !drained {
             ctx.request_repaint();
         }
+        self.refresh_group_best();
         if !self.requested.is_empty() || self.scanning || self.analysis_run.is_some() || self.busy {
             ctx.request_repaint_after(Duration::from_millis(50));
         }

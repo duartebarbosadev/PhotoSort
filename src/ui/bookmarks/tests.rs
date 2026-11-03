@@ -462,7 +462,7 @@ fn events_left_past_a_frames_budget_bring_the_next_frame() {
     app.runtime.shutdown();
 }
 #[test]
-fn a_failed_save_from_the_folder_just_left_is_still_reported() {
+fn news_about_the_folder_just_left_is_not_shown_in_the_next() {
     let dir = tempfile::tempdir().unwrap();
     let mut app =
         PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None);
@@ -470,16 +470,27 @@ fn a_failed_save_from_the_folder_just_left_is_still_reported() {
     let original = std::mem::replace(&mut app.runtime.events, receiver);
     let left = app.runtime.epoch();
     app.runtime.next_epoch();
-    for event in [
-        Event::Error("stale worker error".into()),
-        Event::ViewError("views could not be saved".into()),
+    // Its scan's restore failure names no folder; save failures arrive
+    // stamped with the folder now open.
+    for (epoch, error) in [
+        (left, "Saved view could not be restored: corrupt"),
+        (
+            app.runtime.epoch(),
+            "Saved view could not be written: disk full",
+        ),
     ] {
         sender
-            .send(crate::core::jobs::Envelope { epoch: left, event })
+            .send(crate::core::jobs::Envelope {
+                epoch,
+                event: Event::ViewError(error.into()),
+            })
             .unwrap();
     }
     app.poll(&egui::Context::default());
-    assert_eq!(app.error.as_deref(), Some("views could not be saved"));
+    assert_eq!(
+        app.error.as_deref(),
+        Some("Saved view could not be written: disk full")
+    );
     app.runtime.events = original;
     app.runtime.shutdown();
 }
