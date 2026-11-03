@@ -295,8 +295,7 @@ pub(super) fn hint_row(ui: &mut egui::Ui, hint: &Hint, action_color: Color32) ->
     let width = hint_width(ui, hint);
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(width, CAP_HEIGHT + 2.0), Sense::hover());
-    let name = hint.text();
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &name));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, hint.text()));
     if ui.is_rect_visible(rect) {
         let y = rect.center().y - 0.5;
         let end = paint_keys(ui, hint, rect.left(), y);
@@ -366,9 +365,8 @@ impl PhotoSortApp {
                             egui::vec2(column + S3 + action.size().x, CAP_HEIGHT + 2.0),
                             Sense::hover(),
                         );
-                        let name = hint.text();
                         response.widget_info(|| {
-                            egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &name)
+                            egui::WidgetInfo::labeled(egui::WidgetType::Label, true, hint.text())
                         });
                         let y = rect.center().y - 0.5;
                         paint_keys(ui, hint, rect.left(), y);

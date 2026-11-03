@@ -9,7 +9,7 @@ use image::RgbaImage;
 use std::{
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     thread,
@@ -39,15 +39,67 @@ impl Payload {
 }
 
 /// Copies run one at a time: a newer copy drops an older one's image.
-#[derive(Default)]
 pub struct Copier {
     generation: Arc<AtomicU64>,
+    images: Latest<Render>,
+}
+/// One copy's image, rendered after its file references are on the clipboard.
+struct Render {
+    media: Media,
+    token: platform::Token,
+    generation: u64,
+    cache: PathBuf,
+    limits: super::cache::Limits,
+}
+/// The copy's pixels, decoded within the user's disk cache limit: with no
+/// disk cache allowed, copying writes none.
+fn render(media: &Media, cache: PathBuf, limits: super::cache::Limits) -> Result<Arc<RgbaImage>> {
+    copy_pipeline(cache, limits).render_whole(media, IMAGE_EDGE)
+}
+/// A pipeline for one copy. Its originals budget holds the whole photo, so
+/// the full-size decode is reused instead of decoded again to scale it; it
+/// is dropped with the copy, so no memory is kept beyond that one photo.
+/// `Limits::normalize` clamps the budget to 2 GiB: a larger decode still
+/// happens twice.
+fn copy_pipeline(cache: PathBuf, limits: super::cache::Limits) -> Pipeline {
+    let mut pipeline = Pipeline::new(64 * 1024 * 1024, cache);
+    pipeline.configure_cache(super::cache::Limits {
+        previews_mib: 64,
+        originals_mib: u32::MAX,
+        ..limits
+    });
+    pipeline
+}
+impl Default for Copier {
+    fn default() -> Self {
+        let generation = Arc::new(AtomicU64::new(0));
+        let current = generation.clone();
+        let images = Latest::new(move |job: Render| {
+            let stale = || current.load(Ordering::Acquire) != job.generation;
+            if stale() {
+                return;
+            }
+            let image = render(&job.media, job.cache, job.limits);
+            if stale() {
+                return;
+            }
+            if let Err(error) = image.and_then(|image| platform::add_image(job.token, &image)) {
+                tracing::warn!("Clipboard image for {:?} failed: {error:#}", job.media.path);
+            }
+        });
+        Self { generation, images }
+    }
 }
 impl Copier {
     /// Puts the file references on the clipboard now and adds the image data
     /// from a background thread once it is rendered, unless something else
     /// was copied in the meantime.
-    pub fn copy(&self, payload: Payload, cache: PathBuf) -> Result<()> {
+    pub fn copy(
+        &self,
+        payload: Payload,
+        cache: PathBuf,
+        limits: super::cache::Limits,
+    ) -> Result<()> {
         if let Some(missing) = payload.paths.iter().find(|path| !path.is_file()) {
             anyhow::bail!(
                 "{} is no longer on disk",
@@ -62,20 +114,65 @@ impl Copier {
         let Some(media) = payload.image else {
             return Ok(());
         };
-        let current = self.generation.clone();
-        thread::Builder::new()
+        self.images.submit(Render {
+            media,
+            token,
+            generation,
+            cache,
+            limits,
+        })
+    }
+}
+
+/// Runs jobs on one thread, newest first: while one runs, a newer job
+/// replaces any still waiting. Holding Cmd/Ctrl+C repeats the copy many
+/// times a second; each would otherwise decode the whole photo at once.
+struct Latest<J> {
+    /// The waiting job, and whether the thread is running.
+    state: Arc<Mutex<(Option<J>, bool)>>,
+    run: Arc<dyn Fn(J) + Send + Sync>,
+}
+impl<J: Send + 'static> Latest<J> {
+    fn new(run: impl Fn(J) + Send + Sync + 'static) -> Self {
+        Self {
+            state: Arc::new(Mutex::new((None, false))),
+            run: Arc::new(run),
+        }
+    }
+    fn submit(&self, job: J) -> Result<()> {
+        let mut state = self.state.lock().unwrap();
+        state.0 = Some(job);
+        if state.1 {
+            return Ok(());
+        }
+        let (shared, run) = (self.state.clone(), self.run.clone());
+        let spawned = thread::Builder::new()
             .name("photosort-clipboard".into())
             .spawn(move || {
-                let image = Pipeline::new(64 * 1024 * 1024, cache).render_whole(&media, IMAGE_EDGE);
-                if current.load(Ordering::Acquire) != generation {
-                    return;
+                loop {
+                    let job = {
+                        let mut state = shared.lock().unwrap();
+                        let job = state.0.take();
+                        state.1 = job.is_some();
+                        job
+                    };
+                    let Some(job) = job else { break };
+                    // A photo that fails to decode is not a crash of the app.
+                    if let Err(error) = super::crash::catch(|| run(job)) {
+                        tracing::warn!("Clipboard image failed: {error}");
+                    }
                 }
-                if let Err(error) = image.and_then(|image| platform::add_image(token, &image)) {
-                    tracing::warn!("Clipboard image for {:?} failed: {error:#}", media.path);
-                }
-            })
-            .context("Cannot start copying the photo")?;
-        Ok(())
+            });
+        match spawned {
+            Ok(_) => {
+                state.1 = true;
+                Ok(())
+            }
+            Err(error) => {
+                state.0 = None;
+                Err(error).context("Cannot start copying the photo")
+            }
+        }
     }
 }
 
@@ -641,6 +738,97 @@ mod tests {
             kind,
             fingerprint: Fingerprint::default(),
         }
+    }
+    #[test]
+    fn repeated_copies_render_one_at_a_time_and_only_the_newest_waits() {
+        let (started_tx, started) = std::sync::mpsc::channel();
+        let (release, release_rx) = std::sync::mpsc::channel::<()>();
+        let release_rx = Mutex::new(release_rx);
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let log = ran.clone();
+        let latest = Latest::new(move |job: u32| {
+            started_tx.send(job).unwrap();
+            release_rx.lock().unwrap().recv().unwrap();
+            log.lock().unwrap().push(job);
+        });
+        latest.submit(1).unwrap();
+        assert_eq!(started.recv().unwrap(), 1);
+        // A held shortcut: thirty more while the first still renders.
+        for job in 2..=31 {
+            latest.submit(job).unwrap();
+        }
+        release.send(()).unwrap();
+        assert_eq!(started.recv().unwrap(), 31);
+        release.send(()).unwrap();
+        let until = std::time::Instant::now() + crate::test_support::worker_patience();
+        while latest.state.lock().unwrap().1 {
+            assert!(std::time::Instant::now() < until);
+            thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(*ran.lock().unwrap(), [1, 31]);
+        // A panicking render is reported, and later copies still render.
+        let (done_tx, done) = std::sync::mpsc::channel();
+        let latest = Latest::new(move |job: u32| {
+            assert!(job != 1, "corrupt photo");
+            done_tx.send(job).unwrap();
+        });
+        latest.submit(1).unwrap();
+        latest.submit(2).unwrap();
+        assert_eq!(done.recv().unwrap(), 2);
+    }
+    #[test]
+    fn a_copy_writes_the_disk_cache_only_when_the_user_allows_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("photo.png");
+        image::RgbaImage::from_pixel(1200, 800, image::Rgba([90, 120, 150, 255]))
+            .save(&path)
+            .unwrap();
+        let photo = Media {
+            id: crate::core::model::MediaId::for_path(&path),
+            fingerprint: crate::core::model::Fingerprint::read(&path).unwrap(),
+            path,
+            kind: MediaKind::Photo,
+        };
+        let files = |cache: &std::path::Path| {
+            walkdir::WalkDir::new(cache)
+                .into_iter()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_file())
+                .count()
+        };
+        let (allowed, none) = (dir.path().join("allowed"), dir.path().join("none"));
+        render(&photo, allowed.clone(), Default::default()).unwrap();
+        assert!(files(&allowed) > 0, "the default limits keep a disk copy");
+        let off = crate::core::cache::Limits {
+            disk_mib: 0,
+            ..Default::default()
+        };
+        assert_eq!(render(&photo, none.clone(), off).unwrap().width(), 1200);
+        assert_eq!(files(&none), 0);
+    }
+    #[test]
+    fn a_large_copy_decodes_its_photo_once_whatever_the_originals_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.png");
+        // 74 MB of pixels: more than the smallest originals setting holds.
+        image::RgbaImage::from_pixel(4300, 4300, image::Rgba([90, 120, 150, 255]))
+            .save(&path)
+            .unwrap();
+        let photo = Media {
+            id: crate::core::model::MediaId::for_path(&path),
+            fingerprint: crate::core::model::Fingerprint::read(&path).unwrap(),
+            path,
+            kind: MediaKind::Photo,
+        };
+        let smallest = crate::core::cache::Limits {
+            originals_mib: 64,
+            disk_mib: 0,
+            ..Default::default()
+        };
+        let mut pipeline = copy_pipeline(dir.path().join("cache"), smallest);
+        let image = pipeline.render_whole(&photo, IMAGE_EDGE).unwrap();
+        assert_eq!(image.width(), IMAGE_EDGE);
+        assert_eq!(pipeline.stats.decodes, 1);
     }
     #[test]
     fn one_photo_carries_its_image_and_several_carry_only_their_files() {

@@ -539,7 +539,7 @@ fn loading_grid_animates_then_comes_to_rest() {
     }
     assert!(animated, "no frame asked for animation");
     assert!(app.requested.is_empty(), "{:?}", app.requested);
-    // The workspace keeps a one-second heartbeat for view checkpoints;
+    // A due view checkpoint can bring one more frame within a second;
     // anything sooner means an animation never came to rest.
     assert!(delay >= IDLE, "an idle window repaints every {delay:?}");
 }

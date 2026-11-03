@@ -217,7 +217,8 @@ class BundleIntegrityTests(unittest.TestCase):
                         package_macos.sign_bundle(app, [], '-')
 
     def test_cli_identity_is_forwarded_and_failed_signing_preserves_old_bundle(self):
-        for flag in ([], ['--sign-identity', 'Apple Development: Explicit Name (TEAMID)']):
+        for flag in ([], ['--sign-identity', 'Apple Development: Explicit Name (TEAMID)'],
+                     ['--no-build', '--sign-identity', 'Developer ID Application: Name (TEAMID)']):
             with self.subTest(flag=flag), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 (root/'resources/icons').mkdir(parents=True)
@@ -239,15 +240,22 @@ class BundleIntegrityTests(unittest.TestCase):
                     staged['plist'] = plistlib.loads((app/'Contents/Info.plist').read_bytes())
                     staged['icon'] = (app/'Contents/Resources/AppIcon.icns').read_bytes()
                     raise failure
+                commands = []
+                def run(command, **kwargs):
+                    commands.append(command)
+                    return icon_tools(command, **kwargs)
                 with patch.object(package_macos, 'ROOT', root), \
                         patch.dict(os.environ, {'CARGO_TARGET_DIR': str(target)}), \
                         patch.object(sys, 'argv', ['package_macos.py', '--output', str(output), *flag]), \
-                        patch.object(package_macos.subprocess, 'run', side_effect=icon_tools), \
+                        patch.object(package_macos.subprocess, 'run', side_effect=run), \
                         patch.object(package_macos.subprocess, 'check_output', side_effect=otool), \
                         patch.object(package_macos, 'sign_bundle', side_effect=sign_bundle) as sign:
                     with self.assertRaises(subprocess.CalledProcessError):
                         package_macos.main()
                 self.assertEqual(sign.call_args.args[2], flag[-1] if flag else '-')
+                # The signed release packaging never runs Cargo, or any build script.
+                built = any(command[0] == 'cargo' for command in commands)
+                self.assertEqual(built, '--no-build' not in flag)
                 self.assertEqual(staged['plist']['CFBundleIconFile'], 'AppIcon')
                 self.assertEqual(staged['icon'], b'icns')
                 self.assertEqual((output/'Contents/Info.plist').read_bytes(), b'old bundle sentinel')

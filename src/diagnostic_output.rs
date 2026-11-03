@@ -13,11 +13,14 @@ pub fn writer() -> anyhow::Result<FileDescriptor> {
         // Keep an independent report handle before changing either namespace.
         let output = FileDescriptor::dup(&std::io::stdout())?;
         let previous = FileDescriptor::redirect_stdio(&std::io::stderr(), StdioDescriptor::Stdout)?;
-        // The original handle belongs to CRT stdout; _dup2 closes it. Do not
-        // let the descriptor wrapper close that same handle a second time.
+        // The original handle belongs to a CRT descriptor: stdout itself in a
+        // console build, or the one `attach_parent_console` opened for the
+        // console in a GUI build, whose stdout holds a duplicate. The CRT
+        // closes it; the descriptor wrapper must not close it a second time.
         let _ = previous.into_raw_handle();
         // SAFETY: this runs before model loading/threads in a terminal-only
-        // command. 1 and 2 are the process stdout/stderr CRT descriptors.
+        // command. 1 and 2 are the process stdout/stderr CRT descriptors; a
+        // GUI build bound them to its console in `attach_parent_console`.
         anyhow::ensure!(
             unsafe { libc::dup2(2, 1) } >= 0,
             "Cannot route native stdout to stderr: {}",

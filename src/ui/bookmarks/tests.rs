@@ -362,3 +362,135 @@ fn guided_views_restore_position_and_group_without_decisions() {
     assert_eq!(app.active, Some(ids[2]));
     assert!(app.decisions == staged && app.requested.is_empty());
 }
+#[test]
+fn an_idle_window_saves_its_view_then_stops_repainting() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app =
+        PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None);
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    let frame = |app: &mut PhotoSortApp| {
+        ctx.run_test(egui::RawInput::default(), |ui| {
+            app.update_workspace(ui, false)
+        })
+        .viewport_output[&egui::ViewportId::ROOT]
+            .repaint_delay
+    };
+    // A frame soon after the last checkpoint comes back for the next one.
+    assert!(frame(&mut app) <= VIEW_CHECKPOINT);
+    // Once a frame has saved the view, nothing asks for another; the first
+    // frames may still settle their layout.
+    let mut delay = Duration::ZERO;
+    for _ in 0..10 {
+        app.view_checkpoint = Instant::now().checked_sub(VIEW_CHECKPOINT).unwrap();
+        delay = frame(&mut app);
+        if delay == Duration::MAX {
+            break;
+        }
+    }
+    assert_eq!(delay, Duration::MAX, "{:?}", ctx.repaint_causes());
+    app.runtime.shutdown();
+}
+#[test]
+fn a_restored_view_that_changes_the_filter_draws_again_at_once() {
+    let (_dir, mut app) = fixture();
+    let a = app.media[0].id;
+    app.set_step(Step::Cull);
+    let ctx = egui::Context::default();
+    let until = Instant::now() + worker_patience();
+    while app.metadata_run.is_some() {
+        assert!(Instant::now() < until, "metadata never finished");
+        app.poll(&ctx);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    settle(&mut app);
+    // A saved Cull view of photo a's group, resumed once grouping is known.
+    app.cull_groups = Arc::new(HashMap::from([(a, 5)]));
+    app.pending_bookmark = Some(Bookmark {
+        group_anchor: Some(a),
+        ..app.capture_bookmark()
+    });
+    app.resume_started = true;
+    // A context's first frames repaint anyway; this one comes from a worker.
+    let mut out = ctx.run_test(egui::RawInput::default(), |_| {});
+    for _ in 0..3 {
+        out = ctx.run_test(egui::RawInput::default(), |_| {});
+    }
+    assert_eq!(
+        out.viewport_output[&egui::ViewportId::ROOT].repaint_delay,
+        Duration::MAX
+    );
+    let out = ctx.run_test(egui::RawInput::default(), |ui| {
+        app.refilter_and_restore(&ui.ctx().clone())
+    });
+    assert_eq!(app.browse.group, Some(5));
+    assert!(app.filter_dirty);
+    assert!(
+        out.viewport_output[&egui::ViewportId::ROOT]
+            .repaint_delay
+            .is_zero()
+    );
+    app.runtime.shutdown();
+}
+#[test]
+fn events_left_past_a_frames_budget_bring_the_next_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app =
+        PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None);
+    let ctx = egui::Context::default();
+    for _ in 0..4 {
+        let _ = ctx.run_test(egui::RawInput::default(), |_| {});
+    }
+    // Workers wake the window once per send, and a busy frame can take
+    // every wakeup while more events are still queued.
+    for (queued, again) in [(EVENTS_PER_FRAME - 1, false), (EVENTS_PER_FRAME + 1, true)] {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(queued);
+        let original = std::mem::replace(&mut app.runtime.events, receiver);
+        for _ in 0..queued {
+            sender
+                .send(crate::core::jobs::Envelope {
+                    epoch: app.runtime.epoch(),
+                    event: Event::Saved,
+                })
+                .unwrap();
+        }
+        let out = ctx.run_test(egui::RawInput::default(), |ui| app.poll(&ui.ctx().clone()));
+        let delay = out.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        assert_eq!(delay.is_zero(), again, "{queued} queued: {delay:?}");
+        app.runtime.events = original;
+    }
+    app.runtime.shutdown();
+}
+#[test]
+fn news_about_the_folder_just_left_is_not_shown_in_the_next() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app =
+        PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None);
+    let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+    let original = std::mem::replace(&mut app.runtime.events, receiver);
+    let left = app.runtime.epoch();
+    app.runtime.next_epoch();
+    // Its scan's restore failure names no folder; save failures arrive
+    // stamped with the folder now open.
+    for (epoch, error) in [
+        (left, "Saved view could not be restored: corrupt"),
+        (
+            app.runtime.epoch(),
+            "Saved view could not be written: disk full",
+        ),
+    ] {
+        sender
+            .send(crate::core::jobs::Envelope {
+                epoch,
+                event: Event::ViewError(error.into()),
+            })
+            .unwrap();
+    }
+    app.poll(&egui::Context::default());
+    assert_eq!(
+        app.error.as_deref(),
+        Some("Saved view could not be written: disk full")
+    );
+    app.runtime.events = original;
+    app.runtime.shutdown();
+}

@@ -98,7 +98,13 @@ impl PhotoSortApp {
         }
         self.preferences_path = Some(path);
     }
+    /// Never replaces an unreadable file with defaults behind the user's
+    /// back: opening a folder, the intro or an update check keep their change
+    /// for this session only. Saving Settings writes the file again.
     pub(super) fn save_preferences(&mut self) {
+        if self.preferences_unreadable {
+            return;
+        }
         if let Some(path) = &self.preferences_path
             && let Err(error) = self.runtime.io(IoWork::SavePreferences {
                 path: path.clone(),
@@ -129,6 +135,7 @@ impl PhotoSortApp {
         let rotation_auto_on = next.rotation_auto && !self.preferences.rotation_auto;
         self.preferences = next;
         self.navigation_notice = None;
+        self.preferences_unreadable = false;
         self.save_preferences();
         if auto_on && self.step == Step::EasyDelete {
             self.stage_delete_suggestions();

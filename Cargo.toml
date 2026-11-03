@@ -41,6 +41,8 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
 walkdir = "2.5"
+# Windows: plain C:\ paths for the clipboard and the terminal (already built for aws-lc-sys).
+dunce = "1"
 dirs = "6"
 blake3 = "1.8"
 trash = "5.2"

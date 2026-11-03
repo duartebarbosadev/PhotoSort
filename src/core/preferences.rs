@@ -145,7 +145,8 @@ impl Preferences {
         self.recent_folders = self
             .recent_folders
             .iter()
-            .filter(|p| p.is_absolute())
+            // JSON holds only UTF-8 paths; one other would fail every save.
+            .filter(|p| p.is_absolute() && p.to_str().is_some())
             .map(|p| p.components().collect::<PathBuf>())
             .filter(|p| seen.insert(path_key(p)))
             .take(10)
@@ -158,6 +159,14 @@ impl Preferences {
     }
     pub fn last_existing_folder(&self) -> Option<PathBuf> {
         self.recent_folders.iter().find(|p| p.is_dir()).cloned()
+    }
+    /// The folder `--last-folder` opens. An unreadable file opens none
+    /// rather than stopping the app; the window says why when it loads it.
+    pub fn last_folder(path: &Path) -> Option<PathBuf> {
+        Self::load(path)
+            .inspect_err(|error| tracing::warn!(%error, "preferences unreadable"))
+            .ok()?
+            .last_existing_folder()
     }
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let bytes = match std::fs::read(path) {
@@ -229,6 +238,31 @@ pub fn folder_labels(paths: &[impl AsRef<Path>]) -> Vec<String> {
         }
         if !grew {
             return labels;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn unreadable_files_and_non_utf8_folders_never_stop_startup_or_saving() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preferences.json");
+        std::fs::write(&path, b"[2, {}]").unwrap();
+        assert_eq!(Preferences::last_folder(&path), None);
+        let mut preferences = Preferences::default();
+        preferences.remember(dir.path());
+        assert_eq!(Preferences::last_folder(&path), None);
+        preferences.save(&path).unwrap();
+        assert_eq!(Preferences::last_folder(&path).as_deref(), Some(dir.path()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let latin1 = dir.path().join(std::ffi::OsStr::from_bytes(b"F\xe9vrier"));
+            preferences.remember(&latin1);
+            preferences.save(&path).unwrap();
+            assert_eq!(preferences.recent_folders, [dir.path()]);
         }
     }
 }

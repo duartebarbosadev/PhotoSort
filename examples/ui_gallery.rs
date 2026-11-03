@@ -58,6 +58,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     write_demo_photos(&root)?;
+    fixed_times(&root)?;
 
     let shots: &[(&str, Option<Step>, bool, [f32; 2])] = &[
         (
@@ -572,6 +573,7 @@ fn main() -> anyhow::Result<()> {
             std::fs::copy(entry.path(), dated_root.join(entry.file_name()))?;
         }
     }
+    fixed_times(&dated_root)?;
     shoot(
         &dated_root,
         "03b-organize-by-date-wide",
@@ -612,11 +614,12 @@ fn main() -> anyhow::Result<()> {
     // photos really come from different folders.
     let sources = tempfile::tempdir()?;
     let sources_root = sources.path().join("Photos");
-    let samples: Vec<_> = std::fs::read_dir(&root)?
+    let mut samples: Vec<_> = std::fs::read_dir(&root)?
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .map(|e| e.path())
         .collect();
+    samples.sort();
     for (i, folder) in ["2023-04-28/group-1", "2023-04-28/group-2", "2024-04-18"]
         .into_iter()
         .enumerate()
@@ -627,6 +630,7 @@ fn main() -> anyhow::Result<()> {
             std::fs::copy(sample, dir.join(sample.file_name().unwrap()))?;
         }
     }
+    fixed_times(&sources_root)?;
     let folder = sources_root.clone();
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
@@ -713,11 +717,27 @@ fn write_demo_photos(root: &std::path::Path) -> anyhow::Result<()> {
         // Demo copies need no more than 3000 pixels, and blurring stays fast.
         Ok(image.resize(3000, 3000, FilterType::Triangle))
     };
+    // Each made-up photo has a capture date, a minute after the last, as a
+    // camera would write it; otherwise it would be dated by its file, which
+    // differs on every run.
+    let taken = std::cell::Cell::new(0);
     let save = |image: &DynamicImage, name: &str| -> anyhow::Result<()> {
+        use image::ImageEncoder;
+        let minute = taken.replace(taken.get() + 1);
+        let date = exif::Field {
+            tag: exif::Tag::DateTimeOriginal,
+            ifd_num: exif::In::PRIMARY,
+            value: exif::Value::Ascii(vec![format!("2024:04:25 10:{minute:02}:00").into_bytes()]),
+        };
+        let mut fields = exif::experimental::Writer::new();
+        fields.push_field(&date);
+        let mut tiff = std::io::Cursor::new(Vec::new());
+        fields.write(&mut tiff, false)?;
         let file = std::fs::File::create(root.join(name))?;
         let mut writer = std::io::BufWriter::new(file);
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 90)
-            .encode_image(&image.to_rgb8())?;
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 90);
+        encoder.set_exif_metadata(tiff.into_inner())?;
+        encoder.encode_image(&image.to_rgb8())?;
         Ok(())
     };
     let crop = |image: &DynamicImage, x: f32, y: f32| {
@@ -767,6 +787,33 @@ fn write_demo_photos(root: &std::path::Path) -> anyhow::Result<()> {
         save(&crop(&street, 0.02, 0.02), "DSC01231.jpg")?;
         save(&crop(&street, 0.03, 0.025).blur(6.0), "DSC01232.jpg")?;
         save(&crop(&street, 0.035, 0.03).blur(10.0), "DSC01233.jpg")?;
+    }
+    Ok(())
+}
+
+/// The same file times on every run, a minute apart in name order, for the
+/// sample photos that have no capture date of their own. Linux cannot set
+/// creation times, which come first, so there such samples still vary.
+fn fixed_times(root: &std::path::Path) -> anyhow::Result<()> {
+    let start = std::time::UNIX_EPOCH + Duration::from_secs(1_714_035_600); // 2024-04-25
+    let mut files: Vec<_> = walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.into_path())
+        .collect();
+    files.sort();
+    for (minute, path) in (0u64..).zip(files) {
+        let time = start + Duration::from_secs(60 * minute);
+        let times = std::fs::FileTimes::new().set_modified(time);
+        #[cfg(target_os = "macos")]
+        let times = std::os::macos::fs::FileTimesExt::set_created(times, time);
+        #[cfg(windows)]
+        let times = std::os::windows::fs::FileTimesExt::set_created(times, time);
+        std::fs::File::options()
+            .write(true)
+            .open(path)?
+            .set_times(times)?;
     }
     Ok(())
 }

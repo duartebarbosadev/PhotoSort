@@ -3414,6 +3414,7 @@ dependencies = [
  "chrono",
  "clipboard-win",
  "dirs",
+ "dunce",
  "eframe",
  "egui-phosphor",
  "egui_kittest",

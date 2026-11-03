@@ -7,6 +7,18 @@ use std::ops::ControlFlow;
 /// Failures with no success before analysis stops as a whole.
 const SYSTEMIC_FAILURES: usize = 5;
 
+/// What browsing filters and sorts by in a photo's metadata: its rating and
+/// everything its capture time and day are read from.
+fn browse_key(metadata: &Metadata) -> (u8, Option<i64>, &str, Option<&str>, Option<i64>) {
+    (
+        metadata.rating,
+        metadata.captured_ms,
+        &metadata.captured,
+        metadata.grouping_date.as_deref(),
+        metadata.created_ms,
+    )
+}
+
 impl PhotoSortApp {
     /// `Break` ends the current poll without the end-of-frame repaint and save
     /// bookkeeping; only a failed session hand-off after Apply needs that.
@@ -297,10 +309,16 @@ impl PhotoSortApp {
         self.requested.remove(&(id, preview));
         self.accept_image_warning(id, decoder_warning);
         self.failures.remove(&id);
+        // Most decodes bring metadata the views already have; only a new
+        // rating or capture time can change what they show or their order.
+        let reorders = self
+            .metadata
+            .get(&id)
+            .is_none_or(|known| browse_key(known) != browse_key(&metadata));
         self.metadata.insert(id, metadata);
         self.update_browse_item(id);
         self.metadata_failures.remove(&id);
-        self.filter_dirty |= self.filter == Filter::Rated || self.step == Step::Cull;
+        self.filter_dirty |= reorders && (self.filter == Filter::Rated || self.step == Step::Cull);
         self.stats = stats;
         let size = [pixels.width() as usize, pixels.height() as usize];
         let bytes = pixels.as_raw().len();
@@ -454,6 +472,10 @@ impl PhotoSortApp {
                 self.embeddings.insert(id, embedding);
             }
             self.analysis.insert(id, analysis);
+            // A new score can change which photo of its Cull group is best.
+            if let Some(&shown) = self.cull_groups.get(&id) {
+                self.group_best_stale.insert(shown);
+            }
             if group > 0 && self.cull_group_run != Some(run) {
                 self.record_analysis_group(run, id, group);
             }
@@ -468,6 +490,35 @@ impl PhotoSortApp {
                     self.filter,
                     Filter::Issues | Filter::Duplicates | Filter::Rated
                 );
+        }
+    }
+
+    /// Picks again the best photo of each group whose scores changed, in
+    /// one pass over the groups, by `publish_groups`'s rule: the highest
+    /// score, ties to the lower id, for groups of two or more with a score.
+    pub(super) fn refresh_group_best(&mut self) {
+        if self.group_best_stale.is_empty() {
+            return;
+        }
+        let stale = std::mem::take(&mut self.group_best_stale);
+        let mut best: HashMap<usize, (f64, MediaId, usize)> = HashMap::new();
+        for (id, group) in self.cull_groups.iter().filter(|(_, g)| stale.contains(g)) {
+            let score = self.analysis.get(id).map_or(f64::NEG_INFINITY, |a| a.score);
+            let entry = best.entry(*group).or_insert((score, *id, 0));
+            entry.2 += 1;
+            if score > entry.0 || (score == entry.0 && id.0 < entry.1.0) {
+                (entry.0, entry.1) = (score, *id);
+            }
+        }
+        for group in stale {
+            match best.get(&group) {
+                Some(&(score, id, members)) if members > 1 && score.is_finite() => {
+                    self.group_best.insert(group, (id, members));
+                }
+                _ => {
+                    self.group_best.remove(&group);
+                }
+            }
         }
     }
 
@@ -897,5 +948,96 @@ impl PhotoSortApp {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_decoded_thumbnail_requeries_cull_only_when_its_metadata_changes_the_view() {
+        let (_temp, mut app) = super::super::compact_cull_tests::fixture();
+        let ctx = egui::Context::default();
+        let id = app.media[1].id;
+        let asset = |metadata: Metadata| Event::Asset {
+            id,
+            preview: false,
+            pixels: Arc::new(RgbaImage::new(1, 1)),
+            decoder_warning: None,
+            metadata,
+            stats: Stats::default(),
+        };
+        let known = app.metadata[&id].clone();
+        app.filter_dirty = false;
+        let _ = app.handle_event(&ctx, asset(known.clone()));
+        assert!(!app.filter_dirty, "the same metadata re-ran the query");
+        let rated = Metadata { rating: 1, ..known };
+        let _ = app.handle_event(&ctx, asset(rated));
+        assert!(app.filter_dirty);
+        assert_eq!(app.metadata[&id].rating, 1);
+        app.runtime.shutdown();
+    }
+    #[test]
+    fn a_new_score_moves_its_cull_groups_best_photo() {
+        let (_temp, mut app) = super::super::compact_cull_tests::fixture();
+        let ids: Vec<_> = app.media.iter().take(3).map(|m| m.id).collect();
+        app.cull_groups = Arc::new(ids.iter().map(|id| (*id, 1)).collect());
+        for (id, score) in ids.iter().zip([0.9, 0.5, 0.2]) {
+            app.analysis.insert(
+                *id,
+                Analysis {
+                    score,
+                    ..Default::default()
+                },
+            );
+        }
+        app.group_best = HashMap::from([(1, (ids[0], 3))]);
+        app.analysis_run = Some(7);
+        let scored = |app: &mut PhotoSortApp, id: MediaId, score: f64| {
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            let original = std::mem::replace(&mut app.runtime.events, receiver);
+            sender
+                .send(crate::core::jobs::Envelope {
+                    epoch: app.runtime.epoch(),
+                    event: Event::Analyzed {
+                        run: 7,
+                        id,
+                        analysis: Analysis {
+                            score,
+                            ..Default::default()
+                        },
+                        embedding: None,
+                        group: 0,
+                        duplicate: None,
+                        metadata: app.metadata[&id].clone(),
+                    },
+                })
+                .unwrap();
+            app.poll(&egui::Context::default());
+            app.runtime.events = original;
+        };
+        // A re-analysis scores the second photo above the first...
+        scored(&mut app, ids[1], 0.95);
+        assert_eq!(app.group_best[&1], (ids[1], 3));
+        // ...and the first again once that score drops.
+        scored(&mut app, ids[1], 0.1);
+        assert_eq!(app.group_best[&1], (ids[0], 3));
+        app.runtime.shutdown();
+    }
+    #[test]
+    fn choices_in_easy_delete_never_rescan_its_grid() {
+        let (_temp, mut app) = super::super::compact_cull_tests::fixture();
+        let id = app.media[1].id;
+        for (step, rescans) in [(Step::EasyDelete, false), (Step::Cull, true)] {
+            app.step = step;
+            app.filter_dirty = false;
+            app.decisions.entry(id).or_default().rejected ^= true;
+            app.changed_items([id]);
+            assert_eq!(app.filter_dirty, rescans, "{step:?}");
+            app.filter_dirty = false;
+            app.changed();
+            assert_eq!(app.filter_dirty, rescans, "{step:?}");
+        }
+        app.runtime.shutdown();
     }
 }

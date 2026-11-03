@@ -1,9 +1,20 @@
+// Windows release builds open no console window beside the app; debug and
+// test builds keep theirs. `attach_parent_console` gives command-line flags
+// the terminal they were typed in.
+#![cfg_attr(
+    all(windows, not(debug_assertions), not(test)),
+    windows_subsystem = "windows"
+)]
 mod diagnostic_output;
 mod session_logging;
 #[cfg(test)]
 mod test_support;
 
 fn main() -> eframe::Result {
+    // Debug builds are console programs already.
+    if !cfg!(debug_assertions) {
+        attach_parent_console();
+    }
     // The bundled ONNX Runtime uploader can race its own C++ static teardown.
     // Suppress it before runtime loading; the session API is too late to prevent
     // its initialization event and background uploader from being created.
@@ -107,11 +118,8 @@ fn run(options: photosort::core::startup::Options) -> eframe::Result {
     }
     let smoke_delay = options.smoke_delay();
     let folder = if options.last_folder {
-        photosort::core::preferences::Preferences::load(
-            &photosort::core::preferences::Preferences::path(),
-        )
-        .map_err(|e| eframe::Error::AppCreation(e.into()))?
-        .last_existing_folder()
+        use photosort::core::preferences::Preferences;
+        Preferences::last_folder(&Preferences::path())
     } else {
         options.folder
     };
@@ -151,3 +159,75 @@ fn run(options: photosort::core::startup::Options) -> eframe::Result {
         }),
     )
 }
+
+/// A GUI-subsystem program has no console of its own. Started from a
+/// terminal, it writes `--help`, `--diagnostics` and its log there; started
+/// from Explorer there is none to attach and nothing changes. Output the
+/// caller redirected to a file or pipe keeps its handles.
+#[cfg(windows)]
+fn attach_parent_console() {
+    use std::{ffi::c_void, ptr::null_mut};
+    type Handle = *mut c_void;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn AttachConsole(process: u32) -> i32;
+        fn GetStdHandle(which: u32) -> Handle;
+        fn SetStdHandle(which: u32, handle: Handle) -> i32;
+        fn GetFileType(handle: Handle) -> u32;
+        fn CreateFileW(
+            name: *const u16,
+            access: u32,
+            share: u32,
+            security: *mut c_void,
+            disposition: u32,
+            flags: u32,
+            template: Handle,
+        ) -> Handle;
+    }
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
+    const STD_ERROR_HANDLE: u32 = -12i32 as u32;
+    const FILE_TYPE_UNKNOWN: u32 = 0;
+    const GENERIC_READ_WRITE: u32 = 0x8000_0000 | 0x4000_0000;
+    const FILE_SHARE_READ_WRITE: u32 = 1 | 2;
+    const OPEN_EXISTING: u32 = 3;
+    let invalid = usize::MAX as Handle;
+    let console: Vec<u16> = "CONOUT$\0".encode_utf16().collect();
+    // SAFETY: plain Win32 and C runtime calls on this process's own standard
+    // handles and descriptors, made first in main before any other thread
+    // exists; `console` outlives the call that reads it. Handles opened here
+    // are kept for the life of the process.
+    unsafe {
+        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+            return;
+        }
+        for (which, descriptor) in [(STD_OUTPUT_HANDLE, 1), (STD_ERROR_HANDLE, 2)] {
+            let mut handle = GetStdHandle(which);
+            if handle.is_null() || handle == invalid || GetFileType(handle) == FILE_TYPE_UNKNOWN {
+                handle = CreateFileW(
+                    console.as_ptr(),
+                    GENERIC_READ_WRITE,
+                    FILE_SHARE_READ_WRITE,
+                    null_mut(),
+                    OPEN_EXISTING,
+                    0,
+                    null_mut(),
+                );
+                if handle == invalid {
+                    continue;
+                }
+                SetStdHandle(which, handle);
+            }
+            // The C runtime started without these descriptors; native
+            // libraries and `diagnostic_output` write through them.
+            if libc::get_osfhandle(descriptor) < 0 {
+                let opened = libc::open_osfhandle(handle as libc::intptr_t, 0);
+                if opened >= 0 && opened != descriptor {
+                    libc::dup2(opened, descriptor);
+                }
+            }
+        }
+    }
+}
+#[cfg(not(windows))]
+fn attach_parent_console() {}
