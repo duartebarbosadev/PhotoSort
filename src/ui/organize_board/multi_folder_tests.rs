@@ -353,6 +353,15 @@ fn a_folder_taken_away_leaves_none_of_its_photos_selected() {
     press(&mut app, &ctx, egui::Key::D, Default::default());
     assert!(!app.decision(ids[4]).rejected);
     assert!(app.decision(ids[7]).rejected);
+    // "Show only this folder" from a folder's menu, with the current photo
+    // already in it, lets go of the photos it hides too.
+    app.board_select_folder(None);
+    app.select_library(ids[0], false, false);
+    app.select_library(ids[5], true, false);
+    assert_eq!(app.active, Some(ids[5]));
+    app.board_folder_action(FolderAction::ShowOnly(Some("B".into())));
+    assert_eq!(app.board.focus, ["B"]);
+    assert_eq!(app.selection.ordered(&app.media, &app.filtered), [ids[5]]);
     app.runtime.shutdown();
 }
 
@@ -457,6 +466,15 @@ fn a_folder_click_scrolls_the_board_to_it_and_the_sidebar_follows_your_scrolling
     assert_eq!(app.library_offset, before);
     assert_eq!(highlighted(&app), ["A/Day1/Empty"]);
     assert_eq!(top(&mut app, "B"), Some(landed));
+    // Renamed where it is, the folder just clicked stays highlighted.
+    app.board_rename_folder("A/Day1/Empty");
+    app.board.editing.as_mut().unwrap().1 = "Spare".into();
+    app.board_finish_edit();
+    for _ in 0..5 {
+        rendered(&mut app, &ctx, SIZE);
+    }
+    assert_eq!(app.library_offset, before);
+    assert_eq!(highlighted(&app), ["A/Day1/Spare"]);
     // Scrolling by hand: the sidebar follows the folder at the top.
     let wheel = |app: &mut PhotoSortApp, dy: f32| {
         let over = egui::pos2(SIZE.x / 2.0, SIZE.y / 2.0);

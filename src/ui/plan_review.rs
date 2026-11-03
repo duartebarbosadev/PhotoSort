@@ -297,12 +297,24 @@ impl Rows {
             }
         }
         // A new folder that only holds other new folders is shown through them.
+        // Paths order by component, so a folder's subfolders sort right after
+        // it: one look past it finds any, however many folders the plan makes.
+        let made: std::collections::BTreeSet<&Path> = created.iter().copied().collect();
         let empty: Vec<&Path> = created
             .iter()
             .copied()
             .filter(|path| {
-                !into.keys().any(|folder| folder.starts_with(path))
-                    && !created.iter().any(|c| c != path && c.starts_with(path))
+                !into
+                    .range::<&Path, _>(path..)
+                    .next()
+                    .is_some_and(|(folder, _)| folder.starts_with(path))
+                    && !made
+                        .range::<&Path, _>((
+                            std::ops::Bound::Excluded(path),
+                            std::ops::Bound::Unbounded,
+                        ))
+                        .next()
+                        .is_some_and(|c| c.starts_with(path))
             })
             .collect();
         summary.empty_folders = empty.len();
@@ -310,7 +322,7 @@ impl Rows {
             into.insert(path, (false, Sources::new()));
         }
         for (path, (arrivals, sources)) in into {
-            let new = created.contains(&path);
+            let new = made.contains(path);
             if arrivals {
                 summary.destinations += 1;
                 summary.new_destinations += usize::from(new);
