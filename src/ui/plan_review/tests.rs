@@ -516,7 +516,7 @@ fn review_shows_rotations_before_and_after_named_by_the_turn() {
     assert_eq!(app.plan_rows.slot(List::Updates), PAIR);
     assert_eq!(app.plan_rows.slot(List::Trash), TILE.x);
     // A mirror or an unknown orientation is still named, without a pair.
-    assert_eq!(turns_between(2, 5), Some(1));
+    assert_eq!(turns_between(2, 7), Some(1));
     assert_eq!(turns_between(1, 2), None);
     app.runtime.shutdown();
 }

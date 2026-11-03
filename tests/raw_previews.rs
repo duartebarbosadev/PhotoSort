@@ -238,3 +238,106 @@ fn rotation_input_ignores_the_raw_display_look() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// LibRaw's processed image header (`libraw_processed_image_t`).
+#[repr(C)]
+struct RawImage {
+    kind: std::ffi::c_int,
+    height: u16,
+    width: u16,
+    colors: u16,
+    bits: u16,
+    size: u32,
+    data: [u8; 1],
+}
+unsafe extern "C" {
+    fn photosort_raw_decode(
+        path: *const std::ffi::c_char,
+        recipe: std::ffi::c_int,
+        embedded: *mut std::ffi::c_int,
+        source_width: *mut u32,
+        source_height: *mut u32,
+        progress: unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            std::ffi::c_int,
+            std::ffi::c_int,
+            std::ffi::c_int,
+        ) -> std::ffi::c_int,
+        context: *mut std::ffi::c_void,
+        error: *mut std::ffi::c_int,
+    ) -> *mut RawImage;
+    fn libraw_dcraw_clear_mem(image: *mut RawImage);
+}
+unsafe extern "C" fn keep_going(
+    _: *mut std::ffi::c_void,
+    _: std::ffi::c_int,
+    _: std::ffi::c_int,
+    _: std::ffi::c_int,
+) -> std::ffi::c_int {
+    0
+}
+/// (image kind, embedded, source size, LibRaw error) for one native decode.
+fn native_raw(path: &std::path::Path, recipe: i32) -> (Option<i32>, i32, (u32, u32), i32) {
+    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+    let (mut embedded, mut width, mut height, mut error) = (0, 0, 0, 0);
+    // SAFETY: every out-pointer lives through the call; the image is freed here.
+    unsafe {
+        let image = photosort_raw_decode(
+            path.as_ptr(),
+            recipe,
+            &mut embedded,
+            &mut width,
+            &mut height,
+            keep_going,
+            std::ptr::null_mut(),
+            &mut error,
+        );
+        let kind = (!image.is_null()).then(|| (*image).kind);
+        if !image.is_null() {
+            libraw_dcraw_clear_mem(image);
+        }
+        (kind, embedded, (width, height), error)
+    }
+}
+
+#[test]
+fn a_sensor_past_100_megapixels_still_previews_from_its_embedded_jpeg() {
+    // The sample's sensor directory claims 12000x9000 (108 MP), like a GFX100.
+    let mut bytes = std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/samples/arw_sample.ARW"),
+    )
+    .unwrap();
+    let u16_at = |b: &[u8], at: usize| u16::from_le_bytes(b[at..at + 2].try_into().unwrap());
+    let u32_at = |b: &[u8], at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+    let ifd0 = u32_at(&bytes, 4) as usize;
+    let sensor = (0..usize::from(u16_at(&bytes, ifd0)))
+        .map(|n| ifd0 + 2 + n * 12)
+        .find(|&at| u16_at(&bytes, at) == 0x14A)
+        .map(|at| u32_at(&bytes, at + 8) as usize)
+        .unwrap();
+    for n in 0..usize::from(u16_at(&bytes, sensor)) {
+        let at = sensor + 2 + n * 12;
+        match u16_at(&bytes, at) {
+            0x100 => bytes[at + 8..at + 10].copy_from_slice(&12000u16.to_le_bytes()),
+            0x101 => bytes[at + 8..at + 10].copy_from_slice(&9000u16.to_le_bytes()),
+            _ => {}
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("large.ARW");
+    std::fs::write(&path, bytes).unwrap();
+
+    let (kind, embedded, (width, height), error) = native_raw(&path, 1);
+    assert_eq!(
+        (kind, embedded, error),
+        (Some(1), 1, 0),
+        "embedded JPEG preview"
+    );
+    assert!(
+        u64::from(width) * u64::from(height) > 100_000_000,
+        "{width}x{height}"
+    );
+    // A sensor decode of that size stays refused.
+    let (kind, _, _, error) = native_raw(&path, 0);
+    assert_eq!((kind, error), (None, -100_007));
+}

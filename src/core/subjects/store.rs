@@ -283,7 +283,7 @@ impl Store {
         self.write(key, Kind::Recognition, value)
     }
     pub fn duplicate_key(a: &str, b: &str) -> String {
-        blake3::hash(format!("duplicate-pair-v1-proxy2048-rgb15:{a}:{b}").as_bytes())
+        blake3::hash(format!("duplicate-pair-v2-analysis1024-rgb15:{a}:{b}").as_bytes())
             .to_hex()
             .to_string()
     }

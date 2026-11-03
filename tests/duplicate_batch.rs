@@ -312,11 +312,12 @@ fn a_jpeg_and_heic_of_one_shot_pair_as_two_formats_before_near_review() {
 }
 /// A HEIC that cannot be decoded (a build without HEIF) skips only its pair.
 #[test]
-fn an_undecodable_twin_skips_the_pair_without_failing_the_review() {
+fn undecodable_photos_skip_their_pairs_without_failing_the_review() {
     struct Failing;
     impl Evidence for Failing {
         fn image(&mut self, i: &Input) -> anyhow::Result<Asset> {
             anyhow::ensure!(i.media.id != MediaId(2), "Cannot decode HEIC");
+            anyhow::ensure!(i.media.id != MediaId(5), "Cannot decode JPEG");
             Source::default().image(i)
         }
         fn faces(&mut self, _: &Input) -> Option<Vec<Face>> {
@@ -330,6 +331,7 @@ fn an_undecodable_twin_skips_the_pair_without_failing_the_review() {
         shot(2, "a.heic", 1_761_360_217_000, Some(631)),
         input(3),
         input(4),
+        input(5), // A near candidate of both that can no longer be read.
     ];
     inputs[1].group = 2; // Out of the near pass, which would need its pixels.
     inputs[0].group = 3;

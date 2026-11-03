@@ -19,8 +19,11 @@ shrink while decoding) and it supports ICC-profiled CMYK TIFF.
   slices; native allocations are always released by their own allocator.
 - Borrowed, synchronous cancellation callbacks requiring `Sync`, with panics contained at
   the Rust boundary. Failed or cancelled renders never return pixels.
-- Limits: 32768 maximum dimension, 512 MiB source/output bytes, 4 MiB ICC profiles, and
-  preview edges from 1 to 4096. These bound allocations, not total process memory.
+- Limits: 32768 maximum dimension and 512 MiB source/output bytes for full-size and
+  region renders, 4 MiB ICC profiles, and preview edges from 1 to 4096. A downsized
+  preview is bounded by its output instead, since loaders shrink on load or stream the
+  source; its source may be up to 65535 px on an edge and 2^30 pixels. These bound
+  allocations, not total process memory.
 - Invalid, mismatched or relative-intent-incompatible ICC profiles return a visible error
   instead of an unreported fallback. If a loader discards metadata first (for example
   libpng rejecting iCCP), its warning is returned separately with the pixels. Warning

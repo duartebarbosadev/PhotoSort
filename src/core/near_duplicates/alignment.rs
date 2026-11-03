@@ -19,9 +19,6 @@ impl Aligned<'_> {
     pub fn overlap(&self) -> f64 {
         self.overlap
     }
-    pub fn valid_mask(&self) -> &[bool] {
-        &self.valid
-    }
     pub fn second_gray(&self) -> Gray<'_> {
         Gray {
             pixels: &self.second,

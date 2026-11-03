@@ -121,6 +121,29 @@ fn all_container_orientations_and_sidecar_overrides_share_correct_pixels() {
         (0, 0, 16)
     );
 }
+#[cfg(unix)]
+#[test]
+fn a_file_name_that_is_not_utf8_keeps_its_container_orientation() {
+    use std::os::unix::ffi::OsStrExt;
+    let root = tempfile::tempdir().unwrap();
+    let source = fixture(root.path(), "orientation-6.heic");
+    let path = root
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"caf\xe9-orientation-6.heic"));
+    std::fs::rename(&source.path, &path).unwrap();
+    let media = Media {
+        id: MediaId::for_path(&path),
+        fingerprint: Fingerprint::read(&path).unwrap(),
+        path,
+        kind: MediaKind::Photo,
+    };
+    let mut pipeline = Pipeline::new(16 * 1024 * 1024, root.path().join("cache"));
+    assert_eq!(
+        pipeline.metadata(&media).unwrap().container_orientation,
+        Some(6)
+    );
+    assert_eq!(pipeline.load(&media).unwrap().pixels.dimensions(), (48, 64));
+}
 #[test]
 fn icc_and_nclx_linear_light_become_srgb_once_with_alpha_preserved() {
     let root = tempfile::tempdir().unwrap();

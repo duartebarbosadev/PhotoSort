@@ -45,7 +45,10 @@ pub(super) fn read(path: &Path, result: &mut Metadata, dates: &mut Dates) {
         result.exposure = text(exif::Tag::ExposureTime);
         result.aperture = text(exif::Tag::FNumber);
         result.iso = text(exif::Tag::PhotographicSensitivity);
-        result.orientation = uint(exif::Tag::Orientation).clamp(1, 8) as u8;
+        result.orientation = u8::try_from(uint(exif::Tag::Orientation))
+            .ok()
+            .filter(|v| (1..=8).contains(v))
+            .unwrap_or(1);
         let rational = |tag| {
             exif.get_field(tag, exif::In::PRIMARY)
                 .and_then(|f| match &f.value {

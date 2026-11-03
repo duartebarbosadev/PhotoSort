@@ -217,10 +217,6 @@ impl VisualGroups {
     }
 }
 
-pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(a, b)| a * b).sum()
-}
-
 /// Select a candidate per group after the relative-sharpness gate.
 /// This only suggests keepers; it never creates deletion marks.
 pub fn best_per_group(

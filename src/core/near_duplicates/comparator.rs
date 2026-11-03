@@ -30,7 +30,6 @@ pub struct Assessment {
     pub decision: Decision,
     pub reason: Reason,
     pub structural_similarity: Option<f64>,
-    pub full_change: Option<Change>,
     pub visible_change: Option<Change>,
     pub alignment: Option<Alignment>,
     pub overlap: Option<f64>,
@@ -44,7 +43,6 @@ impl Assessment {
             decision: Decision::Uncertain,
             reason,
             structural_similarity: None,
-            full_change: None,
             visible_change: None,
             alignment: None,
             overlap: None,
@@ -109,7 +107,7 @@ impl Comparator {
         };
         result.alignment = Some(pair.alignment);
         result.overlap = Some(pair.overlap);
-        let measure = || -> Option<(f64, Option<Change>, Option<Change>)> {
+        let measure = || -> Option<(f64, Option<Change>)> {
             let corrected =
                 exposure_correct(first, pair.second_gray(), Some(&pair.valid), &cancelled)?;
             let normal_first = raster::normal(first, &cancelled)?;
@@ -141,13 +139,6 @@ impl Comparator {
                 Some(&preview_mask),
                 &cancelled,
             )?;
-            let full = coherent_change(
-                first,
-                pair.second_gray(),
-                Some(&pair.valid),
-                ChangeOptions::default(),
-                &cancelled,
-            );
             let visible = coherent_change(
                 normal_first.gray(),
                 normal_second.gray(),
@@ -155,16 +146,15 @@ impl Comparator {
                 ChangeOptions::normal_view(),
                 &cancelled,
             );
-            Some((structural, full, visible))
+            Some((structural, visible))
         };
-        let Some((structural, full, visible)) = measure() else {
+        let Some((structural, visible)) = measure() else {
             if cancelled() {
                 result.reason = Reason::Cancelled;
             }
             return result;
         };
         result.structural_similarity = Some(structural);
-        result.full_change = full;
         result.visible_change = visible;
         if cancelled() {
             result.reason = Reason::Cancelled;

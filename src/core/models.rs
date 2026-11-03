@@ -599,9 +599,17 @@ pub fn orientation_input(asset: &Asset) -> Vec<f32> {
     .crop_imm(16, 16, 384, 384);
     nchw(&image, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 }
+/// Development and test runs also read the checkout's `resources` through the
+/// working directory (test binaries live in target/debug/deps). A release never
+/// trusts the folder it was launched from: a `resources/runtime` library there
+/// would be loaded into the process.
+const SEARCH_WORKING_DIRECTORY: bool = cfg!(any(debug_assertions, feature = "test-isolation"));
 pub fn resource_roots() -> Vec<PathBuf> {
+    roots(SEARCH_WORKING_DIRECTORY)
+}
+fn roots(working_directory: bool) -> Vec<PathBuf> {
     let mut paths = vec![super::session::data_dir()];
-    if let Ok(cwd) = std::env::current_dir() {
+    if working_directory && let Ok(cwd) = std::env::current_dir() {
         paths.push(cwd.join("resources"));
     }
     if let Ok(exe) = std::env::current_exe()
@@ -645,18 +653,21 @@ pub fn orientation_model() -> Option<PathBuf> {
         .or_else(|| model_path("orientation.onnx"))
 }
 
-/// Analysis descriptors must be invalidated when any installed model changes.
+/// The models whose outputs subject records hold: scene embeddings and face
+/// geometry. Aesthetic scores have their own key (`aesthetic_signature`), so
+/// installing or replacing that model must not discard this analysis.
+const ANALYSIS_MODELS: [&str; 3] = [
+    "dinov2-small.onnx",
+    "face_detector.onnx",
+    "face_landmarks_detector.onnx",
+];
+/// Analysis descriptors must be invalidated when any model they hold changes.
 /// Subject records embed face geometry, so the face recipe is part of it too.
 pub fn analysis_signature() -> String {
     format!(
         "{}:{}",
         super::faces::RECIPE,
-        model_signature(&[
-            "dinov2-small.onnx",
-            "aesthetic.onnx",
-            "face_detector.onnx",
-            "face_landmarks_detector.onnx",
-        ])
+        model_signature(&ANALYSIS_MODELS)
     )
 }
 pub fn aesthetic_signature() -> String {
@@ -915,6 +926,34 @@ mod regional_batch_tests {
             serde_json::json!({"samples":7,"single_crop_seconds":total_single,"batched_crop_seconds":total_batch,"model_initializations":models.initializations})
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod root_tests {
+    #[test]
+    fn release_builds_never_load_resources_from_the_launch_folder() {
+        let launched = std::env::current_dir().unwrap().join("resources");
+        assert!(super::roots(true).contains(&launched));
+        assert!(!super::roots(false).contains(&launched));
+        assert_eq!(super::roots(false)[0], super::super::session::data_dir());
+    }
+}
+
+#[cfg(test)]
+mod signature_tests {
+    #[test]
+    fn installing_the_aesthetic_model_keeps_subject_analysis_but_retires_old_scores() {
+        // Tests run with a per-process data folder, so this copy is private.
+        let models = super::super::session::data_dir().join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        let (analysis, scores) = (super::analysis_signature(), super::aesthetic_signature());
+        let path = models.join("aesthetic.onnx");
+        std::fs::write(&path, b"stand-in").unwrap();
+        let after = (super::analysis_signature(), super::aesthetic_signature());
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(after.0, analysis);
+        assert_ne!(after.1, scores);
     }
 }
 

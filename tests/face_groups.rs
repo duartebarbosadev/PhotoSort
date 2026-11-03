@@ -149,6 +149,23 @@ fn one_poor_face_cannot_split_a_person_but_different_people_stay_apart() {
     );
 }
 #[test]
+fn lookalikes_in_one_photo_are_two_people_from_the_first_face() {
+    // Siblings who match 0.71: admission must not put the second face of a
+    // photo into the person its first face already joined.
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::new(root.path().into(), false).unwrap();
+    let records = vec![
+        put_faces(&store, 1, vec![vector(0.), vector(45.)]),
+        put(&store, 2, 0.),
+        put(&store, 3, 45.),
+    ];
+    let result = face_groups::group(&records, &store, || false)
+        .unwrap()
+        .unwrap();
+    assert_ne!(result.groups[&MediaId(2)], result.groups[&MediaId(3)]);
+    assert_eq!(result.folders[&MediaId(1)], "People 001 + 002");
+}
+#[test]
 fn people_split_by_admission_order_merge_unless_seen_together() {
     // `q` comes first and matches `p0` only 0.46, so it starts its own group,
     // although it matches the other faces of that person 0.81 and 0.83.

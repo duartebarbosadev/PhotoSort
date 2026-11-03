@@ -113,6 +113,90 @@ fn tiff_and_bmp_rotate_and_a_changed_file_is_left_alone() {
     assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
+/// EXIF as a scanner might write it: Orientation 6 and a capture date in the
+/// Exif directory.
+fn exif() -> Vec<u8> {
+    let mut exif = b"II*\0\x08\0\0\0".to_vec();
+    let entry = |exif: &mut Vec<u8>, tag: u16, kind: u16, count: u32, value: u32| {
+        exif.extend(tag.to_le_bytes());
+        exif.extend(kind.to_le_bytes());
+        exif.extend(count.to_le_bytes());
+        exif.extend(value.to_le_bytes());
+    };
+    exif.extend(2u16.to_le_bytes());
+    entry(&mut exif, 0x0112, 3, 1, 6);
+    entry(&mut exif, 0x8769, 4, 1, 38);
+    exif.extend(0u32.to_le_bytes());
+    exif.extend(1u16.to_le_bytes());
+    entry(&mut exif, 0x9003, 2, 20, 56);
+    exif.extend(0u32.to_le_bytes());
+    exif.extend(b"2019:07:14 10:11:12\0");
+    exif
+}
+
+#[test]
+fn png_rotation_keeps_the_capture_date_with_upright_exif() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("scan.png");
+    let image = pattern();
+    let mut bytes = Vec::new();
+    let mut encoder = PngEncoder::new(&mut bytes);
+    encoder.set_exif_metadata(exif()).unwrap();
+    encoder
+        .write_image(image.as_raw(), 3, 2, image::ExtendedColorType::Rgb8)
+        .unwrap();
+    std::fs::write(&path, bytes).unwrap();
+    assert_eq!(metadata::read(&path).orientation, 6);
+    reencode::rotate(&path, Fingerprint::read(&path).unwrap(), 6).unwrap();
+
+    let meta = metadata::read(&path);
+    assert_eq!(meta.grouping_date.as_deref(), Some("2019-07-14"));
+    assert_eq!(meta.orientation, 1, "the turn is in the pixels now");
+    let rotated = image::open(&path).unwrap().to_rgb8();
+    assert_eq!(rotated.as_raw(), image::imageops::rotate90(&image).as_raw());
+}
+
+#[test]
+fn tiff_rotation_keeps_exif_dates_camera_and_compression() {
+    use tiff::{encoder::colortype::RGB8, tags::Tag};
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("scan.tif");
+    {
+        let file = std::fs::File::create(&path).unwrap();
+        let mut encoder = tiff::encoder::TiffEncoder::new(file)
+            .unwrap()
+            .with_compression(tiff::encoder::Compression::Lzw);
+        let mut exif = encoder.extra_directory().unwrap();
+        exif.write_tag(Tag::Unknown(0x9003), "2019:07:14 10:11:12")
+            .unwrap();
+        let exif = exif.finish_with_offsets().unwrap().offset;
+        let mut image = encoder.new_image::<RGB8>(3, 2).unwrap();
+        let tags = image.encoder();
+        tags.write_tag(Tag::Unknown(272), "Scanner X").unwrap();
+        tags.write_tag(Tag::Unknown(274), 6u16).unwrap();
+        tags.write_tag(Tag::ExifDirectory, exif).unwrap();
+        image.write_data(pattern().as_raw()).unwrap();
+    }
+    assert_eq!(metadata::read(&path).orientation, 6);
+    reencode::rotate(&path, Fingerprint::read(&path).unwrap(), 6).unwrap();
+
+    let meta = metadata::read(&path);
+    assert_eq!(meta.grouping_date.as_deref(), Some("2019-07-14"));
+    assert_eq!(meta.camera, "Scanner X");
+    assert_eq!(meta.orientation, 1, "the turn is in the pixels now");
+    let rotated = image::open(&path).unwrap().to_rgb8();
+    assert_eq!(
+        rotated.as_raw(),
+        image::imageops::rotate90(&pattern()).as_raw()
+    );
+    let mut decoder = tiff::decoder::Decoder::new(std::fs::File::open(&path).unwrap()).unwrap();
+    assert_eq!(
+        decoder.get_tag_unsigned::<u16>(Tag::Compression).unwrap(),
+        5,
+        "LZW stays LZW"
+    );
+}
+
 #[test]
 fn multi_page_tiff_is_refused_without_changes() {
     let temp = tempfile::tempdir().unwrap();
