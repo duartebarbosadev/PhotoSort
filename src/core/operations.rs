@@ -1412,8 +1412,9 @@ fn verify_staged_move(source: &Source, destination: &Path) -> Result<()> {
 }
 /// Before a retry removes the source of a staged move. A hard link proves
 /// itself by identity. A copy (another volume, or no inode identity, as on
-/// Windows) must be a separate file with the source's size, modified time and
-/// bytes, as the executor left it. Returns the destination it checked.
+/// Windows) must be a separate file with the source's size and bytes. Its
+/// modified time is not compared: FAT, exFAT and network shares round it.
+/// Returns the destination it checked.
 fn verify_finishable_move(
     source: &Source,
     destination: &Path,
@@ -1425,8 +1426,7 @@ fn verify_finishable_move(
     check_staged_paths(source, destination)?;
     let staged = Fingerprint::read(destination)?;
     anyhow::ensure!(
-        (staged.bytes, staged.modified_ns)
-            == (source.fingerprint.bytes, source.fingerprint.modified_ns)
+        staged.bytes == source.fingerprint.bytes
             && content_hash(&source.path, cancelled)? == content_hash(destination, cancelled)?,
         "Staged move destination changed: {}",
         destination.display()

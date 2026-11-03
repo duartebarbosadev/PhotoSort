@@ -2170,8 +2170,9 @@ fn staged_retry_rechecks_destination_source_and_symlinks_before_removing_any_sou
         ));
         match mode {
             "destination-replaced" => {
+                // Identical bytes would still keep the photo; other bytes must not.
                 fs::remove_file(&to).unwrap();
-                fs::write(&to, b"first photo").unwrap();
+                fs::write(&to, b"first phot0").unwrap();
             }
             "destination-missing" => fs::remove_file(&to).unwrap(),
             "source-changed" => fs::write(&source, b"changed source").unwrap(),
@@ -2419,10 +2420,9 @@ fn move_that_fails_removing_a_staged_source_retries_only_the_unfinished_unlink()
     }
 }
 #[test]
-fn finishing_a_copied_move_needs_the_source_bytes_and_time_in_another_entry() {
+fn finishing_a_copied_move_needs_the_source_bytes_in_another_entry() {
     let (_temp, _store, context, _plan) = fixture();
     let source = Source::capture(context.root.join("b.jpg")).unwrap();
-    let modified = fs::metadata(&source.path).unwrap().modified().unwrap();
     let finish = |to: &Path| {
         let plan = Plan {
             actions: vec![Action::FinishMove {
@@ -2432,22 +2432,27 @@ fn finishing_a_copied_move_needs_the_source_bytes_and_time_in_another_entry() {
         };
         super::super::execute(&plan, &context.root.join("audit"), || false, |_, _| {}).unwrap()
     };
-    let copy = |to: &Path, bytes: &[u8]| {
-        fs::write(to, bytes).unwrap();
-        File::options()
-            .write(true)
-            .open(to)
-            .unwrap()
-            .set_modified(modified)
-            .unwrap();
-    };
-    // Same size and time, other bytes: not the staged copy.
+    // Same size, other bytes: not the staged copy.
     let forged = context.root.join("forged.jpg");
-    copy(&forged, b"second phot0");
+    fs::write(&forged, b"second phot0").unwrap();
     assert!(!finish(&forged).errors.is_empty());
     assert!(source.path.exists());
+    // A FAT or exFAT card stores the copy's time rounded to 2 seconds.
     let staged = context.root.join("staged.jpg");
-    copy(&staged, b"second photo");
+    fs::write(&staged, b"second photo").unwrap();
+    let seconds = source.fingerprint.modified_ns / 1_000_000_000;
+    let rounded = std::time::UNIX_EPOCH
+        + std::time::Duration::from_secs(u64::try_from(seconds - seconds % 2).unwrap() + 2);
+    File::options()
+        .write(true)
+        .open(&staged)
+        .unwrap()
+        .set_modified(rounded)
+        .unwrap();
+    assert_ne!(
+        Fingerprint::read(&staged).unwrap().modified_ns,
+        source.fingerprint.modified_ns
+    );
     assert!(finish(&staged).errors.is_empty());
     assert!(!source.path.exists());
     assert_eq!(fs::read(&staged).unwrap(), b"second photo");
