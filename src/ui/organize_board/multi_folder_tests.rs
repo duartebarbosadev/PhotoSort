@@ -363,15 +363,26 @@ fn a_folder_taken_away_leaves_none_of_its_photos_selected() {
     assert_eq!(app.board.focus, ["B"]);
     assert_eq!(app.selection.ordered(&app.media, &app.filtered), [ids[5]]);
     // Shown alone, an empty folder leaves no photo current, so D marks
-    // nothing it hides.
+    // nothing it hides: not after swipe compare picks a photo, nor after
+    // the board is arranged again.
     app.board_new_folder("", &[]);
     app.board.editing.as_mut().unwrap().1 = "Spare".into();
     app.board_finish_edit();
     rendered(&mut app, &ctx, SIZE);
+    app.select_library(ids[4], true, false);
+    assert!(app.swipe_key(egui::Key::C, Default::default()));
+    assert!(app.swipe.is_some());
     app.board_folder_action(FolderAction::ShowOnly(Some("Spare".into())));
     assert_eq!(app.board.focus, ["Spare"]);
     assert_eq!(app.active, None);
     assert!(app.selection.is_empty());
+    app.swipe_key(egui::Key::Num1, Default::default());
+    assert_eq!(app.active, None);
+    app.filter_dirty = true;
+    app.refilter();
+    rendered(&mut app, &ctx, SIZE);
+    assert_eq!(app.board.focus, ["Spare"]);
+    assert_eq!(app.active, None);
     press(&mut app, &ctx, egui::Key::D, Default::default());
     assert_eq!(app.active, None);
     let marked: Vec<MediaId> = ids

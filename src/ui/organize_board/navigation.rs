@@ -156,6 +156,7 @@ impl PhotoSortApp {
                     self.active = None;
                     self.comparison.clear();
                     self.comparison_focus = None;
+                    self.swipe = None;
                 }
             }
         }
@@ -268,7 +269,7 @@ impl PhotoSortApp {
     }
     /// Only some folders shown in Organize: the positions in `filtered` of
     /// their photos, in board order.
-    fn board_shown_positions(&self) -> Option<Vec<usize>> {
+    pub(in crate::ui::workspace) fn board_shown_positions(&self) -> Option<Vec<usize>> {
         if self.step != Step::Organize || self.board.focus.is_empty() {
             return None;
         }

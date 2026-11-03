@@ -1101,7 +1101,13 @@ impl PhotoSortApp {
             .active
             .is_none_or(|id| !self.filtered.iter().any(|&i| self.media[i].id == id))
         {
-            self.active = self.filtered.first().map(|&i| self.media[i].id);
+            // With only some folders shown, a hidden photo never becomes
+            // current; only empty folders shown leave none.
+            let first = match self.board_shown_positions() {
+                Some(shown) => shown.first().map(|&p| self.filtered[p]),
+                None => self.filtered.first().copied(),
+            };
+            self.active = first.map(|i| self.media[i].id);
         }
         self.filter_dirty = false;
     }
