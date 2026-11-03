@@ -44,23 +44,62 @@ impl PhotoSortApp {
     /// The lines of a grid or strip of `columns`: rows of photos, and with
     /// [`Self::grouped_view`] a header before each similar set and before
     /// the photos between them.
-    pub(super) fn photo_lines(&self, columns: usize, row: f32, gap: f32, header: f32) -> Lines {
+    pub(super) fn photo_lines(
+        &self,
+        ctx: &egui::Context,
+        columns: usize,
+        row: f32,
+        gap: f32,
+        header: f32,
+    ) -> Lines {
         let mut lines = Lines {
             columns: columns.max(1),
             row,
             gap,
+            header,
             count: self.filtered.len(),
             sections: None,
         };
         if !self.grouped_view() {
             return lines;
         }
+        let sets = self.photo_sets(ctx);
+        let mut tops = Vec::with_capacity(sets.runs.len());
+        let mut top = 0.0;
+        for (_, start, end) in &sets.runs {
+            tops.push(top);
+            top += header + (end - start).div_ceil(lines.columns) as f32 * lines.stride();
+        }
+        lines.sections = Some(Sections {
+            sets,
+            tops,
+            height: top,
+        });
+        lines
+    }
+    /// Cull's shown photos as runs of one similar set each (or of photos in
+    /// none), worked out once for the photos shown and their groups and
+    /// kept between frames.
+    pub(super) fn photo_sets(&self, ctx: &egui::Context) -> Arc<PhotoSets> {
+        let key = (
+            self.filtered.len(),
+            order_checksum(&self.filtered),
+            self.group_best.len(),
+        );
+        let id = egui::Id::new("photo_sets");
+        // The groups are compared by identity: a new grouping is a new map,
+        // and the weak reference keeps its address from being reused.
+        if let Some(cached) = ctx.data(|d| d.get_temp::<SetsCache>(id))
+            && cached.key == key
+            && std::ptr::eq(cached.groups.as_ptr(), Arc::as_ptr(&self.cull_groups))
+        {
+            return cached.sets;
+        }
         let set = |position: usize| {
             let id = self.media[self.filtered[position]].id;
             self.similar_group(id).map(|(group, ..)| group)
         };
-        let mut sections = Vec::new();
-        let mut top = 0.0;
+        let mut runs = Vec::new();
         let mut start = 0;
         while start < self.filtered.len() {
             let group = set(start);
@@ -68,25 +107,26 @@ impl PhotoSortApp {
             while end < self.filtered.len() && set(end) == group {
                 end += 1;
             }
-            sections.push(Line {
-                top,
-                kind: LineKind::Header { group, start, end },
-            });
-            top += header;
-            for first in (start..end).step_by(lines.columns) {
-                sections.push(Line {
-                    top,
-                    kind: LineKind::Cells {
-                        start: first,
-                        end: (first + lines.columns).min(end),
-                    },
-                });
-                top += row + gap;
-            }
+            runs.push((group, start, end));
             start = end;
         }
-        lines.sections = Some((sections, top));
-        lines
+        let sets = runs
+            .iter()
+            .filter_map(|(group, ..)| *group)
+            .collect::<HashSet<_>>()
+            .len();
+        let sets = Arc::new(PhotoSets { runs, sets });
+        ctx.data_mut(|d| {
+            d.insert_temp(
+                id,
+                SetsCache {
+                    key,
+                    groups: Arc::downgrade(&self.cull_groups),
+                    sets: sets.clone(),
+                },
+            )
+        });
+        sets
     }
     /// A Cull grid or strip's scroll area, scrolled to what it must show
     /// once: a saved position, a folder chosen in the navigator, or the
@@ -138,14 +178,21 @@ impl PhotoSortApp {
         if self.step != Step::Cull || !self.navigator.enabled {
             return;
         }
-        let active = self
-            .active
-            .and_then(|id| self.index.get(&id))
-            .and_then(|index| self.filtered.iter().position(|i| i == index))
-            .is_some_and(|position| {
-                let top = lines.top(position);
-                top + lines.row > viewport.top() && top < viewport.bottom()
-            });
+        // Looked for among the rows on screen, not the whole library.
+        let active = self.active.and_then(|id| self.index.get(&id)).copied();
+        let active = active.is_some_and(|index| {
+            lines
+                .visible(viewport.top(), viewport.bottom())
+                .iter()
+                .any(|line| match line.kind {
+                    LineKind::Cells { start, end } => {
+                        line.top + lines.row > viewport.top()
+                            && line.top < viewport.bottom()
+                            && self.filtered[start..end].contains(&index)
+                    }
+                    LineKind::Header { .. } => false,
+                })
+        });
         let top = lines.position_at(viewport.top() + lines.row * 0.25);
         self.follow_photos(active, top, viewport.top());
     }
@@ -160,7 +207,13 @@ impl PhotoSortApp {
         // Hiding file names gives a denser, image-only grid.
         let captioned = self.preferences.show_filenames;
         let row_height = cell_width * 0.75 + if captioned { CAPTION } else { 0.0 };
-        let lines = self.photo_lines(columns, row_height, ui.spacing().item_spacing.y, SET_HEADER);
+        let lines = self.photo_lines(
+            ui.ctx(),
+            columns,
+            row_height,
+            ui.spacing().item_spacing.y,
+            SET_HEADER,
+        );
         let scroll = self.photos_scroll(ui, &lines, egui::Id::new("library_grid"), true);
         let output = scroll.show_viewport(ui, |ui, viewport| {
             let origin = ui.max_rect().min;
@@ -173,7 +226,7 @@ impl PhotoSortApp {
                             left,
                             egui::vec2(ui.available_width(), SET_HEADER),
                         );
-                        self.set_header(ui, rect, group, end - start);
+                        self.set_header(ui, rect, group, start, end - start);
                     }
                     LineKind::Cells { start, end } => {
                         for (column, position) in (start..end).enumerate() {
@@ -182,8 +235,12 @@ impl PhotoSortApp {
                                 egui::vec2(cell_width, row_height),
                             );
                             let index = self.filtered[position];
+                            // Keyed by photo: a click pressed on one photo
+                            // never lands on another sorted into its place.
                             ui.scope_builder(
-                                egui::UiBuilder::new().id_salt(position).max_rect(rect),
+                                egui::UiBuilder::new()
+                                    .id_salt(self.media[index].id)
+                                    .max_rect(rect),
                                 |ui| self.card(ui, index, cell_width, row_height, captioned),
                             );
                         }
@@ -203,17 +260,20 @@ impl PhotoSortApp {
         ui: &mut egui::Ui,
         rect: egui::Rect,
         group: Option<usize>,
+        start: usize,
         shown: usize,
     ) {
         use egui_phosphor::regular as icon;
         let response = ui.interact(
             rect,
-            ui.id().with(("set-header", group, rect.top() as i32)),
+            ui.id().with(("set-header", group, start)),
             Sense::click(),
         );
         let painter = ui.painter_at(rect);
         let y = rect.center().y + 2.0;
-        let Some(group) = group else {
+        let Some((group, &(best, size))) =
+            group.and_then(|group| Some((group, self.group_best.get(&group)?)))
+        else {
             painter.text(
                 egui::pos2(rect.left() + 2.0, y),
                 Align2::LEFT_CENTER,
@@ -223,7 +283,6 @@ impl PhotoSortApp {
             );
             return;
         };
-        let (best, size) = self.group_best[&group];
         let color = super::grouping::group_color(group);
         painter.circle_filled(egui::pos2(rect.left() + 6.0, y), 3.5, color);
         let best_name = self
@@ -264,12 +323,12 @@ impl PhotoSortApp {
         if let Some(drag) = response.dnd_release_payload::<super::grouping::PhotoDrag>() {
             self.drop_on_group(&drag, group);
         }
-        let count = self.group_members(group).len();
         response
             .on_hover_text(
                 "Drop photos here to move them into this set. Right-click to compare it.",
             )
             .context_menu(|ui| {
+                let count = self.group_members(group).len();
                 if ui
                     .add_enabled(
                         (2..=9).contains(&count),
@@ -363,7 +422,7 @@ impl PhotoSortApp {
                 FAINT,
             );
         }
-        if media.kind == MediaKind::Video && texture_is_drawn(&self.textures, id) {
+        if media.kind == MediaKind::Video && self.textures.contains_key(&(id, false)) {
             badge(
                 &painter,
                 image_rect.left_bottom() + egui::vec2(S1, -S1),
@@ -603,8 +662,8 @@ impl PhotoSortApp {
             None,
         );
     }
-    /// All layouts use the same selection, comparison and staged mutation paths.
-    /// Tiles can be dragged onto a similarity group once Cull has groups.
+    /// Grid tiles and strip rows: dragged onto a similar set once Cull has
+    /// sets, otherwise only clicked.
     fn tile_sense(&self) -> Sense {
         if self.photo_drag_enabled() {
             Sense::click_and_drag()
@@ -728,10 +787,6 @@ impl PhotoSortApp {
 
 /// Caption height under grid tiles.
 pub(super) const CAPTION: f32 = 34.0;
-
-fn texture_is_drawn(textures: &HashMap<(MediaId, bool), Texture>, id: MediaId) -> bool {
-    textures.contains_key(&(id, false))
-}
 
 /// A small pill on top of an image: dark translucent fill, coloured text.
 fn badge(painter: &egui::Painter, anchor: egui::Pos2, align: Align2, text: &str, color: Color32) {
@@ -1060,6 +1115,112 @@ mod tests {
         }
     }
     #[test]
+    fn similar_sets_lay_out_from_runs_kept_until_the_photos_or_groups_change() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app =
+            PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
+        app.step = Step::Cull;
+        app.browse.group_sort = crate::core::browsing::GroupSort::Time;
+        app.media = (0..40)
+            .map(|n| Media {
+                id: MediaId(n),
+                path: temp.path().join(format!("photo-{n}.jpg")),
+                kind: MediaKind::Photo,
+                fingerprint: Fingerprint::default(),
+            })
+            .collect();
+        app.index = app
+            .media
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
+        app.filtered = (0..40).collect();
+        // Sets of 1, 5 and 7 photos between photos in none, and two runs
+        // of set 3 apart.
+        let set = |n: u64| match n {
+            2 => Some(1),
+            5..=9 => Some(2),
+            12..=18 | 30..=31 => Some(3),
+            _ => None,
+        };
+        app.cull_groups = Arc::new(
+            (0..40)
+                .filter_map(|n| Some((MediaId(n), set(n)?)))
+                .collect(),
+        );
+        app.group_best = [
+            (1, (MediaId(2), 1)),
+            (2, (MediaId(5), 5)),
+            (3, (MediaId(12), 9)),
+        ]
+        .into_iter()
+        .collect();
+        let ctx = egui::Context::default();
+        let sets = app.photo_sets(&ctx);
+        assert_eq!(sets.sets, 3);
+        assert!(
+            Arc::ptr_eq(&sets, &app.photo_sets(&ctx)),
+            "kept between frames"
+        );
+        // Every line, position and section top as when they were all laid
+        // out up front, at any width.
+        for columns in 1..=4 {
+            let (row, gap, header) = (50.0, 4.0, SET_HEADER);
+            let lines = app.photo_lines(&ctx, columns, row, gap, header);
+            let mut all = Vec::new();
+            let mut top = 0.0;
+            for &(group, start, end) in &sets.runs {
+                all.push(Line {
+                    top,
+                    kind: LineKind::Header { group, start, end },
+                });
+                top += header;
+                for first in (start..end).step_by(columns) {
+                    let end = (first + columns).min(end);
+                    all.push(Line {
+                        top,
+                        kind: LineKind::Cells { start: first, end },
+                    });
+                    top += row + gap;
+                }
+            }
+            assert_eq!(lines.height(), top);
+            let mut y = -30.0;
+            while y < top + 60.0 {
+                let first = all.partition_point(|l| l.top <= y).saturating_sub(1);
+                let expected: Vec<Line> = all[first..]
+                    .iter()
+                    .take_while(|l| l.top < y + 170.0)
+                    .copied()
+                    .collect();
+                assert_eq!(
+                    lines.visible(y, y + 170.0),
+                    expected,
+                    "{columns} columns at {y}"
+                );
+                y += 7.0;
+            }
+            for position in 0..40 {
+                let row = all.iter().find(|l| {
+                    matches!(l.kind, LineKind::Cells { start, end } if (start..end).contains(&position))
+                });
+                assert_eq!(lines.top(position), row.unwrap().top);
+                let header = all.iter().find(
+                    |l| matches!(l.kind, LineKind::Header { start, .. } if start == position),
+                );
+                assert_eq!(lines.section_top(position), header.or(row).unwrap().top);
+            }
+        }
+        // Another order or another grouping works them out again.
+        app.filtered.reverse();
+        let reordered = app.photo_sets(&ctx);
+        assert!(!Arc::ptr_eq(&sets, &reordered));
+        assert_eq!(reordered.runs[0], (None, 0, 8));
+        app.cull_groups = Arc::new((*app.cull_groups).clone());
+        assert!(!Arc::ptr_eq(&reordered, &app.photo_sets(&ctx)));
+    }
+    #[test]
     fn grid_virtualizes_and_keeps_requests_focus_and_comparison() {
         let temp = tempfile::tempdir().unwrap();
         let mut app =
@@ -1153,16 +1314,47 @@ mod tests {
 pub(super) const SET_HEADER: f32 = 26.0;
 
 /// The lines of a Cull grid or strip, see [`PhotoSortApp::photo_lines`].
-/// Without sections every line is a row of photos of one height, computed
-/// as needed, so a library of any size costs nothing to lay out.
+/// Every line is worked out when asked for, from the rows' height or the
+/// similar sets' tops, so a library of any size costs nothing to lay out.
 pub(super) struct Lines {
     pub(super) columns: usize,
     /// A row of photos' height.
     pub(super) row: f32,
     gap: f32,
+    /// A similar set's header height.
+    header: f32,
     count: usize,
-    /// Headers and rows of photos, with the height of them all.
-    sections: Option<(Vec<Line>, f32)>,
+    sections: Option<Sections>,
+}
+/// A grouped grid or strip's similar sets, with the top of each one's
+/// header and the height of them all.
+struct Sections {
+    sets: Arc<PhotoSets>,
+    tops: Vec<f32>,
+    height: f32,
+}
+/// Cull's shown photos split into similar sets, see
+/// [`PhotoSortApp::photo_sets`].
+pub(super) struct PhotoSets {
+    /// Each run of shown photos in one set, or in none: its set and its
+    /// first and past-the-end positions.
+    runs: Vec<(Option<usize>, usize, usize)>,
+    /// How many similar sets the photos shown cover.
+    pub(super) sets: usize,
+}
+/// [`PhotoSets`] kept in the context between frames, with what they were
+/// worked out from.
+#[derive(Clone)]
+struct SetsCache {
+    key: (usize, u64, usize),
+    groups: std::sync::Weak<HashMap<MediaId, usize>>,
+    sets: Arc<PhotoSets>,
+}
+/// A cheap fingerprint of the photos shown, in order.
+pub(super) fn order_checksum(order: &[usize]) -> u64 {
+    order.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &i| {
+        (hash.rotate_left(5) ^ i as u64).wrapping_mul(0x5851_f42d_4c95_7f2d)
+    })
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Line {
@@ -1189,72 +1381,103 @@ impl Lines {
     }
     pub(super) fn height(&self) -> f32 {
         match &self.sections {
-            Some((_, height)) => *height,
+            Some(sections) => sections.height,
             None => (self.rows() as f32 * self.stride() - self.gap).max(0.0),
         }
     }
-    fn row_line(&self, row: usize) -> Line {
-        let start = row * self.columns;
+    /// Row `row` of the photos from `start` to `end`, whose first row is at `top`.
+    fn row_line(&self, top: f32, start: usize, end: usize, row: usize) -> Line {
+        let first = start + row * self.columns;
         Line {
-            top: row as f32 * self.stride(),
+            top: top + row as f32 * self.stride(),
             kind: LineKind::Cells {
-                start,
-                end: (start + self.columns).min(self.count),
+                start: first,
+                end: (first + self.columns).min(end),
             },
         }
     }
-    /// The lines between `top` and `bottom`.
+    /// The lines between `top` and `bottom`: the one `top` falls in, and
+    /// each after it that starts above `bottom`.
     pub(super) fn visible(&self, top: f32, bottom: f32) -> Vec<Line> {
-        match &self.sections {
-            Some((lines, _)) => {
-                let first = lines
-                    .partition_point(|line| line.top <= top)
-                    .saturating_sub(1);
-                lines[first..]
-                    .iter()
-                    .take_while(|line| line.top < bottom)
-                    .copied()
-                    .collect()
+        let stride = self.stride();
+        // The first row of `rows` starting at `first` that reaches below `top`.
+        let first_row = |first: f32, rows: usize| {
+            (((top - first) / stride).floor().max(0.0) as usize).min(rows.saturating_sub(1))
+        };
+        let Some(sections) = &self.sections else {
+            let rows = self.rows();
+            let first = (top / stride).floor().max(0.0) as usize;
+            let last = ((bottom / stride).ceil() as usize + 1).min(rows);
+            return (first..last)
+                .map(|row| self.row_line(0.0, 0, self.count, row))
+                .collect();
+        };
+        let runs = &sections.sets.runs;
+        let mut lines = Vec::new();
+        let first = sections
+            .tops
+            .partition_point(|t| *t <= top)
+            .saturating_sub(1);
+        for (n, (&(group, start, end), &header)) in
+            runs.iter().zip(&sections.tops).enumerate().skip(first)
+        {
+            if header >= bottom {
+                break;
             }
-            None => {
-                let first = (top / self.stride()).floor().max(0.0) as usize;
-                let last = ((bottom / self.stride()).ceil() as usize + 1).min(self.rows());
-                (first..last).map(|row| self.row_line(row)).collect()
+            let rows_top = header + self.header;
+            if n > first || rows_top > top {
+                lines.push(Line {
+                    top: header,
+                    kind: LineKind::Header { group, start, end },
+                });
+            }
+            let rows = (end - start).div_ceil(self.columns);
+            // Rows above `top` in a later set cannot be: it starts below.
+            let from = if n == first {
+                first_row(rows_top, rows)
+            } else {
+                0
+            };
+            for row in from..rows {
+                let line = self.row_line(rows_top, start, end, row);
+                if line.top >= bottom {
+                    break;
+                }
+                lines.push(line);
             }
         }
+        lines
     }
     /// The top of the row holding `position`.
     pub(super) fn top(&self, position: usize) -> f32 {
-        match &self.sections {
-            Some((lines, _)) => {
-                let first = |line: &Line| match line.kind {
-                    LineKind::Header { start, .. } | LineKind::Cells { start, .. } => start,
-                };
-                let at = lines
-                    .partition_point(|line| first(line) <= position)
-                    .saturating_sub(1);
-                lines[at..]
-                    .iter()
-                    .find(|line| {
-                        matches!(line.kind, LineKind::Cells { start, end } if (start..end).contains(&position))
-                    })
-                    .map_or(0.0, |line| line.top)
+        let Some(sections) = &self.sections else {
+            return (position / self.columns) as f32 * self.stride();
+        };
+        let runs = &sections.sets.runs;
+        let at = runs
+            .partition_point(|(_, start, _)| *start <= position)
+            .saturating_sub(1);
+        match runs.get(at) {
+            Some(&(_, start, end)) if (start..end).contains(&position) => {
+                sections.tops[at]
+                    + self.header
+                    + ((position - start) / self.columns) as f32 * self.stride()
             }
-            None => (position / self.columns) as f32 * self.stride(),
+            _ => 0.0,
         }
     }
     /// The top of the row holding `position`, or of its section's header
     /// when it is the first photo there.
     pub(super) fn section_top(&self, position: usize) -> f32 {
-        match &self.sections {
-            Some((lines, _)) => lines
-                .iter()
-                .find(
-                    |line| matches!(line.kind, LineKind::Header { start, .. } if start == position),
-                )
-                .map_or_else(|| self.top(position), |line| line.top),
-            None => self.top(position),
+        if let Some(sections) = &self.sections
+            && let Ok(at) = sections
+                .sets
+                .runs
+                .binary_search_by_key(&position, |(_, start, _)| *start)
+        {
+            return sections.tops[at];
         }
+        self.top(position)
     }
     /// The first photo on the line at `y`, or on the next line with photos.
     pub(super) fn position_at(&self, y: f32) -> Option<usize> {

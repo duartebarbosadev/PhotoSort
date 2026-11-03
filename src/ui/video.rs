@@ -19,18 +19,32 @@ fn time(seconds: f64) -> String {
         format!("{}:{:02}.{tenth}", seconds / 60, seconds % 60)
     }
 }
+/// Context data: the active video and the frame its canvas was last drawn.
+const VIDEO_SHOWN: &str = "video_canvas_shown";
 impl PhotoSortApp {
-    fn video_target(&self) -> Option<&Media> {
-        if !self.review || self.busy || self.scanning || !playback::supported() {
+    /// The active video, while Review or a step's preview panel shows it:
+    /// Organize, Easy Delete and Pick Best show it beside their board or
+    /// grid, outside Review.
+    fn video_target(&self, ctx: &egui::Context) -> Option<&Media> {
+        if self.busy || self.scanning || !playback::supported() {
             return None;
         }
-        self.active
-            .and_then(|id| self.index.get(&id))
+        let id = self.active?;
+        let shown = ctx
+            .data(|d| d.get_temp::<(MediaId, u64)>(egui::Id::new(VIDEO_SHOWN)))
+            .is_some_and(|(shown, frame)| {
+                shown == id && frame.saturating_add(1) >= ctx.cumulative_frame_nr()
+            });
+        if !self.review && !shown {
+            return None;
+        }
+        self.index
+            .get(&id)
             .map(|i| &self.media[*i])
             .filter(|m| m.kind == MediaKind::Video)
     }
     pub(super) fn sync_playback(&mut self, ctx: &egui::Context) {
-        let target = self.video_target();
+        let target = self.video_target(ctx);
         let context = target.map(|m| (self.step, m.id));
         self.runtime.playback.select(target);
         if context != self.video_context
@@ -46,7 +60,7 @@ impl PhotoSortApp {
         self.video_context = context;
     }
     pub(super) fn video_keyboard(&mut self, ctx: &egui::Context) {
-        let Some(media) = self.video_target() else {
+        let Some(media) = self.video_target(ctx) else {
             return;
         };
         if !ctx.input(|i| i.raw.focused) {
@@ -71,6 +85,11 @@ impl PhotoSortApp {
         }
         response.context_menu(|ui| self.review_context_menu(ui, id));
         let active = self.active == Some(id);
+        if active {
+            let frame = ui.ctx().cumulative_frame_nr();
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(egui::Id::new(VIDEO_SHOWN), (id, frame)));
+        }
         let painter = ui.painter().with_clip_rect(rect);
         painter.rect_filled(rect, R_SURFACE, BG);
         if active {
@@ -409,6 +428,40 @@ mod tests {
             let ctx = &ui.ctx().clone();
             app.sync_playback(ctx)
         });
+        // Outside Review, a video plays while a preview panel shows it.
+        app.step = Step::Organize;
+        app.review = false;
+        let _ = ctx.run_test(input(true, egui::vec2(800.0, 600.0)), |ui| {
+            let ctx = &ui.ctx().clone();
+            app.sync_playback(ctx)
+        });
+        assert!(app.runtime.playback.snapshot().id.is_none());
+        let _ = ctx.run_test(input(true, egui::vec2(800.0, 600.0)), |ui| {
+            let ctx = &ui.ctx().clone();
+            egui::CentralPanel::default().show(ui, |ui| {
+                app.video_canvas(ui, MediaId(1), 0, egui::vec2(400.0, 300.0));
+            });
+            app.sync_playback(ctx);
+        });
+        assert_eq!(app.runtime.playback.snapshot().id, Some(MediaId(1)));
+        // Space plays it there too.
+        let mut raw = input(true, egui::vec2(800.0, 600.0));
+        raw.events.push(egui::Event::Key {
+            key: egui::Key::Space,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run_test(raw, |ui| {
+            let ctx = &ui.ctx().clone();
+            app.keyboard(ctx);
+            egui::CentralPanel::default().show(ui, |ui| {
+                app.video_canvas(ui, MediaId(1), 0, egui::vec2(400.0, 300.0));
+            });
+            app.sync_playback(ctx);
+        });
+        assert!(app.runtime.playback.snapshot().play_requested);
         app.runtime.next_epoch();
         assert!(app.runtime.playback.snapshot().id.is_none());
         app.runtime.shutdown();

@@ -167,7 +167,18 @@ impl PhotoSortApp {
                 .active
                 .is_none_or(|id| !self.filtered.iter().any(|i| self.media[*i].id == id))
             {
-                self.active = self.filtered.first().map(|i| self.media[*i].id);
+                // A selected photo still shown takes over, so the outlined
+                // photo stays one that D and the rating keys act on.
+                let next = self
+                    .selection
+                    .ordered(&self.media, &self.filtered)
+                    .first()
+                    .copied()
+                    .or_else(|| self.filtered.first().map(|i| self.media[*i].id));
+                match next {
+                    Some(id) => self.set_active(id),
+                    None => self.active = None,
+                }
                 self.library_reveal = true;
             }
             if self.selection.is_empty()
@@ -226,11 +237,7 @@ impl PhotoSortApp {
             let count = self.filtered.len();
             let mut text = format!("{count} {}", if count == 1 { "photo" } else { "photos" });
             if self.grouped_view() {
-                let sets = self
-                    .group_best
-                    .keys()
-                    .filter(|group| !self.group_members(**group).is_empty())
-                    .count();
+                let sets = self.photo_sets(ui.ctx()).sets;
                 text.push_str(&format!(
                     " · {sets} similar {}",
                     if sets == 1 { "set" } else { "sets" }
@@ -326,75 +333,67 @@ impl PhotoSortApp {
     pub(super) fn browse_controls(&mut self, ui: &mut egui::Ui) {
         // One row at every size: filters live in a popover that shows how many
         // are active, so photos keep the vertical space.
-        let overlay = true;
         let fit = self.bar_fit;
         self.search_field(ui);
         // An overflowing bar moves the photo filter into Filters & sort.
         if fit < super::top_bar::Fit::Overflow {
             self.filter_combo(ui);
         }
-        if overlay {
-            let active = [
-                self.browse.rating != RatingFilter::All,
-                self.browse.group.is_some(),
-                self.browse.date.is_some(),
-                self.browse.folder.path.is_some(),
-            ]
-            .into_iter()
-            .filter(|active| *active)
-            .count();
-            let label = if active == 0 {
-                "Filters & sort".to_owned()
-            } else {
-                format!("Filters & sort · {active}")
-            };
-            let selected = active > 0 || self.browse_filters_open;
-            let response = if fit >= super::top_bar::Fit::Icons {
-                let glyph = if active == 0 {
-                    egui_phosphor::regular::FUNNEL.to_owned()
-                } else {
-                    format!("{} {active}", egui_phosphor::regular::FUNNEL)
-                };
-                super::top_bar::bar_icon(ui, true, selected, &glyph, &label).on_hover_text(&label)
-            } else {
-                icon_text_button(ui, true, selected, egui_phosphor::regular::FUNNEL, &label)
-            };
-            let mut open = self.browse_filters_open;
-            if response.clicked() {
-                open = !open;
-            }
-            let width = (ui.ctx().content_rect().width() - 64.).clamp(240., 460.);
-            let height = (ui.ctx().content_rect().height() - 180.).clamp(160., 440.);
-            // This parent owns its transient state so nested rating/folder
-            // ComboBoxes can use egui's normal popup state independently.
-            egui::Popup::from_response(&response)
-                .id(egui::Id::new("compact_browse_filters"))
-                .open_bool(&mut open)
-                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                .width(width)
-                .show(|ui| {
-                    ui.set_width(width);
-                    ui.heading("Filters & sort");
-                    if fit == super::top_bar::Fit::Overflow {
-                        ui.horizontal(|ui| {
-                            ui.label("Show");
-                            self.filter_combo(ui);
-                        });
-                    }
-                    egui::ScrollArea::vertical()
-                        .max_height(height)
-                        .show(ui, |ui| self.browse_filter_controls(ui));
-                });
-            self.browse_filters_open = open;
+        let active = [
+            self.browse.rating != RatingFilter::All,
+            self.browse.group.is_some(),
+            self.browse.date.is_some(),
+            self.browse.folder.path.is_some(),
+        ]
+        .into_iter()
+        .filter(|active| *active)
+        .count();
+        let label = if active == 0 {
+            "Filters & sort".to_owned()
         } else {
-            self.browse_filters_open = false;
+            format!("Filters & sort · {active}")
+        };
+        let selected = active > 0 || self.browse_filters_open;
+        let response = if fit >= super::top_bar::Fit::Icons {
+            let glyph = if active == 0 {
+                egui_phosphor::regular::FUNNEL.to_owned()
+            } else {
+                format!("{} {active}", egui_phosphor::regular::FUNNEL)
+            };
+            super::top_bar::bar_icon(ui, true, selected, &glyph, &label).on_hover_text(&label)
+        } else {
+            icon_text_button(ui, true, selected, egui_phosphor::regular::FUNNEL, &label)
+        };
+        let mut open = self.browse_filters_open;
+        if response.clicked() {
+            open = !open;
         }
+        let width = (ui.ctx().content_rect().width() - 64.).clamp(240., 460.);
+        let height = (ui.ctx().content_rect().height() - 180.).clamp(160., 440.);
+        // This parent owns its transient state so nested rating/folder
+        // ComboBoxes can use egui's normal popup state independently.
+        egui::Popup::from_response(&response)
+            .id(egui::Id::new("compact_browse_filters"))
+            .open_bool(&mut open)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .width(width)
+            .show(|ui| {
+                ui.set_width(width);
+                ui.heading("Filters & sort");
+                if fit == super::top_bar::Fit::Overflow {
+                    ui.horizontal(|ui| {
+                        ui.label("Show");
+                        self.filter_combo(ui);
+                    });
+                }
+                egui::ScrollArea::vertical()
+                    .max_height(height)
+                    .show(ui, |ui| self.browse_filter_controls(ui));
+            });
+        self.browse_filters_open = open;
         self.navigator_controls(ui);
         if !self.review {
             self.selection_controls(ui);
-        }
-        if !overlay {
-            self.browse_filter_controls(ui);
         }
         // Metadata progress and cancellation live in the status bar
         // (`footer_metadata`): a row here would push the grid down as soon

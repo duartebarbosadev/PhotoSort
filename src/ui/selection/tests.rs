@@ -75,6 +75,24 @@ fn browser_selection_bulk_staging_and_comparison_share_one_filtered_order() {
     settle(&mut app);
     assert!(app.decisions[&MediaId(1)].rejected);
     assert!(!app.decisions[&active].rejected);
+    // A filter hiding the active photo hands it to a selected one still
+    // shown, not to the first photo shown, which D would then skip.
+    app.browse.rating = crate::core::browsing::RatingFilter::All;
+    app.filter_dirty = true;
+    settle(&mut app);
+    app.stage_manual([MediaId(0), MediaId(7)], Change::Rating(3));
+    settle(&mut app);
+    app.select_library(MediaId(5), false, false);
+    app.select_library(MediaId(7), true, false);
+    app.set_active(MediaId(5));
+    app.browse.rating = crate::core::browsing::RatingFilter::Exactly(3);
+    app.filter_dirty = true;
+    settle(&mut app);
+    assert_eq!(
+        app.selection.ordered(&app.media, &app.filtered),
+        [MediaId(7)]
+    );
+    assert_eq!(app.active, Some(MediaId(7)));
     assert_eq!(app.stats.decodes, 0);
     assert_eq!(app.stats.metadata_reads, 0);
     assert!(app.plan.is_none(), "staging must not start file operations");
@@ -118,7 +136,9 @@ fn single_review_navigation_rates_current_photo_and_comparison_rates_its_members
         app.selection.ordered(&app.media, &app.filtered),
         [MediaId(1)]
     );
-    app.cull_selection_key(egui::Key::Num5, egui::Modifiers::COMMAND);
+    // One photo shown: the rating keys reach the canvas's photo.
+    assert!(!app.cull_selection_key(egui::Key::Num5, egui::Modifiers::COMMAND));
+    app.numeric_key(egui::Key::Num5, egui::Modifiers::COMMAND);
     settle(&mut app);
     assert_eq!(app.decisions.len(), 1);
     assert_eq!(app.decisions[&MediaId(1)].rating, Some(5));
@@ -728,6 +748,13 @@ fn a_similarity_group_comparison_keeps_d_on_the_current_photo() {
     assert!(!app.selection_compared());
     assert!(!app.cull_selection_key(egui::Key::D, egui::Modifiers::NONE));
     assert_eq!(app.trash_button_state(MediaId(1)), (false, false));
+    // Ratings too: the selected photos off screen keep theirs.
+    assert!(!app.cull_selection_key(egui::Key::Num4, egui::Modifiers::COMMAND));
+    app.numeric_key(egui::Key::Num4, egui::Modifiers::COMMAND);
+    settle(&mut app);
+    assert_eq!(app.decisions[&MediaId(1)].rating, Some(4));
+    assert!(!app.decisions.contains_key(&MediaId(9)));
+    assert!(!app.decisions.contains_key(&MediaId(10)));
 }
 
 /// Real frames: a click on a compared photo picks it for D, and a click

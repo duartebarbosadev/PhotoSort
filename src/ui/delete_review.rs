@@ -1,13 +1,11 @@
 use super::review_card::{
-    Badge, CardEvent, CardPhoto, CardState, Fact, GridClick, Inset, ReviewCard, size_text,
-    slot_ratio,
+    Badge, CardEvent, CardPhoto, Fact, GridClick, Inset, ReviewCard, size_text, slot_ratio,
 };
+use super::*;
+use crate::core::delete_review::{self, Category, Entry, FormatChoice, Review};
 
 /// The long side, in pixels, a closed-eyes card's zoomed eyes are cut at.
 const EYE_EDGE: f32 = 480.0;
-
-use super::*;
-use crate::core::delete_review::{self, Category, Entry, FormatChoice, Review};
 
 fn count(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
@@ -53,11 +51,15 @@ impl PhotoSortApp {
         self.delete_categories = self.delete_tab_categories(saved.as_ref());
         self.delete_run = None;
         self.filter_dirty = true;
-        let trash = self
+        let cards: Vec<MediaId> = self
             .delete_review
             .entries()
             .iter()
-            .flat_map(Entry::candidates)
+            .map(|e| e.subject)
+            .collect();
+        let trash = self
+            .delete_candidates(&cards)
+            .into_iter()
             .filter(|id| self.decision(*id).rejected)
             .count();
         // A closed-eyes shot with no better one is kept: a note, not a suggestion.
@@ -166,10 +168,14 @@ impl PhotoSortApp {
         self.delete_review.accept(ids, &mut self.decisions);
         self.changed_items(self.delete_candidates(ids));
     }
+    /// The photos of the cards of `ids`, each once: an Eyes closed card's
+    /// better shot can be on another card too.
     fn delete_candidates(&self, ids: &[MediaId]) -> Vec<MediaId> {
+        let mut seen = HashSet::new();
         ids.iter()
             .filter_map(|id| self.delete_review.entry(*id))
             .flat_map(Entry::candidates)
+            .filter(|id| seen.insert(*id))
             .collect()
     }
     /// Undoes the user's changes to the current card.
@@ -1025,15 +1031,9 @@ impl PhotoSortApp {
             .collect();
         ReviewCard {
             title: entry.tag.clone(),
-            state: CardState::Suggested,
             state_text: None,
             photos,
-            note: String::new(),
-            warning: false,
             buttons: Vec::new(),
-            // The selected card shows in the panel beside the grid, which is
-            // enough: no outline that could be read as Keep or Trash.
-            current: false,
             shown: self.delete_panel && self.delete_current == Some(subject),
             title_hover: Some(entry.reason.clone()),
             undo: (enabled && self.delete_review.changed(subject, &self.decisions)).then(|| {
@@ -1530,6 +1530,13 @@ mod tests {
         app.delete_card_event(MediaId(6), CardEvent::Toggle(1));
         assert!(trashed(&app, 6) && !trashed(&app, 10));
         assert_eq!(app.comparison_ids().len(), 3);
+        // Every card shown: the summary counts 7 once, though it keeps two.
+        app.set_delete_tab(None);
+        app.refilter();
+        let cards = app.delete_review_ids();
+        assert!(cards.contains(&MediaId(9)) && cards.contains(&MediaId(6)));
+        let candidates = app.delete_candidates(&cards);
+        assert_eq!(candidates.iter().filter(|id| id.0 == 7).count(), 1);
     }
     #[test]
     fn grid_shows_short_tags_facts_and_group_actions_without_confirm() {
@@ -1868,12 +1875,11 @@ mod tests {
         }
         assert_eq!(app.decisions, staged);
         assert_eq!(app.delete_current, None);
-        // Enter shows the first card; the grid still outlines none.
+        // Enter shows the first card in the panel.
         key(&mut app, egui::Key::Enter, egui::Modifiers::NONE);
         assert_eq!(app.delete_current, Some(MediaId(1)));
         assert!(app.delete_panel);
         let entry = app.delete_review.entry(MediaId(1)).unwrap().clone();
-        assert!(!app.delete_card(&entry).current);
         // Only a soft highlight marks the card shown in the panel.
         assert!(app.delete_card(&entry).shown);
         app.delete_panel = false;

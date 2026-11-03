@@ -1,4 +1,5 @@
-//! One browser selection/action owner shared by Cull's list, icons and grid.
+//! One browser selection/action owner shared by Cull's grid and strips and
+//! Organize's board.
 use super::*;
 use crate::core::decisions::{self, Change};
 
@@ -509,20 +510,18 @@ impl PhotoSortApp {
                 _ => {}
             }
         }
-        if command && !self.selection.is_empty() {
-            let rating = match key {
-                egui::Key::Num0 => Some(0),
-                egui::Key::Num1 => Some(1),
-                egui::Key::Num2 => Some(2),
-                egui::Key::Num3 => Some(3),
-                egui::Key::Num4 => Some(4),
-                egui::Key::Num5 => Some(5),
-                _ => None,
-            };
-            if let Some(n) = rating {
-                self.stage_selection(Change::Rating(n));
-                return true;
-            }
+        // In Review, Ctrl/Cmd and a digit rate every selected photo only
+        // while they are the photos shown, as D marks them; otherwise they
+        // rate the photo shown (`numeric_key`), not selected ones off screen.
+        let together = !self.review
+            || (self.selection_compared() && self.focused_comparison_photo().is_none());
+        if command
+            && together
+            && !self.selection.is_empty()
+            && let Some(n) = super::shortcuts::digit(key).filter(|n| *n <= 5)
+        {
+            self.stage_selection(Change::Rating(n as u8));
+            return true;
         }
         false
     }

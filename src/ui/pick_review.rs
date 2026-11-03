@@ -1,4 +1,4 @@
-use super::review_card::{Badge, CardEvent, CardPhoto, CardState, Fact, GridClick, ReviewCard};
+use super::review_card::{Badge, CardEvent, CardPhoto, Fact, GridClick, ReviewCard};
 use super::*;
 use crate::core::pick_review::{Cluster, Reason, Review};
 
@@ -592,15 +592,11 @@ impl PhotoSortApp {
         };
         ReviewCard {
             title: self.pick_title(group),
-            state: CardState::Suggested,
             state_text: Some(state_text),
             photos,
-            note: String::new(),
-            warning: false,
             buttons: Vec::new(),
             // The selected group shows in the panel beside the grid, which
             // is enough: no outline that could be read as Keep or Trash.
-            current: false,
             shown: self.pick_panel && self.pick_group() == Some(group),
             title_hover: (!hidden.is_empty())
                 .then(|| "Click the card to see every photo of the group".to_owned()),

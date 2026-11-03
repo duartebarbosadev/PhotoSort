@@ -1,9 +1,9 @@
 //! The review card shared by the guided steps' grids (Easy Delete, Fix
 //! Rotation and Pick Best): the photos of one suggestion or group, what
-//! PhotoSort suggests for each, whether the choice is settled, and the same
-//! quick actions as Review. The steps describe cards; this module draws them
-//! and reports what was clicked, so every grid looks and behaves alike.
-use super::library::{WELL, reveal, ring, shimmer};
+//! PhotoSort suggests for each, and a few icon actions in its header. The
+//! steps describe cards; this module draws them and reports what was
+//! clicked, so every grid looks and behaves alike.
+use super::library::{WELL, reveal, shimmer};
 use super::*;
 
 /// One photo on a card.
@@ -68,30 +68,19 @@ impl Badge {
     }
 }
 
-/// How settled a card's choice is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CardState {
-    /// The suggestion is the decision: nothing to say.
-    Suggested,
-}
-
-/// A button on a card's action row.
+/// An icon button at the right of a card's header.
 pub(super) struct CardButton {
+    /// Its icon.
     pub text: String,
     pub hover: String,
-    pub primary: bool,
     pub enabled: bool,
-    /// Right-aligned with Confirm, instead of with the per-photo choices.
-    pub trailing: bool,
 }
 impl CardButton {
     pub fn new(text: impl Into<String>, hover: impl Into<String>) -> Self {
         Self {
             text: text.into(),
             hover: hover.into(),
-            primary: false,
             enabled: true,
-            trailing: false,
         }
     }
     pub fn enabled(mut self, enabled: bool) -> Self {
@@ -102,16 +91,11 @@ impl CardButton {
 
 pub(super) struct ReviewCard {
     pub title: String,
-    pub state: CardState,
-    /// Replaces the state's own words, as in "Round 2 of 3".
+    /// A quiet word at the right of the header, such as how many photos a
+    /// Pick Best group has beyond those shown.
     pub state_text: Option<String>,
     pub photos: Vec<CardPhoto>,
-    /// Why PhotoSort suggests it, in one line.
-    pub note: String,
-    pub warning: bool,
     pub buttons: Vec<CardButton>,
-    /// The card the keyboard shortcuts act on.
-    pub current: bool,
     /// The title's tooltip: the full explanation behind a short tag.
     pub title_hover: Option<String>,
     /// Shown large beside the grid: a soft, neutral highlight that eases in.
@@ -126,7 +110,7 @@ pub(super) struct ReviewCard {
 pub(super) enum CardEvent {
     /// A click on the card, or on one of its photos.
     Select(usize),
-    /// A double click: open it in Review on that photo.
+    /// A double click on the card, or on one of its photos.
     Open(usize),
     /// One of its buttons, by index.
     Button(usize),
@@ -153,8 +137,6 @@ pub(super) struct CardLayout {
     pub captions: bool,
     /// A line of facts under each photo.
     pub facts: bool,
-    /// The note line and the action row under the photos.
-    pub footer: bool,
 }
 
 /// The narrowest a card gets, so its header and pills still fit.
@@ -166,11 +148,9 @@ const HEADER_GAP: f32 = 6.0;
 /// Between photos on one card.
 const PHOTO_GAP: f32 = S1 + 2.0;
 const CAPTION: f32 = 16.0;
-const NOTE: f32 = 18.0;
 const FACTS: f32 = 16.0;
 /// A section header's row in a sectioned grid.
 const SECTION: f32 = 36.0;
-const ACTIONS: f32 = 28.0;
 const RADIUS: f32 = 8.0;
 
 impl CardLayout {
@@ -180,11 +160,6 @@ impl CardLayout {
             + self.photo_height
             + if self.captions { CAPTION } else { 0.0 }
             + if self.facts { FACTS } else { 0.0 }
-            + if self.footer {
-                S1 + NOTE + S2 + ACTIONS
-            } else {
-                0.0
-            }
             + PAD
     }
 }
@@ -196,14 +171,6 @@ pub(super) fn card_tile(aspects: &[f32]) -> super::photo_rows::Tile {
         aspect: aspects.iter().sum(),
         extra: 2.0 * PAD + PHOTO_GAP * aspects.len().saturating_sub(1) as f32,
         min_width: MIN_CARD,
-    }
-}
-
-impl CardState {
-    fn label(self, text: Option<&str>) -> (String, Color32) {
-        match self {
-            Self::Suggested => (text.unwrap_or_default().to_owned(), MUTED),
-        }
     }
 }
 
@@ -344,7 +311,6 @@ impl PhotoSortApp {
                     photo_height: row.height,
                     captions,
                     facts: row.range.clone().any(|i| facts(self, i)),
-                    footer: false,
                 };
                 let height = layout.height();
                 for _ in row.range.clone() {
@@ -444,10 +410,9 @@ impl PhotoSortApp {
             .collect::<Vec<_>>()
             .join(" and ");
         response.widget_info(|| {
-            egui::WidgetInfo::selected(
+            egui::WidgetInfo::labeled(
                 egui::WidgetType::Button,
                 true,
-                card.current,
                 format!("{}: {photos}", card.title),
             )
         });
@@ -468,49 +433,42 @@ impl PhotoSortApp {
                 egui::StrokeKind::Inside,
             );
         }
-        ring(ui, response.id, rect, R_TILE, card.current, false);
         if response.double_clicked() {
             event = Some(CardEvent::Open(0));
         } else if response.clicked() {
             event = Some(CardEvent::Select(0));
         }
 
-        // Header: what the suggestion is, and how settled.
+        // Header: what the suggestion is, then its buttons as icons and the
+        // link back to the suggestion, from the right.
         let inner = rect.shrink(PAD);
         let header = egui::Rect::from_min_size(inner.min, egui::vec2(inner.width(), HEADER));
         let mut right = header.right();
-        // Without a footer, a card's buttons are icons at the header's right.
-        if !layout.footer {
-            for (index, button) in card.buttons.iter().enumerate().rev() {
-                let ink = if button.enabled { MUTED } else { FAINT };
-                let glyph =
-                    painter.layout_no_wrap(button.text.clone(), FontId::proportional(15.0), ink);
-                let rect = Align2::RIGHT_CENTER.anchor_size(
-                    egui::pos2(right, header.center().y),
-                    egui::vec2(glyph.size().x + 10.0, HEADER + 4.0),
-                );
-                let response = ui
-                    .interact(rect, ui.id().with(("button", index)), Sense::click())
-                    .on_hover_text(&button.hover);
-                response.widget_info(|| {
-                    egui::WidgetInfo::labeled(
-                        egui::WidgetType::Button,
-                        button.enabled,
-                        &button.hover,
-                    )
-                });
-                if button.enabled && response.hovered() {
-                    painter.rect_filled(rect, R_CONTROL, ACCENT_SOFT);
-                }
-                painter.galley(rect.center() - glyph.size() / 2.0, glyph, ink);
-                if button.enabled && response.clicked() {
-                    event = Some(CardEvent::Button(index));
-                }
-                right = rect.left() - 2.0;
+        for (index, button) in card.buttons.iter().enumerate().rev() {
+            let ink = if button.enabled { MUTED } else { FAINT };
+            let glyph =
+                painter.layout_no_wrap(button.text.clone(), FontId::proportional(15.0), ink);
+            let rect = Align2::RIGHT_CENTER.anchor_size(
+                egui::pos2(right, header.center().y),
+                egui::vec2(glyph.size().x + 10.0, HEADER + 4.0),
+            );
+            let response = ui
+                .interact(rect, ui.id().with(("button", index)), Sense::click())
+                .on_hover_text(&button.hover);
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, button.enabled, &button.hover)
+            });
+            if button.enabled && response.hovered() {
+                painter.rect_filled(rect, R_CONTROL, ACCENT_SOFT);
             }
-            if !card.buttons.is_empty() {
-                right -= S1;
+            painter.galley(rect.center() - glyph.size() / 2.0, glyph, ink);
+            if button.enabled && response.clicked() {
+                event = Some(CardEvent::Button(index));
             }
+            right = rect.left() - 2.0;
+        }
+        if !card.buttons.is_empty() {
+            right -= S1;
         }
         if let Some((label, hover)) = &card.undo {
             let undo = painter.layout_no_wrap(
@@ -537,8 +495,12 @@ impl PhotoSortApp {
             }
             right = link.left() - S2;
         }
-        let (state, color) = card.state.label(card.state_text.as_deref());
-        let state = painter.layout_no_wrap(state, medium(11.0), color);
+        let color = MUTED;
+        let state = painter.layout_no_wrap(
+            card.state_text.clone().unwrap_or_default(),
+            medium(11.0),
+            color,
+        );
         painter.galley(
             egui::pos2(
                 right - state.size().x,
@@ -701,76 +663,6 @@ impl PhotoSortApp {
             }
         }
 
-        if !layout.footer {
-            return event;
-        }
-        // Why: the reason or confidence, in one line.
-        let note = egui::Rect::from_min_size(
-            egui::pos2(
-                inner.left(),
-                top + layout.photo_height
-                    + if layout.captions { CAPTION } else { 0.0 }
-                    + if layout.facts { FACTS } else { 0.0 }
-                    + S1,
-            ),
-            egui::vec2(inner.width(), NOTE),
-        );
-        let text = if card.warning {
-            format!("{}  {}", egui_phosphor::regular::WARNING, card.note)
-        } else {
-            card.note.clone()
-        };
-        ui.put(
-            note,
-            egui::Label::new(RichText::new(text).size(11.5).color(if card.warning {
-                ACCENT
-            } else {
-                MUTED
-            }))
-            .truncate(),
-        )
-        .on_hover_text(&card.note);
-
-        // The same quick actions as Review's bar.
-        let actions = egui::Rect::from_min_size(
-            egui::pos2(inner.left(), note.bottom() + S2),
-            egui::vec2(inner.width(), ACTIONS),
-        );
-        ui.scope_builder(
-            egui::UiBuilder::new()
-                .max_rect(actions)
-                .layout(egui::Layout::left_to_right(Align::Center)),
-            |ui| {
-                ui.spacing_mut().item_spacing.x = S1 + 2.0;
-                let mut add = |ui: &mut egui::Ui, index: usize, button: &CardButton| {
-                    let widget = if button.primary {
-                        primary(button.text.clone())
-                    } else {
-                        egui::Button::new(button.text.clone())
-                    };
-                    if ui
-                        .add_enabled(button.enabled, widget)
-                        .on_hover_text(&button.hover)
-                        .clicked()
-                    {
-                        event = Some(CardEvent::Button(index));
-                    }
-                };
-                for (index, button) in card.buttons.iter().enumerate() {
-                    if !button.trailing {
-                        add(ui, index, button);
-                    }
-                }
-                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                    // Right to left: the last trailing button sits rightmost.
-                    for (index, button) in card.buttons.iter().enumerate().rev() {
-                        if button.trailing {
-                            add(ui, index, button);
-                        }
-                    }
-                });
-            },
-        );
         event
     }
 
@@ -1200,7 +1092,6 @@ mod tests {
             photo_height: 160.0,
             captions: false,
             facts: false,
-            footer: false,
         };
         // Header, the photo and padding: nothing under the photo.
         assert_eq!(bare.height(), PAD + HEADER + HEADER_GAP + 160.0 + PAD);

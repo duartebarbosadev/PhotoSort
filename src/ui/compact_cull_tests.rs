@@ -62,7 +62,7 @@ pub(super) fn fixture_with(count: usize) -> (tempfile::TempDir, PhotoSortApp) {
     settle(&mut app);
     (temp, app)
 }
-fn settle(app: &mut PhotoSortApp) {
+pub(super) fn settle(app: &mut PhotoSortApp) {
     let deadline = Instant::now() + worker_patience();
     loop {
         let expired = Instant::now() >= deadline;
@@ -727,6 +727,14 @@ fn compact_strip_fits_more_photos_and_best_links_its_similar_group() {
         .map(|(label, _)| label.clone())
         .expect("group chip on a photo that lost");
     assert!(chip.starts_with("3rd of 3"), "{chip}");
+    // With the best photo hidden by the filters, it only says so.
+    let shown = app.filtered.clone();
+    app.filtered.retain(|i| app.media[*i].id != ids[1]);
+    let nodes = rendered(&mut app, &ctx, size);
+    assert!(nodes.iter().any(|(label, _)| label == "3rd of 3"));
+    click_label(&mut app, &ctx, size, "3rd of 3");
+    assert_eq!(app.active, Some(ids[0]));
+    app.filtered = shown;
     click_label(&mut app, &ctx, size, &chip);
     assert_eq!(app.active, Some(ids[1]));
     // The winner offers to compare the whole group.
@@ -739,4 +747,62 @@ fn compact_strip_fits_more_photos_and_best_links_its_similar_group() {
     click_label(&mut app, &ctx, size, &chip);
     assert_eq!(app.comparison, ids[..3].to_vec());
     assert!(app.review);
+}
+
+#[test]
+fn a_photo_sorted_away_between_press_and_release_is_not_clicked() {
+    let size = egui::vec2(1200., 800.);
+    let (_temp, mut app) = fixture();
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let ids: Vec<MediaId> = app.filtered.iter().map(|i| app.media[*i].id).collect();
+    app.set_active(ids[0]);
+    let nodes = rendered(&mut app, &ctx, size);
+    let name = app.media[app.index[&ids[2]]].name();
+    let pos = nodes.iter().find(|(l, _)| *l == name).unwrap().1.center();
+    let button = |pressed| {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            },
+        ]
+    };
+    frame(&mut app, &ctx, size, button(true));
+    // A late result re-sorts the photos: another one takes the third place.
+    app.filtered.swap(2, 3);
+    frame(&mut app, &ctx, size, button(false));
+    assert_eq!(app.active, Some(ids[0]));
+    assert_eq!(app.selection.ordered(&app.media, &app.filtered), [ids[0]]);
+    app.runtime.shutdown();
+}
+
+#[test]
+fn a_folder_clicked_in_the_navigator_scrolls_the_bottom_filmstrip() {
+    let size = egui::vec2(1200., 800.);
+    let (_temp, mut app) = fixture_with(24);
+    app.preferences.strip_position = crate::core::preferences::StripPosition::Bottom;
+    app.review = true;
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    // Frames here take no time, so the strip jumps rather than glides.
+    ctx.global_style_mut(|style| style.scroll_animation = egui::style::ScrollAnimation::none());
+    let first = app.media[app.filtered[0]].name();
+    let strip = |app: &mut PhotoSortApp| {
+        rendered(app, &ctx, size)
+            .into_iter()
+            .any(|(label, _)| label == first)
+    };
+    assert!(strip(&mut app));
+    let b = crate::core::browsing::tree::Key::Folder(app.root.clone().unwrap().join("B"));
+    app.go_to(b);
+    // The four photos of A/Day1 scroll out on the left.
+    assert!(!strip(&mut app));
+    assert!(app.spy.scroll_to.is_none());
+    app.runtime.shutdown();
 }

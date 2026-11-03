@@ -1,6 +1,4 @@
-use super::review_card::{
-    Badge, CardButton, CardEvent, CardPhoto, CardState, GridClick, ReviewCard,
-};
+use super::review_card::{Badge, CardButton, CardEvent, CardPhoto, GridClick, ReviewCard};
 use super::*;
 use crate::core::rotation::{set_turns, turns};
 
@@ -436,8 +434,6 @@ impl PhotoSortApp {
         }
     }
 
-    /// The slot height over width a card's photos need: a quarter turn
-    /// makes a landscape photo portrait.
     /// Each photo's width over its height on `id`'s card: the photo as it
     /// is and, once a turn is staged, as it will be. The turned photo keeps
     /// the first one's slot, fitted inside it, so turning again does not
@@ -451,6 +447,8 @@ impl PhotoSortApp {
         }
     }
 
+    /// The slot height over width a card's photos need: a quarter turn
+    /// makes a landscape photo portrait.
     pub(super) fn rotation_card_ratio(&self, id: MediaId) -> f32 {
         let Some(m) = self
             .metadata
@@ -516,17 +514,13 @@ impl PhotoSortApp {
         }
         ReviewCard {
             title: String::new(),
-            state: CardState::Suggested,
             state_text: None,
             photos,
-            note: String::new(),
-            warning: false,
             buttons: vec![
                 CardButton::new(icon::ARROW_COUNTER_CLOCKWISE, "Rotate left").enabled(enabled),
                 CardButton::new(icon::ARROW_CLOCKWISE, "Rotate right").enabled(enabled),
             ],
             // The selected card shows in the panel beside the grid.
-            current: false,
             shown: self.rotation_panel && self.active == Some(id),
             title_hover: None,
             undo: self.rotation_link(id).filter(|_| enabled).map(|link| {
@@ -720,7 +714,6 @@ mod tests {
         assert_eq!((card.photos[0].turns, card.photos[1].turns), (0, 1));
         assert!(card.photos.iter().all(|p| p.badge == Badge::None));
         assert!(card.photos[1].name.contains("90% confident"));
-        assert!(!card.current);
         let painted = super::super::review_card::render_grid(&mut app);
         for gone in [
             "Turn 90°",
