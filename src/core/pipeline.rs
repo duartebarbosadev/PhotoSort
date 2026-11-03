@@ -159,7 +159,7 @@ impl Pipeline {
         hash.update(media.path.as_os_str().as_encoded_bytes());
         hash.update(
             format!(
-                "{fingerprint:?}-{sidecar:?}-v7-render-status-srgb-neutral-analysis-native_metadata={}",
+                "{fingerprint:?}-{sidecar:?}-v8-render-status-srgb-neutral-analysis-native_metadata={}",
                 cfg!(feature = "metadata-native")
             )
             .as_bytes(),
@@ -272,15 +272,7 @@ impl Pipeline {
             && bytes.len() as u64 <= self.disk_budget
             && cache_record::write(&path, &bytes).is_ok()
         {
-            self.written_since_prune += bytes.len() as u64;
-            if self.written_since_prune >= self.disk_budget.min(32 * 1024 * 1024) {
-                super::cache::maintain_keeping_models(
-                    &self.disk,
-                    Some(self.disk_budget),
-                    cancelled,
-                )?;
-                self.written_since_prune = 0;
-            }
+            self.note_cache_write(bytes.len() as u64, cancelled);
         }
         // A cached model result can skip image preparation entirely. Restore
         // source geometry from the render descriptor without decoding pixels,
@@ -363,7 +355,6 @@ impl Pipeline {
         if path.exists() {
             return;
         }
-        let temp = path.with_extension("tmp.png");
         // Opaque tiles are stored as RGB; the PNG is about a quarter smaller.
         let image = DynamicImage::ImageRgba8(thumbnail.clone());
         let image = if thumbnail.pixels().all(|p| p[3] == 255) {
@@ -371,8 +362,23 @@ impl Pipeline {
         } else {
             image
         };
-        if image.save(&temp).is_ok() && std::fs::rename(&temp, &path).is_err() {
-            let _ = std::fs::remove_file(&temp);
+        publish_png(&image, &path);
+    }
+    /// Counts new cache bytes and trims the folder now and then. A trim lists
+    /// and sorts the whole folder, so it runs once a share of the budget was
+    /// written, not every few photos. A failed trim never fails the read or
+    /// preview that triggered it; the next one tries again.
+    fn note_cache_write(&mut self, bytes: u64, cancelled: &impl Fn() -> bool) {
+        const MIN_TRIM: u64 = 32 * 1024 * 1024;
+        self.written_since_prune += bytes;
+        let every = (self.disk_budget / 16).max(MIN_TRIM).min(self.disk_budget);
+        if self.written_since_prune >= every {
+            if let Err(error) =
+                super::cache::maintain_keeping_models(&self.disk, Some(self.disk_budget), cancelled)
+            {
+                tracing::debug!(%error, "cache trim skipped");
+            }
+            self.written_since_prune = 0;
         }
     }
     /// How RAW photos are displayed. Analysis is unaffected; display assets
@@ -511,23 +517,19 @@ impl Pipeline {
                 !cancelled() && Self::key(media)? == source_key,
                 "Photo changed or preparation cancelled"
             );
-            if self.disk_budget > 0 && std::fs::create_dir_all(&self.disk).is_ok() {
-                let temp = disk.with_extension("tmp.png");
-                if proxy.save(&temp).is_ok() && std::fs::rename(temp, &disk).is_ok() {
-                    let _ = metadata::atomic_write(
-                        &info,
-                        &serde_json::to_vec(&CachedRender {
-                            width: meta.width,
-                            height: meta.height,
-                            warning: warning.clone(),
-                        })?,
-                    );
-                    self.written_since_prune += std::fs::metadata(&disk).map_or(0, |m| m.len());
-                    if self.written_since_prune >= self.disk_budget.min(32 * 1024 * 1024) {
-                        let _ = self.prune_disk(self.disk_budget);
-                        self.written_since_prune = 0;
-                    }
-                }
+            if self.disk_budget > 0
+                && std::fs::create_dir_all(&self.disk).is_ok()
+                && publish_png(&proxy, &disk)
+            {
+                let _ = metadata::atomic_write(
+                    &info,
+                    &serde_json::to_vec(&CachedRender {
+                        width: meta.width,
+                        height: meta.height,
+                        warning: warning.clone(),
+                    })?,
+                );
+                self.note_cache_write(std::fs::metadata(&disk).map_or(0, |m| m.len()), cancelled);
             }
             proxy
         };
@@ -959,10 +961,21 @@ impl Pipeline {
     }
     /// The whole photo as shown, upright, no larger than `edge` on either side.
     pub fn render_whole(&mut self, media: &Media, edge: u32) -> Result<Arc<RgbaImage>> {
+        self.render_whole_cancellable(media, edge, &|| false)
+    }
+    /// The same, stopping with an error between decode stages once `cancelled`
+    /// returns true, for example when a newer copy replaces this one.
+    pub fn render_whole_cancellable(
+        &mut self,
+        media: &Media,
+        edge: u32,
+        cancelled: &(impl Fn() -> bool + Sync),
+    ) -> Result<Arc<RgbaImage>> {
         anyhow::ensure!(media.kind != MediaKind::Video, "Videos have no still image");
+        anyhow::ensure!(!cancelled(), "Rendering cancelled");
         let key = Self::key(media)?;
-        let mut meta = self.metadata_for_key(media, &key, &|| false)?;
-        let prepared = self.canonical(media, &key, &mut meta, true, &|| false)?;
+        let mut meta = self.metadata_for_key(media, &key, cancelled)?;
+        let prepared = self.canonical(media, &key, &mut meta, true, cancelled)?;
         let request = super::inspection::Request {
             slot: 0,
             media: media.clone(),
@@ -972,7 +985,8 @@ impl Pipeline {
             ),
             output_edge: edge,
         };
-        self.inspect(&request)
+        self.inspect_with_warning(&request, cancelled)
+            .map(|(pixels, _)| pixels)
     }
     pub fn clear_memory(&mut self) {
         self.raw_levels.clear();
@@ -1030,9 +1044,6 @@ impl Pipeline {
         usage.metadata_entries = self.metadata.len();
         Ok(usage)
     }
-    pub fn prune_disk(&self, max_bytes: u64) -> Result<()> {
-        super::cache::maintain_keeping_models(&self.disk, Some(max_bytes), || false).map(|_| ())
-    }
 }
 #[cfg(feature = "native-imaging")]
 fn native_pixels(
@@ -1052,6 +1063,25 @@ fn native_pixels(
 }
 // Keep this at the shared proxy boundary: display and analysis in every workflow
 // use the same lossless representation. Original-detail precision is untouched.
+/// Writes a cache PNG through its own temporary file, so two writers of the
+/// same photo (the clipboard has its own pipeline) never publish a torn file
+/// and a failed write leaves nothing behind.
+fn publish_png(image: &DynamicImage, dest: &Path) -> bool {
+    let (Some(dir), Some(stem)) = (dest.parent(), dest.file_stem().and_then(|s| s.to_str())) else {
+        return false;
+    };
+    let Ok(temp) = tempfile::Builder::new()
+        .prefix(&format!("{stem}."))
+        .suffix(".tmp.png")
+        .tempfile_in(dir)
+    else {
+        return false;
+    };
+    image
+        .save_with_format(temp.path(), image::ImageFormat::Png)
+        .is_ok()
+        && super::replace::persist(temp, dest).is_ok()
+}
 fn compact_opaque_proxy(
     image: DynamicImage,
     cancelled: &impl Fn() -> bool,
@@ -1192,6 +1222,21 @@ enum RawRecipe {
     #[cfg(feature = "raw")]
     PreviewFallback = 2,
 }
+/// Only a full-size decode is as large as the sensor. A preview is bounded by
+/// its own output, the camera's JPEG or a reduced decode, which is checked
+/// separately, so a 102 MP RAW still shows a preview and thumbnail.
+#[cfg(any(feature = "raw", test))]
+fn check_raw_source(recipe: RawRecipe, width: u32, height: u32) -> Result<()> {
+    /// Sensor size above which a RAW is not decoded at full size.
+    const MAX_RAW_SOURCE_PIXELS: u64 = 100_000_000;
+    anyhow::ensure!(width > 0 && height > 0, "Invalid RAW source dimensions");
+    anyhow::ensure!(
+        !matches!(recipe, RawRecipe::Original)
+            || u64::from(width) * u64::from(height) <= MAX_RAW_SOURCE_PIXELS,
+        "This RAW is too large to open at full size ({width} x {height})"
+    );
+    Ok(())
+}
 struct RawDecoded {
     image: DynamicImage,
     source: (u32, u32),
@@ -1263,19 +1308,17 @@ fn decode_raw_recipe(
     anyhow::ensure!(!owned.0.is_null(), "LibRaw decode failed ({error})");
     anyhow::ensure!(!cancelled(), "RAW preparation cancelled");
     let raw = unsafe { &*owned.0 };
-    anyhow::ensure!(
-        source_width > 0
-            && source_height > 0
-            && u64::from(source_width) * u64::from(source_height) <= 100_000_000,
-        "Invalid RAW source dimensions"
-    );
+    // The pixels run past the one-byte `data` field. Take their address from
+    // the C pointer: a slice through `raw` may only cover that one byte.
+    let data = unsafe { std::ptr::addr_of!((*owned.0).data) }.cast::<u8>();
+    check_raw_source(recipe, source_width, source_height)?;
     let source = (source_width, source_height);
     if embedded != 0 {
         anyhow::ensure!(
             raw.kind == 1 && raw.size > 0 && raw.size <= 300_000_000,
             "Invalid embedded RAW preview"
         );
-        let bytes = unsafe { std::slice::from_raw_parts(raw.data.as_ptr(), raw.size as usize) };
+        let bytes = unsafe { std::slice::from_raw_parts(data, raw.size as usize) };
         let reader =
             image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Jpeg);
         return match colors.decode(reader, cancelled) {
@@ -1301,7 +1344,7 @@ fn decode_raw_recipe(
         raw.size as usize == size && size <= 300_000_000,
         "Invalid RAW image dimensions"
     );
-    let pixels = unsafe { std::slice::from_raw_parts(raw.data.as_ptr(), size) }.to_vec();
+    let pixels = unsafe { std::slice::from_raw_parts(data, size) }.to_vec();
     Ok(RawDecoded {
         image: DynamicImage::ImageRgb8(
             image::RgbImage::from_raw(raw.width.into(), raw.height.into(), pixels)
@@ -1394,6 +1437,72 @@ mod metadata_cache_tests {
         assert_eq!(pipeline.metadata.len(), METADATA_CAPACITY.get());
         assert!(!pipeline.metadata.contains("unused-1"));
         assert!(pipeline.metadata.contains("unused-2"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_cache_trim_never_fails_the_metadata_read_that_triggered_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("photo.png");
+        image::RgbaImage::new(1, 1).save(&path).unwrap();
+        let media = Media {
+            id: MediaId::for_path(&path),
+            fingerprint: Fingerprint::read(&path).unwrap(),
+            kind: MediaKind::Photo,
+            path,
+        };
+        // Records still land, but maintenance refuses a symlinked cache folder.
+        let real = directory.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let linked = directory.path().join("cache");
+        std::os::unix::fs::symlink(&real, &linked).unwrap();
+        let mut pipeline = Pipeline::new(1024, linked);
+        pipeline.written_since_prune = pipeline.disk_budget;
+        assert!(pipeline.metadata(&media).is_ok());
+        assert_eq!(pipeline.written_since_prune, 0, "the trim ran and failed");
+    }
+
+    #[test]
+    fn whole_render_stops_when_cancelled_and_otherwise_matches() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("photo.png");
+        image::RgbaImage::from_fn(40, 20, |x, y| image::Rgba([x as u8, y as u8, 7, 255]))
+            .save(&path)
+            .unwrap();
+        let media = Media {
+            id: MediaId::for_path(&path),
+            fingerprint: Fingerprint::read(&path).unwrap(),
+            kind: MediaKind::Photo,
+            path,
+        };
+        let cache = directory.path().join("cache");
+        let expected = Pipeline::new(1024 * 1024, cache.clone())
+            .render_whole(&media, 16)
+            .unwrap();
+        // Cancelled after the first check: a newer copy replaced this one
+        // while it was decoding.
+        let checks = std::sync::atomic::AtomicUsize::new(0);
+        let later = || checks.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 0;
+        let mut pipeline = Pipeline::new(1024 * 1024, directory.path().join("other"));
+        let error = pipeline
+            .render_whole_cancellable(&media, 16, &later)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("cancelled"), "{error:#}");
+        assert_eq!(pipeline.stats.decodes, 0, "stopped before decoding");
+        let rendered = Pipeline::new(1024 * 1024, cache)
+            .render_whole_cancellable(&media, 16, &|| false)
+            .unwrap();
+        assert_eq!(*rendered, *expected);
+    }
+
+    #[test]
+    fn a_raw_over_100_megapixels_keeps_its_preview_but_not_a_full_decode() {
+        // Fujifilm GFX100: 11648 x 8736, about 101.8 MP.
+        let (width, height) = (11_648, 8_736);
+        assert!(check_raw_source(RawRecipe::Preview, width, height).is_ok());
+        assert!(check_raw_source(RawRecipe::Original, width, height).is_err());
+        assert!(check_raw_source(RawRecipe::Original, 9_000, 6_000).is_ok());
+        assert!(check_raw_source(RawRecipe::Preview, 0, height).is_err());
     }
 
     #[test]

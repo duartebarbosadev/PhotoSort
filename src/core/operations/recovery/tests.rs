@@ -2170,8 +2170,9 @@ fn staged_retry_rechecks_destination_source_and_symlinks_before_removing_any_sou
         ));
         match mode {
             "destination-replaced" => {
+                // Identical bytes would still keep the photo; other bytes must not.
                 fs::remove_file(&to).unwrap();
-                fs::write(&to, b"first photo").unwrap();
+                fs::write(&to, b"first phot0").unwrap();
             }
             "destination-missing" => fs::remove_file(&to).unwrap(),
             "source-changed" => fs::write(&source, b"changed source").unwrap(),
@@ -2332,4 +2333,182 @@ fn staged_move_never_removes_the_only_destination_through_an_alias() {
     assert!(report.errors.is_empty());
     assert!(!source.path.exists());
     assert_eq!(fs::read(destination).unwrap(), b"first photo");
+}
+#[test]
+#[cfg(unix)]
+fn move_that_fails_removing_a_staged_source_retries_only_the_unfinished_unlink() {
+    use std::os::unix::fs::PermissionsExt;
+    // Hard links on one volume; copies across volumes, where no identity is shared.
+    for copy in [false, true] {
+        let (_temp, store, context, _) = fixture();
+        let locked = context.root.join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::write(locked.join("c.jpg"), b"third photo").unwrap();
+        let sorted = context.root.join("Sorted");
+        let plan = Plan {
+            actions: vec![Action::Move {
+                files: vec![
+                    (
+                        Source::capture(context.root.join("a.jpg")).unwrap(),
+                        sorted.join("a.jpg"),
+                    ),
+                    (
+                        Source::capture(locked.join("c.jpg")).unwrap(),
+                        sorted.join("c.jpg"),
+                    ),
+                ],
+            }],
+            description: "Review moves".into(),
+            output_root: Some(context.root.clone()),
+            ..Default::default()
+        };
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+        if fs::write(locked.join("probe"), b"").is_ok() {
+            return; // Permissions do not bind this user (root); nothing to test.
+        }
+        super::super::COPY_ONLY.set(copy);
+        let report = store
+            .execute(&context, &plan, None, || false, |_, _| {})
+            .unwrap();
+        super::super::COPY_ONLY.set(false);
+        assert_eq!(report.errors.len(), 1, "the failure is still reported");
+        assert!(report.errors[0].contains("could not remove source"));
+        let a = MediaId::for_path(&context.root.join("a.jpg"));
+        assert!(
+            report
+                .relocated
+                .iter()
+                .any(|(old, new, _)| *old == a && *new == MediaId::for_path(&sorted.join("a.jpg")))
+        );
+        assert!(matches!(
+            &report.remaining.actions[..],
+            [Action::FinishMove { files }] if files[0].0.path == locked.join("c.jpg")
+        ));
+        // Reopening agrees with the in-process result, so the retry is accepted.
+        let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
+        assert_eq!(
+            serde_json::to_value(&restored.plan.actions).unwrap(),
+            serde_json::to_value(&report.remaining.actions).unwrap()
+        );
+        assert_eq!(restored.errors, report.errors);
+        // The rating follows the file, under the identity the moved file has.
+        let moved = MediaId::for_path(&sorted.join("a.jpg"));
+        let session = Session::load(&context.root).unwrap();
+        assert_eq!(session.decisions[&moved].rating, Some(4));
+        assert_eq!(
+            session.fingerprints[&moved],
+            Fingerprint::read(&sorted.join("a.jpg")).unwrap()
+        );
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        let retried = store
+            .execute(
+                &context,
+                &restored.plan,
+                Some(&restored.ticket),
+                || false,
+                |_, _| {},
+            )
+            .unwrap();
+        assert!(
+            retried.errors.is_empty() && retried.remaining.actions.is_empty(),
+            "copy: {copy}, {:?}",
+            retried.errors
+        );
+        assert!(!locked.join("c.jpg").exists());
+        assert_eq!(fs::read(sorted.join("c.jpg")).unwrap(), b"third photo");
+        assert_eq!(fs::read(sorted.join("a.jpg")).unwrap(), b"first photo");
+    }
+}
+#[test]
+fn finishing_a_copied_move_needs_the_source_bytes_in_another_entry() {
+    let (_temp, _store, context, _plan) = fixture();
+    let source = Source::capture(context.root.join("b.jpg")).unwrap();
+    let finish = |to: &Path| {
+        let plan = Plan {
+            actions: vec![Action::FinishMove {
+                files: vec![(source.clone(), to.to_path_buf())],
+            }],
+            ..Default::default()
+        };
+        super::super::execute(&plan, &context.root.join("audit"), || false, |_, _| {}).unwrap()
+    };
+    // Same size, other bytes: not the staged copy.
+    let forged = context.root.join("forged.jpg");
+    fs::write(&forged, b"second phot0").unwrap();
+    assert!(!finish(&forged).errors.is_empty());
+    assert!(source.path.exists());
+    // A FAT or exFAT card stores the copy's time rounded to 2 seconds.
+    let staged = context.root.join("staged.jpg");
+    fs::write(&staged, b"second photo").unwrap();
+    let seconds = source.fingerprint.modified_ns / 1_000_000_000;
+    let rounded = std::time::UNIX_EPOCH
+        + std::time::Duration::from_secs(u64::try_from(seconds - seconds % 2).unwrap() + 2);
+    File::options()
+        .write(true)
+        .open(&staged)
+        .unwrap()
+        .set_modified(rounded)
+        .unwrap();
+    assert_ne!(
+        Fingerprint::read(&staged).unwrap().modified_ns,
+        source.fingerprint.modified_ns
+    );
+    assert!(finish(&staged).errors.is_empty());
+    assert!(!source.path.exists());
+    assert_eq!(fs::read(&staged).unwrap(), b"second photo");
+}
+#[test]
+#[cfg(target_os = "macos")]
+fn trash_group_that_fails_partway_retries_only_the_files_still_present() {
+    let (_temp, store, context, _) = fixture();
+    let (a, b) = (context.root.join("a.jpg"), context.root.join("b.jpg"));
+    let plan = Plan {
+        actions: vec![Action::Trash {
+            files: vec![
+                Source::capture(a.clone()).unwrap(),
+                Source::capture(b.clone()).unwrap(),
+            ],
+        }],
+        description: "Review Trash".into(),
+        ..Default::default()
+    };
+    // A locked file cannot be moved to the Trash, like one held open on Windows.
+    let flags = |flag: &str| {
+        let status = std::process::Command::new("chflags")
+            .args([flag, b.to_str().unwrap()])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    flags("uchg");
+    let report = store
+        .execute(&context, &plan, None, || false, |_, _| {})
+        .unwrap();
+    flags("nouchg");
+    assert!(!a.exists() && b.exists());
+    assert_eq!(report.errors.len(), 1);
+    assert!(matches!(
+        &report.remaining.actions[..],
+        [Action::Trash { files }] if files.len() == 1 && files[0].path == b
+    ));
+    // The trashed photo's staged choice is applied, the other one stays staged.
+    let session = Session::load(&context.root).unwrap();
+    assert!(!session.decisions.contains_key(&MediaId::for_path(&a)));
+    assert!(session.decisions.contains_key(&MediaId::for_path(&b)));
+    let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
+    assert_eq!(
+        serde_json::to_value(&restored.plan.actions).unwrap(),
+        serde_json::to_value(&report.remaining.actions).unwrap()
+    );
+    let retried = store
+        .execute(
+            &context,
+            &restored.plan,
+            Some(&restored.ticket),
+            || false,
+            |_, _| {},
+        )
+        .unwrap();
+    assert!(retried.errors.is_empty() && retried.remaining.actions.is_empty());
+    assert!(!b.exists());
 }

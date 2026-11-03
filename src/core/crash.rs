@@ -118,7 +118,7 @@ fn write(
     static SEQUENCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = directory.join(format!(
-        "{PREFIX}{stamp}-{}-{sequence}{suffix}",
+        "{PREFIX}{stamp}-{}-{sequence:06}{suffix}",
         std::process::id()
     ));
     let report = format!(
@@ -153,10 +153,16 @@ fn reports(directory: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// Seen and unseen reports are kept apart, so a burst of recovered item
+/// panics can never prune a crash report the user has not been told about.
 fn prune(directory: &Path) {
-    let found = reports(directory);
-    for old in found.iter().take(found.len().saturating_sub(KEEP)) {
-        let _ = std::fs::remove_file(old);
+    let (seen, unseen): (Vec<_>, Vec<_>) = reports(directory)
+        .into_iter()
+        .partition(|path| path.to_string_lossy().ends_with(SEEN));
+    for found in [seen, unseen] {
+        for old in found.iter().take(found.len().saturating_sub(KEEP)) {
+            let _ = std::fs::remove_file(old);
+        }
     }
 }
 
@@ -204,6 +210,13 @@ mod tests {
             std::fs::write(dir.path().join(format!("{PREFIX}2000{i:04}{UNSEEN}")), "x").unwrap();
         }
         prune(dir.path());
-        assert_eq!(reports(dir.path()).len(), KEEP);
+        assert_eq!(reports(dir.path()).len(), KEEP + 1);
+        // Recovered item panics fill the seen pile, never the unseen one.
+        for _ in 0..KEEP + 3 {
+            write(dir.path(), "worker", "item", "", "", SEEN).unwrap();
+        }
+        let unseen = unseen_report(dir.path()).unwrap();
+        assert!(unseen.ends_with(format!("{PREFIX}2000{:04}{UNSEEN}", KEEP + 2)));
+        assert_eq!(reports(dir.path()).len(), 2 * KEEP);
     }
 }

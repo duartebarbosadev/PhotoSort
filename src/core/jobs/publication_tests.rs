@@ -94,6 +94,48 @@ fn cancellation_during_backpressure_does_not_publish_a_stale_result() {
 }
 
 #[test]
+fn storage_notices_follow_a_folder_change_while_waiting_for_queue_space() {
+    for shutdown in [false, true] {
+        let (tx, rx) = mpsc::sync_channel(1);
+        tx.send(Envelope {
+            epoch: 1,
+            event: Event::Error("queued".into()),
+        })
+        .unwrap();
+        let rx = Mutex::new(rx);
+        let generation = Arc::new(AtomicU64::new(1));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (next_generation, next_stop) = (generation.clone(), stop.clone());
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let observed = delivered.clone();
+        let publisher = Publisher {
+            tx,
+            generation,
+            stop,
+            wake: Arc::new(move || {
+                // The UI opens another folder (or quits) while draining the queue.
+                if shutdown {
+                    next_stop.store(true, Ordering::Release);
+                } else {
+                    next_generation.store(2, Ordering::Release);
+                }
+                while let Ok(envelope) = rx.lock().unwrap().try_recv() {
+                    if let Event::Error(message) | Event::ViewError(message) = envelope.event {
+                        observed.lock().unwrap().push((envelope.epoch, message));
+                    }
+                }
+            }),
+        };
+        publisher.send_current(Event::ViewError("could not be saved".into()));
+        let mut expected = vec![(1, "queued".to_string())];
+        if !shutdown {
+            expected.push((2, "could not be saved".into()));
+        }
+        assert_eq!(*delivered.lock().unwrap(), expected, "shutdown: {shutdown}");
+    }
+}
+
+#[test]
 fn rejected_publication_does_not_request_an_empty_repaint() {
     let (tx, rx) = mpsc::sync_channel(1);
     let wakes = Arc::new(AtomicU64::new(0));
@@ -122,4 +164,40 @@ fn a_panicking_task_publishes_a_readable_error_and_the_worker_continues() {
     let mut ran = false;
     assert!(publisher.guard(Worker::Files, || ran = true));
     assert!(ran && rx.try_recv().is_err());
+}
+
+#[test]
+fn policy_workers_stop_once_the_image_worker_is_gone() {
+    let (tx, _events) = mpsc::sync_channel(1);
+    let publisher = publisher(tx, || {});
+    // The image worker owns both senders; after it stops they are dropped.
+    let (_, duplicate_rx) = mpsc::sync_channel(1);
+    let (evidence_tx, _evidence_rx) = mpsc::sync_channel(1);
+    let (_, subject_rx) = mpsc::sync_channel(1);
+    let workers = [
+        similarity::spawn(
+            publisher.clone(),
+            duplicate_rx,
+            evidence_tx,
+            Default::default(),
+            Default::default(),
+        ),
+        subjects::spawn(
+            publisher.clone(),
+            subject_rx,
+            Default::default(),
+            Default::default(),
+        ),
+    ];
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let _ = done.send(());
+    });
+    // Without the disconnect check both threads would spin until shutdown.
+    let stopped = finished.recv_timeout(Duration::from_secs(5)).is_ok();
+    publisher.stop.store(true, Ordering::Release);
+    assert!(stopped);
 }

@@ -48,17 +48,50 @@ impl NameRules {
             value
         }
     }
+    /// Windows device names (`CON`, `nul.txt`, `com1`, `LPT²`...) cannot be
+    /// files or folders, whatever the case or extension.
+    fn reserved(self, name: &str) -> bool {
+        if self != Self::Windows {
+            return false;
+        }
+        let base = name.split('.').next().unwrap_or(name).trim_end();
+        let base = base.to_ascii_uppercase();
+        let mut chars = base.chars();
+        let port = chars.by_ref().take(3).collect::<String>();
+        matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || (matches!(port.as_str(), "COM" | "LPT")
+                && chars
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit() || "¹²³".contains(c))
+                && chars.next().is_none())
+    }
     /// Clean a new folder or file name. Idempotent, so already cleaned names
     /// pass through unchanged. Never use it on a name read from disk.
     pub fn sanitize(self, value: &str) -> String {
+        /// Most filesystems allow 255 bytes per name; keep room for a
+        /// collision suffix and an extension in any script.
+        const MAX_BYTES: usize = 200;
         let clean: String = value
             .chars()
             .map(|c| if self.replaced(c) { '_' } else { c })
             .collect();
-        let clean: String = self.trim(&clean).chars().take(100).collect();
+        let mut bytes = 0;
+        let clean: String = self
+            .trim(&clean)
+            .chars()
+            .take(100)
+            .take_while(|c| {
+                bytes += c.len_utf8();
+                bytes <= MAX_BYTES
+            })
+            .collect();
         let clean = self.trim(&clean);
         if clean.is_empty() || clean == "." || clean == ".." {
             "Unsorted".into()
+        } else if self.reserved(clean) {
+            // Before the extension: `nul_.txt`, since `nul.txt_` is still NUL.
+            let (base, extension) = clean.split_at(clean.find('.').unwrap_or(clean.len()));
+            format!("{base}_{extension}")
         } else {
             clean.into()
         }
@@ -118,6 +151,13 @@ mod tests {
             (Unix, ".", "Unsorted"),
             (Unix, "  ", "Unsorted"),
             (Unix, ".hidden", ".hidden"),
+            (Windows, "con", "con_"),
+            (Windows, "Nul.txt", "Nul_.txt"),
+            (Windows, "COM1", "COM1_"),
+            (Windows, "lpt²", "lpt²_"),
+            (Windows, "console", "console"),
+            (Windows, "COM10", "COM10"),
+            (Unix, "con", "con"),
         ] {
             assert_eq!(rules.sanitize(input), expected, "{rules:?} {input:?}");
         }
@@ -126,6 +166,12 @@ mod tests {
             let once = rules.sanitize(&long);
             assert_eq!(once, "a".repeat(99));
             assert_eq!(rules.sanitize(&once), once, "{rules:?} is idempotent");
+        }
+        // 100 characters of a three-byte script would pass 255 bytes.
+        let wide = Unix.sanitize(&"写".repeat(100));
+        assert_eq!(wide.len(), 198);
+        for clean in ["aux_", "Nul_.txt"] {
+            assert_eq!(Windows.sanitize(clean), clean, "idempotent");
         }
     }
 

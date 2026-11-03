@@ -157,18 +157,24 @@ impl Control {
         }
     }
 }
-/// Own only fingerprint-named proxy artifacts, including interrupted temporary writes.
+/// Own only fingerprint-named proxy artifacts, including interrupted temporary
+/// writes: `<hash>.<random>.tmp.png` previews and the `.photosort-*.tmp` files
+/// of cache records and render notes. Those sort oldest first like any other
+/// file, so a write in progress is the last to go.
 /// Foreign files, directories and symlinks are never followed or removed.
 fn owned(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
         return false;
     };
+    if name.starts_with(".photosort-") && name.ends_with(".tmp") {
+        return true;
+    }
     let Some((hash, suffix)) = name.split_once('.') else {
         return false;
     };
     hash.len() == 64
         && hash.bytes().all(|b| b.is_ascii_hexdigit())
-        && matches!(suffix, "png" | "json" | "bin" | "tmp.png" | "tmp")
+        && (matches!(suffix, "png" | "json" | "bin") || suffix.ends_with("tmp.png"))
 }
 /// Measures the cache and, with a limit, evicts the oldest previews and AI
 /// evidence above it. A zero limit clears everything, prepared models included.
@@ -237,7 +243,12 @@ fn prune(
         if !owned(&entry.path()) || !entry.file_type()?.is_file() {
             continue;
         }
-        let metadata = entry.metadata()?;
+        // Another writer may have renamed or trimmed it since the listing.
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.into()),
+        };
         usage.disk_bytes = usage.disk_bytes.saturating_add(metadata.len());
         usage.files += 1;
         photo_bytes += metadata.len();

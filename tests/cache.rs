@@ -27,12 +27,16 @@ fn disk_maintenance_owns_only_generated_artifacts_and_preserves_data() {
     artifact(&cache, 2, "tmp.png", b"123");
     artifact(&cache, 3, "png", b"");
     artifact(&cache, 4, "bin", b"12345");
+    // Writes interrupted by a crash: a preview and a cache record.
+    artifact(&cache, 6, "a1B2c3.tmp.png", b"1");
+    std::fs::write(cache.join(".photosort-cache-x1Y2z3.tmp"), b"1").unwrap();
     let sentinels = [
         dir.path().join("sessions.json"),
         dir.path().join("views.json"),
         dir.path().join("photo.png"),
         cache.join("notes.json"),
         cache.join(format!("{:064x}.xmp", 5)),
+        cache.join("notes.tmp"),
     ];
     for path in &sentinels {
         std::fs::write(path, b"preserve").unwrap();
@@ -40,7 +44,7 @@ fn disk_maintenance_owns_only_generated_artifacts_and_preserves_data() {
     std::fs::create_dir(cache.join("nested")).unwrap();
     let nested = artifact(&cache.join("nested"), 4, "png", b"nested");
     let usage = cache::maintain(&cache, None, || false).unwrap();
-    assert_eq!((usage.disk_bytes, usage.files), (14, 5));
+    assert_eq!((usage.disk_bytes, usage.files), (16, 7));
     let pruned = cache::maintain(&cache, Some(4), || false).unwrap();
     assert!(pruned.disk_bytes <= 4);
     let empty = cache::maintain(&cache, Some(0), || false).unwrap();

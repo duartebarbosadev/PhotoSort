@@ -44,24 +44,29 @@ fn run(publisher: &Publisher, rx: &Receiver<Message<IoWork>>) {
             message
         };
         let epoch = message.epoch;
-        // A queued session save belongs to its explicit root and is safe after navigation.
+        // A queued save belongs to its explicit root and is safe after navigation.
+        let saving = matches!(
+            message.work,
+            IoWork::Save { .. }
+                | IoWork::MergeSession { .. }
+                | IoWork::SaveViews { .. }
+                | IoWork::ForgetViews(_)
+                | IoWork::SavePreferences { .. }
+        );
         if publisher.cancelled(epoch)
-            && !matches!(
-                message.work,
-                IoWork::Save { .. }
-                    | IoWork::MergeSession { .. }
-                    | IoWork::Checkpoint { .. }
-                    | IoWork::SaveViews { .. }
-                    | IoWork::ForgetViews(_)
-                    | IoWork::SavePreferences { .. }
-            )
+            && !saving
+            && !matches!(message.work, IoWork::Checkpoint { .. })
         {
             continue;
         }
         let _ = publisher.guard(super::Worker::Files, || {
-            let files = Files { publisher, epoch };
+            let files = Files {
+                publisher,
+                epoch,
+                saving,
+            };
             if let Err(e) = files.handle(message.work) {
-                publisher.send(epoch, Event::Error(format!("{e:#}")));
+                files.send(Event::Error(format!("{e:#}")));
             }
         });
     }
@@ -70,6 +75,9 @@ fn run(publisher: &Publisher, rx: &Receiver<Message<IoWork>>) {
 struct Files<'a> {
     publisher: &'a Publisher,
     epoch: u64,
+    /// A save often runs just after the folder changed (an apply saves, then
+    /// rescans). Its outcome still matters, so it reaches the current folder.
+    saving: bool,
 }
 
 impl Files<'_> {
@@ -81,7 +89,11 @@ impl Files<'_> {
         self.cancelled() || flag.load(Ordering::Acquire)
     }
     fn send(&self, event: Event) {
-        self.publisher.send(self.epoch, event);
+        if self.saving {
+            self.publisher.send_current(event);
+        } else {
+            self.publisher.send(self.epoch, event);
+        }
     }
     fn progress(&self, done: usize, total: usize) {
         self.send(Event::Progress {
@@ -171,8 +183,14 @@ impl Files<'_> {
                 }
                 Ok(())
             }
-            IoWork::MergeSession { root, session } => self.merge_session(&root, session),
-            IoWork::Save { root, session } => self.save(&root, &session),
+            IoWork::MergeSession { root, session } => {
+                self.merge_session(&root, session);
+                Ok(())
+            }
+            IoWork::Save { root, session } => {
+                self.save(&root, &session);
+                Ok(())
+            }
         }
     }
 
@@ -226,7 +244,13 @@ impl Files<'_> {
             || self.cancelled(),
             |batch| self.send(Event::Batch(batch)),
         )?;
-        let mut session = Session::load(&catalog.root)?;
+        let (mut session, damaged) = Session::load_or_set_aside(&catalog.root)?;
+        if let Some(kept) = damaged {
+            self.send(Event::ViewError(format!(
+                "Staged choices for this folder could not be read and start empty. The damaged file was kept at {}",
+                kept.display()
+            )));
+        }
         session.reconcile_catalog(&catalog);
         let mut views = views::Saved::load(&catalog.root).unwrap_or_else(|e| {
             self.send(Event::ViewError(format!(
@@ -378,17 +402,62 @@ impl Files<'_> {
         }
     }
 
-    fn merge_session(&self, root: &std::path::Path, session: Session) -> anyhow::Result<()> {
-        let mut existing = Session::load(root)?;
-        existing.merge(session);
-        existing.save(root)?;
-        self.send(Event::Saved);
-        Ok(())
+    fn merge_session(&self, root: &std::path::Path, session: Session) {
+        let result = Session::load(root).and_then(|mut existing| {
+            existing.merge(session);
+            existing.save(root)
+        });
+        self.saved(result);
     }
 
-    fn save(&self, root: &std::path::Path, session: &Session) -> anyhow::Result<()> {
-        session.save(root)?;
-        self.send(Event::Saved);
-        Ok(())
+    fn save(&self, root: &std::path::Path, session: &Session) {
+        self.saved(session.save(root));
+    }
+
+    /// A failed save is reported on its own: it must not cancel analysis or
+    /// other work the way a general error does.
+    fn saved(&self, result: anyhow::Result<()>) {
+        self.send(match result {
+            Ok(()) => Event::Saved,
+            Err(e) => Event::ViewError(format!("Staged choices could not be saved: {e:#}")),
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_save_after_a_folder_change_still_reaches_the_user_without_cancelling_work() {
+        let library = tempfile::tempdir().unwrap();
+        // A folder where the session file belongs makes reading it fail.
+        std::fs::create_dir_all(crate::core::session::session_path(library.path())).unwrap();
+        let (tx, events) = std::sync::mpsc::sync_channel(8);
+        let publisher = Publisher {
+            tx,
+            generation: Arc::new(std::sync::atomic::AtomicU64::new(2)),
+            stop: Arc::new(AtomicBool::new(false)),
+            wake: Arc::new(|| {}),
+        };
+        let (work, rx) = std::sync::mpsc::channel();
+        let worker = spawn(publisher.clone(), rx);
+        // Queued under folder 1, run after the user already moved on to folder 2.
+        work.send(Message {
+            epoch: 1,
+            work: IoWork::MergeSession {
+                root: library.path().to_path_buf(),
+                session: Session::default(),
+            },
+        })
+        .unwrap();
+        let envelope = events.recv_timeout(Duration::from_secs(10)).unwrap();
+        publisher.stop.store(true, Ordering::Release);
+        worker.join().unwrap();
+        assert_eq!(envelope.epoch, 2);
+        assert!(
+            matches!(&envelope.event, Event::ViewError(m) if m.contains("could not be saved")),
+            "a save failure is its own notice, not an error that resets runs"
+        );
     }
 }

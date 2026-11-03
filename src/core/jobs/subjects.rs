@@ -2,7 +2,11 @@
 use super::{AnalysisStats, Event, Publisher, RunGeneration};
 use crate::core::{cache, subjects};
 use std::{
-    sync::{Arc, atomic::Ordering, mpsc::Receiver},
+    sync::{
+        Arc,
+        atomic::Ordering,
+        mpsc::{self, Receiver},
+    },
     thread,
     time::Duration,
 };
@@ -26,8 +30,12 @@ pub(super) fn spawn(
         .name("photosort-subjects".into())
         .spawn(move || {
             while !publisher.stop.load(Ordering::Relaxed) {
-                let Ok(job) = jobs.recv_timeout(Duration::from_millis(100)) else {
-                    continue;
+                // The image worker owns the sender; once it has stopped
+                // there is no more work, and waiting would spin.
+                let job = match jobs.recv_timeout(Duration::from_millis(100)) {
+                    Ok(job) => job,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 };
                 let _ = publisher.guard(super::Worker::Subjects, || {
                     group(&publisher, &generation, &cache, job)

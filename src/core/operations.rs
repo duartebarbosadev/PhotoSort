@@ -617,14 +617,24 @@ pub fn organize_changes_pending(
     {
         return true;
     }
-    catalog.organize_files().iter().any(|(id, path)| {
-        labels.get(id).is_some_and(|label| {
-            path.parent() != Some(folder_destination(output, label).as_path())
-                || names
-                    .get(id)
-                    .is_some_and(|name| super::organize::requested_stem(path, name).is_some())
-        })
-    })
+    // The plan review asks this every frame: build each folder path once.
+    let mut folders: HashMap<&str, PathBuf> = HashMap::new();
+    for (id, path) in catalog.organize_files() {
+        let Some(label) = labels.get(&id) else {
+            continue;
+        };
+        let folder = folders
+            .entry(label)
+            .or_insert_with(|| folder_destination(output, label));
+        if path.parent() != Some(folder.as_path())
+            || names
+                .get(&id)
+                .is_some_and(|name| super::organize::requested_stem(path, name).is_some())
+        {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn organize_plan(
@@ -693,7 +703,10 @@ pub fn organize_plan_with_layout_cancellable(
     let names =
         super::organize::resolve_file_names(&organize_files, names, companions, &cancelled)?;
     let mut seen = HashSet::new();
+    // Keyed without letter case: two planned names that differ only in case
+    // are one file on macOS and Windows, and the second move would fail.
     let mut reserved = HashSet::new();
+    let reservation = |path: &Path| path.to_string_lossy().to_lowercase();
     let mut actions = casing.actions.clone();
     let mut file_names = case_rename::FileNames::default();
     for (id, path) in organize_files {
@@ -758,7 +771,7 @@ pub fn organize_plan_with_layout_cancellable(
                 .collect();
             let mut available = true;
             for (source, destination) in sources.iter().zip(&destinations) {
-                if reserved.contains(destination)
+                if reserved.contains(&reservation(destination))
                     || (casing.occupied(destination)
                         && !file_names.source_alias(
                             source,
@@ -778,7 +791,7 @@ pub fn organize_plan_with_layout_cancellable(
         let mut files = Vec::new();
         for (source, dest) in sources.into_iter().zip(destinations) {
             seen.insert(source.clone());
-            reserved.insert(dest.clone());
+            reserved.insert(reservation(&dest));
             let mut reviewed = Source::capture(source)?;
             reviewed.path = casing.rebase(&reviewed.path);
             files.push((reviewed, dest));
@@ -855,6 +868,7 @@ fn add_directory_actions(
         .iter()
         .map(|(_, p)| folder_destination(output, p))
         .collect();
+    let known: HashSet<_> = catalog.directories.iter().map(PathBuf::as_path).collect();
     let mut cleanup = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
     let mut candidate = |folder: &Path, dependency: &Path| {
         for path in folder.ancestors() {
@@ -883,7 +897,7 @@ fn add_directory_actions(
         anyhow::ensure!(!cancelled(), "Planning cancelled");
         let source = folder_destination(&catalog.root, source);
         anyhow::ensure!(
-            catalog.directories.contains(&source),
+            known.contains(source.as_path()),
             "Empty folder was not in the reviewed catalog"
         );
         let target = folder_destination(output, target);
@@ -903,7 +917,7 @@ fn add_directory_actions(
                 path.display()
             );
         }
-        if (!path.exists() && !catalog.directories.contains(path)) || moved_targets.contains(path) {
+        if (!path.exists() && !known.contains(path.as_path())) || moved_targets.contains(path) {
             actions.push(Action::CreateDirectory { path: path.clone() });
         }
     }
@@ -1082,10 +1096,36 @@ fn execute_logged(
                     }
                     _ => {}
                 }
-                report.remaining.actions.push(action.clone());
                 let detail = format!("{e:#}");
                 report.errors.push(action.failure_message(&detail));
-                write_record(journal, "failed", i, action, &[], Some(&detail))?;
+                // A move that failed after staging its destinations cannot be
+                // retried as is: they already exist. Receipt its progress, as
+                // reopening after a crash would, so a retry only removes staged
+                // sources and moves the untouched rest. The executor knows which
+                // sources it removed, so copies count too, not only hard links.
+                let receipt = match (e.downcast_ref::<PartialMove>(), action) {
+                    (Some(partial), Action::Move { files }) => {
+                        Ok(Some(partial.states(files.len())))
+                    }
+                    _ => recovery::moves::verify(action, &|| false),
+                };
+                match receipt {
+                    Ok(Some(states)) => {
+                        recovery::moves::write(journal, i, action, &states, Some(&detail))?;
+                        let remainder = recovery::moves::restore(action, &states, &mut report)?;
+                        report.remaining.actions.extend(remainder);
+                    }
+                    _ => {
+                        let trashed = e.downcast_ref::<PartialTrash>().map_or(0, |p| p.trashed);
+                        if let Some((done, rest)) = split_trash(action, trashed) {
+                            report.complete(&done, &[]);
+                            report.remaining.actions.push(rest);
+                        } else {
+                            report.remaining.actions.push(action.clone());
+                        }
+                        write_failure(journal, i, action, trashed, &detail)?;
+                    }
+                }
                 if matches!(action, Action::RenameDirectory(_)) {
                     // Later sources depend on the reviewed spelling. Never run them
                     // after an unsuccessful prerequisite, including on retry.
@@ -1128,6 +1168,37 @@ fn write_record(
             index,
             action,
             relocated,
+            error,
+        },
+    )?;
+    journal.write_all(b"\n")?;
+    Ok(())
+}
+fn write_failure(
+    journal: &mut File,
+    index: usize,
+    action: &Action,
+    trashed: usize,
+    error: &str,
+) -> Result<()> {
+    if trashed == 0 {
+        return write_record(journal, "failed", index, action, &[], Some(error));
+    }
+    #[derive(Serialize)]
+    struct Record<'a> {
+        status: &'a str,
+        index: usize,
+        action: &'a Action,
+        trashed: usize,
+        error: &'a str,
+    }
+    serde_json::to_writer(
+        &mut *journal,
+        &Record {
+            status: "failed",
+            index,
+            action,
+            trashed,
             error,
         },
     )?;
@@ -1203,13 +1274,19 @@ fn apply(
                 "Staged source cleanup requires one receipt per file"
             );
             // Preflight the entire reviewed cohort before removing a source.
+            let mut checked = Vec::with_capacity(files.len());
             for (source, destination) in files {
                 anyhow::ensure!(!cancelled(), "Finishing move cancelled");
-                verify_staged_move(source, destination)?;
+                checked.push(verify_finishable_move(source, destination, cancelled)?);
             }
-            for (source, destination) in files {
+            for ((source, destination), staged) in files.iter().zip(checked) {
                 anyhow::ensure!(!cancelled(), "Finishing move cancelled");
-                verify_staged_move(source, destination)?;
+                source.verify()?;
+                anyhow::ensure!(
+                    Fingerprint::read(destination)? == staged,
+                    "Staged move destination changed: {}",
+                    destination.display()
+                );
                 fs::remove_file(&source.path)?;
             }
         }
@@ -1250,23 +1327,37 @@ fn apply(
             // finish this companion cohort rather than introducing partial moves.
             // All companions have durable destinations before any source is removed.
             // If removal fails, leave the durable copies and report the exact source.
-            for (s, _) in files {
-                fs::remove_file(&s.path).with_context(|| {
-                    format!(
-                        "Copied safely but could not remove source {}",
-                        s.path.display()
-                    )
-                })?;
+            for (removed, (s, _)) in files.iter().enumerate() {
+                fs::remove_file(&s.path)
+                    .with_context(|| {
+                        format!(
+                            "Copied safely but could not remove source {}",
+                            s.path.display()
+                        )
+                    })
+                    .map_err(|error| PartialMove {
+                        removed,
+                        detail: format!("{error:#}"),
+                    })?;
             }
         }
         Action::Trash { files } => {
             for source in files {
                 source.verify()?;
             }
-            for source in files {
-                move_to_trash(&source.path).with_context(|| {
-                    format!("Could not move {} to OS Trash", source.path.display())
-                })?;
+            for (trashed, source) in files.iter().enumerate() {
+                move_to_trash(&source.path)
+                    .with_context(|| {
+                        format!("Could not move {} to OS Trash", source.path.display())
+                    })
+                    .map_err(|error| match trashed {
+                        0 => error,
+                        _ => PartialTrash {
+                            trashed,
+                            detail: format!("{error:#}"),
+                        }
+                        .into(),
+                    })?;
             }
         }
         Action::Metadata {
@@ -1311,6 +1402,38 @@ fn verify_staged_move(source: &Source, destination: &Path) -> Result<()> {
         cfg!(unix) && source.fingerprint.identity[1] != 0,
         "Staged moves require a verified filesystem identity"
     );
+    check_staged_paths(source, destination)?;
+    anyhow::ensure!(
+        Fingerprint::read(destination)? == source.fingerprint,
+        "Staged move destination changed: {}",
+        destination.display()
+    );
+    Ok(())
+}
+/// Before a retry removes the source of a staged move. A hard link proves
+/// itself by identity. A copy (another volume, or no inode identity, as on
+/// Windows) must be a separate file with the source's size and bytes. Its
+/// modified time is not compared: FAT, exFAT and network shares round it.
+/// Returns the destination it checked.
+fn verify_finishable_move(
+    source: &Source,
+    destination: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Fingerprint> {
+    if verify_staged_move(source, destination).is_ok() {
+        return Ok(source.fingerprint);
+    }
+    check_staged_paths(source, destination)?;
+    let staged = Fingerprint::read(destination)?;
+    anyhow::ensure!(
+        staged.bytes == source.fingerprint.bytes
+            && content_hash(&source.path, cancelled)? == content_hash(destination, cancelled)?,
+        "Staged move destination changed: {}",
+        destination.display()
+    );
+    Ok(staged)
+}
+fn check_staged_paths(source: &Source, destination: &Path) -> Result<()> {
     anyhow::ensure!(
         source.path.is_absolute() && destination.is_absolute(),
         "Staged move paths must be absolute"
@@ -1318,46 +1441,96 @@ fn verify_staged_move(source: &Source, destination: &Path) -> Result<()> {
     reject_symlink_components(&source.path)?;
     source.verify()?;
     reject_symlink_components(destination)?;
-    // Equal identity alone does not prove two directory entries: a same-path,
+    // Equal identity or bytes do not prove two directory entries: a same-path,
     // dot-component or case-insensitive alias must never unlink its destination.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let source_parent = source.path.parent().context("Missing source parent")?;
-        let destination_parent = destination.parent().context("Missing destination parent")?;
-        let from = fs::metadata(source_parent)?;
-        let to = fs::metadata(destination_parent)?;
-        if (from.dev(), from.ino()) == (to.dev(), to.ino()) {
-            let source_name = source.path.file_name().context("Missing source name")?;
-            let destination_name = destination
-                .file_name()
-                .context("Missing destination name")?;
-            anyhow::ensure!(
-                source_name != destination_name,
-                "Staged source and destination are the same entry"
-            );
-            let mut source_found = false;
-            let mut destination_found = false;
-            for entry in fs::read_dir(source_parent)? {
-                let name = entry?.file_name();
-                source_found |= name == source_name;
-                destination_found |= name == destination_name;
-                if source_found && destination_found {
-                    break;
-                }
-            }
-            anyhow::ensure!(
-                source_found && destination_found,
-                "Staged move must have two distinct directory entries"
-            );
-        }
-    }
+    // Folder identity is device and inode on Unix, volume and file index on Windows.
     anyhow::ensure!(
-        Fingerprint::read(destination)? == source.fingerprint,
-        "Staged move destination changed: {}",
-        destination.display()
+        cfg!(any(unix, windows)),
+        "Staged moves require a folder identity"
     );
+    let source_parent = source.path.parent().context("Missing source parent")?;
+    let destination_parent = destination.parent().context("Missing destination parent")?;
+    if Fingerprint::read_directory(source_parent)?.identity
+        == Fingerprint::read_directory(destination_parent)?.identity
+    {
+        let source_name = source.path.file_name().context("Missing source name")?;
+        let destination_name = destination
+            .file_name()
+            .context("Missing destination name")?;
+        anyhow::ensure!(
+            source_name != destination_name,
+            "Staged source and destination are the same entry"
+        );
+        let mut source_found = false;
+        let mut destination_found = false;
+        for entry in fs::read_dir(source_parent)? {
+            let name = entry?.file_name();
+            source_found |= name == source_name;
+            destination_found |= name == destination_name;
+            if source_found && destination_found {
+                break;
+            }
+        }
+        anyhow::ensure!(
+            source_found && destination_found,
+            "Staged move must have two distinct directory entries"
+        );
+    }
     Ok(())
+}
+/// A Trash group that failed after its first `trashed` files left: those are
+/// gone, so a retry may only repeat the rest.
+#[derive(Debug)]
+struct PartialTrash {
+    trashed: usize,
+    detail: String,
+}
+impl std::fmt::Display for PartialTrash {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+impl std::error::Error for PartialTrash {}
+/// A move whose destinations are all staged but whose source removal stopped
+/// at member `removed`: the members before it are complete, the rest staged.
+#[derive(Debug)]
+struct PartialMove {
+    removed: usize,
+    detail: String,
+}
+impl PartialMove {
+    fn states(&self, members: usize) -> Vec<recovery::moves::State> {
+        (0..members)
+            .map(|i| match i < self.removed {
+                true => recovery::moves::State::Completed,
+                false => recovery::moves::State::Staged,
+            })
+            .collect()
+    }
+}
+impl std::fmt::Display for PartialMove {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+impl std::error::Error for PartialMove {}
+/// The trashed and the remaining part of a Trash group, for the executor and
+/// for a journal reader, which must agree exactly.
+fn split_trash(action: &Action, trashed: usize) -> Option<(Action, Action)> {
+    let Action::Trash { files } = action else {
+        return None;
+    };
+    (0 < trashed && trashed < files.len()).then(|| {
+        let (done, rest) = files.split_at(trashed);
+        (
+            Action::Trash {
+                files: done.to_vec(),
+            },
+            Action::Trash {
+                files: rest.to_vec(),
+            },
+        )
+    })
 }
 #[derive(Debug)]
 struct MoveCancelled;
@@ -1374,9 +1547,18 @@ fn check_move_cancelled(cancelled: &dyn Fn() -> bool) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(test)]
+thread_local! {
+    /// Stages moves by copying, as across volumes, on this test thread.
+    static COPY_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 fn copy_exclusive(source: &Path, dest: &Path, cancelled: &dyn Fn() -> bool) -> Result<()> {
     check_move_cancelled(cancelled)?;
-    if fs::hard_link(source, dest).is_ok() {
+    #[cfg(test)]
+    let linked = !COPY_ONLY.get() && fs::hard_link(source, dest).is_ok();
+    #[cfg(not(test))]
+    let linked = fs::hard_link(source, dest).is_ok();
+    if linked {
         return Ok(());
     }
     copy_contents_exclusive(source, dest, cancelled)

@@ -475,12 +475,11 @@ fn eyes_entries(
         .filter(|p| p.kind == Kind::Exact)
         .map(|p| p.discard)
         .collect();
-    let identical = |a: MediaId, b: MediaId| {
-        accepted().any(|p| {
-            p.kind == Kind::Exact
-                && ((p.discard, p.keep) == (a, b) || (p.discard, p.keep) == (b, a))
-        })
-    };
+    let exact: HashSet<(MediaId, MediaId)> = accepted()
+        .filter(|p| p.kind == Kind::Exact)
+        .map(|p| (p.discard, p.keep))
+        .collect();
+    let identical = |a: MediaId, b: MediaId| exact.contains(&(a, b)) || exact.contains(&(b, a));
     // Each closed-eyes shot with its better shot, if any.
     let mut chosen: Vec<Choice> = Vec::new();
     for blink in blinks {
@@ -531,8 +530,15 @@ fn eyes_entries(
             (c, n) => format!("Eyes closed for {c} of {n} people"),
         }
     };
+    // Every closed-eyes shot that chose the same better shot, in order.
+    let mut by_better: HashMap<MediaId, Vec<&eyes::Frame>> = HashMap::new();
+    for (shot, better) in &chosen {
+        if let Some((other, _)) = better {
+            by_better.entry(other.id).or_default().push(shot);
+        }
+    }
     let mut entries = Vec::new();
-    let mut grouped: Vec<MediaId> = Vec::new();
+    let mut grouped: HashSet<MediaId> = HashSet::new();
     for (shot, better) in &chosen {
         let Some((other, matched)) = better else {
             entries.push(Entry {
@@ -553,13 +559,8 @@ fn eyes_entries(
         if grouped.contains(&shot.id) {
             continue;
         }
-        // Every closed-eyes shot that chose the same better shot, a few to a
-        // card so each one shows at a useful size.
-        let members: Vec<&eyes::Frame> = chosen
-            .iter()
-            .filter(|(_, b)| b.as_ref().is_some_and(|(o, _)| o.id == other.id))
-            .map(|(s, _)| *s)
-            .collect();
+        // A few shots to a card so each one shows at a useful size.
+        let members = &by_better[&other.id];
         grouped.extend(members.iter().map(|m| m.id));
         let everyone = if shot.people.len() == 1 {
             "with the eyes open"

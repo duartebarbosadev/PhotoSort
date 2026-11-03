@@ -328,6 +328,7 @@ impl Draft {
             !self.folders.contains(&path),
             "A folder with that name already exists"
         );
+        self.ensure_no_case_alias(&path, "")?;
         self.folders.insert(path.clone());
         self.explicit.insert(path.clone());
         Ok(path)
@@ -545,7 +546,25 @@ impl Draft {
             !self.folders.contains(target) || source == target,
             "Destination folder already exists"
         );
+        if source != target {
+            self.ensure_no_case_alias(target, source)?;
+        }
         self.relocate_into(source, target)
+    }
+    /// macOS and Windows treat `Trip` and `trip` as one folder, so a new or
+    /// moved folder may not differ from another only in letter case: the two
+    /// would silently merge on disk. Changing the case of `except` itself is
+    /// a spelling change and stays allowed.
+    fn ensure_no_case_alias(&self, path: &str, except: &str) -> Result<()> {
+        let folded = path.to_lowercase();
+        ensure!(
+            !self
+                .folders
+                .iter()
+                .any(|f| f != path && f != except && f.to_lowercase() == folded),
+            "A folder with that name already exists, spelled with different capital letters"
+        );
+        Ok(())
     }
     /// Combines `source` into the existing folder `target`: everything in
     /// it, subfolders included, goes there and `source` is gone. Used when
@@ -619,6 +638,7 @@ impl Draft {
             !self.folders.contains(&new_parent),
             "Parent folder already exists"
         );
+        self.ensure_no_case_alias(&new_parent, "")?;
         let target = self.relocate(source, &join(&new_parent, leaf(source)))?;
         self.explicit.insert(new_parent);
         Ok(target)

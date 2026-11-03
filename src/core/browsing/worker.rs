@@ -242,6 +242,7 @@ impl Index {
             self.group_choices = Some(Arc::new(choices));
         }
         let text = query.text.to_lowercase();
+        let in_folder = query.options.folder.matcher();
         let mut indices = Vec::new();
         let mut groups = std::collections::BTreeSet::new();
         for (n, &i) in self.order.as_ref()?.1.iter().enumerate() {
@@ -263,7 +264,7 @@ impl Index {
                 )
                 && query.options.rating.matches(rating)
                 && query.options.group.is_none_or(|g| row.group == Some(g))
-                && query.options.folder.matches(&self.catalog.media[i].path)
+                && in_folder(&self.catalog.media[i].path)
                 && tree::date_matches(query.options.date.as_deref(), row.date.as_deref())
             {
                 indices.push(i);

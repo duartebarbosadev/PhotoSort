@@ -94,7 +94,7 @@ pub struct Session {
     #[serde(default, rename = "staged_rotations")]
     pub rotations_staged: HashSet<MediaId>,
 }
-fn session_path(root: &Path) -> PathBuf {
+pub(crate) fn session_path(root: &Path) -> PathBuf {
     // Equivalent trailing separators must not create different session stores.
     let root: PathBuf = root.components().collect();
     data_dir().join("sessions").join(format!(
@@ -107,11 +107,33 @@ impl Session {
         self.manual_groups.ids().chain(self.scene_groups.ids())
     }
     pub fn load(root: &Path) -> Result<Self> {
+        Ok(Self::load_or_set_aside(root)?.0)
+    }
+    /// A damaged session file must never lock the user out of their library.
+    /// It is renamed aside, kept for inspection, and an empty session starts;
+    /// the returned path names the kept copy so the caller can say so.
+    pub fn load_or_set_aside(root: &Path) -> Result<(Self, Option<PathBuf>)> {
         let p = session_path(root);
-        if !p.exists() {
-            return Ok(Self::default());
+        let bytes = match std::fs::read(&p) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((Self::default(), None));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        match serde_json::from_slice(&bytes) {
+            Ok(session) => Ok((session, None)),
+            Err(error) => {
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+                let kept = p.with_extension(format!("damaged-{stamp}.json"));
+                std::fs::rename(&p, &kept)?;
+                tracing::warn!(path = %kept.display(), %error, "set aside a damaged session file");
+                Ok((Self::default(), Some(kept)))
+            }
         }
-        Ok(serde_json::from_slice(&std::fs::read(p)?)?)
     }
     pub fn save(&self, root: &Path) -> Result<()> {
         atomic_write(&session_path(root), &serde_json::to_vec(self)?)
@@ -229,5 +251,32 @@ impl Session {
                 })
         });
         self.fingerprints = fingerprints;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn damaged_session_is_set_aside_instead_of_blocking_the_library() {
+        let library = tempfile::tempdir().unwrap();
+        let path = session_path(library.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"{\"decisions\": {tru").unwrap();
+        let (session, kept) = Session::load_or_set_aside(library.path()).unwrap();
+        assert!(session.decisions.is_empty());
+        let kept = kept.expect("the damaged file is reported");
+        assert_eq!(std::fs::read(&kept).unwrap(), b"{\"decisions\": {tru");
+        assert!(!path.exists());
+        // The next open starts cleanly and a save works as usual.
+        assert!(Session::load(library.path()).unwrap().decisions.is_empty());
+        session.save(library.path()).unwrap();
+        assert!(
+            Session::load_or_set_aside(library.path())
+                .unwrap()
+                .1
+                .is_none()
+        );
     }
 }

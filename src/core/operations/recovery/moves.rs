@@ -5,14 +5,18 @@ use crate::core::operations::{Action, verify_staged_move};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum State {
+pub(in crate::core::operations) enum State {
     Completed,
     Staged,
     Untouched,
 }
 
-/// Cross-device copies and platforms without an inode/device identity stay explicit.
-pub(super) fn verify(action: &Action, cancelled: &impl Fn() -> bool) -> Result<Option<Vec<State>>> {
+/// Crash inference trusts only inode identity: cross-device copies and platforms
+/// without it stay explicit. A live executor receipts its own copies instead.
+pub(in crate::core::operations) fn verify(
+    action: &Action,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Option<Vec<State>>> {
     ensure!(!cancelled(), "Recovery verification cancelled");
     let (Action::Move { files } | Action::FinishMove { files }) = action else {
         return Ok(None);
@@ -58,7 +62,7 @@ pub(super) fn verify(action: &Action, cancelled: &impl Fn() -> bool) -> Result<O
         .then_some(states))
 }
 
-pub(super) fn restore(
+pub(in crate::core::operations) fn restore(
     action: &Action,
     states: &[State],
     report: &mut Report,
@@ -86,10 +90,12 @@ pub(super) fn restore(
         match state {
             State::Completed => {
                 completed.push((source.clone(), destination.clone()));
+                // A copied destination has its own identity; the session keeps
+                // choices only for the fingerprint the file really has.
                 relocated.push((
                     MediaId::for_path(&source.path),
                     MediaId::for_path(destination),
-                    source.fingerprint,
+                    Fingerprint::read(destination).unwrap_or(source.fingerprint),
                 ));
             }
             State::Staged => staged.push((source.clone(), destination.clone())),
@@ -113,11 +119,13 @@ pub(super) fn restore(
     Ok(remaining)
 }
 
-pub(super) fn write(
+/// `error` keeps the failure that stopped an in-process move beside its receipt.
+pub(in crate::core::operations) fn write(
     journal: &mut File,
     index: usize,
     action: &Action,
     states: &[State],
+    error: Option<&str>,
 ) -> Result<()> {
     // Keep complete-cohort receipts compatible with existing audit readers.
     if states.iter().all(|s| *s == State::Completed) {
@@ -129,7 +137,7 @@ pub(super) fn write(
             index,
             action,
             &report.relocated,
-            None,
+            error,
         );
     }
     #[derive(Serialize)]
@@ -138,6 +146,8 @@ pub(super) fn write(
         index: usize,
         action: &'a Action,
         move_states: &'a [State],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<&'a str>,
     }
     serde_json::to_writer(
         &mut *journal,
@@ -146,6 +156,7 @@ pub(super) fn write(
             index,
             action,
             move_states: states,
+            error,
         },
     )?;
     journal.write_all(b"\n")?;

@@ -19,7 +19,6 @@ use std::{
     time::Duration,
 };
 
-#[path = "jobs/diagnostics.rs"]
 mod diagnostics;
 mod files;
 mod images;
@@ -363,11 +362,28 @@ impl Publisher {
         // Record the worker outcome once, independently of publication retries.
         // This describes completed work, not acceptance by the current UI.
         event.record_diagnostic(epoch);
-        let mut envelope = Envelope { epoch, event };
+        self.publish(event, || {
+            (!self.cancelled(epoch) && !cancelled()).then_some(epoch)
+        });
+    }
+    /// Storage outcomes concern the library that was written, also after the
+    /// user opens another folder, so they follow the folder generation instead
+    /// of being dropped with the one they were queued under.
+    fn send_current(&self, event: Event) {
+        event.record_diagnostic(self.generation.load(Ordering::Acquire));
+        self.publish(event, || {
+            (!self.stop.load(Ordering::Relaxed)).then(|| self.generation.load(Ordering::Acquire))
+        });
+    }
+    /// Queues `event` under the epoch `target` returns for each attempt, or
+    /// gives up once it returns None.
+    fn publish(&self, event: Event, target: impl Fn() -> Option<u64>) {
+        let mut envelope = Envelope { epoch: 0, event };
         loop {
-            if self.cancelled(epoch) || cancelled() {
+            let Some(epoch) = target() else {
                 return;
-            }
+            };
+            envelope.epoch = epoch;
             match self.tx.try_send(envelope) {
                 Ok(()) => {
                     // Publish before waking: the UI may drain the queue as soon
@@ -649,9 +665,7 @@ impl Drop for Runtime {
 }
 
 #[cfg(test)]
-#[path = "jobs/admission_tests.rs"]
 mod admission_tests;
 
 #[cfg(test)]
-#[path = "jobs/publication_tests.rs"]
 mod publication_tests;
