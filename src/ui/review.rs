@@ -383,38 +383,33 @@ impl PhotoSortApp {
                         ui.input(|i| i.modifiers.command || i.modifiers.ctrl),
                     );
                 }
-                if self.step == Step::EasyDelete {
+                if matches!(self.step, Step::EasyDelete | Step::PickBest) {
+                    // A Keep/Trash switch per photo, with its number key.
                     for (side, id) in ids.iter().enumerate() {
                         let keep = !self.decision(*id).rejected;
+                        let hover = if side < 9 {
+                            format!("Toggle photo {} · {}", side + 1, side + 1)
+                        } else {
+                            format!("Toggle photo {}", side + 1)
+                        };
                         if ui
                             .add(decision_button(side, keep))
-                            .on_hover_text(format!("Toggle photo {} · {}", side + 1, side + 1))
+                            .on_hover_text(hover)
                             .clicked()
                         {
-                            self.toggle_delete_candidate(side);
+                            if self.step == Step::EasyDelete {
+                                self.toggle_delete_candidate(side);
+                            } else {
+                                self.toggle_pick(*id);
+                            }
                         }
                     }
                     divider(ui);
-                    self.delete_undo_button(ui);
-                } else if self.step == Step::PickBest {
-                    for (side, id) in ids.iter().enumerate() {
-                        let keep = !self.decision(*id).rejected;
-                        let button = ui.add(decision_button(side, keep));
-                        let button = if side < 9 {
-                            button.on_hover_text(format!(
-                                "Toggle photo {} · {}",
-                                side + 1,
-                                side + 1
-                            ))
-                        } else {
-                            button.on_hover_text(format!("Toggle photo {}", side + 1))
-                        };
-                        if button.clicked() {
-                            self.toggle_pick(*id);
-                        }
+                    if self.step == Step::EasyDelete {
+                        self.delete_undo_button(ui);
+                    } else {
+                        self.pick_undo_button(ui);
                     }
-                    divider(ui);
-                    self.pick_undo_button(ui);
                 } else if self.step == Step::Rotation {
                     self.rotation_bar_buttons(ui);
                 } else {
@@ -590,7 +585,9 @@ impl PhotoSortApp {
     fn strip_tile(&mut self, ui: &mut egui::Ui, position: usize, rect: egui::Rect, image: Vec2) {
         let index = self.filtered[position];
         ui.scope_builder(
-            egui::UiBuilder::new().id_salt(position).max_rect(rect),
+            egui::UiBuilder::new()
+                .id_salt(self.media[index].id)
+                .max_rect(rect),
             |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(rect));
                 self.card(ui, index, image.x, image.y, false);
@@ -625,6 +622,13 @@ impl PhotoSortApp {
         if let Some(active) = self.active {
             ui.data_mut(|data| data.insert_temp(selection_key, active));
         }
+        // A folder clicked in the navigator comes to the strip's left edge;
+        // the photo under review stays.
+        let folder = if self.step == Step::Cull {
+            self.take_folder_scroll()
+        } else {
+            None
+        };
         egui::ScrollArea::horizontal()
             .id_salt("review_filmstrip")
             .auto_shrink([false, false])
@@ -635,17 +639,21 @@ impl PhotoSortApp {
                     (self.filtered.len() as f32 * stride - ui.spacing().item_spacing.x).max(0.0),
                     HEIGHT + name,
                 ));
-                if follow
+                let tile = |position: usize| {
+                    egui::Rect::from_min_size(
+                        origin + egui::vec2(position as f32 * stride, 0.0),
+                        egui::vec2(WIDTH, HEIGHT),
+                    )
+                };
+                if let Some(position) = folder {
+                    ui.scroll_to_rect(tile(position), Some(Align::Min));
+                } else if follow
                     && let Some(position) = self
                         .filtered
                         .iter()
                         .position(|index| Some(self.media[*index].id) == self.active)
                 {
-                    let rect = egui::Rect::from_min_size(
-                        origin + egui::vec2(position as f32 * stride, 0.0),
-                        egui::vec2(WIDTH, HEIGHT),
-                    );
-                    ui.scroll_to_rect(rect, Some(Align::Center));
+                    ui.scroll_to_rect(tile(position), Some(Align::Center));
                 }
                 let start = (viewport.min.x / stride).floor().max(0.0) as usize;
                 let end = ((viewport.max.x / stride).ceil() as usize + 1).min(self.filtered.len());
@@ -703,7 +711,7 @@ impl PhotoSortApp {
         // Rows sit closer together than tiles.
         let gap = if image.is_none() { 2.0 } else { spacing.y };
         let stride_x = cell.x + spacing.x;
-        let lines = self.photo_lines(columns, cell.y, gap, super::library::SET_HEADER);
+        let lines = self.photo_lines(ui.ctx(), columns, cell.y, gap, super::library::SET_HEADER);
         let selection_key = egui::Id::new("side_strip_selection");
         let previous = ui.data(|data| data.get_temp::<MediaId>(selection_key));
         let follow = previous != self.active;
@@ -750,7 +758,7 @@ impl PhotoSortApp {
                             origin + egui::vec2(0.0, line.top),
                             egui::vec2(gutter + width, super::library::SET_HEADER),
                         );
-                        self.set_header(ui, rect, group, end - start);
+                        self.set_header(ui, rect, group, start, end - start);
                     }
                     LineKind::Cells { start, end } => {
                         for position in start..end {
@@ -793,6 +801,9 @@ impl PhotoSortApp {
         let Some((group, best, size)) = self.similar_group(id) else {
             return;
         };
+        // A best photo the filters hide cannot be gone to: the photo under
+        // review would be one D and the rating keys act on unseen.
+        let mut go = true;
         let (text, hover) = if best == id {
             (
                 format!("{} Best of {size} · Compare all", icon::CROWN_SIMPLE),
@@ -801,16 +812,26 @@ impl PhotoSortApp {
                 ),
             )
         } else {
-            let rank = ordinal(self.group_rank(id, group));
-            (
-                format!("{rank} of {size} · Go to best"),
-                format!(
-                    "{} scored best of these {size} similar photos.",
-                    self.index
-                        .get(&best)
-                        .map_or_else(String::new, |i| self.media[*i].name())
-                ),
-            )
+            let (rank, shown) = self.group_standing(ui.ctx(), id, group, best);
+            let rank = ordinal(rank);
+            let best = self
+                .index
+                .get(&best)
+                .map_or_else(String::new, |i| self.media[*i].name());
+            go = shown;
+            if shown {
+                (
+                    format!("{rank} of {size} · Go to best"),
+                    format!("{best} scored best of these {size} similar photos."),
+                )
+            } else {
+                (
+                    format!("{rank} of {size}"),
+                    format!(
+                        "{best} scored best of these {size} similar photos. The filters hide it."
+                    ),
+                )
+            }
         };
         let color = super::grouping::group_color(group);
         let galley = ui.painter().layout_no_wrap(text.clone(), medium(10.5), INK);
@@ -819,12 +840,18 @@ impl PhotoSortApp {
         if !clip.contains_rect(chip) {
             return;
         }
+        let sense = if go { Sense::click() } else { Sense::hover() };
         let response = ui
-            .interact(chip, ui.id().with(("group-chip", id)), Sense::click())
+            .interact(chip, ui.id().with(("group-chip", id)), sense)
             .on_hover_text(hover);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &text));
+        let kind = if go {
+            egui::WidgetType::Button
+        } else {
+            egui::WidgetType::Label
+        };
+        response.widget_info(|| egui::WidgetInfo::labeled(kind, true, &text));
         let painter = ui.painter();
-        let fill = if response.hovered() {
+        let fill = if go && response.hovered() {
             Color32::from_black_alpha(200)
         } else {
             Color32::from_black_alpha(150)
@@ -836,11 +863,82 @@ impl PhotoSortApp {
             self.pending_bookmark = None;
             if best == id {
                 self.compare_group(group);
-            } else {
+            } else if go {
                 self.comparison.clear();
                 self.set_active(best);
             }
         }
+    }
+    /// The photo under review's [`Self::group_rank`], and whether its
+    /// group's `best` photo is among those shown. Both look through the
+    /// whole library, so they are kept between frames: the rank until the
+    /// grouping or a score in the group changes, the other until the photos
+    /// shown do.
+    fn group_standing(
+        &self,
+        ctx: &egui::Context,
+        id: MediaId,
+        group: usize,
+        best: MediaId,
+    ) -> (usize, bool) {
+        type Groups = std::sync::Weak<HashMap<MediaId, usize>>;
+        let same_groups =
+            |groups: &Groups| std::ptr::eq(groups.as_ptr(), Arc::as_ptr(&self.cull_groups));
+        let at = egui::Id::new("group_standing_members");
+        let cached = ctx.data(|d| d.get_temp::<(usize, Groups, Arc<Vec<MediaId>>)>(at));
+        let members = match cached {
+            Some((for_group, groups, members)) if for_group == group && same_groups(&groups) => {
+                members
+            }
+            _ => {
+                let members: Arc<Vec<MediaId>> = Arc::new(
+                    self.cull_groups
+                        .iter()
+                        .filter(|(_, g)| **g == group)
+                        .map(|(member, _)| *member)
+                        .collect(),
+                );
+                let groups = Arc::downgrade(&self.cull_groups);
+                ctx.data_mut(|d| d.insert_temp(at, (group, groups, members.clone())));
+                members
+            }
+        };
+        // A new analysis can change the scores without regrouping.
+        let scores = members.iter().fold(0u64, |hash, member| {
+            let score = self
+                .analysis
+                .get(member)
+                .map_or(u64::MAX, |a| a.score.to_bits());
+            (hash.rotate_left(5) ^ score).wrapping_mul(0x5851_f42d_4c95_7f2d)
+        });
+        let at = egui::Id::new("group_standing_rank");
+        let rank = match ctx.data(|d| d.get_temp::<((MediaId, usize, u64), Groups, usize)>(at)) {
+            Some((key, groups, rank)) if key == (id, group, scores) && same_groups(&groups) => rank,
+            _ => {
+                let rank = self.group_rank(id, group);
+                let groups = Arc::downgrade(&self.cull_groups);
+                ctx.data_mut(|d| d.insert_temp(at, ((id, group, scores), groups, rank)));
+                rank
+            }
+        };
+        let at = egui::Id::new("group_standing_best_shown");
+        let key = (
+            best,
+            self.filtered.len(),
+            super::library::order_checksum(&self.filtered),
+        );
+        let shown = match ctx.data(|d| d.get_temp::<((MediaId, usize, u64), bool)>(at)) {
+            Some((for_key, shown)) if for_key == key => shown,
+            _ => {
+                let shown = self
+                    .index
+                    .get(&best)
+                    .is_some_and(|index| self.filtered.contains(index));
+                ctx.data_mut(|d| d.insert_temp(at, (key, shown)));
+                shown
+            }
+        };
+        (rank, shown)
     }
     /// Ties the photos of each similarity group together in a strip: a bar
     /// in the `gutter` beside one column, else a line under the photos.

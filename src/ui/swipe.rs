@@ -17,13 +17,16 @@ pub(super) struct Swipe {
     pub(super) splits: Vec<f32>,
     /// One photo shown whole, from its number key.
     pub(super) solo: Option<usize>,
+    /// The step it was opened in: Cull's Review or Organize's preview.
+    step: Step,
 }
 impl Swipe {
-    fn new(ids: Vec<MediaId>) -> Self {
+    fn new(ids: Vec<MediaId>, step: Step) -> Self {
         let mut swipe = Self {
             ids,
             splits: Vec::new(),
             solo: None,
+            step,
         };
         swipe.even();
         swipe
@@ -43,6 +46,10 @@ impl Swipe {
     }
     /// Moves divider `i` to `at`, keeping every slice at least [`NARROWEST`].
     fn drag(&mut self, i: usize, at: f32) {
+        // A canvas with no width gives no position.
+        if !at.is_finite() {
+            return;
+        }
         let low = if i == 0 { 0.0 } else { self.splits[i - 1] } + NARROWEST;
         let high = self.splits.get(i + 1).copied().unwrap_or(1.0) - NARROWEST;
         self.splits[i] = at.clamp(low, high.max(low));
@@ -64,6 +71,26 @@ impl PhotoSortApp {
     /// closes it. Returns whether it took the key.
     pub(super) fn swipe_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
         if !matches!(self.step, Step::Cull | Step::Organize) || modifiers.alt {
+            return false;
+        }
+        self.drop_hidden_swipe();
+        if matches!(
+            pressed,
+            egui::Key::ArrowLeft
+                | egui::Key::ArrowRight
+                | egui::Key::ArrowUp
+                | egui::Key::ArrowDown
+        ) {
+            // The arrows, with Ctrl/Cmd too, step from the photo you are
+            // looking at, so the comparison replaces that one rather than
+            // the first.
+            if let Some(slot) = self
+                .active
+                .and_then(|id| self.comparison.iter().position(|other| *other == id))
+                .filter(|_| self.swipe.is_some())
+            {
+                self.focused_slot = slot as u64;
+            }
             return false;
         }
         if modifiers.command || modifiers.ctrl {
@@ -90,12 +117,28 @@ impl PhotoSortApp {
                     return false;
                 };
                 swipe.number(n);
-                if let Some(&id) = swipe.ids.get(n - 1) {
-                    self.active = Some(id);
-                }
+                self.swipe_pick(n - 1);
             }
         }
         true
+    }
+    /// A swipe compare left behind in the grid or another step closes
+    /// before it can take a key there, or when Organize or Review draws.
+    fn drop_hidden_swipe(&mut self) {
+        if self.swipe.as_ref().is_some_and(|swipe| {
+            swipe.step != self.step || (self.step == Step::Cull && !self.review)
+        }) {
+            self.swipe = None;
+        }
+    }
+    /// Photo `photo` (from 0) becomes the one you are looking at, as a
+    /// click on a compared photo does: D and the rating keys act on it alone.
+    fn swipe_pick(&mut self, photo: usize) {
+        let Some(&id) = self.swipe.as_ref().and_then(|swipe| swipe.ids.get(photo)) else {
+            return;
+        };
+        self.active = Some(id);
+        self.comparison_focus = Some(id);
     }
     /// Swipe compare over the photos being compared, or the 2 to 9
     /// selected. Videos cannot be overlaid, so they are left out; with
@@ -124,10 +167,11 @@ impl PhotoSortApp {
             self.review = true;
         }
         self.focused_slot = 0;
-        self.swipe = Some(Swipe::new(ids));
+        self.swipe = Some(Swipe::new(ids, self.step));
     }
     /// The open swipe compare, while it still covers the photos compared.
     pub(super) fn swipe_shown(&mut self) -> bool {
+        self.drop_hidden_swipe();
         let Some(swipe) = &self.swipe else {
             return false;
         };
@@ -231,7 +275,7 @@ impl PhotoSortApp {
             && swipe.solo.is_none()
             && let Some(photo) = response.interact_pointer_pos().and_then(under)
         {
-            self.active = Some(swipe.ids[photo]);
+            self.swipe_pick(photo);
         }
         if response.hovered() {
             let (delta, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
@@ -339,7 +383,7 @@ impl PhotoSortApp {
                 .anchor_size(at.center(), galley.size() + egui::vec2(14.0, 6.0));
             let response = ui.interact(
                 pill,
-                ui.id().with(("swipe-label", photo, at.left() as i32)),
+                ui.id().with(("swipe-label", photo, swipe.solo.is_some())),
                 Sense::click(),
             );
             let fill = if on {
@@ -423,7 +467,7 @@ impl PhotoSortApp {
             match choice {
                 Some(photo) if swipe.solo != Some(photo) => {
                     swipe.solo = Some(photo);
-                    self.active = Some(swipe.ids[photo]);
+                    self.swipe_pick(photo);
                 }
                 Some(_) | None => swipe.solo = None,
             }
@@ -457,7 +501,7 @@ impl PhotoSortApp {
 
 #[cfg(test)]
 mod tests {
-    use super::super::compact_cull_tests::{fixture, rendered};
+    use super::super::compact_cull_tests::{fixture, rendered, settle};
     use super::*;
 
     #[test]
@@ -486,6 +530,11 @@ mod tests {
             );
         };
         let none = egui::Modifiers::NONE;
+        // A divider dragged on a canvas with no width stays where it was.
+        let mut slices = Swipe::new(ids.clone(), Step::Cull);
+        slices.drag(0, f32::NAN);
+        slices.drag(1, 0.5);
+        assert!(slices.splits.iter().all(|split| split.is_finite()));
         press(&mut app, egui::Key::C, none);
         let swipe = app.swipe.clone().expect("C opens swipe compare");
         assert!(app.review);
@@ -514,6 +563,10 @@ mod tests {
                 .iter()
                 .all(|id| app.decisions.get(id).is_none_or(|d| d.rating.is_none()))
         );
+        // D too marks the photo shown alone, not every one compared.
+        press(&mut app, egui::Key::D, none);
+        assert!(app.decisions[&ids[2]].rejected);
+        assert!(ids[..2].iter().all(|id| !app.decision(*id).rejected));
         // The same number again goes back to the slices.
         press(&mut app, egui::Key::Num3, none);
         assert_eq!(app.swipe.as_ref().unwrap().solo, None);
@@ -522,6 +575,33 @@ mod tests {
         assert!(app.swipe.is_none());
         assert_eq!(app.comparison, ids);
         assert_eq!(app.selection.len(), 3);
+        // The arrows step from the photo shown: Right replaces the third.
+        press(&mut app, egui::Key::C, none);
+        press(&mut app, egui::Key::Num3, none);
+        // (The marks above refresh the photos shown first.)
+        settle(&mut app);
+        press(&mut app, egui::Key::ArrowRight, none);
+        assert_eq!(app.comparison[..2], ids[..2]);
+        assert!(app.comparison.len() == 3 && !app.comparison.contains(&ids[2]));
+        // So does Ctrl/Cmd and an arrow, which includes marked photos: Left
+        // goes back to the third photo, marked above.
+        press(&mut app, egui::Key::C, none);
+        press(&mut app, egui::Key::C, none);
+        press(&mut app, egui::Key::Num3, none);
+        settle(&mut app);
+        press(&mut app, egui::Key::ArrowLeft, egui::Modifiers::COMMAND);
+        assert_eq!(app.comparison, ids);
+        // Back in the grid, a swipe left open takes no keys: Ctrl/Cmd and
+        // a number rate every selected photo again.
+        app.review = false;
+        press(&mut app, egui::Key::Num4, egui::Modifiers::COMMAND);
+        assert!(app.swipe.is_none());
+        let compared = app.comparison.clone();
+        assert!(
+            compared
+                .iter()
+                .all(|id| app.decisions.get(id).and_then(|d| d.rating) == Some(4))
+        );
         // With one photo selected, C does nothing.
         app.comparison.clear();
         app.review = false;
