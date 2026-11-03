@@ -115,16 +115,23 @@ impl Default for FolderFilter {
 }
 impl FolderFilter {
     pub fn matches(&self, media: &std::path::Path) -> bool {
-        self.path.is_none()
-            || media.parent().is_some_and(|parent| {
-                self.folders().any(|folder| {
+        self.matcher()(media)
+    }
+    /// The same test for many files: the shown folders are hashed once, and
+    /// each file walks only its own parent folders, however many are shown.
+    pub fn matcher(&self) -> impl Fn(&std::path::Path) -> bool + '_ {
+        let folders: std::collections::HashSet<&std::path::Path> =
+            self.folders().map(|f| f.as_path()).collect();
+        move |media| {
+            self.path.is_none()
+                || media.parent().is_some_and(|parent| {
                     if self.recursive {
-                        parent.starts_with(folder)
+                        parent.ancestors().any(|folder| folders.contains(folder))
                     } else {
-                        parent == folder
+                        folders.contains(parent)
                     }
                 })
-            })
+        }
     }
     /// Every folder shown; none when every folder is.
     pub fn folders(&self) -> impl Iterator<Item = &std::path::PathBuf> {
@@ -159,10 +166,12 @@ impl FolderFilter {
         if !add {
             self.also.clear();
         }
+        let mut shown: std::collections::HashSet<_> = self.folders().cloned().collect();
         for folder in span {
             if self.path.is_none() {
+                shown.insert(folder.clone());
                 self.path = Some(folder);
-            } else if !self.shows(&folder) {
+            } else if shown.insert(folder.clone()) {
                 self.also.push(folder);
             }
         }
@@ -193,11 +202,12 @@ pub fn apply(
     groups: &HashMap<MediaId, usize>,
     options: &Options,
 ) {
+    let in_folder = options.folder.matcher();
     indices.retain(|i| {
         let id = media[*i].id;
         options.rating.matches(rating(id, decisions, metadata))
             && options.group.is_none_or(|g| groups.get(&id) == Some(&g))
-            && options.folder.matches(&media[*i].path)
+            && in_folder(&media[*i].path)
             && options.date.as_deref().is_none_or(|scope| {
                 tree::date_matches(
                     Some(scope),

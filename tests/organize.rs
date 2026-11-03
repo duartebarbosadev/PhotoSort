@@ -49,7 +49,13 @@ fn cycles_collisions_root_and_invalid_names_leave_draft_unchanged() {
     ] {
         assert!(d.create_folder("", name).is_err(), "{name}");
     }
+    // `Trip` and `trip` are one folder on macOS and Windows.
+    assert!(d.create_folder("", "Trip").is_err());
+    assert!(d.rename_folder("trips", "TRIP").is_err());
+    assert!(d.create_parent("trips", "TRIP").is_err());
     assert_eq!(before, d);
+    // Changing only the case of a folder's own name stays allowed.
+    assert_eq!(d.rename_folder("trip", "Trip").unwrap(), "Trip");
 }
 #[test]
 fn moving_selection_is_atomic_and_supports_root_and_empty_folders() {

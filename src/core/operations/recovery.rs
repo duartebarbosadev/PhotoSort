@@ -2,7 +2,7 @@
 //! restores intent and verified identities only; file operations require review.
 use super::{Plan, Report, execute_logged, reject_symlink_components};
 mod amendment;
-mod moves;
+pub(super) mod moves;
 use crate::core::{metadata, model::*, session::Session, views};
 use anyhow::{Context as _, Result, ensure};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -237,6 +237,9 @@ struct Entry {
     error: String,
     #[serde(default)]
     move_states: Vec<moves::State>,
+    /// Files a failed Trash group had already moved to the OS Trash.
+    #[serde(default)]
+    trashed: usize,
 }
 struct Loaded {
     pending: Vec<usize>,
@@ -398,6 +401,11 @@ impl Store {
                         "Completion without a pending action"
                     );
                     report.complete(&plan.actions[entry.index], &entry.relocated);
+                    if !entry.error.is_empty() {
+                        report
+                            .errors
+                            .push(plan.actions[entry.index].failure_message(&entry.error));
+                    }
                 }
                 "recovered-move" => {
                     ensure!(
@@ -410,12 +418,24 @@ impl Store {
                         &mut report,
                     )?;
                     partial.insert(entry.index, remainder);
+                    if !entry.error.is_empty() {
+                        report
+                            .errors
+                            .push(plan.actions[entry.index].failure_message(&entry.error));
+                    }
                 }
                 "failed" | "cancelled" => {
                     ensure!(
                         pending.remove(&entry.index),
                         "Failure without a pending action"
                     );
+                    if entry.trashed > 0 {
+                        let (done, rest) =
+                            super::split_trash(&plan.actions[entry.index], entry.trashed)
+                                .context("Invalid partial Trash record")?;
+                        report.complete(&done, &[]);
+                        partial.insert(entry.index, vec![rest]);
+                    }
                     if !entry.error.is_empty() {
                         report
                             .errors
@@ -506,7 +526,7 @@ impl Store {
                 moves::verify(action, cancelled)?.as_ref() == Some(identities),
                 "Moved files changed during recovery; reopen the library"
             );
-            moves::write(checkpoint.as_file_mut(), *index, action, identities)?;
+            moves::write(checkpoint.as_file_mut(), *index, action, identities, None)?;
         }
         checkpoint.as_file().sync_all()?;
         ensure!(!cancelled(), "Recovery cancelled before publication");

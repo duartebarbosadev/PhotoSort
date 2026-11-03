@@ -187,6 +187,26 @@ fn one_collision_suffix_covers_the_entire_renamed_companion_cohort() {
     }
 }
 #[test]
+fn names_that_differ_only_in_case_get_separate_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    for name in ["a.jpg", "b.jpg"] {
+        fs::write(root.join(name), name).unwrap();
+    }
+    let catalog = Catalog::scan(&root, || false, |_| {}).unwrap();
+    let names = HashMap::from([
+        (MediaId::for_path(&root.join("a.jpg")), "Beach".into()),
+        (MediaId::for_path(&root.join("b.jpg")), "beach".into()),
+    ]);
+    let plan =
+        operations::organize_plan_with_names(&catalog, &labels(&catalog), &names, &root, true)
+            .unwrap();
+    let report = operations::execute(&plan, &root.join("journal"), || false, |_, _| {}).unwrap();
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert_eq!(fs::read(root.join("Beach.jpg")).unwrap(), b"a.jpg");
+    assert_eq!(fs::read(root.join("beach_1.jpg")).unwrap(), b"b.jpg");
+}
+#[test]
 #[ignore = "requires PHOTOSORT_SAMPLE_DIR; copies and renames all seven reference samples"]
 fn seven_sample_renames_preserve_original_and_destination_bytes() {
     let source = std::path::PathBuf::from(

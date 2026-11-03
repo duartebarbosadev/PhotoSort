@@ -617,14 +617,24 @@ pub fn organize_changes_pending(
     {
         return true;
     }
-    catalog.organize_files().iter().any(|(id, path)| {
-        labels.get(id).is_some_and(|label| {
-            path.parent() != Some(folder_destination(output, label).as_path())
-                || names
-                    .get(id)
-                    .is_some_and(|name| super::organize::requested_stem(path, name).is_some())
-        })
-    })
+    // The plan review asks this every frame: build each folder path once.
+    let mut folders: HashMap<&str, PathBuf> = HashMap::new();
+    for (id, path) in catalog.organize_files() {
+        let Some(label) = labels.get(&id) else {
+            continue;
+        };
+        let folder = folders
+            .entry(label)
+            .or_insert_with(|| folder_destination(output, label));
+        if path.parent() != Some(folder.as_path())
+            || names
+                .get(&id)
+                .is_some_and(|name| super::organize::requested_stem(path, name).is_some())
+        {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn organize_plan(
@@ -693,7 +703,10 @@ pub fn organize_plan_with_layout_cancellable(
     let names =
         super::organize::resolve_file_names(&organize_files, names, companions, &cancelled)?;
     let mut seen = HashSet::new();
+    // Keyed without letter case: two planned names that differ only in case
+    // are one file on macOS and Windows, and the second move would fail.
     let mut reserved = HashSet::new();
+    let reservation = |path: &Path| path.to_string_lossy().to_lowercase();
     let mut actions = casing.actions.clone();
     let mut file_names = case_rename::FileNames::default();
     for (id, path) in organize_files {
@@ -758,7 +771,7 @@ pub fn organize_plan_with_layout_cancellable(
                 .collect();
             let mut available = true;
             for (source, destination) in sources.iter().zip(&destinations) {
-                if reserved.contains(destination)
+                if reserved.contains(&reservation(destination))
                     || (casing.occupied(destination)
                         && !file_names.source_alias(
                             source,
@@ -778,7 +791,7 @@ pub fn organize_plan_with_layout_cancellable(
         let mut files = Vec::new();
         for (source, dest) in sources.into_iter().zip(destinations) {
             seen.insert(source.clone());
-            reserved.insert(dest.clone());
+            reserved.insert(reservation(&dest));
             let mut reviewed = Source::capture(source)?;
             reviewed.path = casing.rebase(&reviewed.path);
             files.push((reviewed, dest));
@@ -855,6 +868,7 @@ fn add_directory_actions(
         .iter()
         .map(|(_, p)| folder_destination(output, p))
         .collect();
+    let known: HashSet<_> = catalog.directories.iter().map(PathBuf::as_path).collect();
     let mut cleanup = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
     let mut candidate = |folder: &Path, dependency: &Path| {
         for path in folder.ancestors() {
@@ -883,7 +897,7 @@ fn add_directory_actions(
         anyhow::ensure!(!cancelled(), "Planning cancelled");
         let source = folder_destination(&catalog.root, source);
         anyhow::ensure!(
-            catalog.directories.contains(&source),
+            known.contains(source.as_path()),
             "Empty folder was not in the reviewed catalog"
         );
         let target = folder_destination(output, target);
@@ -903,7 +917,7 @@ fn add_directory_actions(
                 path.display()
             );
         }
-        if (!path.exists() && !catalog.directories.contains(path)) || moved_targets.contains(path) {
+        if (!path.exists() && !known.contains(path.as_path())) || moved_targets.contains(path) {
             actions.push(Action::CreateDirectory { path: path.clone() });
         }
     }
@@ -1082,10 +1096,29 @@ fn execute_logged(
                     }
                     _ => {}
                 }
-                report.remaining.actions.push(action.clone());
                 let detail = format!("{e:#}");
                 report.errors.push(action.failure_message(&detail));
-                write_record(journal, "failed", i, action, &[], Some(&detail))?;
+                // A move that failed after linking its destinations cannot be
+                // retried as is: they already exist. Receipt its verified
+                // progress, as reopening after a crash would, so a retry only
+                // removes staged sources and moves the untouched rest.
+                match recovery::moves::verify(action, &|| false) {
+                    Ok(Some(states)) => {
+                        recovery::moves::write(journal, i, action, &states, Some(&detail))?;
+                        let remainder = recovery::moves::restore(action, &states, &mut report)?;
+                        report.remaining.actions.extend(remainder);
+                    }
+                    _ => {
+                        let trashed = e.downcast_ref::<PartialTrash>().map_or(0, |p| p.trashed);
+                        if let Some((done, rest)) = split_trash(action, trashed) {
+                            report.complete(&done, &[]);
+                            report.remaining.actions.push(rest);
+                        } else {
+                            report.remaining.actions.push(action.clone());
+                        }
+                        write_failure(journal, i, action, trashed, &detail)?;
+                    }
+                }
                 if matches!(action, Action::RenameDirectory(_)) {
                     // Later sources depend on the reviewed spelling. Never run them
                     // after an unsuccessful prerequisite, including on retry.
@@ -1128,6 +1161,37 @@ fn write_record(
             index,
             action,
             relocated,
+            error,
+        },
+    )?;
+    journal.write_all(b"\n")?;
+    Ok(())
+}
+fn write_failure(
+    journal: &mut File,
+    index: usize,
+    action: &Action,
+    trashed: usize,
+    error: &str,
+) -> Result<()> {
+    if trashed == 0 {
+        return write_record(journal, "failed", index, action, &[], Some(error));
+    }
+    #[derive(Serialize)]
+    struct Record<'a> {
+        status: &'a str,
+        index: usize,
+        action: &'a Action,
+        trashed: usize,
+        error: &'a str,
+    }
+    serde_json::to_writer(
+        &mut *journal,
+        &Record {
+            status: "failed",
+            index,
+            action,
+            trashed,
             error,
         },
     )?;
@@ -1263,10 +1327,19 @@ fn apply(
             for source in files {
                 source.verify()?;
             }
-            for source in files {
-                move_to_trash(&source.path).with_context(|| {
-                    format!("Could not move {} to OS Trash", source.path.display())
-                })?;
+            for (trashed, source) in files.iter().enumerate() {
+                move_to_trash(&source.path)
+                    .with_context(|| {
+                        format!("Could not move {} to OS Trash", source.path.display())
+                    })
+                    .map_err(|error| match trashed {
+                        0 => error,
+                        _ => PartialTrash {
+                            trashed,
+                            detail: format!("{error:#}"),
+                        }
+                        .into(),
+                    })?;
             }
         }
         Action::Metadata {
@@ -1358,6 +1431,37 @@ fn verify_staged_move(source: &Source, destination: &Path) -> Result<()> {
         destination.display()
     );
     Ok(())
+}
+/// A Trash group that failed after its first `trashed` files left: those are
+/// gone, so a retry may only repeat the rest.
+#[derive(Debug)]
+struct PartialTrash {
+    trashed: usize,
+    detail: String,
+}
+impl std::fmt::Display for PartialTrash {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+impl std::error::Error for PartialTrash {}
+/// The trashed and the remaining part of a Trash group, for the executor and
+/// for a journal reader, which must agree exactly.
+fn split_trash(action: &Action, trashed: usize) -> Option<(Action, Action)> {
+    let Action::Trash { files } = action else {
+        return None;
+    };
+    (0 < trashed && trashed < files.len()).then(|| {
+        let (done, rest) = files.split_at(trashed);
+        (
+            Action::Trash {
+                files: done.to_vec(),
+            },
+            Action::Trash {
+                files: rest.to_vec(),
+            },
+        )
+    })
 }
 #[derive(Debug)]
 struct MoveCancelled;

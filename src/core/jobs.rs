@@ -19,7 +19,6 @@ use std::{
     time::Duration,
 };
 
-#[path = "jobs/diagnostics.rs"]
 mod diagnostics;
 mod files;
 mod images;
@@ -649,9 +648,7 @@ impl Drop for Runtime {
 }
 
 #[cfg(test)]
-#[path = "jobs/admission_tests.rs"]
 mod admission_tests;
 
 #[cfg(test)]
-#[path = "jobs/publication_tests.rs"]
 mod publication_tests;

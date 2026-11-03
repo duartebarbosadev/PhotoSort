@@ -2333,3 +2333,131 @@ fn staged_move_never_removes_the_only_destination_through_an_alias() {
     assert!(!source.path.exists());
     assert_eq!(fs::read(destination).unwrap(), b"first photo");
 }
+#[test]
+#[cfg(unix)]
+fn move_that_fails_removing_a_linked_source_retries_only_the_unfinished_unlink() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_temp, store, context, _) = fixture();
+    let locked = context.root.join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::write(locked.join("c.jpg"), b"third photo").unwrap();
+    let sorted = context.root.join("Sorted");
+    let plan = Plan {
+        actions: vec![Action::Move {
+            files: vec![
+                (
+                    Source::capture(context.root.join("a.jpg")).unwrap(),
+                    sorted.join("a.jpg"),
+                ),
+                (
+                    Source::capture(locked.join("c.jpg")).unwrap(),
+                    sorted.join("c.jpg"),
+                ),
+            ],
+        }],
+        description: "Review moves".into(),
+        output_root: Some(context.root.clone()),
+        ..Default::default()
+    };
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+    if fs::write(locked.join("probe"), b"").is_ok() {
+        return; // Permissions do not bind this user (root); nothing to test.
+    }
+    let report = store
+        .execute(&context, &plan, None, || false, |_, _| {})
+        .unwrap();
+    assert_eq!(report.errors.len(), 1, "the failure is still reported");
+    assert!(report.errors[0].contains("could not remove source"));
+    let a = MediaId::for_path(&context.root.join("a.jpg"));
+    assert!(
+        report
+            .relocated
+            .iter()
+            .any(|(old, new, _)| *old == a && *new == MediaId::for_path(&sorted.join("a.jpg")))
+    );
+    assert!(matches!(
+        &report.remaining.actions[..],
+        [Action::FinishMove { files }] if files[0].0.path == locked.join("c.jpg")
+    ));
+    // Reopening agrees with the in-process result, so the retry is accepted.
+    let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
+    assert_eq!(
+        serde_json::to_value(&restored.plan.actions).unwrap(),
+        serde_json::to_value(&report.remaining.actions).unwrap()
+    );
+    assert_eq!(restored.errors, report.errors);
+    assert_eq!(
+        Session::load(&context.root).unwrap().decisions[&MediaId::for_path(&sorted.join("a.jpg"))]
+            .rating,
+        Some(4)
+    );
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    let retried = store
+        .execute(
+            &context,
+            &restored.plan,
+            Some(&restored.ticket),
+            || false,
+            |_, _| {},
+        )
+        .unwrap();
+    assert!(retried.errors.is_empty() && retried.remaining.actions.is_empty());
+    assert!(!locked.join("c.jpg").exists());
+    assert_eq!(fs::read(sorted.join("c.jpg")).unwrap(), b"third photo");
+    assert_eq!(fs::read(sorted.join("a.jpg")).unwrap(), b"first photo");
+}
+#[test]
+#[cfg(target_os = "macos")]
+fn trash_group_that_fails_partway_retries_only_the_files_still_present() {
+    let (_temp, store, context, _) = fixture();
+    let (a, b) = (context.root.join("a.jpg"), context.root.join("b.jpg"));
+    let plan = Plan {
+        actions: vec![Action::Trash {
+            files: vec![
+                Source::capture(a.clone()).unwrap(),
+                Source::capture(b.clone()).unwrap(),
+            ],
+        }],
+        description: "Review Trash".into(),
+        ..Default::default()
+    };
+    // A locked file cannot be moved to the Trash, like one held open on Windows.
+    let flags = |flag: &str| {
+        let status = std::process::Command::new("chflags")
+            .args([flag, b.to_str().unwrap()])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    flags("uchg");
+    let report = store
+        .execute(&context, &plan, None, || false, |_, _| {})
+        .unwrap();
+    flags("nouchg");
+    assert!(!a.exists() && b.exists());
+    assert_eq!(report.errors.len(), 1);
+    assert!(matches!(
+        &report.remaining.actions[..],
+        [Action::Trash { files }] if files.len() == 1 && files[0].path == b
+    ));
+    // The trashed photo's staged choice is applied, the other one stays staged.
+    let session = Session::load(&context.root).unwrap();
+    assert!(!session.decisions.contains_key(&MediaId::for_path(&a)));
+    assert!(session.decisions.contains_key(&MediaId::for_path(&b)));
+    let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
+    assert_eq!(
+        serde_json::to_value(&restored.plan.actions).unwrap(),
+        serde_json::to_value(&report.remaining.actions).unwrap()
+    );
+    let retried = store
+        .execute(
+            &context,
+            &restored.plan,
+            Some(&restored.ticket),
+            || false,
+            |_, _| {},
+        )
+        .unwrap();
+    assert!(retried.errors.is_empty() && retried.remaining.actions.is_empty());
+    assert!(!b.exists());
+}

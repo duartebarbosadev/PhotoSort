@@ -123,3 +123,39 @@ fn a_panicking_task_publishes_a_readable_error_and_the_worker_continues() {
     assert!(publisher.guard(Worker::Files, || ran = true));
     assert!(ran && rx.try_recv().is_err());
 }
+
+#[test]
+fn policy_workers_stop_once_the_image_worker_is_gone() {
+    let (tx, _events) = mpsc::sync_channel(1);
+    let publisher = publisher(tx, || {});
+    // The image worker owns both senders; after it stops they are dropped.
+    let (_, duplicate_rx) = mpsc::sync_channel(1);
+    let (evidence_tx, _evidence_rx) = mpsc::sync_channel(1);
+    let (_, subject_rx) = mpsc::sync_channel(1);
+    let workers = [
+        similarity::spawn(
+            publisher.clone(),
+            duplicate_rx,
+            evidence_tx,
+            Default::default(),
+            Default::default(),
+        ),
+        subjects::spawn(
+            publisher.clone(),
+            subject_rx,
+            Default::default(),
+            Default::default(),
+        ),
+    ];
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let _ = done.send(());
+    });
+    // Without the disconnect check both threads would spin until shutdown.
+    let stopped = finished.recv_timeout(Duration::from_secs(5)).is_ok();
+    publisher.stop.store(true, Ordering::Release);
+    assert!(stopped);
+}
