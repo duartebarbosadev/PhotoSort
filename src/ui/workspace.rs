@@ -961,7 +961,13 @@ impl PhotoSortApp {
                 drained = true;
                 break;
             };
-            if envelope.epoch != self.runtime.epoch() {
+            // A failed save is reported even after its folder was left.
+            if envelope.epoch != self.runtime.epoch()
+                && !matches!(
+                    envelope.event,
+                    Event::ViewError(_) | Event::PreferencesError(_)
+                )
+            {
                 continue;
             }
             if self.handle_event(ctx, envelope.event).is_break() {

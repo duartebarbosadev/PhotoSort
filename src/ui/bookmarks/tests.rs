@@ -461,3 +461,25 @@ fn events_left_past_a_frames_budget_bring_the_next_frame() {
     }
     app.runtime.shutdown();
 }
+#[test]
+fn a_failed_save_from_the_folder_just_left_is_still_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app =
+        PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None);
+    let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+    let original = std::mem::replace(&mut app.runtime.events, receiver);
+    let left = app.runtime.epoch();
+    app.runtime.next_epoch();
+    for event in [
+        Event::Error("stale worker error".into()),
+        Event::ViewError("views could not be saved".into()),
+    ] {
+        sender
+            .send(crate::core::jobs::Envelope { epoch: left, event })
+            .unwrap();
+    }
+    app.poll(&egui::Context::default());
+    assert_eq!(app.error.as_deref(), Some("views could not be saved"));
+    app.runtime.events = original;
+    app.runtime.shutdown();
+}
