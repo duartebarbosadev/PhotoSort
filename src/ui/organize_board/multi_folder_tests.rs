@@ -362,6 +362,24 @@ fn a_folder_taken_away_leaves_none_of_its_photos_selected() {
     app.board_folder_action(FolderAction::ShowOnly(Some("B".into())));
     assert_eq!(app.board.focus, ["B"]);
     assert_eq!(app.selection.ordered(&app.media, &app.filtered), [ids[5]]);
+    // Shown alone, an empty folder leaves no photo current, so D marks
+    // nothing it hides.
+    app.board_new_folder("", &[]);
+    app.board.editing.as_mut().unwrap().1 = "Spare".into();
+    app.board_finish_edit();
+    rendered(&mut app, &ctx, SIZE);
+    app.board_folder_action(FolderAction::ShowOnly(Some("Spare".into())));
+    assert_eq!(app.board.focus, ["Spare"]);
+    assert_eq!(app.active, None);
+    assert!(app.selection.is_empty());
+    press(&mut app, &ctx, egui::Key::D, Default::default());
+    assert_eq!(app.active, None);
+    let marked: Vec<MediaId> = ids
+        .iter()
+        .copied()
+        .filter(|id| app.decision(*id).rejected)
+        .collect();
+    assert_eq!(marked, [ids[7]], "only the photo marked above");
     app.runtime.shutdown();
 }
 

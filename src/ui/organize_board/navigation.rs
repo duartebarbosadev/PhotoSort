@@ -147,8 +147,17 @@ impl PhotoSortApp {
             .and_then(|s| self.filtered.get(s.range.start))
             .map(|&i| self.media[i].id);
         self.board.focus = focus;
-        if !inside && let Some(id) = first {
-            self.board_start_at(id);
+        if !inside {
+            match first {
+                Some(id) => self.board_start_at(id),
+                // Only empty folders shown: no photo stays current unseen,
+                // for D, F2 or a rating to act on.
+                None => {
+                    self.active = None;
+                    self.comparison.clear();
+                    self.comparison_focus = None;
+                }
+            }
         }
         if !self.board.focus.is_empty() {
             let shown = self.board_focus_positions();
