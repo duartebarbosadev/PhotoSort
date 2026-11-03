@@ -58,6 +58,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     write_demo_photos(&root)?;
+    fixed_times(&root)?;
 
     let shots: &[(&str, Option<Step>, bool, [f32; 2])] = &[
         (
@@ -572,6 +573,7 @@ fn main() -> anyhow::Result<()> {
             std::fs::copy(entry.path(), dated_root.join(entry.file_name()))?;
         }
     }
+    fixed_times(&dated_root)?;
     shoot(
         &dated_root,
         "03b-organize-by-date-wide",
@@ -612,11 +614,12 @@ fn main() -> anyhow::Result<()> {
     // photos really come from different folders.
     let sources = tempfile::tempdir()?;
     let sources_root = sources.path().join("Photos");
-    let samples: Vec<_> = std::fs::read_dir(&root)?
+    let mut samples: Vec<_> = std::fs::read_dir(&root)?
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .map(|e| e.path())
         .collect();
+    samples.sort();
     for (i, folder) in ["2023-04-28/group-1", "2023-04-28/group-2", "2024-04-18"]
         .into_iter()
         .enumerate()
@@ -627,6 +630,7 @@ fn main() -> anyhow::Result<()> {
             std::fs::copy(sample, dir.join(sample.file_name().unwrap()))?;
         }
     }
+    fixed_times(&sources_root)?;
     let folder = sources_root.clone();
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
@@ -767,6 +771,33 @@ fn write_demo_photos(root: &std::path::Path) -> anyhow::Result<()> {
         save(&crop(&street, 0.02, 0.02), "DSC01231.jpg")?;
         save(&crop(&street, 0.03, 0.025).blur(6.0), "DSC01232.jpg")?;
         save(&crop(&street, 0.035, 0.03).blur(10.0), "DSC01233.jpg")?;
+    }
+    Ok(())
+}
+
+/// The same file times on every run, a minute apart in name order. Photos
+/// without a capture date are dated by them (creation time first, which
+/// Linux cannot set), and so grouped and labelled.
+fn fixed_times(root: &std::path::Path) -> anyhow::Result<()> {
+    let start = std::time::UNIX_EPOCH + Duration::from_secs(1_714_035_600); // 2024-04-25
+    let mut files: Vec<_> = walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.into_path())
+        .collect();
+    files.sort();
+    for (minute, path) in (0u64..).zip(files) {
+        let time = start + Duration::from_secs(60 * minute);
+        let times = std::fs::FileTimes::new().set_modified(time);
+        #[cfg(target_os = "macos")]
+        let times = std::os::macos::fs::FileTimesExt::set_created(times, time);
+        #[cfg(windows)]
+        let times = std::os::windows::fs::FileTimesExt::set_created(times, time);
+        std::fs::File::options()
+            .write(true)
+            .open(path)?
+            .set_times(times)?;
     }
     Ok(())
 }

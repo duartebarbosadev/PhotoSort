@@ -120,11 +120,7 @@ impl PhotoSortApp {
             // Remembered as it opens: quitting part-way through, or a film
             // that cannot play, must not bring it back on every launch.
             self.preferences.intro_shown = true;
-            // Never replace an unreadable file with defaults behind the
-            // user's back; only an explicit Settings change does that.
-            if !self.preferences_unreadable {
-                self.save_preferences();
-            }
+            self.save_preferences();
         }
         let fingerprint = match Fingerprint::read(&path) {
             Ok(fingerprint) => fingerprint,

@@ -82,9 +82,6 @@ impl Source {
         })?;
         Self::new(repo).map_err(|e| format!("Invalid release configuration: {e}"))
     }
-    pub fn repository(&self) -> &str {
-        &self.repository
-    }
     pub fn api_url(&self) -> String {
         format!(
             "https://api.github.com/repos/{}/releases/latest",
@@ -215,7 +212,7 @@ impl Worker {
             }
         })
     }
-    fn start_task(
+    pub(crate) fn start_task(
         &mut self,
         check: impl FnOnce(&AtomicBool) -> Result<State> + Send + 'static,
     ) -> Result<bool> {

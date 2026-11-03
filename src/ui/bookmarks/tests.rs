@@ -362,3 +362,73 @@ fn guided_views_restore_position_and_group_without_decisions() {
     assert_eq!(app.active, Some(ids[2]));
     assert!(app.decisions == staged && app.requested.is_empty());
 }
+#[test]
+fn an_idle_window_saves_its_view_then_stops_repainting() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app =
+        PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None);
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    let frame = |app: &mut PhotoSortApp| {
+        ctx.run_test(egui::RawInput::default(), |ui| {
+            app.update_workspace(ui, false)
+        })
+        .viewport_output[&egui::ViewportId::ROOT]
+            .repaint_delay
+    };
+    // A frame soon after the last checkpoint comes back for the next one.
+    assert!(frame(&mut app) <= VIEW_CHECKPOINT);
+    // Once a frame has saved the view, nothing asks for another; the first
+    // frames may still settle their layout.
+    let mut delay = Duration::ZERO;
+    for _ in 0..10 {
+        app.view_checkpoint = Instant::now().checked_sub(VIEW_CHECKPOINT).unwrap();
+        delay = frame(&mut app);
+        if delay == Duration::MAX {
+            break;
+        }
+    }
+    assert_eq!(delay, Duration::MAX, "{:?}", ctx.repaint_causes());
+    app.runtime.shutdown();
+}
+#[test]
+fn a_restored_view_that_changes_the_filter_draws_again_at_once() {
+    let (_dir, mut app) = fixture();
+    let a = app.media[0].id;
+    app.set_step(Step::Cull);
+    let ctx = egui::Context::default();
+    let until = Instant::now() + worker_patience();
+    while app.metadata_run.is_some() {
+        assert!(Instant::now() < until, "metadata never finished");
+        app.poll(&ctx);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    settle(&mut app);
+    // A saved Cull view of photo a's group, resumed once grouping is known.
+    app.cull_groups = Arc::new(HashMap::from([(a, 5)]));
+    app.pending_bookmark = Some(Bookmark {
+        group_anchor: Some(a),
+        ..app.capture_bookmark()
+    });
+    app.resume_started = true;
+    // A context's first frames repaint anyway; this one comes from a worker.
+    let mut out = ctx.run_test(egui::RawInput::default(), |_| {});
+    for _ in 0..3 {
+        out = ctx.run_test(egui::RawInput::default(), |_| {});
+    }
+    assert_eq!(
+        out.viewport_output[&egui::ViewportId::ROOT].repaint_delay,
+        Duration::MAX
+    );
+    let out = ctx.run_test(egui::RawInput::default(), |ui| {
+        app.refilter_and_restore(&ui.ctx().clone())
+    });
+    assert_eq!(app.browse.group, Some(5));
+    assert!(app.filter_dirty);
+    assert!(
+        out.viewport_output[&egui::ViewportId::ROOT]
+            .repaint_delay
+            .is_zero()
+    );
+    app.runtime.shutdown();
+}

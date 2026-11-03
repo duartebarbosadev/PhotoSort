@@ -126,14 +126,13 @@ impl Bookmark {
     ) {
         self.missing_focus = self.active.is_some_and(|id| !valid(id));
         self.active = self.active.filter(|id| valid(*id));
+        self.make_storable();
         if let Some(editor) = self.editor.as_mut() {
             editor.selected.retain(|id| valid_file(*id));
             editor.focused = editor.focused.filter(|id| valid_file(*id));
             editor.anchor = editor.anchor.filter(|id| valid_file(*id));
             for offset in [&mut editor.photo_scroll, &mut editor.folder_scroll] {
-                if !offset.is_finite() || *offset < 0.0 {
-                    *offset = 0.0;
-                }
+                *offset = offset.max(0.0);
             }
         }
         self.selected.retain(|id| valid(*id));
@@ -146,22 +145,46 @@ impl Bookmark {
         if self.group_anchor.is_none() {
             self.browse.group = None;
         }
+        self.scroll = self.scroll.max(0.0);
+        // A view saved zoomed out past Fit comes back at Fit. 1:1 views
+        // are limited when their photo is laid out again.
+        self.view = self.view.clamped(None);
+        self.independent_views.retain(|slot, v| {
+            *v = v.clamped(None);
+            *slot < 9
+        });
+    }
+    /// What JSON cannot hold goes back to its default: serde_json writes
+    /// NaN and infinity as `null`, which would make the whole file
+    /// unreadable, and refuses folder paths that are not UTF-8.
+    fn make_storable(&mut self) {
+        if let Some(editor) = self.editor.as_mut() {
+            for offset in [&mut editor.photo_scroll, &mut editor.folder_scroll] {
+                if !offset.is_finite() {
+                    *offset = 0.0;
+                }
+            }
+        }
         if !self.scroll.is_finite() {
             self.scroll = 0.0;
         }
-        self.scroll = self.scroll.max(0.0);
-        fn clean(v: &mut inspection::View) {
-            if !v.zoom.is_finite() || v.pan.iter().any(|n| !n.is_finite()) {
-                *v = Default::default();
+        for view in std::iter::once(&mut self.view).chain(self.independent_views.values_mut()) {
+            if !view.zoom.is_finite() || view.pan.iter().any(|n| !n.is_finite()) {
+                *view = Default::default();
             }
-            // A view saved zoomed out past Fit comes back at Fit. 1:1 views
-            // are limited when their photo is laid out again.
-            *v = v.clamped(None);
         }
-        clean(&mut self.view);
-        self.independent_views.retain(|slot, v| {
-            clean(v);
-            *slot < 9
+        let folder = &self.browse.folder;
+        if folder
+            .path
+            .iter()
+            .chain(&folder.also)
+            .any(|p| p.to_str().is_none())
+        {
+            self.browse.folder = Default::default();
+        }
+        self.navigator.collapsed.retain(|key| match key {
+            browsing::tree::Key::Folder(path) => path.to_str().is_some(),
+            _ => true,
         });
     }
 }
@@ -356,7 +379,12 @@ impl Saved {
         Ok(saved)
     }
     pub fn save(&self, root: &Path) -> anyhow::Result<()> {
-        super::metadata::atomic_write(&Self::path(root), &serde_json::to_vec(&(1, self))?)
+        let mut saved = self.clone();
+        saved
+            .bookmarks
+            .values_mut()
+            .for_each(Bookmark::make_storable);
+        super::metadata::atomic_write(&Self::path(root), &serde_json::to_vec(&(1, saved))?)
     }
 }
 
@@ -392,6 +420,39 @@ mod tests {
         }
         // Nothing left to forget is not an error.
         super::forget_all(data.path()).unwrap();
+    }
+    #[test]
+    fn views_json_cannot_hold_are_saved_as_defaults_and_still_open() {
+        use super::*;
+        let root = tempfile::tempdir().unwrap();
+        let mut view = Bookmark {
+            scroll: f32::NAN,
+            query: "kept".into(),
+            ..Default::default()
+        };
+        view.view.zoom = f32::INFINITY;
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let latin1 = root.path().join(std::ffi::OsStr::from_bytes(b"F\xe9vrier"));
+            view.browse.folder.path = Some(latin1.clone());
+            view.navigator
+                .collapsed
+                .insert(browsing::tree::Key::Folder(latin1));
+        }
+        let saved = Saved {
+            step: Some(Step::Cull),
+            bookmarks: HashMap::from([(Step::Cull, view)]),
+            ..Default::default()
+        };
+        saved.save(root.path()).unwrap();
+        let loaded = Saved::load(root.path()).unwrap();
+        let view = &loaded.bookmarks[&Step::Cull];
+        assert_eq!(view.query, "kept");
+        assert_eq!(view.scroll, 0.0);
+        assert_eq!(view.view, inspection::View::default());
+        assert_eq!(view.browse.folder, Default::default());
+        assert!(view.navigator.collapsed.is_empty());
     }
     #[test]
     fn a_view_saved_in_the_removed_list_or_icons_layout_opens_as_the_grid() {

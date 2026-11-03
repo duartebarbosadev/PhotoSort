@@ -217,10 +217,18 @@ impl PhotoSortApp {
     fn delete_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
         // Keys that change a card act on the one shown beside the grid.
         let shown = self.delete_panel;
+        // A digit is a photo's place on the card, as its switch's tooltip
+        // says: an Eyes closed card can show more than two.
+        let photo = digit(pressed).filter(|d| *d > 0);
         match pressed {
-            egui::Key::ArrowLeft | egui::Key::Num1 if shown => self.toggle_delete_candidate(0),
-            egui::Key::ArrowRight | egui::Key::Num2 if shown => self.toggle_delete_candidate(1),
-            egui::Key::ArrowLeft | egui::Key::ArrowRight | egui::Key::Num1 | egui::Key::Num2 => {}
+            egui::Key::ArrowLeft if shown => self.toggle_delete_candidate(0),
+            egui::Key::ArrowRight if shown => self.toggle_delete_candidate(1),
+            _ if photo.is_some() => {
+                if shown && let Some(photo) = photo {
+                    self.toggle_delete_candidate(photo - 1);
+                }
+            }
+            egui::Key::ArrowLeft | egui::Key::ArrowRight => {}
             egui::Key::R if modifiers.shift => self.accept_delete_defaults(),
             egui::Key::R if shown => self.undo_delete(),
             egui::Key::R => {}
@@ -274,9 +282,14 @@ impl PhotoSortApp {
 
     /// Single-photo actions shared by every workflow that shows a canvas.
     fn photo_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) {
-        let reviewing_candidates = matches!(self.step, Step::EasyDelete | Step::PickBest);
+        // Easy Delete and Pick Best choose with their own keys, and Fix
+        // Rotation shows no Trash marks to stage.
+        let marks = !matches!(
+            self.step,
+            Step::EasyDelete | Step::PickBest | Step::Rotation
+        );
         match pressed {
-            egui::Key::D if !reviewing_candidates => {
+            egui::Key::D if marks => {
                 if let Some(id) = self.active {
                     self.reject(id);
                 }
@@ -305,10 +318,11 @@ impl PhotoSortApp {
                 self.fit_view();
             }
             egui::Key::Enter if modifiers.shift => self.review_changes(),
-            egui::Key::Delete | egui::Key::Backspace if !reviewing_candidates => {
+            // Marks the photo, with its RAW, JPEG and XMP companions as D
+            // does, then opens the review of every staged change.
+            egui::Key::Delete | egui::Key::Backspace if marks && !self.busy => {
                 if let Some(id) = self.active {
-                    self.decisions.entry(id).or_default().rejected = true;
-                    self.changed();
+                    self.stage_manual([id], crate::core::decisions::Change::Trash(true));
                     self.review_changes();
                 }
             }

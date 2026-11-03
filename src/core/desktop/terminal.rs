@@ -1,62 +1,61 @@
 //! Small platform adapters for opening an interactive terminal without a command string.
 use anyhow::{Context, Result, ensure};
-use std::{
-    path::Path,
-    process::{Child, Command},
-    sync::Mutex,
-};
+#[cfg(any(not(target_os = "macos"), test))]
+use std::process::Child;
+use std::{path::Path, process::Command};
 
 #[cfg(any(not(target_os = "windows"), test))]
 use std::process::Stdio;
 
-#[derive(Default)]
-pub(super) struct Children(Mutex<Vec<Child>>);
-impl Children {
-    pub fn open(&self, folder: &Path) -> Result<()> {
-        let mut command = command(folder)?;
-        #[cfg(target_os = "macos")]
+pub(super) fn open(folder: &Path) -> Result<()> {
+    let mut command = command(folder)?;
+    #[cfg(target_os = "macos")]
+    {
+        // LaunchServices returns after handing the directory to Terminal.
+        let status = command.status().context("Could not launch Terminal")?;
+        ensure!(
+            status.success(),
+            "Terminal could not open this folder ({status})"
+        );
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        #[cfg(target_os = "linux")]
         {
-            // LaunchServices returns after handing the directory to Terminal.
-            let status = command.status().context("Could not launch Terminal")?;
+            // Validate the user's desktop entry before starting a possibly
+            // long-lived terminal process. No arbitrary command is requested.
+            let status = Command::new("xdg-terminal-exec")
+                .arg("--print-id")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .context("Install xdg-terminal-exec and configure a preferred terminal")?;
             ensure!(
                 status.success(),
-                "Terminal could not open this folder ({status})"
+                "Configure a preferred terminal for xdg-terminal-exec"
             );
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            #[cfg(target_os = "linux")]
-            {
-                // Validate the user's desktop entry before starting a possibly
-                // long-lived terminal process. No arbitrary command is requested.
-                let status = Command::new("xdg-terminal-exec")
-                    .arg("--print-id")
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .context("Install xdg-terminal-exec and configure a preferred terminal")?;
-                ensure!(
-                    status.success(),
-                    "Configure a preferred terminal for xdg-terminal-exec"
-                );
-            }
-            let child = command
-                .spawn()
-                .context("Could not open a terminal in this folder")?;
-            self.0.lock().unwrap().push(child);
-        }
-        Ok(())
+        let child = command
+            .spawn()
+            .context("Could not open a terminal in this folder")?;
+        reap(child);
     }
-    pub fn poll(&self) -> bool {
-        let Ok(mut children) = self.0.try_lock() else {
-            return true;
-        };
-        children.retain_mut(|child| !matches!(child.try_wait(), Ok(Some(_))));
-        !children.is_empty()
-    }
-    // Dropping Child closes its handle, without terminating the user's terminal.
-    // At app exit the OS adopts any live Unix children; no reaper thread is needed.
+    Ok(())
+}
+
+/// Waits for the user's terminal on its own thread, so a closed one leaves
+/// no zombie process and nothing polls for it. The terminal is never
+/// stopped; at app exit the OS adopts it.
+#[cfg(any(not(target_os = "macos"), test))]
+fn reap(mut child: Child) -> Option<std::thread::JoinHandle<()>> {
+    std::thread::Builder::new()
+        .name("photosort-terminal".into())
+        .spawn(move || {
+            let _ = child.wait();
+        })
+        .inspect_err(|error| tracing::warn!(%error, "terminal will not be reaped"))
+        .ok()
 }
 
 fn command(folder: &Path) -> Result<Command> {
@@ -99,7 +98,8 @@ fn command(folder: &Path) -> Result<Command> {
     };
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     anyhow::bail!("Terminal integration is unavailable on this platform");
-    command.current_dir(folder);
+    // Windows: a verbatim \\?\C:\ root would show in the shell's prompt.
+    command.current_dir(dunce::simplified(folder));
     #[cfg(not(target_os = "windows"))]
     command
         .stdin(Stdio::null())
@@ -169,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn live_children_do_not_block_and_finished_children_are_reaped() {
+    fn a_live_terminal_never_blocks_and_is_reaped_when_it_closes() {
         let dir = tempfile::tempdir().unwrap();
         let child = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "core::desktop::terminal::tests::child_probe"])
@@ -179,22 +179,18 @@ mod tests {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let children = Children(Mutex::new(vec![child]));
         let end = Instant::now() + worker_patience();
+        let reaper = reap(child).unwrap();
         while !dir.path().join("probe-ready").exists() {
             assert!(Instant::now() < end);
             thread::sleep(Duration::from_millis(5));
         }
-        assert!(children.poll());
-        // Contention must not wait for a concurrent spawn to release the pool.
-        let guard = children.0.lock().unwrap();
-        assert!(children.poll());
-        drop(guard);
+        assert!(!reaper.is_finished());
         std::fs::write(dir.path().join("probe-release"), "release").unwrap();
-        while children.poll() {
+        while !reaper.is_finished() {
             assert!(Instant::now() < end);
             thread::sleep(Duration::from_millis(5));
         }
-        assert!(children.0.lock().unwrap().is_empty());
+        reaper.join().unwrap();
     }
 }

@@ -771,6 +771,7 @@ impl PhotoSortApp {
         self.rotation_panel = false;
         self.active = None;
         self.comparison.clear();
+        self.comparison_focus = None;
         self.inspection_wanted.clear();
         self.inspection_frames.clear();
         self.textures.clear();
@@ -830,7 +831,7 @@ impl PhotoSortApp {
                 .decision_batch(ids.into_iter().map(|id| (id, self.decision(id))));
         }
         self.dirty = Some(Instant::now());
-        self.filter_dirty = true;
+        self.decisions_changed_filter();
     }
     fn changed(&mut self) {
         self.review_changed();
@@ -840,7 +841,12 @@ impl PhotoSortApp {
             self.runtime.browsing.decisions(self.decisions.clone());
         }
         self.dirty = Some(Instant::now());
-        self.filter_dirty = true;
+        self.decisions_changed_filter();
+    }
+    /// Easy Delete's cards come from its review and tabs, never from Trash
+    /// marks or ratings, so a choice there leaves its grid as it is.
+    fn decisions_changed_filter(&mut self) {
+        self.filter_dirty |= self.step != Step::EasyDelete;
     }
     fn decision(&self, id: MediaId) -> Decision {
         self.decisions.get(&id).cloned().unwrap_or_default()
@@ -947,9 +953,6 @@ impl PhotoSortApp {
     }
     fn poll(&mut self, ctx: &egui::Context) {
         self.poll_desktop();
-        if self.runtime.desktop.poll_terminals() {
-            ctx.request_repaint_after(Duration::from_secs(1));
-        }
         for _ in 0..12 {
             let Ok(envelope) = self.runtime.events.try_recv() else {
                 break;
@@ -1584,6 +1587,8 @@ impl PhotoSortApp {
 }
 /// Thumbnail decodes queued at once; see [`PhotoSortApp::texture`].
 pub(super) const THUMBNAILS_IN_FLIGHT: usize = 8;
+/// How long a changed view may wait before it is saved for the folder.
+const VIEW_CHECKPOINT: Duration = Duration::from_secs(1);
 fn theme_install(ctx: &egui::Context) {
     super::theme::install(ctx);
     // Headless frames carry no real time; finish every animation at once so
@@ -1651,6 +1656,17 @@ fn paint_image_tinted(
 }
 
 impl PhotoSortApp {
+    /// Applies the frame's filter changes, then resumes a saved view. A
+    /// restore can change the filter again (Cull's saved group, say) in a
+    /// frame no input brought; the next frame then comes at once to apply it.
+    fn refilter_and_restore(&mut self, ctx: &egui::Context) {
+        self.refilter();
+        let dirty = self.filter_dirty;
+        self.restore_bookmark();
+        if self.filter_dirty && !dirty {
+            ctx.request_repaint();
+        }
+    }
     // Shared frame boundary lets input and native-close ordering be verified
     // without constructing a GPU window or replacing the native delegate.
     fn update_workspace(&mut self, root: &mut egui::Ui, native_requested: bool) {
@@ -1665,8 +1681,7 @@ impl PhotoSortApp {
         self.tick += 1;
         self.poll(ctx);
         self.check_board();
-        self.refilter();
-        self.restore_bookmark();
+        self.refilter_and_restore(ctx);
         self.intro_keys(ctx);
         self.keyboard(ctx);
         // Organize, Easy Delete, Fix Rotation and Pick Best have no separate
@@ -1844,11 +1859,16 @@ impl PhotoSortApp {
                 .any(|request| request.slot == *slot)
         });
         self.sync_playback(ctx);
-        if self.view_checkpoint.elapsed() >= Duration::from_secs(1) {
+        // Views change only in frames like this one, so each frame either
+        // saves them or comes back once to do it; an idle window then stops
+        // drawing until there is input or work to show.
+        let since = self.view_checkpoint.elapsed();
+        if since >= VIEW_CHECKPOINT {
             self.checkpoint_bookmarks();
             self.view_checkpoint = Instant::now();
+        } else {
+            ctx.request_repaint_after(VIEW_CHECKPOINT - since);
         }
-        ctx.request_repaint_after(Duration::from_secs(1));
         if self.close_authorized {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -2150,7 +2170,12 @@ impl PhotoSortApp {
         let Some(groups) = &self.face_groups else {
             return;
         };
-        for (id, group) in &groups.groups {
+        // Each person's first photo in library order, the same on every run.
+        for (id, group) in self
+            .media
+            .iter()
+            .filter_map(|m| groups.groups.get(&m.id).map(|g| (&m.id, g)))
+        {
             if let Some(label) = groups.folders.get(id).filter(|_| *group != 0)
                 && let Some([person]) = people::people_in(label).as_deref()
             {
@@ -2442,7 +2467,11 @@ fn pressed_keys(ctx: &egui::Context, rotation: bool) -> Vec<(egui::Key, egui::Mo
                         | egui::Key::Num7
                         | egui::Key::Num8
                         | egui::Key::Num9
-                ) || (*key == egui::Key::Enter && (modifiers.shift || rotation));
+                ) || (*key == egui::Key::Enter && (modifiers.shift || rotation))
+                    // Organize's New folder; a plain N stays with egui.
+                    || (*key == egui::Key::N
+                        && (modifiers.command || modifiers.ctrl)
+                        && modifiers.shift);
                 if handled {
                     if *down {
                         pressed.push((*key, *modifiers));
@@ -2527,6 +2556,43 @@ mod keyboard_tests {
             captured,
             vec![(egui::Key::ArrowRight, egui::Modifiers::SHIFT); 3]
         );
+    }
+    #[test]
+    fn command_shift_n_makes_a_new_folder_on_the_organize_board() {
+        let (_temp, mut app) = super::compact_cull_tests::fixture();
+        app.step = Step::Organize;
+        app.review = false;
+        app.output = app.root.as_ref().unwrap().display().to_string();
+        app.filter_dirty = true;
+        app.refilter();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        let key = |key, modifiers| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        let input = egui::RawInput {
+            events: vec![key(egui::Key::N, egui::Modifiers::NONE)],
+            ..Default::default()
+        };
+        let _ = ctx.run_test(input, |ui| app.keyboard(&ui.ctx().clone()));
+        assert!(app.board.editing.is_none());
+        let input = egui::RawInput {
+            events: vec![key(
+                egui::Key::N,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            )],
+            ..Default::default()
+        };
+        let _ = ctx.run_test(input, |ui| app.keyboard(&ui.ctx().clone()));
+        assert!(app.board.editing.is_some(), "no new folder to name");
+        // Another Group by plans other folders: the half-typed name goes.
+        app.set_group_mode(GroupMode::Date);
+        assert!(app.board.editing.is_none());
+        app.runtime.shutdown();
     }
 }
 

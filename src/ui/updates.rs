@@ -27,7 +27,9 @@ impl PhotoSortApp {
             return;
         }
         self.update_startup_checked = true;
-        if let Ok(source) = Source::configured()
+        // Defaults check daily; an unreadable file may have turned that off.
+        if !self.preferences_unreadable
+            && let Ok(source) = Source::configured()
             && self
                 .preferences
                 .updates
@@ -116,8 +118,9 @@ impl PhotoSortApp {
                 }
             });
         });
+        // A check keeps going behind a closed dialog: it may be the startup
+        // check, which is not tried again for a day. Cancel check stops it.
         if close || response.should_close() {
-            self.runtime.updates.cancel();
             self.update_dialog = false;
         }
     }
@@ -171,6 +174,54 @@ mod tests {
             }
             assert!(app.requested.is_empty() && app.analysis_run.is_none());
         }
+    }
+    #[test]
+    fn closing_the_dialog_leaves_a_running_check_to_finish() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app =
+            PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let latest = State::Current {
+            latest: "3.0.0".into(),
+        };
+        let result = latest.clone();
+        assert!(
+            app.runtime
+                .updates
+                .start_task(move |_| {
+                    wait.recv().unwrap();
+                    Ok(result)
+                })
+                .unwrap()
+        );
+        app.update_dialog = true;
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        let escape = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [vec![], vec![escape]] {
+            let _ = ctx.run_test(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.updates_dialog(&ui.ctx().clone()),
+            );
+        }
+        assert!(!app.update_dialog);
+        release.send(()).unwrap();
+        let until = std::time::Instant::now() + crate::test_support::worker_patience();
+        while app.runtime.updates.running() {
+            assert!(std::time::Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(app.runtime.updates.state(), latest);
+        app.runtime.shutdown();
     }
     #[test]
     fn all_workflows_share_update_dialog_and_preserve_photo_state_at_small_sizes() {

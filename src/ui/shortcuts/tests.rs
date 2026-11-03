@@ -743,3 +743,67 @@ fn settings_access_respects_existing_modal_popup_repeat_and_modifier_guards() {
         .is_none()
     );
 }
+#[test]
+fn guided_keys_match_their_cards_and_trash_keys_only_mark_where_marks_show() {
+    use crate::core::delete_review::{Category, Entry};
+    let press = |app: &mut PhotoSortApp, key: egui::Key| {
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        let _ = ctx.run_test(input(&[(key, egui::Modifiers::NONE)]), |ui| {
+            app.keyboard(&ui.ctx().clone())
+        });
+    };
+    // An Eyes closed card of four photos: 3 and 4 switch the third and
+    // fourth, as their tooltips say.
+    let mut app = app(Step::EasyDelete);
+    app.media = (1..=4)
+        .map(|n| Media {
+            id: MediaId(n),
+            path: format!("/absent/library/{n}.jpg").into(),
+            kind: MediaKind::Photo,
+            fingerprint: Default::default(),
+        })
+        .collect();
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+    app.filtered = (0..4).collect();
+    app.delete_review.replace(vec![Entry {
+        subject: MediaId(1),
+        companion: Some(MediaId(4)),
+        category: Category::EyesClosed,
+        tag: "Keep the shot with eyes open".into(),
+        reason: String::new(),
+        keep_why: String::new(),
+        eyes: Vec::new(),
+        extra: vec![MediaId(2), MediaId(3)],
+    }]);
+    app.delete_current = Some(MediaId(1));
+    app.delete_panel = true;
+    for (key, photo) in [(egui::Key::Num3, MediaId(3)), (egui::Key::Num4, MediaId(4))] {
+        let before = app.decision(photo).rejected;
+        press(&mut app, key);
+        assert_ne!(app.decision(photo).rejected, before, "{key:?}");
+    }
+    app.runtime.shutdown();
+    // Fix Rotation shows no Trash marks, so D and Delete stage none.
+    let mut app = super::tests::app(Step::Rotation);
+    for key in [egui::Key::D, egui::Key::Delete, egui::Key::Backspace] {
+        press(&mut app, key);
+    }
+    assert!(app.decisions.is_empty() && !app.plan_open);
+    app.runtime.shutdown();
+    // Reviewing in Cull, Delete marks the photo as D does, and waits while busy.
+    let mut app = super::tests::app(Step::Cull);
+    app.review = true;
+    app.busy = true;
+    press(&mut app, egui::Key::Delete);
+    assert!(app.decisions.is_empty());
+    app.busy = false;
+    press(&mut app, egui::Key::Delete);
+    assert!(app.decision(MediaId(7)).rejected);
+    app.runtime.shutdown();
+}

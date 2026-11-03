@@ -7,6 +7,18 @@ use std::ops::ControlFlow;
 /// Failures with no success before analysis stops as a whole.
 const SYSTEMIC_FAILURES: usize = 5;
 
+/// What browsing filters and sorts by in a photo's metadata: its rating and
+/// everything its capture time and day are read from.
+fn browse_key(metadata: &Metadata) -> (u8, Option<i64>, &str, Option<&str>, Option<i64>) {
+    (
+        metadata.rating,
+        metadata.captured_ms,
+        &metadata.captured,
+        metadata.grouping_date.as_deref(),
+        metadata.created_ms,
+    )
+}
+
 impl PhotoSortApp {
     /// `Break` ends the current poll without the end-of-frame repaint and save
     /// bookkeeping; only a failed session hand-off after Apply needs that.
@@ -297,10 +309,16 @@ impl PhotoSortApp {
         self.requested.remove(&(id, preview));
         self.accept_image_warning(id, decoder_warning);
         self.failures.remove(&id);
+        // Most decodes bring metadata the views already have; only a new
+        // rating or capture time can change what they show or their order.
+        let reorders = self
+            .metadata
+            .get(&id)
+            .is_none_or(|known| browse_key(known) != browse_key(&metadata));
         self.metadata.insert(id, metadata);
         self.update_browse_item(id);
         self.metadata_failures.remove(&id);
-        self.filter_dirty |= self.filter == Filter::Rated || self.step == Step::Cull;
+        self.filter_dirty |= reorders && (self.filter == Filter::Rated || self.step == Step::Cull);
         self.stats = stats;
         let size = [pixels.width() as usize, pixels.height() as usize];
         let bytes = pixels.as_raw().len();
@@ -897,5 +915,49 @@ impl PhotoSortApp {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_decoded_thumbnail_requeries_cull_only_when_its_metadata_changes_the_view() {
+        let (_temp, mut app) = super::super::compact_cull_tests::fixture();
+        let ctx = egui::Context::default();
+        let id = app.media[1].id;
+        let asset = |metadata: Metadata| Event::Asset {
+            id,
+            preview: false,
+            pixels: Arc::new(RgbaImage::new(1, 1)),
+            decoder_warning: None,
+            metadata,
+            stats: Stats::default(),
+        };
+        let known = app.metadata[&id].clone();
+        app.filter_dirty = false;
+        let _ = app.handle_event(&ctx, asset(known.clone()));
+        assert!(!app.filter_dirty, "the same metadata re-ran the query");
+        let rated = Metadata { rating: 1, ..known };
+        let _ = app.handle_event(&ctx, asset(rated));
+        assert!(app.filter_dirty);
+        assert_eq!(app.metadata[&id].rating, 1);
+        app.runtime.shutdown();
+    }
+    #[test]
+    fn choices_in_easy_delete_never_rescan_its_grid() {
+        let (_temp, mut app) = super::super::compact_cull_tests::fixture();
+        let id = app.media[1].id;
+        for (step, rescans) in [(Step::EasyDelete, false), (Step::Cull, true)] {
+            app.step = step;
+            app.filter_dirty = false;
+            app.decisions.entry(id).or_default().rejected ^= true;
+            app.changed_items([id]);
+            assert_eq!(app.filter_dirty, rescans, "{step:?}");
+            app.filter_dirty = false;
+            app.changed();
+            assert_eq!(app.filter_dirty, rescans, "{step:?}");
+        }
+        app.runtime.shutdown();
     }
 }

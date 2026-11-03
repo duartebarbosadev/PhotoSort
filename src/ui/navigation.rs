@@ -196,6 +196,7 @@ impl PhotoSortApp {
         self.selection.clear();
         self.library_reveal = true;
         self.comparison.clear();
+        self.comparison_focus = None;
         self.filter = Filter::All;
         self.filter_dirty = true;
         self.review = !matches!(step, Step::Organize | Step::Rotation);
@@ -203,17 +204,20 @@ impl PhotoSortApp {
         self.view_started = Instant::now();
         self.start_ready_analysis();
         self.prepare_bookmark();
+        // The guided steps select nothing until the user picks a card or a
+        // group (a saved view restores its own); another step's photo is
+        // not on screen for Copy, rating or rotation to act on.
+        if matches!(step, Step::EasyDelete | Step::Rotation | Step::PickBest) {
+            self.active = None;
+        }
         if step == Step::EasyDelete {
             self.stage_delete_suggestions();
         }
         if step == Step::Rotation {
-            // As in Easy Delete, no card is selected until the user picks one.
-            self.active = None;
             self.rotation_panel = false;
             self.stage_rotation_suggestions();
         }
         if step == Step::PickBest {
-            // As in Easy Delete, no group is selected until the user picks one.
             self.pick_current = None;
             self.pick_panel = false;
             self.stage_pick_suggestions();
@@ -230,6 +234,8 @@ impl PhotoSortApp {
             self.pending_bookmark = None;
             let was_metadata = self.metadata_organize_mode();
             self.group_mode = mode;
+            // A folder being named belongs to the old grouping's plan.
+            self.board.editing = None;
             self.organize_preview_requested = false;
             self.discard_stale_model_retry();
             if self.metadata_organize_mode() {
@@ -1105,7 +1111,7 @@ mod step_bar_tests {
     }
     #[test]
     fn step_buttons_switch_steps_but_wait_while_busy() {
-        let (_temp, mut app, _) = app();
+        let (temp, mut app, ids) = app();
         let ctx = egui::Context::default();
         theme_install(&ctx);
         ctx.enable_accesskit();
@@ -1116,8 +1122,18 @@ mod step_bar_tests {
         click_label(&mut app, &ctx, size, "4. Pick Best");
         assert_eq!(app.step, Step::Cull, "a busy app keeps its step");
         app.busy = false;
+        // A photo clicked in Cull's comparison is not what Copy or Trash act
+        // on in the next step, or in the next folder.
+        app.comparison_focus = Some(ids[0]);
+        assert!(app.active.is_some());
         click_label(&mut app, &ctx, size, "4. Pick Best");
         assert_eq!(app.step, Step::PickBest);
+        assert_eq!(app.comparison_focus, None);
+        // Cull's photo is not shown here, so Copy or Alt+R must not act on it.
+        assert_eq!(app.active, None);
+        app.comparison_focus = Some(ids[0]);
+        app.scan_folder(temp.path().to_path_buf());
+        assert_eq!(app.comparison_focus, None);
         app.runtime.shutdown();
     }
     #[test]

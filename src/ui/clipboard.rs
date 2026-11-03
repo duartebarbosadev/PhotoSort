@@ -89,7 +89,11 @@ impl PhotoSortApp {
         let media = self.copy_media();
         let (text, error) = match Payload::new(media.clone()) {
             None => ("Select a photo to copy".to_owned(), true),
-            Some(payload) => match self.copier.copy(payload, crate::core::session::cache_dir()) {
+            Some(payload) => match self.copier.copy(
+                payload,
+                crate::core::session::cache_dir(),
+                self.preferences.cache,
+            ) {
                 Ok(()) => (copied_text(&media), false),
                 Err(problem) => (format!("Couldn't copy: {problem:#}"), true),
             },
@@ -123,7 +127,10 @@ impl PhotoSortApp {
         if opacity < 1.0 {
             ctx.request_repaint();
         } else {
-            ctx.request_repaint_after(std::time::Duration::from_secs_f64(life - age - fade));
+            // Opacity rounds to 1 in f32 a little before the fade-out starts.
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+                (life - age - fade).max(0.0),
+            ));
         }
         let (icon, color) = if toast.error {
             (egui_phosphor::regular::WARNING_CIRCLE, RED)
@@ -228,6 +235,30 @@ mod tests {
         copy_event(&mut app, &ctx);
         let toast = app.toast.as_ref().unwrap();
         assert!(toast.error && toast.text.contains("2.jpg is no longer on disk"));
+        app.runtime.shutdown();
+    }
+    #[test]
+    fn a_toast_about_to_fade_out_never_asks_for_a_negative_delay() {
+        let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.global_style_mut(|style| style.animation_time = 0.25);
+        // A hair before the fade-out starts, opacity rounds to exactly 1.
+        let (now, fade) = (10.0, 0.25);
+        let age = SHOWN - fade * (1.0 - 1e-9);
+        app.toast = Some(Toast {
+            text: "Photo copied".into(),
+            error: false,
+            since: Some(now - age),
+        });
+        let _ = ctx.run_test(
+            egui::RawInput {
+                time: Some(now),
+                ..Default::default()
+            },
+            |ui| app.show_toast(&ui.ctx().clone()),
+        );
+        assert!(app.toast.is_some());
         app.runtime.shutdown();
     }
 }

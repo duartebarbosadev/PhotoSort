@@ -113,13 +113,10 @@ pub struct Worker {
     thread: Option<thread::JoinHandle<()>>,
     wake: Arc<dyn Fn() + Send + Sync>,
     launch: Launcher,
-    terminals: Arc<terminal::Children>,
 }
 impl Worker {
     pub fn new(generation: Arc<AtomicU64>, wake: Arc<dyn Fn() + Send + Sync>) -> Self {
-        let terminals = Arc::new(terminal::Children::default());
-        let launcher = terminals.clone();
-        let mut worker = Self::with_launcher(
+        Self::with_launcher(
             generation,
             wake,
             Arc::new(move |request| {
@@ -128,13 +125,11 @@ impl Worker {
                     Action::Open | Action::OpenFolder | Action::OpenVideo => {
                         opener::open(&request.path)?
                     }
-                    Action::Terminal => launcher.open(&request.path)?,
+                    Action::Terminal => terminal::open(&request.path)?,
                 }
                 Ok(())
             }),
-        );
-        worker.terminals = terminals;
-        worker
+        )
     }
     pub(crate) fn with_launcher(
         generation: Arc<AtomicU64>,
@@ -148,7 +143,6 @@ impl Worker {
             thread: None,
             wake,
             launch,
-            terminals: Arc::default(),
         }
     }
     pub fn running(&self) -> bool {
@@ -207,10 +201,6 @@ impl Worker {
                 .context("Could not start desktop handoff")?,
         );
         Ok(())
-    }
-    /// Reap finished terminal children without waiting or blocking the UI.
-    pub fn poll_terminals(&self) -> bool {
-        self.terminals.poll()
     }
     pub fn take(&self) -> Option<Completion> {
         self.result.lock().unwrap().take().filter(|result| {

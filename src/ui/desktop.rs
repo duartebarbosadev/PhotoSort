@@ -39,7 +39,10 @@ pub(super) fn locations_menu(
         if label == "Copy proposed destination" && path.is_none() {
             continue;
         }
-        let text = path.and_then(std::path::Path::to_str);
+        // Other apps want C:\..., not the \\?\C:\... a canonical root has on Windows.
+        let text = path
+            .map(dunce::simplified)
+            .and_then(std::path::Path::to_str);
         let response = ui.add_enabled(text.is_some(), egui::Button::new(label));
         if label == "Copy proposed destination" {
             response.clone().on_hover_text(
@@ -142,17 +145,25 @@ mod tests {
         use crate::ui::test_frame::absolute;
         let source = absolute("/library/a ' café.jpg");
         let proposed = absolute("/output/Chosen/Keeper.jpg");
+        // Windows scans give verbatim paths; copies and the terminal get plain ones.
+        let scanned = if cfg!(windows) {
+            PathBuf::from(format!(r"\\?\{}", source.display()))
+        } else {
+            source.clone()
+        };
         let paths = Locations {
-            source: Some(source.clone()),
+            source: Some(scanned),
             relative: Some(PathBuf::from("a ' café.jpg")),
             proposed: Some(proposed.clone()),
         };
         let (source, proposed) = (source.display().to_string(), proposed.display().to_string());
+        // The request keeps the scanned path; the terminal command simplifies it.
+        let request = paths.source.as_ref().unwrap().display().to_string();
         for (label, expected) in [
             ("Copy full path", source.as_str()),
             ("Copy relative path", "a ' café.jpg"),
             ("Copy proposed destination", proposed.as_str()),
-            ("Open terminal here", source.as_str()),
+            ("Open terminal here", request.as_str()),
         ] {
             let ctx = egui::Context::default();
             theme_install(&ctx);

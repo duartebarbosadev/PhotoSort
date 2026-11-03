@@ -1,9 +1,17 @@
+// Windows release builds open no console window beside the app; debug and
+// test builds keep theirs. `attach_parent_console` gives command-line flags
+// the terminal they were typed in.
+#![cfg_attr(
+    all(windows, not(debug_assertions), not(test)),
+    windows_subsystem = "windows"
+)]
 mod diagnostic_output;
 mod session_logging;
 #[cfg(test)]
 mod test_support;
 
 fn main() -> eframe::Result {
+    attach_parent_console();
     // The bundled ONNX Runtime uploader can race its own C++ static teardown.
     // Suppress it before runtime loading; the session API is too late to prevent
     // its initialization event and background uploader from being created.
@@ -107,11 +115,8 @@ fn run(options: photosort::core::startup::Options) -> eframe::Result {
     }
     let smoke_delay = options.smoke_delay();
     let folder = if options.last_folder {
-        photosort::core::preferences::Preferences::load(
-            &photosort::core::preferences::Preferences::path(),
-        )
-        .map_err(|e| eframe::Error::AppCreation(e.into()))?
-        .last_existing_folder()
+        use photosort::core::preferences::Preferences;
+        Preferences::last_folder(&Preferences::path())
     } else {
         options.folder
     };
@@ -150,4 +155,24 @@ fn run(options: photosort::core::startup::Options) -> eframe::Result {
             Ok(Box::new(app))
         }),
     )
+}
+
+/// A GUI-subsystem program has no console of its own. Started from a
+/// terminal, it writes `--help`, `--diagnostics` and its log there; started
+/// from Explorer there is none to attach and nothing changes. Redirected
+/// output already has its handles and keeps them.
+fn attach_parent_console() {
+    #[cfg(all(windows, not(debug_assertions)))]
+    {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn AttachConsole(process: u32) -> i32;
+        }
+        const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+        // SAFETY: a plain Win32 call with no pointers, made before any
+        // thread or console use; failure only means there is no console.
+        unsafe {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
 }

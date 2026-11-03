@@ -231,6 +231,35 @@ fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
     (dir, app)
 }
 #[test]
+fn an_unreadable_preferences_file_is_kept_until_settings_are_saved() {
+    let (dir, mut app) = fixture();
+    let path = dir.path().join("preferences.json");
+    // A newer PhotoSort's file, say.
+    let unreadable = b"[2, {\"show_shortcuts\": false}]";
+    std::fs::write(&path, unreadable).unwrap();
+    app.load_preferences(path.clone());
+    assert!(app.preferences_unreadable && app.error.is_some());
+    // Opening a folder remembers it and the startup check records its
+    // attempt; neither writes defaults over the file.
+    app.preferences.remember(dir.path());
+    app.save_preferences();
+    app.check_updates_at_startup();
+    // Shutdown finishes every queued write.
+    app.runtime.shutdown();
+    assert_eq!(std::fs::read(&path).unwrap(), unreadable);
+
+    let (_other, mut app) = fixture();
+    app.load_preferences(path.clone());
+    let mut draft = app.preferences.clone();
+    draft.show_shortcuts = false;
+    app.apply_preferences(draft);
+    assert!(!app.preferences_unreadable);
+    app.runtime.shutdown();
+    let saved = Preferences::load(&path).unwrap();
+    assert!(!saved.show_shortcuts);
+    assert_eq!(saved.recent_folders, app.preferences.recent_folders);
+}
+#[test]
 fn hiding_current_step_uses_departure_guard_and_keeps_it_reachable_until_resolved() {
     let (_dir, mut app) = fixture();
     app.step = Step::Rotation;

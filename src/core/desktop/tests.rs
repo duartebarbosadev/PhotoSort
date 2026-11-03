@@ -163,7 +163,6 @@ fn terminal_resolves_files_to_their_original_folder_once_on_the_worker() {
     wait(&worker);
     assert!(worker.take().unwrap().result.is_err());
     assert_eq!(launches.lock().unwrap().len(), 2);
-    assert!(!worker.poll_terminals());
 }
 
 #[test]
