@@ -159,7 +159,7 @@ impl Pipeline {
         hash.update(media.path.as_os_str().as_encoded_bytes());
         hash.update(
             format!(
-                "{fingerprint:?}-{sidecar:?}-v7-render-status-srgb-neutral-analysis-native_metadata={}",
+                "{fingerprint:?}-{sidecar:?}-v8-render-status-srgb-neutral-analysis-native_metadata={}",
                 cfg!(feature = "metadata-native")
             )
             .as_bytes(),
