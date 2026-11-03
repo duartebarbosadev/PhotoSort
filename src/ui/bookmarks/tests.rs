@@ -432,3 +432,32 @@ fn a_restored_view_that_changes_the_filter_draws_again_at_once() {
     );
     app.runtime.shutdown();
 }
+#[test]
+fn events_left_past_a_frames_budget_bring_the_next_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app =
+        PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None);
+    let ctx = egui::Context::default();
+    for _ in 0..4 {
+        let _ = ctx.run_test(egui::RawInput::default(), |_| {});
+    }
+    // Workers wake the window once per send, and a busy frame can take
+    // every wakeup while more events are still queued.
+    for (queued, again) in [(EVENTS_PER_FRAME - 1, false), (EVENTS_PER_FRAME + 1, true)] {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(queued);
+        let original = std::mem::replace(&mut app.runtime.events, receiver);
+        for _ in 0..queued {
+            sender
+                .send(crate::core::jobs::Envelope {
+                    epoch: app.runtime.epoch(),
+                    event: Event::Saved,
+                })
+                .unwrap();
+        }
+        let out = ctx.run_test(egui::RawInput::default(), |ui| app.poll(&ui.ctx().clone()));
+        let delay = out.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        assert_eq!(delay.is_zero(), again, "{queued} queued: {delay:?}");
+        app.runtime.events = original;
+    }
+    app.runtime.shutdown();
+}

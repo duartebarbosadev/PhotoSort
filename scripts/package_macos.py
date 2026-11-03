@@ -175,6 +175,7 @@ def main():
     parser.add_argument('--output', type=Path, help='Destination .app bundle (default: target/PhotoSort.app)')
     parser.add_argument('--native-imaging', action='store_true', help='Include the opt-in libvips backend built by scripts/build_vips.py')
     parser.add_argument('--native-prefix', type=Path, help='Private libvips prefix to bundle with --native-imaging (default: .tools/vips)')
+    parser.add_argument('--no-build', action='store_true', help='Package the release binary an earlier run built, without running Cargo. The release workflow builds before its signing identity is unlocked, so no build script runs while it is.')
     parser.add_argument('--sign-identity', default='-', help='Existing codesign identity name or SHA-1; default: ad-hoc (-). Named identities also get a secure timestamp and the hardened runtime. No notarization is performed.')
     args = parser.parse_args()
     if not args.sign_identity.strip():
@@ -198,7 +199,11 @@ def main():
             parser.error('Run python3 scripts/build_vips.py before packaging --native-imaging')
         command += ['--features', 'native-imaging']
         env['PKG_CONFIG_PATH'] = str(native_prefix/'lib/pkgconfig') + os.pathsep + env.get('PKG_CONFIG_PATH', '')
-    subprocess.run(command, cwd=ROOT, env=env, check=True)
+    if args.no_build:
+        if not (target/'release/photosort').is_file():
+            parser.error('--no-build needs a release build; package once without it first')
+    else:
+        subprocess.run(command, cwd=ROOT, env=env, check=True)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=destination.parent, prefix='photosort-bundle-') as staging:
         app = Path(staging) / 'PhotoSort.app'

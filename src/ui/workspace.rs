@@ -953,16 +953,24 @@ impl PhotoSortApp {
     }
     fn poll(&mut self, ctx: &egui::Context) {
         self.poll_desktop();
-        for _ in 0..12 {
+        // A frame takes a few events; workers' wakeups for the rest may have
+        // been spent on this frame, so an unfinished queue asks for the next.
+        let mut drained = false;
+        for _ in 0..EVENTS_PER_FRAME {
             let Ok(envelope) = self.runtime.events.try_recv() else {
+                drained = true;
                 break;
             };
             if envelope.epoch != self.runtime.epoch() {
                 continue;
             }
             if self.handle_event(ctx, envelope.event).is_break() {
+                ctx.request_repaint();
                 return;
             }
+        }
+        if !drained {
+            ctx.request_repaint();
         }
         if !self.requested.is_empty() || self.scanning || self.analysis_run.is_some() || self.busy {
             ctx.request_repaint_after(Duration::from_millis(50));
@@ -1587,6 +1595,8 @@ impl PhotoSortApp {
 }
 /// Thumbnail decodes queued at once; see [`PhotoSortApp::texture`].
 pub(super) const THUMBNAILS_IN_FLIGHT: usize = 8;
+/// Worker events applied per frame, so a burst never stalls drawing.
+const EVENTS_PER_FRAME: usize = 12;
 /// How long a changed view may wait before it is saved for the folder.
 const VIEW_CHECKPOINT: Duration = Duration::from_secs(1);
 fn theme_install(ctx: &egui::Context) {

@@ -51,15 +51,22 @@ struct Render {
     cache: PathBuf,
     limits: super::cache::Limits,
 }
-/// The copy's pixels, decoded within the user's cache limits: with no disk
-/// cache allowed, copying writes none.
+/// The copy's pixels, decoded within the user's disk cache limit: with no
+/// disk cache allowed, copying writes none.
 fn render(media: &Media, cache: PathBuf, limits: super::cache::Limits) -> Result<Arc<RgbaImage>> {
+    copy_pipeline(cache, limits).render_whole(media, IMAGE_EDGE)
+}
+/// A pipeline for one copy. Its originals budget holds the whole photo, so
+/// the full-size decode is reused instead of decoded again to scale it; it
+/// is dropped with the copy, so no memory is kept beyond that one photo.
+fn copy_pipeline(cache: PathBuf, limits: super::cache::Limits) -> Pipeline {
     let mut pipeline = Pipeline::new(64 * 1024 * 1024, cache);
     pipeline.configure_cache(super::cache::Limits {
         previews_mib: 64,
+        originals_mib: u32::MAX,
         ..limits
     });
-    pipeline.render_whole(media, IMAGE_EDGE)
+    pipeline
 }
 impl Default for Copier {
     fn default() -> Self {
@@ -796,6 +803,30 @@ mod tests {
         };
         assert_eq!(render(&photo, none.clone(), off).unwrap().width(), 1200);
         assert_eq!(files(&none), 0);
+    }
+    #[test]
+    fn a_large_copy_decodes_its_photo_once_whatever_the_originals_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.png");
+        // 74 MB of pixels: more than the smallest originals setting holds.
+        image::RgbaImage::from_pixel(4300, 4300, image::Rgba([90, 120, 150, 255]))
+            .save(&path)
+            .unwrap();
+        let photo = Media {
+            id: crate::core::model::MediaId::for_path(&path),
+            fingerprint: crate::core::model::Fingerprint::read(&path).unwrap(),
+            path,
+            kind: MediaKind::Photo,
+        };
+        let smallest = crate::core::cache::Limits {
+            originals_mib: 64,
+            disk_mib: 0,
+            ..Default::default()
+        };
+        let mut pipeline = copy_pipeline(dir.path().join("cache"), smallest);
+        let image = pipeline.render_whole(&photo, IMAGE_EDGE).unwrap();
+        assert_eq!(image.width(), IMAGE_EDGE);
+        assert_eq!(pipeline.stats.decodes, 1);
     }
     #[test]
     fn one_photo_carries_its_image_and_several_carry_only_their_files() {

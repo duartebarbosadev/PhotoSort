@@ -717,11 +717,27 @@ fn write_demo_photos(root: &std::path::Path) -> anyhow::Result<()> {
         // Demo copies need no more than 3000 pixels, and blurring stays fast.
         Ok(image.resize(3000, 3000, FilterType::Triangle))
     };
+    // Each made-up photo has a capture date, a minute after the last, as a
+    // camera would write it; otherwise it would be dated by its file, which
+    // differs on every run.
+    let taken = std::cell::Cell::new(0);
     let save = |image: &DynamicImage, name: &str| -> anyhow::Result<()> {
+        use image::ImageEncoder;
+        let minute = taken.replace(taken.get() + 1);
+        let date = exif::Field {
+            tag: exif::Tag::DateTimeOriginal,
+            ifd_num: exif::In::PRIMARY,
+            value: exif::Value::Ascii(vec![format!("2024:04:25 10:{minute:02}:00").into_bytes()]),
+        };
+        let mut fields = exif::experimental::Writer::new();
+        fields.push_field(&date);
+        let mut tiff = std::io::Cursor::new(Vec::new());
+        fields.write(&mut tiff, false)?;
         let file = std::fs::File::create(root.join(name))?;
         let mut writer = std::io::BufWriter::new(file);
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 90)
-            .encode_image(&image.to_rgb8())?;
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 90);
+        encoder.set_exif_metadata(tiff.into_inner())?;
+        encoder.encode_image(&image.to_rgb8())?;
         Ok(())
     };
     let crop = |image: &DynamicImage, x: f32, y: f32| {
@@ -775,9 +791,9 @@ fn write_demo_photos(root: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The same file times on every run, a minute apart in name order. Photos
-/// without a capture date are dated by them (creation time first, which
-/// Linux cannot set), and so grouped and labelled.
+/// The same file times on every run, a minute apart in name order, for the
+/// sample photos that have no capture date of their own. Linux cannot set
+/// creation times, which come first, so there such samples still vary.
 fn fixed_times(root: &std::path::Path) -> anyhow::Result<()> {
     let start = std::time::UNIX_EPOCH + Duration::from_secs(1_714_035_600); // 2024-04-25
     let mut files: Vec<_> = walkdir::WalkDir::new(root)

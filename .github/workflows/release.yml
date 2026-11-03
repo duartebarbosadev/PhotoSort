@@ -224,8 +224,8 @@ jobs:
         # Every pinned file, including each downloaded model and the runtime.
         run: shasum -a 256 --check --strict SHA256SUMS
       # Build scripts and proc macros of every dependency run here, before the
-      # signing identity is unlocked; the signed packaging below reuses this
-      # build (same command and environment), so it compiles nothing.
+      # signing identity is unlocked; the signed packaging below packages this
+      # build with --no-build and never runs Cargo.
       - name: Build before the signing identity is available
         run: python3 -B scripts/package_macos.py --native-imaging --sign-identity -
       - name: Import the Developer ID certificate
@@ -255,7 +255,7 @@ jobs:
       - name: Package the app
         env:
           SIGN_IDENTITY: ${{ steps.certificate.outputs.identity || '-' }}
-        run: python3 -B scripts/package_macos.py --native-imaging --sign-identity "$SIGN_IDENTITY"
+        run: python3 -B scripts/package_macos.py --native-imaging --no-build --sign-identity "$SIGN_IDENTITY"
       - name: Check the app
         id: app
         # Outside the checkout, so the app cannot pick up ./resources instead of its own.
