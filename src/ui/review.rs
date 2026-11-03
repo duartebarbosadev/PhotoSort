@@ -870,8 +870,10 @@ impl PhotoSortApp {
         }
     }
     /// The photo under review's [`Self::group_rank`], and whether its
-    /// group's `best` photo is among those shown. Kept between frames: both
-    /// look through the whole library.
+    /// group's `best` photo is among those shown. Both look through the
+    /// whole library, so they are kept between frames: the rank until the
+    /// grouping or a score in the group changes, the other until the photos
+    /// shown do.
     fn group_standing(
         &self,
         ctx: &egui::Context,
@@ -879,31 +881,64 @@ impl PhotoSortApp {
         group: usize,
         best: MediaId,
     ) -> (usize, bool) {
-        type Key = (MediaId, usize, MediaId, usize, usize, u64);
-        type Standing = (Key, std::sync::Weak<HashMap<MediaId, usize>>, (usize, bool));
-        let at = egui::Id::new("group_standing");
+        type Groups = std::sync::Weak<HashMap<MediaId, usize>>;
+        let same_groups =
+            |groups: &Groups| std::ptr::eq(groups.as_ptr(), Arc::as_ptr(&self.cull_groups));
+        let at = egui::Id::new("group_standing_members");
+        let cached = ctx.data(|d| d.get_temp::<(usize, Groups, Arc<Vec<MediaId>>)>(at));
+        let members = match cached {
+            Some((for_group, groups, members)) if for_group == group && same_groups(&groups) => {
+                members
+            }
+            _ => {
+                let members: Arc<Vec<MediaId>> = Arc::new(
+                    self.cull_groups
+                        .iter()
+                        .filter(|(_, g)| **g == group)
+                        .map(|(member, _)| *member)
+                        .collect(),
+                );
+                let groups = Arc::downgrade(&self.cull_groups);
+                ctx.data_mut(|d| d.insert_temp(at, (group, groups, members.clone())));
+                members
+            }
+        };
+        // A new analysis can change the scores without regrouping.
+        let scores = members.iter().fold(0u64, |hash, member| {
+            let score = self
+                .analysis
+                .get(member)
+                .map_or(u64::MAX, |a| a.score.to_bits());
+            (hash.rotate_left(5) ^ score).wrapping_mul(0x5851_f42d_4c95_7f2d)
+        });
+        let at = egui::Id::new("group_standing_rank");
+        let rank = match ctx.data(|d| d.get_temp::<((MediaId, usize, u64), Groups, usize)>(at)) {
+            Some((key, groups, rank)) if key == (id, group, scores) && same_groups(&groups) => rank,
+            _ => {
+                let rank = self.group_rank(id, group);
+                let groups = Arc::downgrade(&self.cull_groups);
+                ctx.data_mut(|d| d.insert_temp(at, ((id, group, scores), groups, rank)));
+                rank
+            }
+        };
+        let at = egui::Id::new("group_standing_best_shown");
         let key = (
-            id,
-            group,
             best,
-            self.analysis.len(),
             self.filtered.len(),
             super::library::order_checksum(&self.filtered),
         );
-        if let Some((for_key, groups, standing)) = ctx.data(|d| d.get_temp::<Standing>(at))
-            && for_key == key
-            && std::ptr::eq(groups.as_ptr(), Arc::as_ptr(&self.cull_groups))
-        {
-            return standing;
-        }
-        let shown = self
-            .index
-            .get(&best)
-            .is_some_and(|index| self.filtered.contains(index));
-        let standing = (self.group_rank(id, group), shown);
-        let groups = Arc::downgrade(&self.cull_groups);
-        ctx.data_mut(|d| d.insert_temp(at, (key, groups, standing)));
-        standing
+        let shown = match ctx.data(|d| d.get_temp::<((MediaId, usize, u64), bool)>(at)) {
+            Some((for_key, shown)) if for_key == key => shown,
+            _ => {
+                let shown = self
+                    .index
+                    .get(&best)
+                    .is_some_and(|index| self.filtered.contains(index));
+                ctx.data_mut(|d| d.insert_temp(at, (key, shown)));
+                shown
+            }
+        };
+        (rank, shown)
     }
     /// Ties the photos of each similarity group together in a strip: a bar
     /// in the `gutter` beside one column, else a line under the photos.

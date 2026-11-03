@@ -64,17 +64,35 @@ impl PhotoSortApp {
             return lines;
         }
         let sets = self.photo_sets(ctx);
-        let mut tops = Vec::with_capacity(sets.runs.len());
-        let mut top = 0.0;
-        for (_, start, end) in &sets.runs {
-            tops.push(top);
-            top += header + (end - start).div_ceil(lines.columns) as f32 * lines.stride();
-        }
-        lines.sections = Some(Sections {
-            sets,
-            tops,
-            height: top,
-        });
+        // The sets' tops, kept for these sets at this size, as the sets are.
+        type Tops = (Arc<PhotoSets>, [u32; 4], Arc<[f32]>, f32);
+        let size = [
+            columns as u32,
+            row.to_bits(),
+            gap.to_bits(),
+            header.to_bits(),
+        ];
+        let id = egui::Id::new("photo_set_tops");
+        let cached = ctx.data(|d| d.get_temp::<Tops>(id));
+        let (tops, height) = match cached {
+            Some((for_sets, for_size, tops, height))
+                if Arc::ptr_eq(&for_sets, &sets) && for_size == size =>
+            {
+                (tops, height)
+            }
+            _ => {
+                let mut tops = Vec::with_capacity(sets.runs.len());
+                let mut top = 0.0;
+                for (_, start, end) in &sets.runs {
+                    tops.push(top);
+                    top += header + (end - start).div_ceil(lines.columns) as f32 * lines.stride();
+                }
+                let tops: Arc<[f32]> = tops.into();
+                ctx.data_mut(|d| d.insert_temp(id, (sets.clone(), size, tops.clone(), top)));
+                (tops, top)
+            }
+        };
+        lines.sections = Some(Sections { sets, tops, height });
         lines
     }
     /// Cull's shown photos as runs of one similar set each (or of photos in
@@ -1168,6 +1186,9 @@ mod tests {
         for columns in 1..=4 {
             let (row, gap, header) = (50.0, 4.0, SET_HEADER);
             let lines = app.photo_lines(&ctx, columns, row, gap, header);
+            let again = app.photo_lines(&ctx, columns, row, gap, header);
+            let tops = |lines: &Lines| lines.sections.as_ref().unwrap().tops.clone();
+            assert!(Arc::ptr_eq(&tops(&lines), &tops(&again)), "tops kept");
             let mut all = Vec::new();
             let mut top = 0.0;
             for &(group, start, end) in &sets.runs {
@@ -1330,7 +1351,7 @@ pub(super) struct Lines {
 /// header and the height of them all.
 struct Sections {
     sets: Arc<PhotoSets>,
-    tops: Vec<f32>,
+    tops: Arc<[f32]>,
     height: f32,
 }
 /// Cull's shown photos split into similar sets, see
@@ -1418,8 +1439,11 @@ impl Lines {
             .tops
             .partition_point(|t| *t <= top)
             .saturating_sub(1);
-        for (n, (&(group, start, end), &header)) in
-            runs.iter().zip(&sections.tops).enumerate().skip(first)
+        for (n, (&(group, start, end), &header)) in runs
+            .iter()
+            .zip(sections.tops.iter())
+            .enumerate()
+            .skip(first)
         {
             if header >= bottom {
                 break;

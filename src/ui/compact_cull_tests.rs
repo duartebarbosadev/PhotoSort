@@ -727,14 +727,33 @@ fn compact_strip_fits_more_photos_and_best_links_its_similar_group() {
         .map(|(label, _)| label.clone())
         .expect("group chip on a photo that lost");
     assert!(chip.starts_with("3rd of 3"), "{chip}");
-    // With the best photo hidden by the filters, it only says so.
-    let shown = app.filtered.clone();
-    app.filtered.retain(|i| app.media[*i].id != ids[1]);
+    // With the best photo hidden by the filters, it only says so. (A real
+    // filter: metadata read while the frames run refreshes the photos.)
+    app.stage_manual([ids[1]], crate::core::decisions::Change::Rating(1));
+    app.browse.rating = crate::core::browsing::RatingFilter::AtLeast(3);
+    app.filter_dirty = true;
+    settle(&mut app);
     let nodes = rendered(&mut app, &ctx, size);
     assert!(nodes.iter().any(|(label, _)| label == "3rd of 3"));
     click_label(&mut app, &ctx, size, "3rd of 3");
     assert_eq!(app.active, Some(ids[0]));
-    app.filtered = shown;
+    // A new score moves it up, though the photos scored stay the same.
+    let rescore = |app: &mut PhotoSortApp, score| {
+        app.analysis.insert(
+            ids[0],
+            crate::core::analysis::Analysis {
+                score,
+                ..Default::default()
+            },
+        )
+    };
+    rescore(&mut app, 80.0);
+    let nodes = rendered(&mut app, &ctx, size);
+    assert!(nodes.iter().any(|(label, _)| label == "2nd of 3"));
+    rescore(&mut app, 60.0);
+    app.browse.rating = crate::core::browsing::RatingFilter::All;
+    app.filter_dirty = true;
+    settle(&mut app);
     click_label(&mut app, &ctx, size, &chip);
     assert_eq!(app.active, Some(ids[1]));
     // The winner offers to compare the whole group.
@@ -801,8 +820,18 @@ fn a_folder_clicked_in_the_navigator_scrolls_the_bottom_filmstrip() {
     assert!(strip(&mut app));
     let b = crate::core::browsing::tree::Key::Folder(app.root.clone().unwrap().join("B"));
     app.go_to(b);
+    // The strip scrolls once the photos shown are up to date: metadata
+    // read while the frames run can refresh them first.
+    let deadline = Instant::now() + worker_patience();
+    while app.spy.scroll_to.is_some() {
+        assert!(
+            Instant::now() < deadline,
+            "the folder was never scrolled to"
+        );
+        rendered(&mut app, &ctx, size);
+        settle(&mut app);
+    }
     // The four photos of A/Day1 scroll out on the left.
     assert!(!strip(&mut app));
-    assert!(app.spy.scroll_to.is_none());
     app.runtime.shutdown();
 }

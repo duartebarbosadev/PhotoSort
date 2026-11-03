@@ -755,6 +755,15 @@ fn a_similarity_group_comparison_keeps_d_on_the_current_photo() {
     assert_eq!(app.decisions[&MediaId(1)].rating, Some(4));
     assert!(!app.decisions.contains_key(&MediaId(9)));
     assert!(!app.decisions.contains_key(&MediaId(10)));
+    // A filter hiding the photo on screen hands it to another compared
+    // photo, not to a selected one on no canvas.
+    let rated = [4, 6, 9, 10].map(MediaId);
+    app.stage_manual(rated, Change::Rating(3));
+    app.browse.rating = crate::core::browsing::RatingFilter::Exactly(3);
+    app.filter_dirty = true;
+    settle(&mut app);
+    assert_eq!(app.comparison, [MediaId(4), MediaId(6)]);
+    assert_eq!(app.active, Some(MediaId(4)));
 }
 
 /// Real frames: a click on a compared photo picks it for D, and a click

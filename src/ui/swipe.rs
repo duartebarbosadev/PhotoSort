@@ -74,6 +74,25 @@ impl PhotoSortApp {
             return false;
         }
         self.drop_hidden_swipe();
+        if matches!(
+            pressed,
+            egui::Key::ArrowLeft
+                | egui::Key::ArrowRight
+                | egui::Key::ArrowUp
+                | egui::Key::ArrowDown
+        ) {
+            // The arrows, with Ctrl/Cmd too, step from the photo you are
+            // looking at, so the comparison replaces that one rather than
+            // the first.
+            if let Some(slot) = self
+                .active
+                .and_then(|id| self.comparison.iter().position(|other| *other == id))
+                .filter(|_| self.swipe.is_some())
+            {
+                self.focused_slot = slot as u64;
+            }
+            return false;
+        }
         if modifiers.command || modifiers.ctrl {
             // Ctrl/Cmd and 0 to 5 rate the photo you are looking at, not
             // every photo selected for the comparison.
@@ -90,21 +109,6 @@ impl PhotoSortApp {
             egui::Key::C if self.swipe.is_some() => self.swipe = None,
             egui::Key::C => self.open_swipe(),
             egui::Key::Escape if self.swipe.is_some() => self.swipe = None,
-            egui::Key::ArrowLeft
-            | egui::Key::ArrowRight
-            | egui::Key::ArrowUp
-            | egui::Key::ArrowDown => {
-                // The arrows step from the photo you are looking at, so the
-                // comparison replaces that one rather than the first.
-                if let Some(slot) = self
-                    .active
-                    .and_then(|id| self.comparison.iter().position(|other| *other == id))
-                    .filter(|_| self.swipe.is_some())
-                {
-                    self.focused_slot = slot as u64;
-                }
-                return false;
-            }
             key => {
                 let Some(swipe) = self.swipe.as_mut() else {
                     return false;
@@ -579,6 +583,14 @@ mod tests {
         press(&mut app, egui::Key::ArrowRight, none);
         assert_eq!(app.comparison[..2], ids[..2]);
         assert!(app.comparison.len() == 3 && !app.comparison.contains(&ids[2]));
+        // So does Ctrl/Cmd and an arrow, which includes marked photos: Left
+        // goes back to the third photo, marked above.
+        press(&mut app, egui::Key::C, none);
+        press(&mut app, egui::Key::C, none);
+        press(&mut app, egui::Key::Num3, none);
+        settle(&mut app);
+        press(&mut app, egui::Key::ArrowLeft, egui::Modifiers::COMMAND);
+        assert_eq!(app.comparison, ids);
         // Back in the grid, a swipe left open takes no keys: Ctrl/Cmd and
         // a number rate every selected photo again.
         app.review = false;

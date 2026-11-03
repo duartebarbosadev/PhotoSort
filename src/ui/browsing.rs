@@ -167,13 +167,17 @@ impl PhotoSortApp {
                 .active
                 .is_none_or(|id| !self.filtered.iter().any(|i| self.media[*i].id == id))
             {
-                // A selected photo still shown takes over, so the outlined
-                // photo stays one that D and the rating keys act on.
-                let next = self
-                    .selection
-                    .ordered(&self.media, &self.filtered)
-                    .first()
-                    .copied()
+                // In Review a compared photo still shown takes over, so it
+                // stays on a canvas; otherwise a selected one, so the
+                // outlined photo is one D and the rating keys act on.
+                let compared = self.comparison.first().copied().filter(|_| self.review);
+                let next = compared
+                    .or_else(|| {
+                        self.selection
+                            .ordered(&self.media, &self.filtered)
+                            .first()
+                            .copied()
+                    })
                     .or_else(|| self.filtered.first().map(|i| self.media[*i].id));
                 match next {
                     Some(id) => self.set_active(id),
