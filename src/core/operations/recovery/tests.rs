@@ -2335,76 +2335,122 @@ fn staged_move_never_removes_the_only_destination_through_an_alias() {
 }
 #[test]
 #[cfg(unix)]
-fn move_that_fails_removing_a_linked_source_retries_only_the_unfinished_unlink() {
+fn move_that_fails_removing_a_staged_source_retries_only_the_unfinished_unlink() {
     use std::os::unix::fs::PermissionsExt;
-    let (_temp, store, context, _) = fixture();
-    let locked = context.root.join("locked");
-    fs::create_dir(&locked).unwrap();
-    fs::write(locked.join("c.jpg"), b"third photo").unwrap();
-    let sorted = context.root.join("Sorted");
-    let plan = Plan {
-        actions: vec![Action::Move {
-            files: vec![
-                (
-                    Source::capture(context.root.join("a.jpg")).unwrap(),
-                    sorted.join("a.jpg"),
-                ),
-                (
-                    Source::capture(locked.join("c.jpg")).unwrap(),
-                    sorted.join("c.jpg"),
-                ),
-            ],
-        }],
-        description: "Review moves".into(),
-        output_root: Some(context.root.clone()),
-        ..Default::default()
-    };
-    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
-    if fs::write(locked.join("probe"), b"").is_ok() {
-        return; // Permissions do not bind this user (root); nothing to test.
+    // Hard links on one volume; copies across volumes, where no identity is shared.
+    for copy in [false, true] {
+        let (_temp, store, context, _) = fixture();
+        let locked = context.root.join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::write(locked.join("c.jpg"), b"third photo").unwrap();
+        let sorted = context.root.join("Sorted");
+        let plan = Plan {
+            actions: vec![Action::Move {
+                files: vec![
+                    (
+                        Source::capture(context.root.join("a.jpg")).unwrap(),
+                        sorted.join("a.jpg"),
+                    ),
+                    (
+                        Source::capture(locked.join("c.jpg")).unwrap(),
+                        sorted.join("c.jpg"),
+                    ),
+                ],
+            }],
+            description: "Review moves".into(),
+            output_root: Some(context.root.clone()),
+            ..Default::default()
+        };
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+        if fs::write(locked.join("probe"), b"").is_ok() {
+            return; // Permissions do not bind this user (root); nothing to test.
+        }
+        super::super::COPY_ONLY.set(copy);
+        let report = store
+            .execute(&context, &plan, None, || false, |_, _| {})
+            .unwrap();
+        super::super::COPY_ONLY.set(false);
+        assert_eq!(report.errors.len(), 1, "the failure is still reported");
+        assert!(report.errors[0].contains("could not remove source"));
+        let a = MediaId::for_path(&context.root.join("a.jpg"));
+        assert!(
+            report
+                .relocated
+                .iter()
+                .any(|(old, new, _)| *old == a && *new == MediaId::for_path(&sorted.join("a.jpg")))
+        );
+        assert!(matches!(
+            &report.remaining.actions[..],
+            [Action::FinishMove { files }] if files[0].0.path == locked.join("c.jpg")
+        ));
+        // Reopening agrees with the in-process result, so the retry is accepted.
+        let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
+        assert_eq!(
+            serde_json::to_value(&restored.plan.actions).unwrap(),
+            serde_json::to_value(&report.remaining.actions).unwrap()
+        );
+        assert_eq!(restored.errors, report.errors);
+        // The rating follows the file, under the identity the moved file has.
+        let moved = MediaId::for_path(&sorted.join("a.jpg"));
+        let session = Session::load(&context.root).unwrap();
+        assert_eq!(session.decisions[&moved].rating, Some(4));
+        assert_eq!(
+            session.fingerprints[&moved],
+            Fingerprint::read(&sorted.join("a.jpg")).unwrap()
+        );
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        let retried = store
+            .execute(
+                &context,
+                &restored.plan,
+                Some(&restored.ticket),
+                || false,
+                |_, _| {},
+            )
+            .unwrap();
+        assert!(
+            retried.errors.is_empty() && retried.remaining.actions.is_empty(),
+            "copy: {copy}, {:?}",
+            retried.errors
+        );
+        assert!(!locked.join("c.jpg").exists());
+        assert_eq!(fs::read(sorted.join("c.jpg")).unwrap(), b"third photo");
+        assert_eq!(fs::read(sorted.join("a.jpg")).unwrap(), b"first photo");
     }
-    let report = store
-        .execute(&context, &plan, None, || false, |_, _| {})
-        .unwrap();
-    assert_eq!(report.errors.len(), 1, "the failure is still reported");
-    assert!(report.errors[0].contains("could not remove source"));
-    let a = MediaId::for_path(&context.root.join("a.jpg"));
-    assert!(
-        report
-            .relocated
-            .iter()
-            .any(|(old, new, _)| *old == a && *new == MediaId::for_path(&sorted.join("a.jpg")))
-    );
-    assert!(matches!(
-        &report.remaining.actions[..],
-        [Action::FinishMove { files }] if files[0].0.path == locked.join("c.jpg")
-    ));
-    // Reopening agrees with the in-process result, so the retry is accepted.
-    let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
-    assert_eq!(
-        serde_json::to_value(&restored.plan.actions).unwrap(),
-        serde_json::to_value(&report.remaining.actions).unwrap()
-    );
-    assert_eq!(restored.errors, report.errors);
-    assert_eq!(
-        Session::load(&context.root).unwrap().decisions[&MediaId::for_path(&sorted.join("a.jpg"))]
-            .rating,
-        Some(4)
-    );
-    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
-    let retried = store
-        .execute(
-            &context,
-            &restored.plan,
-            Some(&restored.ticket),
-            || false,
-            |_, _| {},
-        )
-        .unwrap();
-    assert!(retried.errors.is_empty() && retried.remaining.actions.is_empty());
-    assert!(!locked.join("c.jpg").exists());
-    assert_eq!(fs::read(sorted.join("c.jpg")).unwrap(), b"third photo");
-    assert_eq!(fs::read(sorted.join("a.jpg")).unwrap(), b"first photo");
+}
+#[test]
+fn finishing_a_copied_move_needs_the_source_bytes_and_time_in_another_entry() {
+    let (_temp, _store, context, _plan) = fixture();
+    let source = Source::capture(context.root.join("b.jpg")).unwrap();
+    let modified = fs::metadata(&source.path).unwrap().modified().unwrap();
+    let finish = |to: &Path| {
+        let plan = Plan {
+            actions: vec![Action::FinishMove {
+                files: vec![(source.clone(), to.to_path_buf())],
+            }],
+            ..Default::default()
+        };
+        super::super::execute(&plan, &context.root.join("audit"), || false, |_, _| {}).unwrap()
+    };
+    let copy = |to: &Path, bytes: &[u8]| {
+        fs::write(to, bytes).unwrap();
+        File::options()
+            .write(true)
+            .open(to)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+    };
+    // Same size and time, other bytes: not the staged copy.
+    let forged = context.root.join("forged.jpg");
+    copy(&forged, b"second phot0");
+    assert!(!finish(&forged).errors.is_empty());
+    assert!(source.path.exists());
+    let staged = context.root.join("staged.jpg");
+    copy(&staged, b"second photo");
+    assert!(finish(&staged).errors.is_empty());
+    assert!(!source.path.exists());
+    assert_eq!(fs::read(&staged).unwrap(), b"second photo");
 }
 #[test]
 #[cfg(target_os = "macos")]

@@ -89,12 +89,11 @@ impl Files<'_> {
         self.cancelled() || flag.load(Ordering::Acquire)
     }
     fn send(&self, event: Event) {
-        let epoch = if self.saving {
-            self.publisher.generation.load(Ordering::Acquire)
+        if self.saving {
+            self.publisher.send_current(event);
         } else {
-            self.epoch
-        };
-        self.publisher.send(epoch, event);
+            self.publisher.send(self.epoch, event);
+        }
     }
     fn progress(&self, done: usize, total: usize) {
         self.send(Event::Progress {

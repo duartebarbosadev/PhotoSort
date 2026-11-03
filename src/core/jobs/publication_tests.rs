@@ -94,6 +94,48 @@ fn cancellation_during_backpressure_does_not_publish_a_stale_result() {
 }
 
 #[test]
+fn storage_notices_follow_a_folder_change_while_waiting_for_queue_space() {
+    for shutdown in [false, true] {
+        let (tx, rx) = mpsc::sync_channel(1);
+        tx.send(Envelope {
+            epoch: 1,
+            event: Event::Error("queued".into()),
+        })
+        .unwrap();
+        let rx = Mutex::new(rx);
+        let generation = Arc::new(AtomicU64::new(1));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (next_generation, next_stop) = (generation.clone(), stop.clone());
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let observed = delivered.clone();
+        let publisher = Publisher {
+            tx,
+            generation,
+            stop,
+            wake: Arc::new(move || {
+                // The UI opens another folder (or quits) while draining the queue.
+                if shutdown {
+                    next_stop.store(true, Ordering::Release);
+                } else {
+                    next_generation.store(2, Ordering::Release);
+                }
+                while let Ok(envelope) = rx.lock().unwrap().try_recv() {
+                    if let Event::Error(message) | Event::ViewError(message) = envelope.event {
+                        observed.lock().unwrap().push((envelope.epoch, message));
+                    }
+                }
+            }),
+        };
+        publisher.send_current(Event::ViewError("could not be saved".into()));
+        let mut expected = vec![(1, "queued".to_string())];
+        if !shutdown {
+            expected.push((2, "could not be saved".into()));
+        }
+        assert_eq!(*delivered.lock().unwrap(), expected, "shutdown: {shutdown}");
+    }
+}
+
+#[test]
 fn rejected_publication_does_not_request_an_empty_repaint() {
     let (tx, rx) = mpsc::sync_channel(1);
     let wakes = Arc::new(AtomicU64::new(0));

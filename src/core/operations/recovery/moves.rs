@@ -11,7 +11,8 @@ pub(in crate::core::operations) enum State {
     Untouched,
 }
 
-/// Cross-device copies and platforms without an inode/device identity stay explicit.
+/// Crash inference trusts only inode identity: cross-device copies and platforms
+/// without it stay explicit. A live executor receipts its own copies instead.
 pub(in crate::core::operations) fn verify(
     action: &Action,
     cancelled: &impl Fn() -> bool,
@@ -89,10 +90,12 @@ pub(in crate::core::operations) fn restore(
         match state {
             State::Completed => {
                 completed.push((source.clone(), destination.clone()));
+                // A copied destination has its own identity; the session keeps
+                // choices only for the fingerprint the file really has.
                 relocated.push((
                     MediaId::for_path(&source.path),
                     MediaId::for_path(destination),
-                    source.fingerprint,
+                    Fingerprint::read(destination).unwrap_or(source.fingerprint),
                 ));
             }
             State::Staged => staged.push((source.clone(), destination.clone())),
