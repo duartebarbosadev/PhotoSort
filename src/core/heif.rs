@@ -44,6 +44,10 @@ fn relative_orientation(container: u8, desired: u8) -> u8 {
 }
 pub(super) fn orientation(path: &Path) -> Option<u8> {
     library().ok()?;
+    // Unix paths are bytes; a name that is not UTF-8 is still a valid file.
+    #[cfg(unix)]
+    let path = CString::new(std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str())).ok()?;
+    #[cfg(not(unix))]
     let path = CString::new(path.to_str()?).ok()?;
     let mut operations = [0i32; 32];
     unsafe extern "C" {

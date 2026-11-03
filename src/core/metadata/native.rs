@@ -123,8 +123,9 @@ impl Snapshot {
         result.orientation = self
             .raw("Exif.Image.Orientation")
             .parse::<u8>()
-            .unwrap_or(1)
-            .clamp(1, 8);
+            .ok()
+            .filter(|v| (1..=8).contains(v))
+            .unwrap_or(1);
         result.rating = self
             .raw("Xmp.xmp.Rating")
             .parse::<u8>()

@@ -129,6 +129,10 @@ pub fn read_cancellable(path: &Path, cancelled: &impl Fn() -> bool) -> Result<Me
             dates.overlay(3, photoshop.as_deref());
         }
     }
+    // Cameras without a fix write zeros (or zero denominators); neither is a place.
+    result.gps = result
+        .gps
+        .filter(|&(lat, lon)| lat.abs() <= 90.0 && lon.abs() <= 180.0 && (lat, lon) != (0.0, 0.0));
     anyhow::ensure!(!cancelled(), "Metadata read cancelled");
     result.grouping_date = dates.day.into_iter().flatten().next();
     result.captured_ms = dates.time.into_iter().flatten().next();
@@ -379,8 +383,10 @@ pub fn atomic_write(dest: &Path, bytes: &[u8]) -> Result<()> {
     super::replace::persist(temp, dest)?;
     Ok(())
 }
+/// The EXIF orientation that shows the photo turned `turns` quarter turns
+/// clockwise from how `orientation` shows it. Mirrored values stay mirrored.
 pub fn rotate_orientation(mut orientation: u8, turns: u8) -> u8 {
-    const CLOCKWISE: [u8; 9] = [1, 6, 5, 8, 7, 4, 3, 2, 1];
+    const CLOCKWISE: [u8; 9] = [1, 6, 7, 8, 5, 2, 3, 4, 1];
     for _ in 0..turns % 4 {
         orientation = CLOCKWISE[usize::from(orientation.clamp(1, 8))];
     }

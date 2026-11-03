@@ -401,20 +401,23 @@ pub fn group(
             return Ok(None);
         }
         let vector = &vectors[index];
-        let mut best = None;
-        let mut best_score = MIN_SIMILARITY;
-        for (g, person) in groups.iter().enumerate() {
-            let score = similarity(vector, &person.sum) / person.members.len() as f32;
-            if score >= best_score && best.is_none_or(|_| score > best_score) {
-                best = Some(g);
-                best_score = score;
-            }
-        }
         let face = Person {
             members: vec![index],
             sum: vector.clone(),
             photos: photos[index].clone(),
         };
+        let mut best = None;
+        let mut best_score = MIN_SIMILARITY;
+        for (g, person) in groups.iter().enumerate() {
+            let score = similarity(vector, &person.sum) / person.members.len() as f32;
+            if score >= best_score
+                && best.is_none_or(|_| score > best_score)
+                && !person.seen_with(&face)
+            {
+                best = Some(g);
+                best_score = score;
+            }
+        }
         match best {
             Some(g) => groups[g].absorb(face),
             None => groups.push(face),

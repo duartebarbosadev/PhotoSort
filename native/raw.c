@@ -20,9 +20,6 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe, int
     libraw_set_progress_handler(raw, progress, context);
     *error = libraw_open_file(raw, path);
     if (*error) { libraw_close(raw); return 0; }
-    if ((unsigned long long)raw->sizes.raw_width * raw->sizes.raw_height > 100000000ULL) {
-        *error = LIBRAW_UNSUFFICIENT_MEMORY; libraw_close(raw); return 0;
-    }
     if (recipe == 1) {
         *error = libraw_unpack_thumb(raw);
         if (!*error) {
@@ -46,6 +43,11 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe, int
         }
         if (*error == LIBRAW_CANCELLED_BY_CALLBACK) { libraw_close(raw); return 0; }
         *error = 0; /* Missing/non-JPEG thumbnails use neutral half-size decoding. */
+    }
+    /* Only a sensor decode holds the whole mosaic, so only it is bounded by the
+       sensor size; an embedded JPEG above is returned for any sensor size. */
+    if ((unsigned long long)raw->sizes.raw_width * raw->sizes.raw_height > 100000000ULL) {
+        *error = LIBRAW_UNSUFFICIENT_MEMORY; libraw_close(raw); return 0;
     }
     if (preview) {
         /* Fallback needs both full-source geometry and a reduced sensor decode.

@@ -7,6 +7,10 @@
 
 #define MAX_BYTES ((size_t)512 * 1024 * 1024)
 #define MAX_PROFILE ((size_t)4 * 1024 * 1024)
+/* Previews of very large sources: JPEG's own maximum edge, and a pixel bound
+ * that still stops decompression bombs from streaming for minutes. */
+#define MAX_PREVIEW_EDGE 65535
+#define MAX_PREVIEW_PIXELS ((uint64_t)1 << 30)
 
 typedef int (*Cancel)(void *);
 typedef struct {
@@ -86,8 +90,14 @@ int photosort_vips_render(const char *path, uint32_t edge,
     int w = vips_image_get_width(header), h = vips_image_get_height(header);
     int bands = vips_image_get_bands(header);
     size_t sample = vips_format_sizeof(vips_image_get_format(header));
-    if (w < 1 || h < 1 || w > 32768 || h > 32768 || bands < 1 || bands > 5 ||
-        sample == 0 || (uint64_t)w * h * bands * sample > MAX_BYTES) {
+    /* A downsized preview never holds the source raster: loaders shrink on load
+     * or stream it, and the output is checked against MAX_BYTES below. Only a
+     * full-size or region render is bounded by the source size itself. */
+    const int preview = !width && !height && edge && ((uint32_t)w > edge || (uint32_t)h > edge);
+    const int limit = preview ? MAX_PREVIEW_EDGE : 32768;
+    if (w < 1 || h < 1 || w > limit || h > limit || bands < 1 || bands > 5 || sample == 0 ||
+        (preview ? (uint64_t)w * h > MAX_PREVIEW_PIXELS
+                 : (uint64_t)w * h * bands * sample > MAX_BYTES)) {
         fail(error, capacity, "Image exceeds the dimension or 512 MiB decode budget"); goto done;
     }
     output->source_sample_bytes = (uint32_t)sample;

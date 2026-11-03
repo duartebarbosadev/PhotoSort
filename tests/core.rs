@@ -119,14 +119,63 @@ fn sidecar_mutation_invalidates_canonical_preview() {
     assert_eq!(p.stats.decodes, 2);
 }
 #[test]
-fn all_exif_rotations_form_four_turn_cycles() {
+fn all_exif_rotations_turn_the_shown_photo_clockwise_in_four_turn_cycles() {
+    let image = DynamicImage::ImageRgba8(RgbaImage::from_fn(3, 2, |x, y| {
+        Rgba([(x + y * 3) as u8, 0, 0, 255])
+    }));
     for orientation in 1..=8 {
+        // Mirrored values included: a turned selfie must not end up upside down.
+        let turned = metadata::rotate_orientation(orientation, 1);
+        assert_eq!(
+            orient(image.clone(), turned).to_rgba8(),
+            orient(image.clone(), orientation).rotate90().to_rgba8(),
+            "one clockwise turn of orientation {orientation}"
+        );
         let mut current = orientation;
         for _ in 0..4 {
             current = metadata::rotate_orientation(current, 1);
         }
         assert_eq!(current, orientation);
     }
+}
+#[test]
+fn invalid_orientation_and_zero_gps_read_as_unset() {
+    // IFD0: Orientation 9 and a GPS IFD of 0° 0' 0" N, 0° 0' 0" E, as cameras
+    // without a fix write it.
+    let mut tiff = b"II*\0\x08\0\0\0".to_vec();
+    let entry = |tiff: &mut Vec<u8>, tag: u16, kind: u16, count: u32, value: [u8; 4]| {
+        tiff.extend(tag.to_le_bytes());
+        tiff.extend(kind.to_le_bytes());
+        tiff.extend(count.to_le_bytes());
+        tiff.extend(value);
+    };
+    tiff.extend(2u16.to_le_bytes());
+    entry(&mut tiff, 0x0112, 3, 1, [9, 0, 0, 0]);
+    entry(&mut tiff, 0x8825, 4, 1, 38u32.to_le_bytes());
+    tiff.extend(0u32.to_le_bytes());
+    tiff.extend(4u16.to_le_bytes());
+    entry(&mut tiff, 1, 2, 2, *b"N\0\0\0");
+    entry(&mut tiff, 2, 5, 3, 92u32.to_le_bytes());
+    entry(&mut tiff, 3, 2, 2, *b"E\0\0\0");
+    entry(&mut tiff, 4, 5, 3, 116u32.to_le_bytes());
+    tiff.extend(0u32.to_le_bytes());
+    for _ in 0..6 {
+        tiff.extend(0u32.to_le_bytes());
+        tiff.extend(1u32.to_le_bytes());
+    }
+    assert_eq!(tiff.len(), 140);
+    let d = TempDir::new().unwrap();
+    let path = d.path().join("no-fix.jpg");
+    let mut encoder = jpeg_encoder::Encoder::new(fs::File::create(&path).unwrap(), 90);
+    encoder
+        .add_app_segment(1, [b"Exif\0\0".as_slice(), &tiff].concat())
+        .unwrap();
+    encoder
+        .encode(&[128; 3 * 64], 8, 8, jpeg_encoder::ColorType::Rgb)
+        .unwrap();
+    let meta = metadata::read(&path);
+    assert_eq!(meta.orientation, 1);
+    assert_eq!(meta.gps, None);
 }
 #[test]
 fn exif_mirrored_orientations_are_not_lost() {

@@ -198,8 +198,23 @@ pub fn review(
                 let assessment = if let Some(previous) = store.duplicate(&key) {
                     previous
                 } else {
-                    let left = evidence.image(first)?;
-                    let right = evidence.image(second)?;
+                    // Like a twin preview in `format_pairs`, a photo that cannot be
+                    // read now only skips its pairs instead of failing the review.
+                    let (left, right) = match (evidence.image(first), evidence.image(second)) {
+                        (Ok(left), Ok(right)) => (left, right),
+                        (Err(error), _) | (_, Err(error)) => {
+                            if cancelled() {
+                                return Ok(None);
+                            }
+                            tracing::warn!(
+                                first = %first.media.path.display(),
+                                second = %second.media.path.display(),
+                                %error,
+                                "near-duplicate pair skipped"
+                            );
+                            continue;
+                        }
+                    };
                     let Some(left) = gray(&left, &cancelled) else {
                         return Ok(None);
                     };

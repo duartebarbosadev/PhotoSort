@@ -3429,6 +3429,7 @@ dependencies = [
  "libc",
  "libheif-rs",
  "lru",
+ "miniz_oxide 0.9.1",
  "moxcms",
  "mp4",
  "nalgebra",

@@ -19,11 +19,19 @@ pub fn probe(path: &Path) -> Option<VideoInfo> {
     let file = std::fs::File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
     // The header comes from an untrusted file; a parser bug skips the rows.
-    let reader = super::crash::catch(|| {
-        mp4::Mp4Reader::read_header(std::io::BufReader::new(file), size).ok()
+    super::crash::catch(|| {
+        let reader = mp4::Mp4Reader::read_header(std::io::BufReader::new(file), size).ok()?;
+        read_info(&reader)
     })
     .ok()
-    .flatten()?;
+    .flatten()
+}
+/// The reader's duration, frame rate and bitrate divide by the header's
+/// timescales unchecked, so a zero timescale is refused before any of them.
+fn read_info<R: std::io::Read + std::io::Seek>(reader: &mp4::Mp4Reader<R>) -> Option<VideoInfo> {
+    if reader.timescale() == 0 || reader.tracks().values().any(|t| t.timescale() == 0) {
+        return None;
+    }
     let mut info = VideoInfo {
         duration_s: reader.duration().as_secs_f64(),
         ..Default::default()
@@ -104,5 +112,25 @@ mod tests {
         std::fs::write(&path, b"plain text").unwrap();
         assert!(probe(&path).is_none());
         assert!(probe(&dir.path().join("missing.mp4")).is_none());
+    }
+
+    #[test]
+    fn a_zero_timescale_header_probes_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("zero-timescale.mp4");
+        let config = mp4::Mp4Config {
+            major_brand: str::parse("isom").unwrap(),
+            minor_version: 512,
+            compatible_brands: vec![],
+            timescale: 0,
+        };
+        let file = std::fs::File::create(&path).unwrap();
+        let mut writer = mp4::Mp4Writer::write_start(file, &config).unwrap();
+        writer.write_end().unwrap();
+        // The header itself parses; only its derived values would divide by zero.
+        let bytes = std::fs::read(&path).unwrap();
+        let size = bytes.len() as u64;
+        assert!(mp4::Mp4Reader::read_header(std::io::Cursor::new(bytes), size).is_ok());
+        assert!(probe(&path).is_none());
     }
 }

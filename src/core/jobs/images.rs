@@ -81,6 +81,28 @@ struct CachedAnalysis {
     faces: Option<faces::FaceSummary>,
 }
 
+/// Retire cached results made with other models, returning whether the analysis
+/// models changed (which also retires stored subjects). Aesthetic scores come
+/// from their own model, so replacing it clears only the scores.
+fn retire_stale_results(
+    results: &mut HashMap<String, CachedAnalysis>,
+    analysis: (&mut String, String),
+    aesthetic: (&mut String, String),
+) -> bool {
+    let changed = *analysis.0 != analysis.1;
+    if changed {
+        results.clear();
+        *analysis.0 = analysis.1;
+    }
+    if *aesthetic.0 != aesthetic.1 {
+        for cached in results.values_mut() {
+            cached.aesthetic = None;
+        }
+        *aesthetic.0 = aesthetic.1;
+    }
+    changed
+}
+
 /// Identity of one analysis run. Superseded by a new folder generation or run.
 struct Scope {
     publisher: Publisher,
@@ -207,6 +229,7 @@ struct ImageWorker {
     results: HashMap<String, CachedAnalysis>,
     result_epoch: u64,
     model_signature: String,
+    aesthetic_signature: String,
     technical_measurements: u64,
     content_hashes: u64,
     quality_measurements: u64,
@@ -268,6 +291,7 @@ impl ImageWorker {
             results: HashMap::new(),
             result_epoch: 0,
             model_signature: String::new(),
+            aesthetic_signature: String::new(),
             technical_measurements: 0,
             content_hashes: 0,
             quality_measurements: 0,
@@ -694,11 +718,12 @@ impl ImageWorker {
             return;
         }
         self.begin_models(&scope, model_config);
-        let signature = models::analysis_signature();
-        if signature != self.model_signature {
-            self.results.clear();
+        if retire_stale_results(
+            &mut self.results,
+            (&mut self.model_signature, models::analysis_signature()),
+            (&mut self.aesthetic_signature, models::aesthetic_signature()),
+        ) {
             self.subject_store = None;
-            self.model_signature = signature;
         }
         if self.evidence_unavailable(&scope) || scope.cancelled() {
             return;
@@ -1447,5 +1472,46 @@ impl ImageWorker {
         if complete {
             self.metadata_index = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod signature_tests {
+    use super::*;
+
+    fn scored() -> HashMap<String, CachedAnalysis> {
+        let cached = CachedAnalysis {
+            technical: Analysis::default(),
+            hash: "hash".into(),
+            dimensions: (4, 3),
+            embedding: Some(vec![1.0]),
+            aesthetic: Some(0.7),
+            faces: None,
+        };
+        HashMap::from([("photo".to_owned(), cached)])
+    }
+
+    #[test]
+    fn a_new_aesthetic_model_retires_only_the_scores() {
+        let mut results = scored();
+        let (mut analysis, mut aesthetic) = ("scenes".to_owned(), "old".to_owned());
+        let changed = retire_stale_results(
+            &mut results,
+            (&mut analysis, "scenes".into()),
+            (&mut aesthetic, "new".into()),
+        );
+        assert!(!changed);
+        assert_eq!(aesthetic, "new");
+        let cached = &results["photo"];
+        assert_eq!(cached.aesthetic, None, "rerunning Quality scores again");
+        assert_eq!(cached.embedding.as_deref(), Some(&[1.0][..]));
+
+        let changed = retire_stale_results(
+            &mut results,
+            (&mut analysis, "other scenes".into()),
+            (&mut aesthetic, "new".into()),
+        );
+        assert!(changed);
+        assert!(results.is_empty());
     }
 }

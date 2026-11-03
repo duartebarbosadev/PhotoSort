@@ -127,6 +127,55 @@ fn thumbnails_are_bounded_and_regions_use_unrotated_source_coordinates() {
         .is_err()
     );
 }
+/// A flat gray baseline JPEG of any size in a few bytes per 64 pixels: one-code
+/// Huffman tables make every 8x8 block two zero bits (DC unchanged, end of block).
+fn flat_jpeg(path: &Path, width: u16, height: u16) {
+    let mut jpeg = vec![0xFF, 0xD8];
+    let segment = |jpeg: &mut Vec<u8>, marker: u8, body: &[u8]| {
+        jpeg.extend([0xFF, marker]);
+        jpeg.extend((body.len() as u16 + 2).to_be_bytes());
+        jpeg.extend(body);
+    };
+    segment(&mut jpeg, 0xDB, &[[0].as_slice(), &[1; 64]].concat());
+    let [w0, w1] = width.to_be_bytes();
+    let [h0, h1] = height.to_be_bytes();
+    segment(&mut jpeg, 0xC0, &[8, h0, h1, w0, w1, 1, 1, 0x11, 0]);
+    for class in [0x00, 0x10] {
+        let mut table = vec![class, 1];
+        table.extend([0; 15]);
+        table.push(0);
+        segment(&mut jpeg, 0xC4, &table);
+    }
+    segment(&mut jpeg, 0xDA, &[1, 1, 0, 0, 63, 0]);
+    let blocks = usize::from(width / 8) * usize::from(height / 8);
+    jpeg.resize(jpeg.len() + blocks * 2 / 8, 0);
+    jpeg.extend([0xFF, 0xD9]);
+    std::fs::write(path, jpeg).unwrap();
+}
+#[test]
+fn previews_of_sources_past_the_decode_budget_shrink_on_load() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("large.jpg");
+    // 552 million samples, past the 512 MiB budget for a full-size decode.
+    flat_jpeg(&path, 24000, 23000);
+    let preview = render(
+        &path,
+        Request {
+            edge: Some(256),
+            region: None,
+        },
+        || false,
+    )
+    .unwrap();
+    assert_eq!((preview.width, preview.height), (256, 245));
+    assert_eq!(
+        (preview.source_width, preview.source_height),
+        (24000, 23000)
+    );
+    assert!(rgba(preview).chunks(4).all(|p| p == [128, 128, 128, 255]));
+    let full = render(&path, Request::default(), || false).unwrap_err();
+    assert!(full.to_string().contains("512 MiB"), "{full}");
+}
 #[test]
 fn embedded_linear_profile_normalizes_rgb_but_preserves_alpha() {
     let temp = tempfile::tempdir().unwrap();
