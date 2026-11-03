@@ -9,6 +9,11 @@ use image::{
     codecs::{bmp::BmpEncoder, png::PngDecoder, png::PngEncoder},
     metadata::Orientation,
 };
+use quick_xml::{
+    NsReader, Writer,
+    events::{BytesEnd, BytesStart, Event, attributes::Attribute},
+    name::{QName, ResolveResult},
+};
 use std::{fs, io::Cursor, path::Path};
 use tiff::{
     decoder::Decoder,
@@ -143,7 +148,7 @@ fn carry_png_metadata(source: &[u8], encoded: &[u8], orientation: u8) -> Result<
                 exif
             }
             b"tEXt" | b"zTXt" | b"iTXt" if data.starts_with(XMP_KEYWORD) => {
-                upright_xmp_chunk(&kind, data)?
+                upright_xmp_chunk(&kind, data, transposed(orientation))?
             }
             b"tEXt" | b"zTXt" | b"iTXt" if data.starts_with(b"Raw profile type") => continue,
             // Ancillary (lowercase first letter) and safe to copy (lowercase last).
@@ -207,7 +212,8 @@ fn crc32(bytes: &[u8]) -> u32 {
 }
 
 /// Set Orientation (0x0112) in IFD0 of an EXIF TIFF block to 1, in place. On a
-/// quarter turn PixelXDimension and PixelYDimension in the Exif directory swap.
+/// quarter turn the pixel size swaps: ImageWidth and ImageLength in IFD0, and
+/// PixelXDimension and PixelYDimension in the Exif directory.
 fn upright_exif(exif: &mut [u8], transposed: bool) -> Result<()> {
     // Some writers keep the JPEG APP1 "Exif" header in eXIf.
     let exif = match exif.strip_prefix(b"Exif\0\0") {
@@ -264,19 +270,29 @@ fn upright_exif(exif: &mut [u8], transposed: bool) -> Result<()> {
             exif[at + 8..at + 10].copy_from_slice(&one);
         }
     }
-    if let Some(&(_, at)) = ifd0.iter().find(|(tag, _)| *tag == 0x8769)
-        && transposed
-    {
-        let directory = u32_at(exif, at + 8)
-            .and_then(|ifd| entries(exif, ifd))
-            .context("The photo's Exif directory cannot be read")?;
-        let find = |code| directory.iter().find(|(tag, _)| *tag == code);
-        if let (Some(&(_, x)), Some(&(_, y))) = (find(0xA002), find(0xA003)) {
-            // Type, count and value move together: one may be SHORT, the other LONG.
-            let width: [u8; 10] = exif[x + 2..x + 12].try_into()?;
+    if !transposed {
+        return Ok(());
+    }
+    let find = |entries: &[(u16, usize)], code| {
+        entries
+            .iter()
+            .find(|(tag, _)| *tag == code)
+            .map(|&(_, at)| at)
+    };
+    // Type, count and value move together: one may be SHORT, the other LONG.
+    let swap = |exif: &mut [u8], width: Option<usize>, height: Option<usize>| {
+        if let (Some(x), Some(y)) = (width, height) {
+            let width: [u8; 10] = exif[x + 2..x + 12].try_into().expect("12-byte entry");
             exif.copy_within(y + 2..y + 12, x + 2);
             exif[y + 2..y + 12].copy_from_slice(&width);
         }
+    };
+    swap(exif, find(&ifd0, 0x0100), find(&ifd0, 0x0101));
+    if let Some(at) = find(&ifd0, 0x8769) {
+        let directory = u32_at(exif, at + 8)
+            .and_then(|ifd| entries(exif, ifd))
+            .context("The photo's Exif directory cannot be read")?;
+        swap(exif, find(&directory, 0xA002), find(&directory, 0xA003));
     }
     Ok(())
 }
@@ -287,7 +303,7 @@ const XMP_LIMIT: usize = 16 * 1024 * 1024;
 
 /// A PNG text chunk (tEXt, zTXt or iTXt) holding XMP, with its orientation set
 /// upright. Compressed text is inflated, rewritten and compressed again.
-fn upright_xmp_chunk(kind: &[u8; 4], data: &[u8]) -> Result<Vec<u8>> {
+fn upright_xmp_chunk(kind: &[u8; 4], data: &[u8], transposed: bool) -> Result<Vec<u8>> {
     let body = &data[XMP_KEYWORD.len()..];
     // The header kept as it is before the text, and whether the text is zlib.
     let (header, compressed) = match kind {
@@ -320,7 +336,7 @@ fn upright_xmp_chunk(kind: &[u8; 4], data: &[u8]) -> Result<Vec<u8>> {
     } else {
         text.to_vec()
     };
-    let xmp = upright_xmp(&xmp)?;
+    let xmp = upright_xmp(&xmp, transposed)?;
     let xmp = if compressed {
         miniz_oxide::deflate::compress_to_vec_zlib(&xmp, 6)
     } else {
@@ -330,17 +346,90 @@ fn upright_xmp_chunk(kind: &[u8; 4], data: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// An XMP packet with every TIFF-namespace Orientation, attribute or element and
-/// under any prefix, replaced by one `tiff:Orientation` of 1.
-fn upright_xmp(xmp: &[u8]) -> Result<Vec<u8>> {
+/// under any prefix, replaced by one `tiff:Orientation` of 1. On a quarter turn
+/// its copies of the pixel size swap too.
+fn upright_xmp(xmp: &[u8], transposed: bool) -> Result<Vec<u8>> {
     // TIFF stores XMP as bytes, sometimes with a terminating NUL.
     let end = xmp.iter().rposition(|&b| b != 0).map_or(0, |at| at + 1);
     let xml = std::str::from_utf8(&xmp[..end]).context("The photo's XMP is not UTF-8")?;
-    let upright = metadata::update_xmp(xml, None, Some(1))?;
+    let mut upright = metadata::update_xmp(xml, None, Some(1))?;
+    if transposed {
+        upright = transpose_xmp_size(&upright)?;
+    }
     ensure!(
         metadata::read_xmp(&upright)?.1 == Some(1),
         "The photo's XMP orientation cannot be reset"
     );
     Ok(upright.into_bytes())
+}
+
+/// The XMP pixel-size property a quarter turn swaps with this one, if it is one.
+fn swapped_size(ns: ResolveResult<'_>, local: &[u8]) -> Option<&'static str> {
+    const EXIF: &[u8] = b"http://ns.adobe.com/exif/1.0/";
+    const TIFF: &[u8] = b"http://ns.adobe.com/tiff/1.0/";
+    let ResolveResult::Bound(ns) = ns else {
+        return None;
+    };
+    match (ns.as_ref(), local) {
+        (EXIF, b"PixelXDimension") => Some("PixelYDimension"),
+        (EXIF, b"PixelYDimension") => Some("PixelXDimension"),
+        (TIFF, b"ImageWidth") => Some("ImageLength"),
+        (TIFF, b"ImageLength") => Some("ImageWidth"),
+        _ => None,
+    }
+}
+
+/// Swap the XMP copies of the pixel size by renaming each property to its
+/// partner, keeping its prefix and value, as attribute or element.
+fn transpose_xmp_size(xml: &str) -> Result<String> {
+    fn renamed(name: QName<'_>, local: &str) -> Result<String> {
+        Ok(match name.prefix() {
+            Some(prefix) => format!("{}:{local}", std::str::from_utf8(prefix.as_ref())?),
+            None => local.to_owned(),
+        })
+    }
+    fn start(reader: &NsReader<&[u8]>, e: &BytesStart<'_>) -> Result<BytesStart<'static>> {
+        let (ns, local) = reader.resolver().resolve_element(e.name());
+        let name = match swapped_size(ns, local.as_ref()) {
+            Some(other) => renamed(e.name(), other)?,
+            None => std::str::from_utf8(e.name().as_ref())?.to_owned(),
+        };
+        let mut start = BytesStart::new(name);
+        for attribute in e.attributes() {
+            let attribute = attribute?;
+            let (ns, local) = reader.resolver().resolve_attribute(attribute.key);
+            match swapped_size(ns, local.as_ref()) {
+                Some(other) => {
+                    let key = renamed(attribute.key, other)?;
+                    start.push_attribute(Attribute {
+                        key: QName(key.as_bytes()),
+                        value: attribute.value,
+                    });
+                }
+                None => start.push_attribute(attribute),
+            }
+        }
+        Ok(start)
+    }
+    let mut reader = NsReader::from_str(xml);
+    let mut writer = Writer::new(Vec::new());
+    loop {
+        let event = match reader.read_event()? {
+            Event::Eof => break,
+            Event::Start(e) => Event::Start(start(&reader, &e)?),
+            Event::Empty(e) => Event::Empty(start(&reader, &e)?),
+            Event::End(e) => {
+                let (ns, local) = reader.resolver().resolve_element(e.name());
+                match swapped_size(ns, local.as_ref()) {
+                    Some(other) => Event::End(BytesEnd::new(renamed(e.name(), other)?)),
+                    None => Event::End(e),
+                }
+            }
+            event => event,
+        };
+        writer.write_event(event)?;
+    }
+    Ok(String::from_utf8(writer.into_inner())?)
 }
 
 /// Descriptive IFD0 tags carried to the rewritten TIFF. Structure tags are the
@@ -391,7 +480,7 @@ fn encode_tiff(
             };
             if let Some(mut value) = tiff_value(&mut ifd, code)? {
                 if code == 700 {
-                    let patched = upright_xmp(value.as_bytes())?;
+                    let patched = upright_xmp(value.as_bytes(), swap)?;
                     value = ValueBuffer::from_value(&patched.as_slice());
                 }
                 top.push((target, value));

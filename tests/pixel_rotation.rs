@@ -113,8 +113,9 @@ fn tiff_and_bmp_rotate_and_a_changed_file_is_left_alone() {
     assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
-/// EXIF as a scanner might write it: Orientation 6, and a capture date and the
-/// 3x2 pixel size (width SHORT, height LONG) in the Exif directory.
+/// EXIF as a scanner might write it: the 3x2 size and Orientation 6 in IFD0, and
+/// a capture date and the size again in the Exif directory (widths SHORT,
+/// heights LONG).
 fn exif() -> Vec<u8> {
     let mut exif = b"II*\0\x08\0\0\0".to_vec();
     let entry = |exif: &mut Vec<u8>, tag: u16, kind: u16, count: u32, value: u32| {
@@ -123,12 +124,14 @@ fn exif() -> Vec<u8> {
         exif.extend(count.to_le_bytes());
         exif.extend(value.to_le_bytes());
     };
-    exif.extend(2u16.to_le_bytes());
+    exif.extend(4u16.to_le_bytes());
+    entry(&mut exif, 0x0100, 3, 1, 3);
+    entry(&mut exif, 0x0101, 4, 1, 2);
     entry(&mut exif, 0x0112, 3, 1, 6);
-    entry(&mut exif, 0x8769, 4, 1, 38);
+    entry(&mut exif, 0x8769, 4, 1, 62);
     exif.extend(0u32.to_le_bytes());
     exif.extend(3u16.to_le_bytes());
-    entry(&mut exif, 0x9003, 2, 20, 80);
+    entry(&mut exif, 0x9003, 2, 20, 104);
     entry(&mut exif, 0xA002, 3, 1, 3);
     entry(&mut exif, 0xA003, 4, 1, 2);
     exif.extend(0u32.to_le_bytes());
@@ -168,14 +171,16 @@ fn png_rotation_keeps_the_capture_date_with_upright_exif() {
         let field = exif.get_field(tag, exif::In::PRIMARY).unwrap();
         field.value.get_uint(0).unwrap()
     };
-    assert_eq!(
-        (
-            size(exif::Tag::PixelXDimension),
-            size(exif::Tag::PixelYDimension)
-        ),
-        (2, 3),
-        "the EXIF pixel size turns with the pixels"
-    );
+    for (width, height) in [
+        (exif::Tag::ImageWidth, exif::Tag::ImageLength),
+        (exif::Tag::PixelXDimension, exif::Tag::PixelYDimension),
+    ] {
+        assert_eq!(
+            (size(width), size(height)),
+            (2, 3),
+            "the EXIF pixel size turns with the pixels"
+        );
+    }
 }
 
 /// The PNG's chunks after the signature, as (type, data).
@@ -214,9 +219,11 @@ fn png_rotation_rewrites_compressed_xmp_under_any_tiff_prefix() {
     // Both forms, spaced out and under a prefix other than "tiff".
     let xmp = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-<rdf:Description rdf:about="" xmlns:t="http://ns.adobe.com/tiff/1.0/" t:Orientation = "6"/>
+<rdf:Description rdf:about="" xmlns:t="http://ns.adobe.com/tiff/1.0/" t:Orientation = "6"
+ xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:PixelXDimension="3" exif:PixelYDimension="2"/>
 <rdf:Description rdf:about="" xmlns:t="http://ns.adobe.com/tiff/1.0/"
- xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Scanner X"><t:Orientation >6</t:Orientation ></rdf:Description>
+ xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Scanner X"><t:Orientation >6</t:Orientation >
+ <t:ImageWidth>3</t:ImageWidth><t:ImageLength>2</t:ImageLength></rdf:Description>
 </rdf:RDF></x:xmpmeta>
 <?xpacket end="w"?>"#;
     assert_eq!(metadata::read_xmp(xmp).unwrap().1, Some(6));
@@ -242,6 +249,14 @@ fn png_rotation_rewrites_compressed_xmp_under_any_tiff_prefix() {
     assert_eq!(metadata::read_xmp(&xmp).unwrap().1, Some(1));
     assert!(!xmp.contains("Orientation>6") && !xmp.contains("\"6\""));
     assert!(xmp.contains(r#"xmp:CreatorTool="Scanner X""#));
+    // The XMP copies of the pixel size turn too.
+    assert!(
+        xmp.contains(r#"exif:PixelXDimension="2""#) && xmp.contains(r#"exif:PixelYDimension="3""#)
+    );
+    assert!(
+        xmp.contains("<t:ImageWidth>2</t:ImageWidth>")
+            && xmp.contains("<t:ImageLength>3</t:ImageLength>")
+    );
 }
 
 #[test]
