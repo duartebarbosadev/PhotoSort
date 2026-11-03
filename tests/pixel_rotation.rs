@@ -113,8 +113,8 @@ fn tiff_and_bmp_rotate_and_a_changed_file_is_left_alone() {
     assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
-/// EXIF as a scanner might write it: Orientation 6 and a capture date in the
-/// Exif directory.
+/// EXIF as a scanner might write it: Orientation 6, and a capture date and the
+/// 3x2 pixel size (width SHORT, height LONG) in the Exif directory.
 fn exif() -> Vec<u8> {
     let mut exif = b"II*\0\x08\0\0\0".to_vec();
     let entry = |exif: &mut Vec<u8>, tag: u16, kind: u16, count: u32, value: u32| {
@@ -127,8 +127,10 @@ fn exif() -> Vec<u8> {
     entry(&mut exif, 0x0112, 3, 1, 6);
     entry(&mut exif, 0x8769, 4, 1, 38);
     exif.extend(0u32.to_le_bytes());
-    exif.extend(1u16.to_le_bytes());
-    entry(&mut exif, 0x9003, 2, 20, 56);
+    exif.extend(3u16.to_le_bytes());
+    entry(&mut exif, 0x9003, 2, 20, 80);
+    entry(&mut exif, 0xA002, 3, 1, 3);
+    entry(&mut exif, 0xA003, 4, 1, 2);
     exif.extend(0u32.to_le_bytes());
     exif.extend(b"2019:07:14 10:11:12\0");
     exif
@@ -154,6 +156,92 @@ fn png_rotation_keeps_the_capture_date_with_upright_exif() {
     assert_eq!(meta.orientation, 1, "the turn is in the pixels now");
     let rotated = image::open(&path).unwrap().to_rgb8();
     assert_eq!(rotated.as_raw(), image::imageops::rotate90(&image).as_raw());
+    let mut decoder = image::codecs::png::PngDecoder::new(std::io::BufReader::new(
+        std::fs::File::open(&path).unwrap(),
+    ))
+    .unwrap();
+    let raw = image::ImageDecoder::exif_metadata(&mut decoder)
+        .unwrap()
+        .unwrap();
+    let exif = exif::Reader::new().read_raw(raw).unwrap();
+    let size = |tag| {
+        let field = exif.get_field(tag, exif::In::PRIMARY).unwrap();
+        field.value.get_uint(0).unwrap()
+    };
+    assert_eq!(
+        (
+            size(exif::Tag::PixelXDimension),
+            size(exif::Tag::PixelYDimension)
+        ),
+        (2, 3),
+        "the EXIF pixel size turns with the pixels"
+    );
+}
+
+/// The PNG's chunks after the signature, as (type, data).
+fn png_chunks(png: &[u8]) -> Vec<([u8; 4], Vec<u8>)> {
+    let mut chunks = Vec::new();
+    let mut at = 8;
+    while at < png.len() {
+        let length = u32::from_be_bytes(png[at..at + 4].try_into().unwrap()) as usize;
+        let kind = png[at + 4..at + 8].try_into().unwrap();
+        chunks.push((kind, png[at + 8..at + 8 + length].to_vec()));
+        at += 12 + length;
+    }
+    chunks
+}
+
+fn png_from_chunks(chunks: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    for (kind, data) in chunks {
+        png.extend((data.len() as u32).to_be_bytes());
+        let mut crc = !0u32;
+        for byte in kind.iter().chain(data) {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
+            }
+        }
+        png.extend(kind);
+        png.extend(data);
+        png.extend((!crc).to_be_bytes());
+    }
+    png
+}
+
+#[test]
+fn png_rotation_rewrites_compressed_xmp_under_any_tiff_prefix() {
+    // Both forms, spaced out and under a prefix other than "tiff".
+    let xmp = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:t="http://ns.adobe.com/tiff/1.0/" t:Orientation = "6"/>
+<rdf:Description rdf:about="" xmlns:t="http://ns.adobe.com/tiff/1.0/"
+ xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Scanner X"><t:Orientation >6</t:Orientation ></rdf:Description>
+</rdf:RDF></x:xmpmeta>
+<?xpacket end="w"?>"#;
+    assert_eq!(metadata::read_xmp(xmp).unwrap().1, Some(6));
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("scan.png");
+    write_png(&path, None);
+    let mut chunks = png_chunks(&std::fs::read(&path).unwrap());
+    let header = b"XML:com.adobe.xmp\0\x01\0\0\0";
+    let compressed = miniz_oxide::deflate::compress_to_vec_zlib(xmp.as_bytes(), 6);
+    chunks.insert(1, (*b"iTXt", [&header[..], &compressed].concat()));
+    std::fs::write(&path, png_from_chunks(&chunks)).unwrap();
+
+    reencode::rotate(&path, Fingerprint::read(&path).unwrap(), 6).unwrap();
+
+    let chunks = png_chunks(&std::fs::read(&path).unwrap());
+    let (_, data) = chunks
+        .iter()
+        .find(|(kind, data)| kind == b"iTXt" && data.starts_with(b"XML:com.adobe.xmp\0"))
+        .expect("the XMP is kept");
+    assert!(data.starts_with(header), "and stays compressed");
+    let inflated = miniz_oxide::inflate::decompress_to_vec_zlib(&data[header.len()..]).unwrap();
+    let xmp = String::from_utf8(inflated).unwrap();
+    assert_eq!(metadata::read_xmp(&xmp).unwrap().1, Some(1));
+    assert!(!xmp.contains("Orientation>6") && !xmp.contains("\"6\""));
+    assert!(xmp.contains(r#"xmp:CreatorTool="Scanner X""#));
 }
 
 #[test]

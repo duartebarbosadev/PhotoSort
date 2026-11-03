@@ -121,7 +121,8 @@ fn transposed(orientation: u8) -> bool {
 /// chunks whose meaning does not depend on the pixel layout. Chunks tied to the
 /// old sample layout (PLTE, tRNS, sBIT, bKGD...) are not. Legacy "Raw profile"
 /// text can hold an orientation that cannot be reset, so it is dropped rather
-/// than turn the new pixels a second time.
+/// than turn the new pixels a second time. An EXIF or XMP orientation that
+/// cannot be reset refuses the rotation instead.
 fn carry_png_metadata(source: &[u8], encoded: &[u8], orientation: u8) -> Result<Vec<u8>> {
     let source = png_chunks(source).context("Cannot read the PNG's metadata")?;
     let encoded_chunks = png_chunks(encoded).context("Re-encoded PNG is malformed")?;
@@ -138,15 +139,11 @@ fn carry_png_metadata(source: &[u8], encoded: &[u8], orientation: u8) -> Result<
             }
             b"eXIf" => {
                 let mut exif = data.to_vec();
-                upright_exif(&mut exif);
+                upright_exif(&mut exif, transposed(orientation))?;
                 exif
             }
-            b"iTXt" if data.starts_with(b"XML:com.adobe.xmp\0") => {
-                // Keyword, compression flag; compressed XMP cannot be reset.
-                if data.get(18) != Some(&0) {
-                    continue;
-                }
-                upright_xmp(data)
+            b"tEXt" | b"zTXt" | b"iTXt" if data.starts_with(XMP_KEYWORD) => {
+                upright_xmp_chunk(&kind, data)?
             }
             b"tEXt" | b"zTXt" | b"iTXt" if data.starts_with(b"Raw profile type") => continue,
             // Ancillary (lowercase first letter) and safe to copy (lowercase last).
@@ -209,70 +206,141 @@ fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
-/// Set Orientation (0x0112) in IFD0 of an EXIF TIFF block to 1, in place.
-fn upright_exif(exif: &mut [u8]) {
+/// Set Orientation (0x0112) in IFD0 of an EXIF TIFF block to 1, in place. On a
+/// quarter turn PixelXDimension and PixelYDimension in the Exif directory swap.
+fn upright_exif(exif: &mut [u8], transposed: bool) -> Result<()> {
+    // Some writers keep the JPEG APP1 "Exif" header in eXIf.
+    let exif = match exif.strip_prefix(b"Exif\0\0") {
+        Some(_) => &mut exif[6..],
+        None => exif,
+    };
     let little = match exif.get(..2) {
         Some(b"II") => true,
         Some(b"MM") => false,
-        _ => return,
+        _ => bail!("The photo's EXIF cannot be read"),
     };
     let u16_at = |b: &[u8], at: usize| {
-        b.get(at..at + 2).map(|v| {
-            let v = [v[0], v[1]];
-            if little {
-                u16::from_le_bytes(v)
-            } else {
-                u16::from_be_bytes(v)
-            }
+        let v: [u8; 2] = b.get(at..at + 2)?.try_into().ok()?;
+        Some(if little {
+            u16::from_le_bytes(v)
+        } else {
+            u16::from_be_bytes(v)
         })
     };
-    let Some(ifd) = exif.get(4..8).map(|v| {
-        let v = [v[0], v[1], v[2], v[3]];
-        (if little {
+    let u32_at = |b: &[u8], at: usize| {
+        let v: [u8; 4] = b.get(at..at + 4)?.try_into().ok()?;
+        Some(if little {
             u32::from_le_bytes(v)
         } else {
             u32::from_be_bytes(v)
-        }) as usize
-    }) else {
-        return;
+        })
     };
-    let Some(count) = u16_at(exif, ifd) else {
-        return;
+    // Each directory entry is 12 bytes: tag, type, count and a value or offset.
+    let entries = |b: &[u8], ifd: u32| -> Option<Vec<(u16, usize)>> {
+        let ifd = usize::try_from(ifd).ok()?;
+        (0..usize::from(u16_at(b, ifd)?))
+            .map(|entry| {
+                let at = ifd + 2 + entry * 12;
+                b.get(at..at + 12)?;
+                Some((u16_at(b, at)?, at))
+            })
+            .collect()
     };
-    for entry in 0..usize::from(count) {
-        let at = ifd + 2 + entry * 12;
-        // Tag 0x0112, type SHORT, count 1: the value sits in the entry itself.
-        if u16_at(exif, at) == Some(0x0112) && u16_at(exif, at + 2) == Some(3) {
+    let ifd0 = u32_at(exif, 4)
+        .and_then(|ifd| entries(exif, ifd))
+        .context("The photo's EXIF cannot be read")?;
+    for &(tag, at) in &ifd0 {
+        if tag == 0x0112 {
+            // Type SHORT, count 1: the value sits in the entry itself.
+            ensure!(
+                u16_at(exif, at + 2) == Some(3) && u32_at(exif, at + 4) == Some(1),
+                "The photo's EXIF orientation cannot be reset"
+            );
             let one = if little {
                 1u16.to_le_bytes()
             } else {
                 1u16.to_be_bytes()
             };
-            if let Some(value) = exif.get_mut(at + 8..at + 10) {
-                value.copy_from_slice(&one);
-            }
+            exif[at + 8..at + 10].copy_from_slice(&one);
         }
     }
+    if let Some(&(_, at)) = ifd0.iter().find(|(tag, _)| *tag == 0x8769)
+        && transposed
+    {
+        let directory = u32_at(exif, at + 8)
+            .and_then(|ifd| entries(exif, ifd))
+            .context("The photo's Exif directory cannot be read")?;
+        let find = |code| directory.iter().find(|(tag, _)| *tag == code);
+        if let (Some(&(_, x)), Some(&(_, y))) = (find(0xA002), find(0xA003)) {
+            // Type, count and value move together: one may be SHORT, the other LONG.
+            let width: [u8; 10] = exif[x + 2..x + 12].try_into()?;
+            exif.copy_within(y + 2..y + 12, x + 2);
+            exif[y + 2..y + 12].copy_from_slice(&width);
+        }
+    }
+    Ok(())
 }
 
-/// Set `tiff:Orientation` in an XMP packet to 1, as attribute or element.
-fn upright_xmp(xmp: &[u8]) -> Vec<u8> {
-    let mut out = xmp.to_vec();
-    for prefix in [
-        &b"tiff:Orientation=\""[..],
-        b"tiff:Orientation='",
-        b"<tiff:Orientation>",
-    ] {
-        let mut from = 0;
-        while let Some(found) = out[from..].windows(prefix.len()).position(|w| w == prefix) {
-            let value = from + found + prefix.len();
-            if out.get(value).is_some_and(u8::is_ascii_digit) {
-                out[value] = b'1';
-            }
-            from = value;
+const XMP_KEYWORD: &[u8] = b"XML:com.adobe.xmp\0";
+/// Compressed XMP larger than this is refused rather than inflated.
+const XMP_LIMIT: usize = 16 * 1024 * 1024;
+
+/// A PNG text chunk (tEXt, zTXt or iTXt) holding XMP, with its orientation set
+/// upright. Compressed text is inflated, rewritten and compressed again.
+fn upright_xmp_chunk(kind: &[u8; 4], data: &[u8]) -> Result<Vec<u8>> {
+    let body = &data[XMP_KEYWORD.len()..];
+    // The header kept as it is before the text, and whether the text is zlib.
+    let (header, compressed) = match kind {
+        b"tEXt" => (0, false),
+        b"zTXt" => {
+            ensure!(body.first() == Some(&0), "Unknown XMP compression");
+            (1, true)
         }
-    }
-    out
+        _ => {
+            // Compression flag and method, language tag, translated keyword.
+            let compressed = match body.get(..2) {
+                Some([0, _]) => false,
+                Some([1, 0]) => true,
+                _ => bail!("Unknown XMP compression"),
+            };
+            let after_nul = |from: usize| {
+                let at = body.get(from..)?.iter().position(|&b| b == 0)?;
+                Some(from + at + 1)
+            };
+            let header = after_nul(2)
+                .and_then(after_nul)
+                .context("The photo's XMP cannot be read")?;
+            (header, compressed)
+        }
+    };
+    let text = &body[header..];
+    let xmp = if compressed {
+        miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(text, XMP_LIMIT)
+            .map_err(|_| anyhow::anyhow!("The photo's compressed XMP cannot be read"))?
+    } else {
+        text.to_vec()
+    };
+    let xmp = upright_xmp(&xmp)?;
+    let xmp = if compressed {
+        miniz_oxide::deflate::compress_to_vec_zlib(&xmp, 6)
+    } else {
+        xmp
+    };
+    Ok([&data[..XMP_KEYWORD.len() + header], &xmp].concat())
+}
+
+/// An XMP packet with every TIFF-namespace Orientation, attribute or element and
+/// under any prefix, replaced by one `tiff:Orientation` of 1.
+fn upright_xmp(xmp: &[u8]) -> Result<Vec<u8>> {
+    // TIFF stores XMP as bytes, sometimes with a terminating NUL.
+    let end = xmp.iter().rposition(|&b| b != 0).map_or(0, |at| at + 1);
+    let xml = std::str::from_utf8(&xmp[..end]).context("The photo's XMP is not UTF-8")?;
+    let upright = metadata::update_xmp(xml, None, Some(1))?;
+    ensure!(
+        metadata::read_xmp(&upright)?.1 == Some(1),
+        "The photo's XMP orientation cannot be reset"
+    );
+    Ok(upright.into_bytes())
 }
 
 /// Descriptive IFD0 tags carried to the rewritten TIFF. Structure tags are the
@@ -323,7 +391,7 @@ fn encode_tiff(
             };
             if let Some(mut value) = tiff_value(&mut ifd, code)? {
                 if code == 700 {
-                    let patched = upright_xmp(value.as_bytes());
+                    let patched = upright_xmp(value.as_bytes())?;
                     value = ValueBuffer::from_value(&patched.as_slice());
                 }
                 top.push((target, value));
