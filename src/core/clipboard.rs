@@ -74,6 +74,9 @@ fn copy_pipeline(cache: PathBuf, limits: super::cache::Limits) -> Pipeline {
         originals_mib: u32::MAX,
         ..limits
     });
+    // It may run next to a full-size decode in the image worker: a quarter
+    // of the quiet allowance, then the camera's preview for a larger RAW.
+    pipeline.limit_quiet_allowance(super::memory::Machine::current().quiet_allowance() / 4);
     pipeline
 }
 impl Default for Copier {

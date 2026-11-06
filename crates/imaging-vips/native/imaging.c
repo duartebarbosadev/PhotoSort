@@ -12,6 +12,9 @@
  * decompression bomb. Memory, not these, bounds real photos. */
 #define MAX_EDGE (1 << 20)
 #define MAX_PIXELS ((uint64_t)1 << 32)
+/* Previews run unattended (grid, thumbnails) while holding the render lock:
+ * past a gigapixel a hostile header would stream for minutes. */
+#define MAX_PREVIEW_PIXELS ((uint64_t)1 << 30)
 
 typedef int (*Cancel)(void *);
 typedef struct {
@@ -102,6 +105,9 @@ int photosort_vips_render(const char *path, uint32_t edge,
     if (w < 1 || h < 1 || w > MAX_EDGE || h > MAX_EDGE || bands < 1 || bands > 5 || sample == 0 ||
         (uint64_t)w * h > MAX_PIXELS) {
         fail(error, capacity, "This file reports an impossible image size"); goto done;
+    }
+    if (preview && (uint64_t)w * h > MAX_PREVIEW_PIXELS) {
+        fail(error, capacity, "This image is too large to preview"); goto done;
     }
     output->source_sample_bytes = (uint32_t)sample;
     output->source_width = (uint32_t)w;

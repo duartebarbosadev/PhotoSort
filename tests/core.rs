@@ -88,7 +88,7 @@ fn proxy_survives_memory_eviction_without_redecoding_source() {
     assert_eq!(p.stats.disk_hits, 1);
 }
 #[test]
-fn display_previews_are_jpeg_read_back_as_stored_and_old_png_previews_still_load() {
+fn display_previews_are_the_same_jpeg_pixels_whatever_the_cache_holds() {
     let d = TempDir::new().unwrap();
     let m = photo(d.path(), "a.png");
     let cache = TempDir::new().unwrap();
@@ -108,7 +108,15 @@ fn display_previews_are_jpeg_read_back_as_stored_and_old_png_previews_still_load
     let mut reopened = Pipeline::new(1_000_000, cache.path().to_owned());
     assert_eq!(*reopened.load(&m).unwrap().pixels, *fresh.pixels);
     assert_eq!(reopened.stats.decodes, 0);
-    // Previews written as PNG by earlier versions are read, not made again.
+    // Without a disk cache the photo shows (and is analysed) the same way.
+    let mut uncached = Pipeline::new(1_000_000, cache.path().join("unused"));
+    uncached.configure_cache(photosort::core::cache::Limits {
+        disk_mib: 0,
+        ..Default::default()
+    });
+    assert_eq!(*uncached.load(&m).unwrap().pixels, *fresh.pixels);
+    // From earlier versions: PNG thumbnails still open the grid; an opaque
+    // PNG preview is made again, so it shows the same pixels as above.
     for jpg in with("jpg") {
         image::open(&jpg)
             .unwrap()
@@ -117,8 +125,10 @@ fn display_previews_are_jpeg_read_back_as_stored_and_old_png_previews_still_load
         fs::remove_file(jpg).unwrap();
     }
     let mut upgraded = Pipeline::new(1_000_000, cache.path().to_owned());
+    assert!(upgraded.cached_thumbnail(&m, || false).is_some());
+    assert_eq!(upgraded.stats.decodes, 0);
     assert_eq!(*upgraded.load(&m).unwrap().pixels, *fresh.pixels);
-    assert_eq!((upgraded.stats.decodes, upgraded.stats.disk_hits), (0, 1));
+    assert_eq!(upgraded.stats.decodes, 1);
 }
 #[test]
 fn grid_thumbnails_reopen_from_their_own_artifact_without_decoding() {

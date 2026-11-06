@@ -1895,6 +1895,8 @@ impl PhotoSortApp {
                 .iter()
                 .any(|request| request.slot == *slot)
         });
+        self.detail_waiting
+            .retain(|slot, _| self.inspection_wanted.iter().any(|r| r.slot == *slot));
         self.sync_playback(ctx);
         // Views change only in frames like this one, so each frame either
         // saves them or comes back once to do it; an idle window then stops

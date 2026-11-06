@@ -383,3 +383,34 @@ fn a_preview_holding_every_metadata_pixel_is_complete() {
     assert!(!View::preview_is_complete([2048, 1536], [2048, 1536]));
     assert!(!View::preview_is_complete([320, 240], [320, 240]));
 }
+#[test]
+fn open_anyway_raises_what_a_full_size_decode_may_use() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    // BMP decodes at full size in every build (no shrink-on-load region).
+    let path = root.path().join("large.bmp");
+    image::RgbImage::from_pixel(600, 400, image::Rgb([90, 120, 150]))
+        .save(&path)
+        .unwrap();
+    let media = Media {
+        id: MediaId::for_path(&path),
+        fingerprint: Fingerprint::read(&path).unwrap(),
+        path,
+        kind: MediaKind::Photo,
+    };
+    let mut pipeline = Pipeline::new(64 << 20, cache.path().to_owned());
+    // As if this photo needed more than half of a smaller Mac's memory.
+    pipeline.limit_quiet_allowance(1 << 20);
+    let mut wanted = request(&media, Region::full(600, 400));
+    let refused = pipeline
+        .inspect_with_warning(&wanted, &|| false)
+        .unwrap_err();
+    let too_large = refused
+        .downcast_ref::<photosort::core::memory::TooLarge>()
+        .expect("refused for memory, with what it needs");
+    assert!(too_large.needed > 1 << 20);
+    // "Open anyway" sends the same view with the allowance raised.
+    wanted.allow_large = true;
+    let (pixels, _) = pipeline.inspect_with_warning(&wanted, &|| false).unwrap();
+    assert_eq!(pixels.dimensions(), (512, 341));
+}

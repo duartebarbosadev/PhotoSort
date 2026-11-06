@@ -255,7 +255,8 @@ impl ImageWorker {
             subjects,
         } = wiring;
         let subject_root = cache.clone();
-        let pipeline = Pipeline::new(128 * 1024 * 1024, cache);
+        let mut pipeline = Pipeline::new(128 * 1024 * 1024, cache);
+        pipeline.share_writes(cache_control.writes());
         processing.remember_timings(subject_root.join("model-prepare-times.json"));
         let mut models = models::Models::with_processing(processing);
         models.configure_compiled_cache(subject_root.clone(), false);

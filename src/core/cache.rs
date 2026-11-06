@@ -136,6 +136,16 @@ pub struct Control {
     directory: Option<Arc<PathBuf>>,
     state: Arc<Mutex<State>>,
     cancelled: Arc<AtomicU64>,
+    writes: Arc<Writes>,
+}
+/// Disk cache bytes every pipeline of a runtime (the image worker and the
+/// preview builder) wrote in this session, the photos whose previews they
+/// made, and how many of those bytes trims already removed again.
+#[derive(Debug, Default)]
+pub struct Writes {
+    pub written: AtomicU64,
+    pub photos: AtomicU64,
+    pub evicted: AtomicU64,
 }
 impl Control {
     pub(crate) fn with_directory(directory: PathBuf) -> Self {
@@ -143,6 +153,10 @@ impl Control {
             directory: directory.is_absolute().then(|| Arc::new(directory)),
             ..Self::default()
         }
+    }
+    /// What this runtime's pipelines wrote to the disk cache.
+    pub fn writes(&self) -> Arc<Writes> {
+        self.writes.clone()
     }
     /// The same location injected into the image pipeline, without filesystem I/O.
     pub fn directory(&self) -> Option<&Path> {

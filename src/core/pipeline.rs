@@ -84,12 +84,9 @@ pub struct Stats {
     /// kept anyway, alone and outside the budget, so zooming it stays fast,
     /// but a second one (comparing, going back) replaces it.
     pub detail_overflow: u64,
-    /// Disk cache bytes this pipeline wrote, the photos they belong to, and
-    /// how many of those bytes a trim already removed again: the cache is
-    /// smaller than what this session works with.
+    /// Disk cache bytes this pipeline wrote. The runtime-wide count, with
+    /// photos and trimmed bytes, is `cache::Writes`.
     pub disk_written: u64,
-    pub disk_photos: u64,
-    pub disk_evicted: u64,
 }
 // Naive EXIF and movie-header dates depend on the system timezone. A cache
 // hit must still represent that timezone at the photo's captured instant.
@@ -131,6 +128,8 @@ pub struct Pipeline {
     /// The one entry of `details` over the detail budget, not counted in it.
     oversized: Option<String>,
     pressure: super::memory::Pressure,
+    /// See `limit_quiet_allowance`.
+    quiet_cap: Option<u64>,
     budget: usize,
     detail_budget: usize,
     disk_budget: u64,
@@ -139,6 +138,8 @@ pub struct Pipeline {
     disk: PathBuf,
     written_since_prune: u64,
     written_photos: std::collections::HashSet<PathBuf>,
+    /// Shared with the other pipelines of a runtime; see `share_writes`.
+    writes: Option<Arc<super::cache::Writes>>,
     started: std::time::SystemTime,
     raw_look: super::raw_look::RawLook,
     /// Enhanced-look levels per RAW source, so 1:1 crops match the preview.
@@ -155,6 +156,7 @@ impl Pipeline {
             details: HashMap::new(),
             oversized: None,
             pressure: Default::default(),
+            quiet_cap: None,
             budget,
             detail_budget: budget.saturating_mul(2),
             disk_budget: 1024 * 1024 * 1024,
@@ -163,6 +165,7 @@ impl Pipeline {
             disk,
             written_since_prune: 0,
             written_photos: Default::default(),
+            writes: None,
             started: std::time::SystemTime::now(),
             raw_look: Default::default(),
             raw_levels: HashMap::new(),
@@ -355,7 +358,7 @@ impl Pipeline {
             return None;
         }
         let saved = self.render_info(&source_key)?;
-        let image = read_cached_image(&self.disk, &thumb_key(&display_key))?;
+        let image = read_cached_image(&self.disk, &thumb_key(&display_key), |_| true)?;
         let mut meta = self.metadata_for_key(media, &source_key, &cancelled).ok()?;
         if media.kind != MediaKind::Video {
             (meta.width, meta.height) = (saved.width, saved.height);
@@ -371,7 +374,7 @@ impl Pipeline {
     }
     /// Stores the grid thumbnail and returns it as a later session reads it
     /// back, so a fresh tile and a reopened one are the same pixels.
-    fn save_thumbnail(&self, source_key: &str, thumbnail: &RgbaImage) -> Option<RgbaImage> {
+    fn save_thumbnail(&mut self, source_key: &str, thumbnail: &RgbaImage) -> Option<RgbaImage> {
         if self.disk_budget == 0 || std::fs::create_dir_all(&self.disk).is_err() {
             return None;
         }
@@ -389,9 +392,10 @@ impl Pipeline {
         } else {
             image
         };
-        publish_cached(&image, &self.disk, &key, true)
-            .and_then(|(_, read_back)| read_back)
-            .map(|image| image.to_rgba8())
+        let (bytes, format, read_back) = encode_cached(&image, true)?;
+        write_cached(&bytes, format, &self.disk, &key)?;
+        self.note_cache_write(None, bytes.len() as u64, &|| false);
+        read_back.map(|image| image.to_rgba8())
     }
     /// Counts new cache bytes and trims the folder now and then. A trim lists
     /// and sorts the whole folder, so it runs once a share of the budget was
@@ -408,16 +412,28 @@ impl Pipeline {
         const MIN_TRIM: u64 = 32 * 1024 * 1024;
         self.written_since_prune += bytes;
         self.stats.disk_written += bytes;
+        use std::sync::atomic::Ordering::Relaxed;
+        if let Some(writes) = &self.writes {
+            writes.written.fetch_add(bytes, Relaxed);
+        }
         if let Some(media) = preview
             && !self.written_photos.contains(media)
         {
             self.written_photos.insert(media.to_owned());
-            self.stats.disk_photos += 1;
+            if let Some(writes) = &self.writes {
+                writes.photos.fetch_add(1, Relaxed);
+            }
         }
         let every = (self.disk_budget / 16).max(MIN_TRIM).min(self.disk_budget);
         if self.written_since_prune >= every {
             match super::cache::trim(&self.disk, self.disk_budget, self.started, cancelled) {
-                Ok(usage) => self.stats.disk_evicted += usage.evicted_recent_bytes,
+                Ok(usage) => {
+                    if let Some(writes) = &self.writes {
+                        writes
+                            .evicted
+                            .fetch_add(usage.evicted_recent_bytes, Relaxed);
+                    }
+                }
                 Err(error) => tracing::debug!(%error, "cache trim skipped"),
             }
             self.written_since_prune = 0;
@@ -442,12 +458,25 @@ impl Pipeline {
     /// Makes the display preview and grid thumbnail on disk unless both are
     /// there already, and keeps nothing in memory. True when it made them.
     /// Videos are left to the image worker, which owns playback.
+    /// Adds this pipeline's disk cache writes to the runtime's shared count.
+    pub fn share_writes(&mut self, writes: Arc<super::cache::Writes>) {
+        self.writes = Some(writes);
+    }
+    /// Caps what a decode may use without the user asking. The image worker
+    /// has the whole quiet allowance; background and copy pipelines run next
+    /// to it, so they take a small share and fall back to smaller sources.
+    pub fn limit_quiet_allowance(&mut self, bytes: u64) {
+        self.quiet_cap = Some(bytes);
+        self.colors.set_allowance(self.quiet_cap);
+    }
     pub fn build_preview(
         &mut self,
         media: &Media,
         cancelled: impl Fn() -> bool + Sync,
     ) -> Result<bool> {
-        if self.disk_budget == 0 || media.kind == MediaKind::Video {
+        // libvips formats shrink while loading, so building them ahead gains
+        // little and would hold libvips' one render lock against the screen.
+        if self.disk_budget == 0 || media.kind == MediaKind::Video || native_raster(media) {
             return Ok(false);
         }
         let source_key = Self::key(media)?;
@@ -535,8 +564,12 @@ impl Pipeline {
         let saved = self.render_info(&key);
         let warning;
         let decoded = if let Some(saved) = saved
-            && let Some(proxy) = read_cached_image(&self.disk, &key)
-        {
+            && let Some(proxy) = read_cached_image(&self.disk, &key, |image| {
+                // An opaque display preview is a JPEG now; an opaque PNG is an
+                // older lossless one, which would show (and give the rotation
+                // model) other pixels than a fresh render.
+                analysis || image.color().has_alpha()
+            }) {
             self.stats.disk_hits += 1;
             // Geometry and warnings are part of the same rendered artifact.
             // Never publish cached pixels without the status that produced them.
@@ -590,11 +623,17 @@ impl Pipeline {
                 !cancelled() && Self::key(media)? == source_key,
                 "Photo changed or preparation cancelled"
             );
-            // Display previews may be JPEG; analysis input stays lossless.
-            let written = (self.disk_budget > 0 && std::fs::create_dir_all(&self.disk).is_ok())
-                .then(|| publish_cached(&proxy, &self.disk, &key, !analysis))
-                .flatten();
-            if let Some((bytes, read_back)) = written {
+            // Display previews are JPEG, encoded even when nothing is written,
+            // so what is shown (and what the rotation model reads) never
+            // depends on the cache. Analysis input stays lossless.
+            let Some((bytes, format, read_back)) = encode_cached(&proxy, !analysis) else {
+                anyhow::bail!("Cannot encode the preview of {}", media.name());
+            };
+            let proxy = read_back.unwrap_or(proxy);
+            if self.disk_budget > 0
+                && std::fs::create_dir_all(&self.disk).is_ok()
+                && write_cached(&bytes, format, &self.disk, &key).is_some()
+            {
                 let _ = metadata::atomic_write(
                     &info,
                     &serde_json::to_vec(&CachedRender {
@@ -603,13 +642,12 @@ impl Pipeline {
                         warning: warning.clone(),
                     })?,
                 );
-                self.note_cache_write(Some(&media.path), bytes, cancelled);
-                // The pixels a later cache hit reads, so the rotation model
-                // sees the same input on the first run and every run after.
-                read_back.unwrap_or(proxy)
-            } else {
-                proxy
+                // A photo counts once, at its display preview; analysis
+                // images add their bytes to it.
+                let photo = (!analysis).then_some(media.path.as_path());
+                self.note_cache_write(photo, bytes.len() as u64, cancelled);
             }
+            proxy
         };
         anyhow::ensure!(
             !cancelled() && Self::key(media)? == source_key,
@@ -1013,13 +1051,14 @@ impl Pipeline {
     ) -> Result<(Arc<RgbaImage>, Option<String>)> {
         let machine = super::memory::Machine::current();
         // Under memory pressure a large photo asks first instead.
+        let quiet = self.pressure.share(machine.quiet_allowance() as usize) as u64;
         self.colors.set_allowance(Some(if request.allow_large {
             machine.forced_allowance()
         } else {
-            self.pressure.share(machine.quiet_allowance() as usize) as u64
+            self.quiet_cap.map_or(quiet, |cap| cap.min(quiet))
         }));
         let result = self.inspect_allowed(request, cancelled);
-        self.colors.set_allowance(None);
+        self.colors.set_allowance(self.quiet_cap);
         result
     }
     fn inspect_allowed(
@@ -1115,24 +1154,21 @@ impl Pipeline {
             );
             return Ok(Arc::new(image));
         }
+        let edge = edge.clamp(1, 4096);
+        // The camera's own JPEG is enough when it covers the copy size, and
+        // needs no sensor decode.
+        if media.kind == MediaKind::Raw
+            && let Ok(preview) = self.raw_preview(media, &key, &mut meta, cancelled)
+            && preview.image.width().max(preview.image.height()) >= edge
+        {
+            return Ok(Arc::new(self.raw_copy(media, &preview, edge)));
+        }
         let prepared = match self.canonical(media, &key, &mut meta, true, cancelled) {
             // Too large to decode at full size here: the camera's own
             // preview is used instead, so copying still works.
             Err(error) if error.is::<super::memory::TooLarge>() && media.kind == MediaKind::Raw => {
                 let preview = self.raw_preview(media, &key, &mut meta, cancelled)?;
-                let edge = edge.clamp(1, 4096);
-                let mut pixels = if preview.image.width() > edge || preview.image.height() > edge {
-                    preview
-                        .image
-                        .resize(edge, edge, image::imageops::FilterType::Triangle)
-                        .into_rgba8()
-                } else {
-                    preview.image.to_rgba8()
-                };
-                if self.enhanced(media) {
-                    super::raw_look::Levels::measure(&pixels).apply(&mut pixels);
-                }
-                return Ok(Arc::new(pixels));
+                return Ok(Arc::new(self.raw_copy(media, &preview, edge)));
             }
             other => other?,
         };
@@ -1148,6 +1184,21 @@ impl Pipeline {
         };
         self.inspect_with_warning(&request, cancelled)
             .map(|(pixels, _)| pixels)
+    }
+    /// A RAW's preview at copy size, in the display look.
+    fn raw_copy(&self, media: &Media, preview: &Prepared, edge: u32) -> RgbaImage {
+        let mut pixels = if preview.image.width() > edge || preview.image.height() > edge {
+            preview
+                .image
+                .resize(edge, edge, image::imageops::FilterType::Triangle)
+                .into_rgba8()
+        } else {
+            preview.image.to_rgba8()
+        };
+        if self.enhanced(media) {
+            super::raw_look::Levels::measure(&pixels).apply(&mut pixels);
+        }
+        pixels
     }
     /// The whole photo no larger than `edge`, from loaders that shrink while
     /// decoding, so a copy never holds the full original. None for formats
@@ -1285,37 +1336,39 @@ fn native_pixels(
 /// Display previews and grid thumbnails are JPEG at this quality: about a
 /// fifth of a PNG, so the same disk limit keeps several times more photos.
 const PREVIEW_QUALITY: u8 = 92;
-/// A cache image, JPEG or the PNG older versions wrote, marked as used.
-fn read_cached_image(disk: &Path, key: &str) -> Option<DynamicImage> {
+/// A cache image, marked as used: a JPEG, or a PNG that `accept_png` takes.
+fn read_cached_image(
+    disk: &Path,
+    key: &str,
+    accept_png: impl Fn(&DynamicImage) -> bool,
+) -> Option<DynamicImage> {
     ["jpg", "png"].iter().find_map(|ext| {
         let path = disk.join(format!("{key}.{ext}"));
-        let image = image::open(&path).ok()?;
+        let image = image::open(&path)
+            .ok()
+            .filter(|image| *ext == "jpg" || accept_png(image))?;
         super::cache::touch(&path);
         Some(image)
     })
 }
-/// Writes a cache image through its own temporary file, so two writers of the
-/// same photo (the clipboard has its own pipeline) never publish a torn file
-/// and a failed write leaves nothing behind. With `lossy`, an opaque 8-bit
-/// image is a JPEG and comes back as a later read decodes it; anything else
-/// (analysis input, alpha, 16-bit) stays a lossless PNG. Returns the bytes
-/// written.
-fn publish_cached(
+/// With `lossy`, an opaque 8-bit image becomes a JPEG and comes back as a
+/// later read decodes it; anything else (analysis input, alpha, 16-bit) is a
+/// lossless PNG and comes back as None (the pixels are unchanged).
+fn encode_cached(
     image: &DynamicImage,
-    disk: &Path,
-    key: &str,
     lossy: bool,
-) -> Option<(u64, Option<DynamicImage>)> {
-    let jpeg = lossy && matches!(image, DynamicImage::ImageRgb8(_));
+) -> Option<(Vec<u8>, image::ImageFormat, Option<DynamicImage>)> {
     let mut bytes = Vec::new();
-    let format = if jpeg {
+    if lossy && matches!(image, DynamicImage::ImageRgb8(_)) {
         image
             .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
                 &mut bytes,
                 PREVIEW_QUALITY,
             ))
             .ok()?;
-        image::ImageFormat::Jpeg
+        let read_back =
+            image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg).ok()?;
+        Some((bytes, image::ImageFormat::Jpeg, Some(read_back)))
     } else {
         image
             .write_to(
@@ -1323,22 +1376,26 @@ fn publish_cached(
                 image::ImageFormat::Png,
             )
             .ok()?;
-        image::ImageFormat::Png
-    };
-    let read_back = if jpeg {
-        Some(image::load_from_memory_with_format(&bytes, format).ok()?)
+        Some((bytes, image::ImageFormat::Png, None))
+    }
+}
+/// Writes an encoded cache image through its own temporary file, so two
+/// writers of the same photo (the clipboard has its own pipeline) never
+/// publish a torn file and a failed write leaves nothing behind.
+fn write_cached(bytes: &[u8], format: image::ImageFormat, disk: &Path, key: &str) -> Option<()> {
+    let ext = if format == image::ImageFormat::Jpeg {
+        "jpg"
     } else {
-        None
+        "png"
     };
-    let ext = if jpeg { "jpg" } else { "png" };
     let mut temp = tempfile::Builder::new()
         .prefix(&format!("{key}."))
         .suffix(&format!(".tmp.{ext}"))
         .tempfile_in(disk)
         .ok()?;
-    std::io::Write::write_all(&mut temp, &bytes).ok()?;
+    std::io::Write::write_all(&mut temp, bytes).ok()?;
     super::replace::persist(temp, &disk.join(format!("{key}.{ext}"))).ok()?;
-    Some((bytes.len() as u64, read_back))
+    Some(())
 }
 fn compact_opaque_proxy(
     image: DynamicImage,
@@ -1493,6 +1550,9 @@ fn check_raw_source(width: u32, height: u32) -> Result<()> {
 /// raw.c: a sensor decode would need more than its allowance.
 #[cfg(any(feature = "raw", test))]
 const RAW_NEEDS_MEMORY: i32 = -200001;
+/// raw.c: LibRaw could not size the result safely; never overridden.
+#[cfg(any(feature = "raw", test))]
+const RAW_IMPOSSIBLE_SIZE: i32 = -200002;
 /// LibRaw: the file or its mosaic is larger than LibRaw accepts.
 #[cfg(any(feature = "raw", test))]
 const LIBRAW_TOO_BIG: i32 = -100012;
@@ -1505,6 +1565,9 @@ fn raw_failure(error: i32, needed: u64, width: u32, height: u32) -> anyhow::Erro
             height,
         }
         .into(),
+        RAW_IMPOSSIBLE_SIZE => {
+            anyhow::anyhow!("This file reports an impossible size ({width} x {height})")
+        }
         LIBRAW_TOO_BIG => anyhow::anyhow!(
             "LibRaw cannot read this RAW: the file is over 2 GB or its sensor data is too large"
         ),

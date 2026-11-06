@@ -9,8 +9,11 @@ static int source_geometry(libraw_data_t *raw, unsigned int *width, unsigned int
     }
     return error;
 }
+#include <limits.h>
 /* Returned with *needed when a sensor decode would take more than its allowance. */
 #define PHOTOSORT_NEEDS_MEMORY (-200001)
+/* Returned when LibRaw could not size the result safely, whatever the memory. */
+#define PHOTOSORT_IMPOSSIBLE_SIZE (-200002)
 /* Peak bytes per sensor pixel: the 16-bit mosaic, LibRaw's four 16-bit
    channels, the 8-bit RGB result and the caller's copy and rotation of it.
    A half-size decode keeps the mosaic but only a quarter of the rest. */
@@ -53,10 +56,11 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe,
         if (*error == LIBRAW_CANCELLED_BY_CALLBACK) { libraw_close(raw); return 0; }
         *error = 0; /* Missing/non-JPEG thumbnails use neutral half-size decoding. */
     }
-    if (preview) {
-        /* Fallback needs both full-source geometry and a reduced sensor decode.
-           LibRaw's info-only call advances processing state, so use a short-lived
-           header-only handle here. No image/model work is repeated. */
+    {
+        /* The full-size output geometry: a preview fallback reports it, and
+           every sensor decode is bounded by it below. LibRaw's info-only call
+           advances processing state, so use a short-lived header-only handle
+           here. No image/model work is repeated. */
         libraw_data_t *geometry = libraw_init(0);
         if (geometry) {
             libraw_set_progress_handler(geometry, progress, context);
@@ -69,11 +73,26 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe,
         }
     }
     const int geometry_known = *source_width && *source_height;
+    const unsigned long long full_output =
+        (unsigned long long)*source_width * *source_height * 3;
     /* Only a sensor decode holds the whole mosaic, so only it is bounded by
        memory; an embedded JPEG above is returned for any sensor size. */
     const unsigned long long sensor =
         (unsigned long long)raw->sizes.raw_width * raw->sizes.raw_height;
     const int half = preview && geometry_known;
+    /* LibRaw sizes its 8-bit RGB result and its row offsets in 32-bit ints,
+       so neither the sensor nor the full-size result (after pixel aspect
+       stretching or Fuji's rotation) may pass INT_MAX bytes as RGB, whatever
+       memory allows. A 400 MP pixel-shift file is about 1.2 GB; only a
+       crafted header comes near this. */
+    if (sensor * 3 > INT_MAX || full_output > INT_MAX) {
+        *error = PHOTOSORT_IMPOSSIBLE_SIZE;
+        if (!geometry_known) {
+            *source_width = raw->sizes.raw_width;
+            *source_height = raw->sizes.raw_height;
+        }
+        libraw_close(raw); return 0;
+    }
     *needed = sensor * (half ? HALF_BYTES_PER_PIXEL : FULL_BYTES_PER_PIXEL);
     if (!sensor || *needed > allowance) {
         *error = sensor ? PHOTOSORT_NEEDS_MEMORY : LIBRAW_UNSUFFICIENT_MEMORY;

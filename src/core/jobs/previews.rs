@@ -5,7 +5,11 @@
 //! only thing shared, and its writes are atomic. Interactive requests still go
 //! to the image worker, which then reads what was built here.
 use crate::core::{
-    cache::Limits, memory::Pressure, model::Media, pipeline::Pipeline, raw_look::RawLook,
+    cache::{Limits, Writes},
+    memory::Pressure,
+    model::Media,
+    pipeline::Pipeline,
+    raw_look::RawLook,
 };
 use std::{
     path::PathBuf,
@@ -22,7 +26,11 @@ use std::{
 #[derive(Default)]
 struct Queue {
     media: Arc<Vec<Media>>,
+    /// Indices of `media` in build order: outward from the photo on screen.
+    order: Vec<usize>,
     next: usize,
+    /// Photos being built right now.
+    busy: usize,
     limits: Limits,
     look: RawLook,
     /// Disk bytes all threads wrote for this folder.
@@ -35,6 +43,8 @@ struct Shared {
     generation: AtomicU64,
     stop: AtomicBool,
     built: AtomicU64,
+    /// Signalled when the queue runs out and no photo is being built.
+    idle: Condvar,
 }
 pub struct Builder {
     shared: Arc<Shared>,
@@ -49,24 +59,42 @@ pub(super) fn thread_count() -> usize {
         (crate::core::processing::available() / 2).clamp(1, 4)
     }
 }
+/// `0, 1, ..` reordered to start at `start` and alternate outward from it.
+fn outward(len: usize, start: usize) -> Vec<usize> {
+    let start = start.min(len.saturating_sub(1));
+    let mut order = Vec::with_capacity(len);
+    order.extend((start < len).then_some(start));
+    for step in 1..len {
+        order.extend(start.checked_add(step).filter(|&i| i < len));
+        order.extend(start.checked_sub(step));
+    }
+    order
+}
 impl Builder {
-    pub fn new(cache: PathBuf, threads: usize) -> Self {
+    pub fn new(cache: PathBuf, threads: usize, writes: Arc<Writes>) -> Self {
         let shared = Arc::new(Shared::default());
+        // Several run next to the image worker: each takes a small share of
+        // the quiet decode allowance, enough for a camera preview or a
+        // half-size RAW, never a full-size decode.
+        let quiet = crate::core::memory::Machine::current().quiet_allowance();
+        let cap = (quiet / (threads as u64 + 2)).min(1 << 30);
         let threads = (0..threads)
             .filter_map(|n| {
                 let shared = shared.clone();
                 let cache = cache.clone();
+                let writes = writes.clone();
                 thread::Builder::new()
                     .name(format!("preview-builder-{n}"))
-                    .spawn(move || run(&shared, cache))
+                    .spawn(move || run(&shared, cache, cap, writes))
                     .ok()
             })
             .collect();
         Self { shared, threads }
     }
-    /// Builds what is missing for `media`, in order. The same folder again
-    /// (same photos) keeps its progress; anything else starts over.
-    pub fn build(&self, media: Arc<Vec<Media>>, limits: Limits, look: RawLook) {
+    /// Builds what is missing for `media`, outward from `start` (the photo on
+    /// screen). The same folder again (same photos) keeps its progress;
+    /// anything else starts over.
+    pub fn build(&self, media: Arc<Vec<Media>>, start: usize, limits: Limits, look: RawLook) {
         let mut queue = self.shared.queue.lock().unwrap();
         let same = queue.media.len() == media.len()
             && queue
@@ -80,9 +108,12 @@ impl Builder {
             return;
         }
         self.shared.generation.fetch_add(1, Ordering::AcqRel);
+        let busy = queue.busy;
         *queue = Queue {
+            order: outward(media.len(), start),
             media,
             next: 0,
+            busy,
             limits,
             look,
             written: 0,
@@ -91,7 +122,18 @@ impl Builder {
     }
     /// Stops building for the current folder.
     pub fn clear(&self) {
-        self.build(Arc::default(), Limits::default(), RawLook::default());
+        self.build(Arc::default(), 0, Limits::default(), RawLook::default());
+    }
+    /// Waits until every photo of the current folder was looked at and no
+    /// thread is building one; false if `timeout` passed first.
+    pub fn wait_idle(&self, timeout: Duration) -> bool {
+        let queue = self.shared.queue.lock().unwrap();
+        let (_queue, result) = self
+            .shared
+            .idle
+            .wait_timeout_while(queue, timeout, |q| q.busy > 0 || q.next < q.order.len())
+            .unwrap();
+        !result.timed_out()
     }
     /// Photos built since the app started.
     pub fn built(&self) -> u64 {
@@ -120,9 +162,10 @@ fn next(shared: &Shared) -> Option<(u64, Media, Limits, RawLook)> {
         // Stop well before the limit: building more would only push out
         // previews made a moment ago.
         let room = u64::from(queue.limits.disk_mib) * crate::core::cache::MIB / 4 * 3;
-        if queue.next < queue.media.len() && queue.written < room {
-            let media = queue.media[queue.next].clone();
+        if queue.next < queue.order.len() && queue.written < room {
+            let media = queue.media[queue.order[queue.next]].clone();
             queue.next += 1;
+            queue.busy += 1;
             return Some((
                 shared.generation.load(Ordering::Acquire),
                 media,
@@ -130,11 +173,20 @@ fn next(shared: &Shared) -> Option<(u64, Media, Limits, RawLook)> {
                 queue.look,
             ));
         }
+        // Out of room: the rest counts as looked at.
+        if queue.next < queue.order.len() {
+            queue.next = queue.order.len();
+        }
+        if queue.busy == 0 {
+            shared.idle.notify_all();
+        }
         queue = shared.work.wait(queue).unwrap();
     }
 }
-fn run(shared: &Shared, cache: PathBuf) {
+fn run(shared: &Shared, cache: PathBuf, cap: u64, writes: Arc<Writes>) {
     let mut pipeline = Pipeline::new(0, cache);
+    pipeline.share_writes(writes);
+    pipeline.limit_quiet_allowance(cap);
     while let Some((generation, media, limits, look)) = next(shared) {
         // The system is short of memory: wait instead of adding to it.
         while Pressure::current() > Pressure::Normal
@@ -148,6 +200,7 @@ fn run(shared: &Shared, cache: PathBuf) {
                 || shared.generation.load(Ordering::Acquire) != generation
         };
         if stale() {
+            done(shared);
             continue;
         }
         pipeline.configure_cache(limits);
@@ -162,10 +215,21 @@ fn run(shared: &Shared, cache: PathBuf) {
             Err(error) => tracing::debug!(path = ?media.path, %error, "preview not built"),
         }
         let written = pipeline.disk_written() - before;
-        let mut queue = shared.queue.lock().unwrap();
-        if shared.generation.load(Ordering::Acquire) == generation {
-            queue.written += written;
+        {
+            let mut queue = shared.queue.lock().unwrap();
+            if shared.generation.load(Ordering::Acquire) == generation {
+                queue.written += written;
+            }
         }
+        done(shared);
+    }
+}
+/// One photo finished (built, skipped or dropped).
+fn done(shared: &Shared) {
+    let mut queue = shared.queue.lock().unwrap();
+    queue.busy = queue.busy.saturating_sub(1);
+    if queue.busy == 0 && queue.next >= queue.order.len() {
+        shared.idle.notify_all();
     }
 }
 #[cfg(test)]
@@ -173,41 +237,48 @@ mod tests {
     use super::*;
     use crate::core::model::{Fingerprint, MediaId, MediaKind};
     #[test]
-    fn a_folder_gets_its_previews_built_in_the_background_once() {
+    fn the_builder_fills_the_cache_next_to_the_image_worker() {
+        assert_eq!(outward(5, 2), [2, 3, 1, 4, 0]);
+        assert_eq!(outward(3, 9), [2, 1, 0]);
         let photos = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
-        let media: Vec<Media> = (0..6)
-            .map(|n| {
-                let path = photos.path().join(format!("{n}.png"));
-                image::RgbImage::from_fn(300, 200, |x, y| image::Rgb([x as u8, y as u8, n]))
-                    .save(&path)
-                    .unwrap();
-                Media {
-                    id: MediaId::for_path(&path),
-                    fingerprint: Fingerprint::read(&path).unwrap(),
-                    path,
-                    kind: MediaKind::Photo,
-                }
-            })
-            .collect();
-        let media = Arc::new(media);
-        let mut builder = Builder::new(cache.path().to_owned(), 3);
-        builder.build(media.clone(), Limits::default(), RawLook::Neutral);
-        let deadline = std::time::Instant::now() + crate::test_support::worker_patience();
-        while builder.built() < 6 && std::time::Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10));
+        // BMP decodes outside libvips in every build, so it is built here.
+        let media: Arc<Vec<Media>> = Arc::new(
+            (0..6)
+                .map(|n| {
+                    let path = photos.path().join(format!("{n}.bmp"));
+                    image::RgbImage::from_fn(300, 200, |x, y| image::Rgb([x as u8, y as u8, n]))
+                        .save(&path)
+                        .unwrap();
+                    Media {
+                        id: MediaId::for_path(&path),
+                        fingerprint: Fingerprint::read(&path).unwrap(),
+                        path,
+                        kind: MediaKind::Photo,
+                    }
+                })
+                .collect(),
+        );
+        let patience = crate::test_support::worker_patience();
+        let mut builder = Builder::new(cache.path().to_owned(), 3, Arc::default());
+        builder.build(media.clone(), 3, Limits::default(), RawLook::Neutral);
+        // The image worker shows the same photos while the builder runs.
+        let mut worker = Pipeline::new(64 << 20, cache.path().to_owned());
+        let shown: Vec<_> = media.iter().map(|m| worker.load(m).unwrap()).collect();
+        assert!(builder.wait_idle(patience));
+        let built = builder.built();
+        // Between them every photo was made; both may race for the same one.
+        assert!(built + worker.stats.decodes >= 6);
+        // A new session finds every one on disk, as the first one showed it.
+        let mut reopened = Pipeline::new(64 << 20, cache.path().to_owned());
+        for (photo, asset) in media.iter().zip(&shown) {
+            assert_eq!(*reopened.load(photo).unwrap().pixels, *asset.pixels);
         }
-        assert_eq!(builder.built(), 6);
-        // The image worker's pipeline now finds every preview on disk.
-        let mut pipeline = Pipeline::new(64 << 20, cache.path().to_owned());
-        for photo in media.iter() {
-            pipeline.load(photo).unwrap();
-        }
-        assert_eq!((pipeline.stats.decodes, pipeline.stats.disk_hits), (0, 6));
+        assert_eq!((reopened.stats.decodes, reopened.stats.disk_hits), (0, 6));
         // The same folder again builds nothing more.
-        builder.build(media, Limits::default(), RawLook::Neutral);
-        thread::sleep(Duration::from_millis(50));
-        assert_eq!(builder.built(), 6);
+        builder.build(media, 0, Limits::default(), RawLook::Neutral);
+        assert!(builder.wait_idle(patience));
+        assert_eq!(builder.built(), built);
         builder.shutdown();
     }
 }

@@ -310,9 +310,8 @@ fn native_raw(
     }
 }
 
-#[test]
-fn a_sensor_past_100_megapixels_previews_from_its_jpeg_and_decodes_when_memory_allows() {
-    // The sample's sensor directory claims 12000x9000 (108 MP), like a GFX100.
+/// The public ARW sample with its sensor directory claiming `width` x `height`.
+fn patched_arw(width: u16, height: u16) -> (tempfile::TempDir, PathBuf) {
     let mut bytes = std::fs::read(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/samples/arw_sample.ARW"),
     )
@@ -328,14 +327,20 @@ fn a_sensor_past_100_megapixels_previews_from_its_jpeg_and_decodes_when_memory_a
     for n in 0..usize::from(u16_at(&bytes, sensor)) {
         let at = sensor + 2 + n * 12;
         match u16_at(&bytes, at) {
-            0x100 => bytes[at + 8..at + 10].copy_from_slice(&12000u16.to_le_bytes()),
-            0x101 => bytes[at + 8..at + 10].copy_from_slice(&9000u16.to_le_bytes()),
+            0x100 => bytes[at + 8..at + 10].copy_from_slice(&width.to_le_bytes()),
+            0x101 => bytes[at + 8..at + 10].copy_from_slice(&height.to_le_bytes()),
             _ => {}
         }
     }
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("large.ARW");
     std::fs::write(&path, bytes).unwrap();
+    (temp, path)
+}
+#[test]
+fn a_sensor_past_100_megapixels_previews_from_its_jpeg_and_decodes_when_memory_allows() {
+    // The sample's sensor directory claims 12000x9000 (108 MP), like a GFX100.
+    let (_temp, path) = patched_arw(12000, 9000);
 
     let (kind, embedded, (width, height), error, _) = native_raw(&path, 1, 0);
     assert_eq!(
@@ -358,4 +363,14 @@ fn a_sensor_past_100_megapixels_previews_from_its_jpeg_and_decodes_when_memory_a
     // patched file's short sensor data can stop it now.
     let (_, _, _, error, _) = native_raw(&path, 0, 4 * gib);
     assert_ne!(error, -200_001);
+}
+#[test]
+fn a_sensor_too_large_for_libraw_to_size_is_refused_before_any_decode() {
+    // 40000x40000 is 1.6 GP: LibRaw's 32-bit output sizing would overflow.
+    let (_temp, path) = patched_arw(40000, 40000);
+    let (kind, _, _, error, needed) = native_raw(&path, 0, u64::MAX);
+    assert_eq!((kind, error, needed), (None, -200_002, 0));
+    // The camera's own preview still shows.
+    let (kind, embedded, _, error, _) = native_raw(&path, 1, 0);
+    assert_eq!((kind, embedded, error), (Some(1), 1, 0));
 }

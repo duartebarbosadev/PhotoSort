@@ -477,7 +477,11 @@ impl Runtime {
         let processing = super::processing::Control::default();
         let raw_look = super::raw_look::Control::default();
         let inspection = Arc::new(Mutex::new(super::inspection::Queue::default()));
-        let previews = previews::Builder::new(cache.clone(), previews::thread_count());
+        let previews = previews::Builder::new(
+            cache.clone(),
+            previews::thread_count(),
+            cache_control.writes(),
+        );
         let image_thread = images::spawn(images::Wiring {
             publisher,
             cache,

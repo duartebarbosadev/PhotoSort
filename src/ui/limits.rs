@@ -33,6 +33,8 @@ pub(super) struct State {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Notice {
     pub prompt: LimitPrompt,
+    /// The folder it was about (the runtime epoch); another folder drops it.
+    pub epoch: u64,
     pub title: String,
     pub body: String,
     /// The setting it offers, in MiB.
@@ -72,6 +74,7 @@ pub(super) fn detail_notice(bytes: u64, limits: Limits, max_mib: u32) -> Option<
         ),
         increase_to,
         quiet: false,
+        epoch: 0,
     })
 }
 /// The disk cache prompt once a trim removed previews of this session.
@@ -96,6 +99,7 @@ pub(super) fn disk_notice(needed: u64, limits: Limits, free: Option<u64>) -> Opt
         ),
         increase_to,
         quiet: false,
+        epoch: 0,
     })
 }
 
@@ -113,8 +117,14 @@ impl PhotoSortApp {
     /// Has the background builder make this folder's previews on disk, so
     /// photos show at once when browsed; a no-op for the same folder.
     pub(super) fn build_previews(&self) {
+        // Outward from the photo on screen, which is wanted first.
+        let start = self
+            .active
+            .and_then(|id| self.index.get(&id).copied())
+            .unwrap_or(0);
         self.runtime.previews.build(
             Arc::new(self.media.clone()),
+            start,
             self.preferences.cache,
             self.preferences.raw_look,
         );
@@ -128,8 +138,14 @@ impl PhotoSortApp {
             // Smaller under pressure: let go of textures not on screen now.
             self.evict(0);
         }
-        if self.limits.notice.is_some() {
-            return;
+        let epoch = self.runtime.epoch();
+        if let Some(notice) = &self.limits.notice {
+            if notice.epoch == epoch {
+                return;
+            }
+            // Unanswered, about a folder no longer open: it may ask again.
+            self.limits.asked.remove(&notice.prompt);
+            self.limits.notice = None;
         }
         let quiet = &self.preferences.limit_prompts.quiet;
         let can_ask = |prompt| !quiet.contains(&prompt) && !self.limits.asked.contains(&prompt);
@@ -145,11 +161,14 @@ impl PhotoSortApp {
             })
             .flatten();
         let notice = detail.or_else(|| {
-            (can_ask(LimitPrompt::DiskCache)
-                && self.stats.disk_evicted > 0
-                && self.stats.disk_photos > 0)
+            // Every pipeline's writes: the image worker's and the builder's.
+            let writes = self.runtime.cache.writes();
+            let load =
+                |n: &std::sync::atomic::AtomicU64| n.load(std::sync::atomic::Ordering::Relaxed);
+            let (written, photos) = (load(&writes.written), load(&writes.photos));
+            (can_ask(LimitPrompt::DiskCache) && load(&writes.evicted) > 0 && photos > 0)
                 .then(|| {
-                    let per_photo = self.stats.disk_written / self.stats.disk_photos;
+                    let per_photo = written / photos;
                     disk_notice(
                         per_photo * self.media.len().max(1) as u64,
                         limits,
@@ -160,7 +179,7 @@ impl PhotoSortApp {
         });
         if let Some(notice) = notice {
             self.limits.asked.insert(notice.prompt);
-            self.limits.notice = Some(notice);
+            self.limits.notice = Some(Notice { epoch, ..notice });
         }
     }
 
@@ -419,6 +438,13 @@ mod tests {
         assert_eq!(
             app.limits.notice.as_ref().map(|n| n.prompt),
             Some(LimitPrompt::DetailMemory)
+        );
+        // Unanswered when another folder opens: it goes, and may ask again.
+        app.runtime.next_epoch();
+        app.check_limits();
+        assert_eq!(
+            app.limits.notice.as_ref().map(|n| n.epoch),
+            Some(app.runtime.epoch())
         );
         app.limits.notice.as_mut().unwrap().quiet = true;
         app.answer_limit_notice(true);
