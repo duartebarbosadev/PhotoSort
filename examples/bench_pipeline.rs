@@ -60,6 +60,7 @@ fn main() -> Result<()> {
                 height: metadata.height.min(512),
             },
             output_edge: 512,
+            allow_large: false,
         };
         let one = Instant::now();
         let first = pipeline.inspect(&request)?;

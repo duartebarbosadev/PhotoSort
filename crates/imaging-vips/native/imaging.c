@@ -5,18 +5,21 @@
 #include <stdint.h>
 #include <string.h>
 
-#define MAX_BYTES ((size_t)512 * 1024 * 1024)
+/* Default memory for a render when the caller names none. */
+#define MAX_BYTES ((uint64_t)512 * 1024 * 1024)
 #define MAX_PROFILE ((size_t)4 * 1024 * 1024)
-/* Previews of very large sources: JPEG's own maximum edge, and a pixel bound
- * that still stops decompression bombs from streaming for minutes. */
-#define MAX_PREVIEW_EDGE 65535
-#define MAX_PREVIEW_PIXELS ((uint64_t)1 << 30)
+/* No real image is larger: a header claiming more is corrupt or a
+ * decompression bomb. Memory, not these, bounds real photos. */
+#define MAX_EDGE (1 << 20)
+#define MAX_PIXELS ((uint64_t)1 << 32)
 
 typedef int (*Cancel)(void *);
 typedef struct {
     void *pixels;
     size_t length;
     uint32_t width, height, source_width, source_height, sample_bytes, profiled, source_sample_bytes;
+    /* Set when a full-size render was refused for memory: what it needs. */
+    uint64_t needed;
 } Output;
 typedef struct { Cancel check; void *context; } Progress;
 
@@ -62,7 +65,7 @@ void photosort_vips_free(void *pixels) { g_free(pixels); }
 
 int photosort_vips_render(const char *path, uint32_t edge,
     uint32_t x, uint32_t y, uint32_t width, uint32_t height,
-    uint32_t orientation, uint32_t tile_edge,
+    uint32_t orientation, uint32_t tile_edge, uint64_t max_bytes,
     Cancel cancelled, void *context, Output *output, char *error, size_t capacity,
     char *warning, size_t warning_capacity) {
     VipsSource *source = NULL;
@@ -90,19 +93,25 @@ int photosort_vips_render(const char *path, uint32_t edge,
     int w = vips_image_get_width(header), h = vips_image_get_height(header);
     int bands = vips_image_get_bands(header);
     size_t sample = vips_format_sizeof(vips_image_get_format(header));
+    if (!max_bytes) max_bytes = MAX_BYTES;
     /* A downsized preview never holds the source raster: loaders shrink on load
-     * or stream it, and the output is checked against MAX_BYTES below. Only a
-     * full-size or region render is bounded by the source size itself. */
+     * or stream it. A region decodes only its crop. Both are bounded by their
+     * output below; only a full-size render holds the whole source. */
     const int preview = !width && !height && edge && ((uint32_t)w > edge || (uint32_t)h > edge);
-    const int limit = preview ? MAX_PREVIEW_EDGE : 32768;
-    if (w < 1 || h < 1 || w > limit || h > limit || bands < 1 || bands > 5 || sample == 0 ||
-        (preview ? (uint64_t)w * h > MAX_PREVIEW_PIXELS
-                 : (uint64_t)w * h * bands * sample > MAX_BYTES)) {
-        fail(error, capacity, "Image exceeds the dimension or 512 MiB decode budget"); goto done;
+    const int whole = !width && !height && !preview;
+    if (w < 1 || h < 1 || w > MAX_EDGE || h > MAX_EDGE || bands < 1 || bands > 5 || sample == 0 ||
+        (uint64_t)w * h > MAX_PIXELS) {
+        fail(error, capacity, "This file reports an impossible image size"); goto done;
     }
     output->source_sample_bytes = (uint32_t)sample;
     output->source_width = (uint32_t)w;
     output->source_height = (uint32_t)h;
+    /* The decoded source and the RGBA result, at most 16 bits a sample. */
+    const uint64_t needed = (uint64_t)w * h * (bands * sample + 4 * (sample > 1 ? 2 : 1));
+    if (whole && needed > max_bytes) {
+        output->needed = needed;
+        fail(error, capacity, "Opening this image at full size needs more memory than allowed"); goto done;
+    }
     if (vips_image_get_typeof(header, VIPS_META_ICC_NAME)) {
         if (vips_image_get_blob(header, VIPS_META_ICC_NAME, &profile, &profile_length)) goto native_error;
         if (profile_length > MAX_PROFILE ||
@@ -204,7 +213,7 @@ int photosort_vips_render(const char *path, uint32_t edge,
     output->height = vips_image_get_height(rgba);
     output->sample_bytes = format == VIPS_FORMAT_USHORT ? 2 : 1;
     uint64_t expected = (uint64_t)output->width * output->height * 4 * output->sample_bytes;
-    if (expected > MAX_BYTES) { fail(error, capacity, "Output exceeds the 512 MiB budget"); goto done; }
+    if (expected > max_bytes) { fail(error, capacity, "Output needs more memory than allowed"); goto done; }
     vips_image_set_progress(rgba, TRUE);
     signal = g_signal_connect(rgba, "eval", G_CALLBACK(progress), &p);
     output->pixels = vips_image_write_to_memory(rgba, &output->length);
@@ -220,7 +229,12 @@ done:
     VIPS_UNREF(rgba); VIPS_UNREF(cast); VIPS_UNREF(sized); VIPS_UNREF(colored);
     VIPS_UNREF(working); VIPS_UNREF(header); VIPS_UNREF(source);
     if (icc) cmsCloseProfile(icc);
-    if (result) { g_free(output->pixels); memset(output, 0, sizeof(*output)); }
+    if (result) {
+        /* A refusal for memory still says what the render would need. */
+        const uint64_t needed = output->needed;
+        g_free(output->pixels); memset(output, 0, sizeof(*output));
+        output->needed = needed;
+    }
     vips_error_clear();
     g_private_set(&current_warnings, previous_warnings);
     return result;

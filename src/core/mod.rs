@@ -11,6 +11,7 @@ pub mod eyes;
 pub mod faces;
 pub mod geography;
 pub mod jobs;
+pub mod memory;
 pub mod metadata;
 pub mod model;
 pub mod models;

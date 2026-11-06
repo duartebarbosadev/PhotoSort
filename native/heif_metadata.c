@@ -9,7 +9,8 @@ int photosort_heif_transforms(const char *path, int32_t *operations, int capacit
     struct heif_context *context = heif_context_alloc();
     if (!context) return -1;
     struct heif_security_limits *limits = heif_context_get_security_limits(context);
-    limits->max_image_size_pixels = 100000000;
+    /* Header only: any real size passes; pixels are never decoded here. */
+    limits->max_image_size_pixels = 1ULL << 32;
     limits->max_color_profile_size = 4 * 1024 * 1024;
     limits->max_memory_block_size = 512ULL * 1024 * 1024;
     limits->max_total_memory = 512ULL * 1024 * 1024;

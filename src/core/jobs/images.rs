@@ -9,7 +9,7 @@ use crate::core::{
     analysis::{self, Analysis, Thresholds, VisualGroups},
     cache,
     catalog::Catalog,
-    dates, eyes, face_groups, faces, inspection, manual_groups,
+    dates, eyes, face_groups, faces, inspection, manual_groups, memory,
     model::*,
     model_assets, models, near_duplicates, operations,
     pipeline::{self, Pipeline},
@@ -311,6 +311,7 @@ impl ImageWorker {
             let publisher = self.publisher.clone();
             // A Settings change applies to the next preview or detail request.
             self.pipeline.set_raw_look(self.raw_look.get());
+            self.pipeline.apply_pressure(memory::Pressure::current());
             let ok = publisher.guard(super::Worker::Images, || {
                 if self.handle_cache_request()
                     || self.handle_inspection()
@@ -412,9 +413,13 @@ impl ImageWorker {
             self.publisher.cancelled(epoch)
                 || !self.inspection.lock().unwrap().accepts(epoch, &request)
         });
-        let (result, decoder_warning) = match rendered {
-            Ok((pixels, warning)) => (Ok(pixels), warning),
-            Err(error) => (Err(format!("{error:#}")), None),
+        let (result, decoder_warning, too_large) = match rendered {
+            Ok((pixels, warning)) => (Ok(pixels), warning, None),
+            Err(error) => (
+                Err(format!("{error:#}")),
+                None,
+                error.downcast_ref::<memory::TooLarge>().copied(),
+            ),
         };
         let accepted = self.inspection.lock().unwrap().accepts(epoch, &request);
         if accepted {
@@ -424,6 +429,7 @@ impl ImageWorker {
                     request,
                     result,
                     decoder_warning,
+                    too_large,
                     stats: self.pipeline.stats,
                 },
             );

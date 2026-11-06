@@ -624,7 +624,7 @@ impl PhotoSortApp {
             icon::MEMORY,
             "Memory",
             Some(
-                "More memory keeps photos ready to show. Displayed images and AI models use extra memory.",
+                "More memory keeps photos ready to show. Defaults follow this computer's memory. Displayed images and AI models use extra memory.",
             ),
             false,
             |rows| {
@@ -636,7 +636,11 @@ impl PhotoSortApp {
                     |ui| {
                         if scale(
                             ui,
-                            egui::Slider::new(&mut draft.cache.previews_mib, 32..=1024),
+                            egui::Slider::new(
+                                &mut draft.cache.previews_mib,
+                                crate::core::cache::PREVIEWS_MIB,
+                            )
+                            .logarithmic(true),
                             "Preview memory",
                             f64::from(previews),
                             ("Less", "More"),
@@ -651,11 +655,15 @@ impl PhotoSortApp {
                 rows.row(
                     "Full-size detail memory",
                     "Originals kept ready for zooming in.",
-                    None,
+                    Some("A photo too large for this still opens at full size, but it is decoded again after you look at another one, which is slow. PhotoSort offers more when that happens."),
                     |ui| {
                         if scale(
                             ui,
-                            egui::Slider::new(&mut draft.cache.originals_mib, 64..=2048),
+                            egui::Slider::new(
+                                &mut draft.cache.originals_mib,
+                                crate::core::cache::Limits::originals_range(),
+                            )
+                            .logarithmic(true),
                             "Original detail memory",
                             f64::from(originals),
                             ("Less", "More"),
@@ -663,6 +671,19 @@ impl PhotoSortApp {
                             Some(originals != defaults.originals_mib),
                         ) {
                             draft.cache.originals_mib = defaults.originals_mib;
+                        }
+                    },
+                );
+                rows.row(
+                    "Limit prompts",
+                    "Offers to raise a limit when it slows photos down.",
+                    Some("Brings back the prompts you turned off with Don't ask again, and asks again before opening very large photos."),
+                    |ui| {
+                        if ui
+                            .add_enabled(draft.limit_prompts.any(), egui::Button::new("Show again"))
+                            .clicked()
+                        {
+                            draft.limit_prompts = Default::default();
                         }
                     },
                 );
@@ -677,11 +698,12 @@ impl PhotoSortApp {
             rows.row(
                 "Disk cache limit",
                 "Previews and AI results kept between sessions.",
-                Some("Limits apply when settings are saved. Zero disables persistent previews and AI evidence. AI models prepared for this computer are kept separately, whatever this limit. A model, runtime or macOS update replaces them, and clearing caches removes them. Displayed images and models use additional memory."),
+                Some("Limits apply when settings are saved. The default follows the free space on this disk. Zero disables persistent previews and AI evidence. AI models prepared for this computer are kept separately, whatever this limit. A model, runtime or macOS update replaces them, and clearing caches removes them. Displayed images and models use additional memory."),
                 |ui| {
                     if scale(
                         ui,
-                        egui::Slider::new(&mut draft.cache.disk_mib, 0..=32768).logarithmic(true),
+                        egui::Slider::new(&mut draft.cache.disk_mib, 0..=crate::core::cache::DISK_MAX_MIB)
+                            .logarithmic(true),
                         "Disk cache",
                         f64::from(disk),
                         ("Off", "More"),
@@ -693,34 +715,35 @@ impl PhotoSortApp {
                 },
             );
             let cache = self.runtime.cache.status();
-            let (hint, details) = match (&cache.usage, cache.busy) {
-                (_, true) => ("Updating caches…".to_owned(), None),
+            // Prepared models sit outside the limit, so each gets its own
+            // row and the cache reads against the limit alone.
+            let limit = self.preferences.cache.disk_mib;
+            let (hint, details, models) = match (&cache.usage, cache.busy) {
+                (_, true) => ("Updating caches…".to_owned(), None, None),
                 (Some(usage), false) => {
-                    let mut details = format!(
-                        "Cached pixels: {:.1} MiB previews · {:.1} MiB originals\n{} metadata entries · {} analysis entries",
+                    let details = format!(
+                        "Cached pixels: {:.1} MiB previews · {:.1} MiB originals\n{} metadata entries · {} analysis entries\n{} files in all",
                         usage.preview_bytes as f64 / 1048576.0,
                         usage.original_bytes as f64 / 1048576.0,
                         usage.metadata_entries,
-                        usage.analysis_entries
+                        usage.analysis_entries,
+                        usage.files
                     );
-                    if usage.pinned_disk_bytes > 0 {
-                        details.push_str(&format!(
-                            "\n{:.1} MiB held by active model sessions",
-                            usage.pinned_disk_bytes as f64 / 1048576.0
-                        ));
-                    }
-                    (
+                    let cached = usage.disk_bytes.saturating_sub(usage.model_bytes);
+                    let hint = if limit == 0 {
+                        "Off: nothing is kept between sessions.".to_owned()
+                    } else {
                         format!(
-                            "{} in {} files.",
-                            size_text(usage.disk_bytes as f64 / 1048576.0),
-                            usage.files
-                        ),
-                        Some(details),
-                    )
+                            "{} of the {} limit.",
+                            size_text(cached as f64 / 1048576.0),
+                            size_text(f64::from(limit))
+                        )
+                    };
+                    (hint, Some(details), Some(usage))
                 }
-                (None, false) => ("Not measured yet.".to_owned(), None),
+                (None, false) => ("Not measured yet.".to_owned(), None, None),
             };
-            rows.row("Space used", &hint, details.as_deref(), |ui| {
+            rows.row("Cache space used", &hint, details.as_deref(), |ui| {
                 if cache.busy {
                     if ui.button("Cancel cache task").clicked() {
                         self.runtime.cache.cancel();
@@ -732,6 +755,28 @@ impl PhotoSortApp {
                     self.cache_folder_button(ui);
                 }
             });
+            // Only Core ML prepares models; elsewhere there is nothing to show.
+            if let Some(usage) = models.filter(|usage| usage.model_bytes > 0) {
+                let hint = format!(
+                    "{}, kept outside the limit.",
+                    size_text(usage.model_bytes as f64 / 1048576.0)
+                );
+                let mut details = format!(
+                    "AI models prepared for {} are slow to prepare again, so the disk cache limit never removes them. A model, runtime or macOS update replaces them, and Clear caches removes them.",
+                    if cfg!(target_os = "macos") {
+                        "this Mac"
+                    } else {
+                        "this computer"
+                    }
+                );
+                if usage.pinned_disk_bytes > 0 {
+                    details.push_str(&format!(
+                        "\n{:.1} MiB held by active model sessions",
+                        usage.pinned_disk_bytes as f64 / 1048576.0
+                    ));
+                }
+                rows.row("AI models space used", &hint, Some(&details), |_| {});
+            }
             if let Some(message) = &cache.message {
                 rows.note(message);
             }

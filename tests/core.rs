@@ -88,6 +88,39 @@ fn proxy_survives_memory_eviction_without_redecoding_source() {
     assert_eq!(p.stats.disk_hits, 1);
 }
 #[test]
+fn display_previews_are_jpeg_read_back_as_stored_and_old_png_previews_still_load() {
+    let d = TempDir::new().unwrap();
+    let m = photo(d.path(), "a.png");
+    let cache = TempDir::new().unwrap();
+    let with = |ext: &str| {
+        fs::read_dir(cache.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == ext))
+            .collect::<Vec<_>>()
+    };
+    let fresh = Pipeline::new(1_000_000, cache.path().to_owned())
+        .load(&m)
+        .unwrap();
+    // The display preview and the grid thumbnail.
+    assert_eq!((with("jpg").len(), with("png").len()), (2, 0));
+    // A new session reads the very pixels the first one showed.
+    let mut reopened = Pipeline::new(1_000_000, cache.path().to_owned());
+    assert_eq!(*reopened.load(&m).unwrap().pixels, *fresh.pixels);
+    assert_eq!(reopened.stats.decodes, 0);
+    // Previews written as PNG by earlier versions are read, not made again.
+    for jpg in with("jpg") {
+        image::open(&jpg)
+            .unwrap()
+            .save(jpg.with_extension("png"))
+            .unwrap();
+        fs::remove_file(jpg).unwrap();
+    }
+    let mut upgraded = Pipeline::new(1_000_000, cache.path().to_owned());
+    assert_eq!(*upgraded.load(&m).unwrap().pixels, *fresh.pixels);
+    assert_eq!((upgraded.stats.decodes, upgraded.stats.disk_hits), (0, 1));
+}
+#[test]
 fn grid_thumbnails_reopen_from_their_own_artifact_without_decoding() {
     let d = TempDir::new().unwrap();
     let m = photo(d.path(), "a.png");

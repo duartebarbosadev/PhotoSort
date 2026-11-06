@@ -24,6 +24,9 @@ pub struct Request {
     pub media: Media,
     pub region: Region,
     pub output_edge: u32,
+    /// The user chose to open this photo at full size although it needs more
+    /// than half the memory (see `memory::Fit`).
+    pub allow_large: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

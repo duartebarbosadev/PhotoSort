@@ -53,8 +53,14 @@ struct Render {
 }
 /// The copy's pixels, decoded within the user's disk cache limit: with no
 /// disk cache allowed, copying writes none.
-fn render(media: &Media, cache: PathBuf, limits: super::cache::Limits) -> Result<Arc<RgbaImage>> {
-    copy_pipeline(cache, limits).render_whole(media, IMAGE_EDGE)
+/// A newer copy makes `cancelled` true, which stops this one between stages.
+fn render(
+    media: &Media,
+    cache: PathBuf,
+    limits: super::cache::Limits,
+    cancelled: &(impl Fn() -> bool + Sync),
+) -> Result<Arc<RgbaImage>> {
+    copy_pipeline(cache, limits).render_whole_cancellable(media, IMAGE_EDGE, cancelled)
 }
 /// A pipeline for one copy. Its originals budget holds the whole photo, so
 /// the full-size decode is reused instead of decoded again to scale it; it
@@ -79,7 +85,7 @@ impl Default for Copier {
             if stale() {
                 return;
             }
-            let image = render(&job.media, job.cache, job.limits);
+            let image = render(&job.media, job.cache, job.limits, &stale);
             if stale() {
                 return;
             }
@@ -797,13 +803,18 @@ mod tests {
                 .count()
         };
         let (allowed, none) = (dir.path().join("allowed"), dir.path().join("none"));
-        render(&photo, allowed.clone(), Default::default()).unwrap();
+        render(&photo, allowed.clone(), Default::default(), &|| false).unwrap();
         assert!(files(&allowed) > 0, "the default limits keep a disk copy");
         let off = crate::core::cache::Limits {
             disk_mib: 0,
             ..Default::default()
         };
-        assert_eq!(render(&photo, none.clone(), off).unwrap().width(), 1200);
+        assert_eq!(
+            render(&photo, none.clone(), off, &|| false)
+                .unwrap()
+                .width(),
+            1200
+        );
         assert_eq!(files(&none), 0);
     }
     #[test]

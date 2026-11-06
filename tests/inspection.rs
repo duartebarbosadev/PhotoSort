@@ -26,6 +26,7 @@ fn request(media: &Media, region: Region) -> Request {
         media: media.clone(),
         region,
         output_edge: 512,
+        allow_large: false,
     }
 }
 
@@ -237,16 +238,33 @@ fn source_and_sidecar_changes_invalidate_original_detail() {
     assert_eq!(pipeline.stats.decodes, 3);
 }
 #[test]
-fn detail_budget_evicts_sources_but_never_downscales_a_native_crop() {
+fn detail_too_large_for_its_budget_is_kept_alone_for_the_photo_being_inspected() {
     let root = tempfile::tempdir().unwrap();
     let cache = tempfile::tempdir().unwrap();
     let media = photo(root.path(), "a.png", 96, 64);
+    let other = photo(root.path(), "b.png", 96, 64);
     let mut pipeline = Pipeline::new(1, cache.path().to_owned());
     let detail = pipeline
         .inspect(&request(&media, Region::full(96, 64)))
         .unwrap();
     assert_eq!(detail.dimensions(), (96, 64));
     assert_eq!(pipeline.stats.detail_bytes, 0);
+    assert_eq!(pipeline.stats.detail_overflow, 96 * 64 * 4);
+    // Panning the same photo reuses it instead of decoding it again.
+    let decodes = pipeline.stats.decodes;
+    let part = Region {
+        x: 10,
+        y: 10,
+        width: 40,
+        height: 30,
+    };
+    let crop = pipeline.inspect(&request(&media, part)).unwrap();
+    assert_eq!(crop.dimensions(), (40, 30));
+    assert_eq!(pipeline.stats.decodes, decodes);
+    // Another photo takes its place; the first is decoded again later.
+    pipeline.inspect(&request(&other, part)).unwrap();
+    pipeline.inspect(&request(&media, part)).unwrap();
+    assert_eq!(pipeline.stats.decodes, decodes + 2);
 }
 #[test]
 fn inspection_mailbox_coalesces_views_and_rejects_late_results() {

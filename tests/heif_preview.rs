@@ -18,6 +18,7 @@ fn full(pipeline: &mut Pipeline, media: &Media, dimensions: (u32, u32)) -> Arc<i
             media: media.clone(),
             region: Region::full(dimensions.0, dimensions.1),
             output_edge: 4096,
+            allow_large: false,
         })
         .unwrap()
 }

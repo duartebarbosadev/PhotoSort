@@ -55,6 +55,7 @@ fn display_analysis_and_detail_share_one_color_conversion_and_restart_reuses_cor
                 height: 20,
             },
             output_edge: 20,
+            allow_large: false,
         })
         .unwrap();
     for pixels in [
@@ -152,8 +153,9 @@ fn tagged_opaque_pixels_agree_with_independent_apple_colorsync_conversion() {
             path: path.clone(),
         };
         let mut pipeline = Pipeline::new(8 * 1024 * 1024, temp.path().join("cache"));
-        let result = pipeline.load(&media).unwrap();
-        let rendered = photosort::core::apple_image::decode(&path, None).unwrap();
+        // The lossless analysis image: display previews are stored as JPEG.
+        let result = pipeline.analysis(&media, || false).unwrap();
+        let rendered = photosort::core::apple_image::decode(&path, None, u64::MAX).unwrap();
         let (w, h) = rendered.pixels.dimensions();
         let native = rendered.pixels.into_raw();
         assert_eq!((w, h), (64, 32));
@@ -255,6 +257,7 @@ fn cmyk_and_ycck_profiles_preserve_ink_channels_and_share_corrected_results() {
                     height: 32,
                 },
                 output_edge: 64,
+                allow_large: false,
             })
             .unwrap();
         assert_eq!(pipeline.stats.decodes, before + 1);
@@ -262,13 +265,14 @@ fn cmyk_and_ycck_profiles_preserve_ink_channels_and_share_corrected_results() {
         assert_eq!(pipeline.stats.native_renders, pipeline.stats.decodes);
         #[cfg(not(feature = "native-imaging"))]
         assert_eq!(pipeline.stats.color_initializations, 1);
-        assert_eq!(display.pixels.as_raw(), analysis.pixels.as_raw());
-        assert_eq!(display.pixels.as_raw(), detail.as_raw());
-        let rendered = photosort::core::apple_image::decode(&path, None).unwrap();
+        // Display previews are stored as JPEG; analysis and detail are exact.
+        assert_eq!(display.pixels.dimensions(), analysis.pixels.dimensions());
+        assert_eq!(analysis.pixels.as_raw(), detail.as_raw());
+        let rendered = photosort::core::apple_image::decode(&path, None, u64::MAX).unwrap();
         let (w, h) = rendered.pixels.dimensions();
         let native = rendered.pixels.into_raw();
         assert_eq!((w, h), (64, 32));
-        let max = display
+        let max = analysis
             .pixels
             .as_raw()
             .iter()
@@ -290,7 +294,7 @@ fn cmyk_and_ycck_profiles_preserve_ink_channels_and_share_corrected_results() {
         );
         #[cfg(feature = "native-imaging")]
         {
-            let mean = display
+            let mean = analysis
                 .pixels
                 .as_raw()
                 .as_chunks::<4>()

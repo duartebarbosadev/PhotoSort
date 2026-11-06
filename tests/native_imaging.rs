@@ -25,6 +25,7 @@ fn request(media: &photosort::core::model::Media) -> Request {
             height: 100,
         },
         output_edge: 100,
+        allow_large: false,
     }
 }
 #[test]

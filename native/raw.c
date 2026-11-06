@@ -9,9 +9,18 @@ static int source_geometry(libraw_data_t *raw, unsigned int *width, unsigned int
     }
     return error;
 }
-libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe, int *embedded,
+/* Returned with *needed when a sensor decode would take more than its allowance. */
+#define PHOTOSORT_NEEDS_MEMORY (-200001)
+/* Peak bytes per sensor pixel: the 16-bit mosaic, LibRaw's four 16-bit
+   channels, the 8-bit RGB result and the caller's copy and rotation of it.
+   A half-size decode keeps the mosaic but only a quarter of the rest. */
+#define FULL_BYTES_PER_PIXEL 18
+#define HALF_BYTES_PER_PIXEL 5
+libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe,
+    unsigned long long allowance, unsigned long long *needed, int *embedded,
     unsigned int *source_width, unsigned int *source_height,
     progress_callback progress, void *context, int *error) {
+    *needed = 0;
     *embedded = 0;
     *source_width = *source_height = 0;
     const int preview = recipe != 0;
@@ -36,18 +45,13 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe, int
                 libraw_dcraw_clear_mem(thumb);
                 libraw_close(raw);
                 if (*error == LIBRAW_CANCELLED_BY_CALLBACK) return 0;
-                return photosort_raw_decode(path, 2, embedded, source_width, source_height,
-                    progress, context, error);
+                return photosort_raw_decode(path, 2, allowance, needed, embedded,
+                    source_width, source_height, progress, context, error);
             }
             if (thumb) libraw_dcraw_clear_mem(thumb);
         }
         if (*error == LIBRAW_CANCELLED_BY_CALLBACK) { libraw_close(raw); return 0; }
         *error = 0; /* Missing/non-JPEG thumbnails use neutral half-size decoding. */
-    }
-    /* Only a sensor decode holds the whole mosaic, so only it is bounded by the
-       sensor size; an embedded JPEG above is returned for any sensor size. */
-    if ((unsigned long long)raw->sizes.raw_width * raw->sizes.raw_height > 100000000ULL) {
-        *error = LIBRAW_UNSUFFICIENT_MEMORY; libraw_close(raw); return 0;
     }
     if (preview) {
         /* Fallback needs both full-source geometry and a reduced sensor decode.
@@ -65,12 +69,31 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe, int
         }
     }
     const int geometry_known = *source_width && *source_height;
+    /* Only a sensor decode holds the whole mosaic, so only it is bounded by
+       memory; an embedded JPEG above is returned for any sensor size. */
+    const unsigned long long sensor =
+        (unsigned long long)raw->sizes.raw_width * raw->sizes.raw_height;
+    const int half = preview && geometry_known;
+    *needed = sensor * (half ? HALF_BYTES_PER_PIXEL : FULL_BYTES_PER_PIXEL);
+    if (!sensor || *needed > allowance) {
+        *error = sensor ? PHOTOSORT_NEEDS_MEMORY : LIBRAW_UNSUFFICIENT_MEMORY;
+        if (!geometry_known) {
+            *source_width = raw->sizes.width;
+            *source_height = raw->sizes.height;
+        }
+        libraw_close(raw); return 0;
+    }
+    /* LibRaw's own mosaic cap (2 GB by default) follows the same allowance,
+       so multi-shot and pixel-shift files are not refused below it. */
+    const unsigned long long allowed_mb = allowance / (1024 * 1024);
+    if (allowed_mb > raw->rawparams.max_raw_memory_mb)
+        raw->rawparams.max_raw_memory_mb = allowed_mb > 0xFFFFFFFFULL ? 0xFFFFFFFFU : (unsigned)allowed_mb;
     raw->params.use_camera_wb = 1;
     raw->params.output_color = 1;
     raw->params.output_bps = 8;
     raw->params.user_qual = 3;
     raw->params.user_flip = 0; /* EXIF/XMP orientation belongs to the shared pipeline. */
-    raw->params.half_size = preview && geometry_known ? 1 : 0;
+    raw->params.half_size = half;
     raw->params.no_auto_bright = preview ? 1 : 0;
     raw->params.auto_bright_thr = 0.01;
     raw->params.bright = preview ? 1.0 : 1.25;

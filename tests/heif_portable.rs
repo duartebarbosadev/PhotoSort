@@ -38,6 +38,7 @@ fn detail(pipeline: &mut Pipeline, media: &Media, dimensions: (u32, u32)) -> Arc
                 height: dimensions.1,
             },
             output_edge: dimensions.0.max(dimensions.1),
+            allow_large: false,
         })
         .unwrap()
 }

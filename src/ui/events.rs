@@ -48,8 +48,9 @@ impl PhotoSortApp {
                 request,
                 result,
                 decoder_warning,
+                too_large,
                 stats,
-            } => self.on_inspected(ctx, request, result, decoder_warning, stats),
+            } => self.on_inspected(ctx, request, (result, too_large), decoder_warning, stats),
             Event::AnalysisError { run, id, error } => self.on_analysis_error(run, id, error),
             Event::RunError { run, error } => {
                 if self.analysis_run == Some(run) {
@@ -292,6 +293,7 @@ impl PhotoSortApp {
             );
         }
         self.start_ready_analysis();
+        self.build_previews();
         if self.step == Step::Cull || self.metadata_organize_mode() {
             self.start_metadata_index();
         }
@@ -342,11 +344,15 @@ impl PhotoSortApp {
         &mut self,
         ctx: &egui::Context,
         request: InspectionRequest,
-        result: Result<Arc<RgbaImage>, String>,
+        (result, too_large): (Result<Arc<RgbaImage>, String>, Option<TooLarge>),
         decoder_warning: Option<String>,
         stats: Stats,
     ) {
+        self.detail_waiting.remove(&request.slot);
         if self.inspection_wanted.contains(&request) {
+            if let Some(too_large) = too_large {
+                self.on_too_large(request.media.id, too_large);
+            }
             if result.is_ok() {
                 self.accept_image_warning(request.media.id, decoder_warning);
             }
@@ -371,6 +377,7 @@ impl PhotoSortApp {
                     request,
                     texture,
                     error,
+                    too_large,
                 },
             );
         }

@@ -3,6 +3,7 @@ use photosort::core::{
     cache::{self, Limits},
     catalog::Catalog,
     jobs::{AnalysisProfile, Event, Runtime},
+    memory::Pressure,
     pipeline::Pipeline,
     preferences::Preferences,
     startup::Options,
@@ -109,9 +110,9 @@ fn cache_preferences_are_bounded_backward_compatible_and_cli_parses() {
     assert_eq!(
         loaded.cache,
         Limits {
-            previews_mib: 32,
-            originals_mib: 2048,
-            disk_mib: 32768,
+            previews_mib: 64,
+            originals_mib: 32768,
+            disk_mib: cache::DISK_MAX_MIB,
             ..Limits::default()
         }
     );
@@ -126,7 +127,8 @@ fn lowered_memory_limits_evict_without_redecoding_and_zero_disk_disables_writes(
     let dir = tempfile::tempdir().unwrap();
     let library = dir.path().join("photos");
     std::fs::create_dir(&library).unwrap();
-    for i in 0..3 {
+    // Five 2048 px previews (16 MiB each) are more than the smallest limit.
+    for i in 0..5 {
         image::RgbaImage::new(2400, 2400)
             .save(library.join(format!("{i}.png")))
             .unwrap();
@@ -138,16 +140,30 @@ fn lowered_memory_limits_evict_without_redecoding_and_zero_disk_disables_writes(
         pipeline.load(m).unwrap();
     }
     let decodes = pipeline.stats.decodes;
-    assert_eq!(decodes, 3);
+    assert_eq!(decodes, 5);
+    assert!(pipeline.stats.resident_bytes > 64 * 1024 * 1024);
+    // System memory pressure shrinks the memory caches, and they grow back
+    // once it clears; nothing is decoded again for it.
+    pipeline.apply_pressure(Pressure::Warn);
+    assert!(pipeline.stats.resident_bytes <= 64 * 1024 * 1024);
+    pipeline.apply_pressure(Pressure::Critical);
+    assert!(pipeline.stats.resident_bytes <= 32 * 1024 * 1024);
+    pipeline.apply_pressure(Pressure::Normal);
+    for m in &media {
+        pipeline.load(m).unwrap();
+    }
+    assert!(pipeline.stats.resident_bytes > 64 * 1024 * 1024);
+    assert_eq!(pipeline.stats.decodes, decodes);
+    // The smallest limits Settings allows.
     pipeline.configure_cache(Limits {
-        previews_mib: 32,
-        originals_mib: 64,
+        previews_mib: 64,
+        originals_mib: 256,
         disk_mib: 0,
         ..Limits::default()
     });
     assert!(
-        pipeline.stats.resident_bytes <= 32 * 1024 * 1024
-            && pipeline.stats.detail_bytes <= 64 * 1024 * 1024
+        pipeline.stats.resident_bytes <= 64 * 1024 * 1024
+            && pipeline.stats.detail_bytes <= 256 * 1024 * 1024
     );
     assert_eq!(pipeline.stats.decodes, decodes);
     pipeline.clear_memory();

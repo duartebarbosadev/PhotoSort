@@ -18,7 +18,7 @@ int main(int argc,char **argv){
  CGImageDestinationAddImage(destination,image,NULL);
  if(!CGImageDestinationFinalize(destination))return 4;
  CFRelease(destination);CFRelease(url);CGImageRelease(image);CGDataProviderRelease(provider);CGColorSpaceRelease(cs);
- unsigned int w=0,h=0,sw=0,sh=0;unsigned char *output=photosort_apple_decode((unsigned char*)argv[1],strlen(argv[1]),0,&w,&h,&sw,&sh);
+ unsigned int w=0,h=0,sw=0,sh=0;unsigned char *output=photosort_apple_decode((unsigned char*)argv[1],strlen(argv[1]),0,~0ULL,&w,&h,&sw,&sh);
  if(!output)return 5;
  printf("dimensions %u %u source %u %u\n",w,h,sw,sh);
  for(int i=0;i<4;i++){unsigned char *p=output+4*(32*w+12+24*i);printf("sample %d RGBA %u %u %u %u\n",i,p[0],p[1],p[2],p[3]);}
