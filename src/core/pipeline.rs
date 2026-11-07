@@ -144,6 +144,8 @@ pub struct Pipeline {
     raw_look: super::raw_look::RawLook,
     /// Enhanced-look levels per RAW source, so 1:1 crops match the preview.
     raw_levels: HashMap<String, super::raw_look::Levels>,
+    /// Threads one proxy downscale may use; see `limit_threads`.
+    threads: usize,
 }
 impl Pipeline {
     pub fn new(budget: usize, disk: PathBuf) -> Self {
@@ -169,7 +171,20 @@ impl Pipeline {
             started: std::time::SystemTime::now(),
             raw_look: Default::default(),
             raw_levels: HashMap::new(),
+            threads: super::processing::available(),
         }
+    }
+    /// Pipelines that already run several at a time (background builders,
+    /// analysis helpers) keep each downscale on their own thread, so they
+    /// add up to the cores they were given rather than a multiple of them.
+    pub fn limit_threads(&mut self, threads: usize) {
+        self.threads = threads.max(1);
+    }
+    /// Whether another pipeline may prepare this photo next to the image
+    /// worker's. libvips formats render under one lock the screen needs, and
+    /// videos belong to the image worker, which owns playback.
+    pub fn shared_decode(media: &Media) -> bool {
+        media.kind != MediaKind::Video && !native_raster(media)
     }
     pub fn standard() -> Self {
         Self::new(128 * 1024 * 1024, session::cache_dir())
@@ -627,18 +642,20 @@ impl Pipeline {
                     (meta.width, meta.height)
                 };
                 let scale = f64::from(edge) / f64::from(width.max(height));
-                oriented.resize_exact(
+                super::resample::exact_lanczos3(
+                    &oriented,
                     (f64::from(width) * scale).round().max(1.0) as u32,
                     (f64::from(height) * scale).round().max(1.0) as u32,
-                    image::imageops::FilterType::Lanczos3,
+                    self.threads,
                 )
             } else if oriented.width() > edge || oriented.height() > edge {
+                // The same pixels as resize(.., Lanczos3) and resize(..,
+                // Triangle), without their full-size float buffer and on
+                // several threads.
                 if analysis {
-                    oriented.resize(edge, edge, image::imageops::FilterType::Lanczos3)
+                    super::resample::fit_lanczos3(&oriented, edge, self.threads)
                 } else {
-                    // The same pixels as resize(.., Triangle), without its
-                    // full-size float buffer.
-                    super::resample::fit_triangle(&oriented, edge)
+                    super::resample::fit_triangle(&oriented, edge, self.threads)
                 }
             } else {
                 (*oriented).clone()
@@ -725,7 +742,22 @@ impl Pipeline {
             metadata: meta.clone(),
             decoder_warning: warning,
         };
-        self.metadata.put(source_key, meta);
+        self.remember(source_key, memory_key, &asset);
+        Ok(asset)
+    }
+    /// An analysis image another pipeline of this cache prepared for `media`
+    /// (see `jobs::ahead`), kept as if this pipeline had prepared it: its
+    /// metadata, with the geometry the decode found, and the image itself
+    /// for later model stages and duplicate review.
+    pub fn adopt_analysis(&mut self, media: &Media, asset: &Asset) -> Result<()> {
+        let source_key = Self::key(media)?;
+        let memory_key = analysis_key(&source_key);
+        self.tick += 1;
+        self.remember(source_key, memory_key, asset);
+        Ok(())
+    }
+    fn remember(&mut self, source_key: String, memory_key: String, asset: &Asset) {
+        self.metadata.put(source_key, asset.metadata.clone());
         let limit = self.preview_limit();
         while self.stats.resident_bytes + asset.bytes() > limit && !self.cache.is_empty() {
             let oldest = self
@@ -740,15 +772,16 @@ impl Pipeline {
         }
         if asset.bytes() <= limit {
             self.stats.resident_bytes += asset.bytes();
-            self.cache.insert(
+            if let Some(old) = self.cache.insert(
                 memory_key,
                 Entry {
                     asset: asset.clone(),
                     tick: self.tick,
                 },
-            );
+            ) {
+                self.stats.resident_bytes -= old.asset.bytes();
+            }
         }
-        Ok(asset)
     }
     /// Camera preview (or neutral half-size fallback) shared by display and analysis.
     /// This recipe never supplies original inspection, even if a JPEG has source dimensions.
