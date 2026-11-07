@@ -14,8 +14,8 @@ pub(in crate::ui::workspace) enum Row {
 pub(in crate::ui::workspace) struct BoardRowsKey {
     arranged: u64,
     /// Photos' shapes come with their metadata, which arrives without
-    /// rearranging the board.
-    metadata: usize,
+    /// rearranging the board: new entries, and changed shapes of known ones.
+    metadata: (usize, u64),
     focus: Vec<String>,
     width: f32,
     target: f32,
@@ -230,7 +230,7 @@ impl PhotoSortApp {
         let spacing = ui.spacing().item_spacing.y;
         let laid = self.board_rows(BoardRowsKey {
             arranged: self.board.arranged,
-            metadata: self.metadata.len(),
+            metadata: (self.metadata.len(), self.metadata_shapes),
             focus: self.board.focus.clone(),
             width,
             target: self.photo_size(),
@@ -692,5 +692,59 @@ impl PhotoSortApp {
         if faceless {
             self.change_faceless(crate::core::preferences::Faceless::Folder);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_photos_new_shape_lays_the_board_out_again() {
+        let (_temp, mut app) = super::super::compact_cull_tests::fixture();
+        app.step = Step::Organize;
+        app.review = false;
+        app.output = app.root.as_ref().unwrap().display().to_string();
+        app.filter_dirty = true;
+        app.refilter();
+        let key = |app: &PhotoSortApp| BoardRowsKey {
+            arranged: app.board.arranged,
+            metadata: (app.metadata.len(), app.metadata_shapes),
+            focus: Vec::new(),
+            width: 900.0,
+            target: 120.0,
+            gap: 8.0,
+            spacing: 8.0,
+        };
+        let first = app.board_rows(key(&app));
+        let id = app.media[0].id;
+        let decoded = |app: &mut PhotoSortApp, width, height| {
+            let metadata = Metadata {
+                width,
+                height,
+                ..app.metadata[&id].clone()
+            };
+            let _ = app.handle_event(
+                &egui::Context::default(),
+                Event::Asset {
+                    id,
+                    preview: false,
+                    pixels: Arc::new(image::RgbaImage::new(1, 1)),
+                    decoder_warning: None,
+                    metadata,
+                    stats: Default::default(),
+                },
+            );
+        };
+        // The same shape again keeps the rows.
+        let (width, height) = (app.metadata[&id].width, app.metadata[&id].height);
+        decoded(&mut app, width, height);
+        assert!(Arc::ptr_eq(&first, &app.board_rows(key(&app))));
+        // A decode that finds the photo is wide replaces its entry; the
+        // map keeps its size, and the rows are laid out again.
+        let photos = app.metadata.len();
+        decoded(&mut app, 3000, 1000);
+        assert_eq!(app.metadata.len(), photos);
+        assert!(!Arc::ptr_eq(&first, &app.board_rows(key(&app))));
+        app.runtime.shutdown();
     }
 }
