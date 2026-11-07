@@ -40,6 +40,17 @@ pub fn catch<T>(work: impl FnOnce() -> T) -> Result<T, String> {
     })
 }
 
+/// Wraps work for a thread that the current thread starts and joins, so a
+/// panic there counts as recoverable exactly when it does here: inside
+/// [`catch`], the joining thread turns it into the item's error.
+pub fn inherit<T>(work: impl FnOnce() -> T + Send) -> impl FnOnce() -> T + Send {
+    let recoverable = RECOVERABLE.with(Cell::get);
+    move || {
+        RECOVERABLE.with(|flag| flag.set(recoverable));
+        work()
+    }
+}
+
 /// Where reports are kept: `crashes` inside the data directory.
 pub fn directory() -> PathBuf {
     super::session::data_dir().join("crashes")
@@ -194,6 +205,14 @@ pub fn mark_seen(directory: &Path, report: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn started_threads_inherit_recoverability() {
+        let on_thread = |work: fn() -> bool| std::thread::scope(|s| s.spawn(inherit(work)).join());
+        let recoverable = || RECOVERABLE.with(Cell::get);
+        assert_eq!(on_thread(recoverable).ok(), Some(false));
+        assert_eq!(catch(|| on_thread(recoverable).ok()), Ok(Some(true)));
+    }
 
     #[test]
     fn reports_are_written_found_once_and_pruned() {

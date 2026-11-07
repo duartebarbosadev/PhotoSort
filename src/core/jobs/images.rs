@@ -2,6 +2,7 @@
 //! analysis, previews, inspection and cache maintenance interleave one step at a time.
 use super::{
     AnalysisProfile, AnalysisStats, Event, ImageWork, Message, Publisher, RunGeneration,
+    ahead::{self, Ahead, Measured, Taken},
     similarity::{EvidenceReply, EvidenceRequest, SimilarityJob},
     subjects::SubjectJob,
 };
@@ -76,6 +77,8 @@ struct CachedAnalysis {
     technical: Analysis,
     hash: String,
     dimensions: (u32, u32),
+    /// The decoded photo's stored size (`Measurements::source_width`).
+    source: (u32, u32),
     embedding: Option<Vec<f32>>,
     aesthetic: Option<f32>,
     faces: Option<faces::FaceSummary>,
@@ -188,6 +191,8 @@ struct Item<'a> {
     media: &'a Media,
     source_key: String,
     prepared: Prepared,
+    /// Decoded and measured by a helper while earlier photos were analyzed.
+    ahead: Option<Measured>,
 }
 impl Item<'_> {
     fn asset(&mut self, pipeline: &mut Pipeline) -> anyhow::Result<pipeline::Asset> {
@@ -200,6 +205,7 @@ struct Scored {
     technical: Analysis,
     hash: String,
     dimensions: (u32, u32),
+    source: (u32, u32),
     embedding: Option<Vec<f32>>,
 }
 
@@ -235,6 +241,11 @@ struct ImageWorker {
     quality_measurements: u64,
     models: models::Models,
     orientation_model: Option<rotation::Detector>,
+    ahead: Ahead,
+    /// Helpers for the next run, from its processing settings.
+    helpers: usize,
+    /// Source decodes helpers made for analysis runs.
+    ahead_decodes: u64,
 }
 
 impl ImageWorker {
@@ -255,6 +266,7 @@ impl ImageWorker {
             subjects,
         } = wiring;
         let subject_root = cache.clone();
+        let ahead = Ahead::new(cache.clone(), cache_control.writes());
         let mut pipeline = Pipeline::new(128 * 1024 * 1024, cache);
         pipeline.share_writes(cache_control.writes());
         processing.remember_timings(subject_root.join("model-prepare-times.json"));
@@ -298,6 +310,9 @@ impl ImageWorker {
             quality_measurements: 0,
             models,
             orientation_model: None,
+            ahead,
+            helpers: 1,
+            ahead_decodes: 0,
         }
     }
 
@@ -339,7 +354,7 @@ impl ImageWorker {
 
     fn stats(&self) -> AnalysisStats {
         AnalysisStats {
-            decodes: self.pipeline.stats.decodes,
+            decodes: self.pipeline.stats.decodes + self.ahead_decodes,
             quality_measurements: self.quality_measurements,
             technical_measurements: self.technical_measurements,
             content_hashes: self.content_hashes,
@@ -366,6 +381,7 @@ impl ImageWorker {
         self.models
             .configure_compiled_cache(self.subject_root.clone(), request.clear);
         self.pipeline.configure_cache(request.limits);
+        self.ahead.configure_cache(request.limits);
         self.subject_persistent = request.limits.disk_mib > 0;
         if let Some(store) = &self.subject_store {
             store.persistent(self.subject_persistent);
@@ -725,6 +741,10 @@ impl ImageWorker {
             return;
         }
         self.begin_models(&scope, model_config);
+        self.helpers = ahead::helpers(
+            model_config,
+            selection.profile != AnalysisProfile::Technical,
+        );
         if retire_stale_results(
             &mut self.results,
             (&mut self.model_signature, models::analysis_signature()),
@@ -818,6 +838,22 @@ impl ImageWorker {
     fn start(&mut self, scope: Arc<Scope>, media: Arc<Vec<Media>>) {
         self.groups = VisualGroups::default();
         self.hashes = HashMap::new();
+        // Helpers measure ahead for every profile that measures; rotation
+        // and face grouping read other evidence.
+        let measures =
+            self.orientation_model.is_none() && self.selection.profile != AnalysisProfile::Faces;
+        match (&self.subject_store, measures) {
+            (Some(store), true) => {
+                let cancelled = scope.clone();
+                self.ahead.begin(
+                    media.clone(),
+                    store.clone(),
+                    Arc::new(move || cancelled.cancelled()),
+                    self.helpers,
+                );
+            }
+            _ => self.ahead.end(),
+        }
         self.pending = Some(Pending {
             scope,
             media,
@@ -832,15 +868,30 @@ impl ImageWorker {
             return false;
         };
         if pending.scope.cancelled() {
+            self.ahead.end();
             return true;
         }
         if pending.index >= pending.media.len() {
+            self.ahead.end();
             self.finish_analysis(&pending.scope);
             return true;
         }
         let item = &pending.media[pending.index];
-        if item.kind != MediaKind::Video && self.analyze_photo(&pending.scope, item) {
-            return true;
+        if item.kind != MediaKind::Video {
+            let ahead = match self.ahead.take(pending.index) {
+                Taken::Ready(measured) => measured.map(|measured| *measured),
+                Taken::Absent => None,
+                // A helper is still on this photo: serve other requests
+                // meanwhile, then ask again.
+                Taken::Waiting => {
+                    self.pending = Some(pending);
+                    return true;
+                }
+            };
+            if self.analyze_photo(&pending.scope, item, ahead) {
+                self.ahead.end();
+                return true;
+            }
         }
         pending.index += 1;
         pending.scope.send(Event::Progress {
@@ -922,11 +973,12 @@ impl ImageWorker {
     }
 
     /// Analyze one photo. Returns true when the run was superseded meanwhile.
-    fn analyze_photo(&mut self, scope: &Scope, item: &Media) -> bool {
+    fn analyze_photo(&mut self, scope: &Scope, item: &Media, ahead: Option<Measured>) -> bool {
         let mut item_metadata = Metadata::default();
-        let result =
-            super::super::crash::catch(|| self.analyze_item(scope, item, &mut item_metadata))
-                .unwrap_or_else(|error| Err(anyhow::anyhow!(error)));
+        let result = super::super::crash::catch(|| {
+            self.analyze_item(scope, item, &mut item_metadata, ahead)
+        })
+        .unwrap_or_else(|error| Err(anyhow::anyhow!(error)));
         // Cancellation can interrupt preparation, measurements or
         // native models. Retire the run before publishing errors,
         // fallback groups or progress for work the user superseded.
@@ -960,6 +1012,7 @@ impl ImageWorker {
         scope: &Scope,
         item: &Media,
         item_metadata: &mut Metadata,
+        ahead: Option<Measured>,
     ) -> anyhow::Result<()> {
         let source_key = Pipeline::key(item)?;
         if self.selection.profile == AnalysisProfile::Faces && self.orientation_model.is_none() {
@@ -995,6 +1048,7 @@ impl ImageWorker {
             media: item,
             source_key,
             prepared: Prepared::default(),
+            ahead,
         };
         let store = self
             .subject_store
@@ -1094,6 +1148,7 @@ impl ImageWorker {
                 technical: value.analysis,
                 hash: value.content_hash,
                 dimensions: (value.width, value.height),
+                source: (value.source_width, value.source_height),
                 embedding: None,
                 aesthetic: None,
                 faces: None,
@@ -1113,6 +1168,24 @@ impl ImageWorker {
         }
         let scope = it.scope;
         let cancelled = || scope.cancelled();
+        // A helper made these from the same recipe, and the analysis image
+        // it decoded serves the later stages too.
+        if let Some(measured) = it.ahead.take()
+            && measured.source_key == it.source_key
+        {
+            anyhow::ensure!(
+                !cancelled() && Pipeline::key(it.media)? == it.source_key,
+                "Photo changed or analysis cancelled"
+            );
+            self.ahead_decodes += measured.decodes;
+            self.technical_measurements += 1;
+            self.quality_measurements += 1;
+            self.content_hashes += 1;
+            self.pipeline.adopt_analysis(it.media, &measured.asset)?;
+            it.prepared = Prepared(Some(measured.asset));
+            store.put_measurements(&key, &measured.measurements)?;
+            return Ok(measured.measurements);
+        }
         let asset = it.asset(&mut self.pipeline)?;
         let mut technical = analysis::analyze_cancellable(&asset, Thresholds::default(), cancelled)
             .context("Image measurements cancelled")?;
@@ -1130,6 +1203,8 @@ impl ImageWorker {
             width: asset.pixels.width(),
             height: asset.pixels.height(),
             content_hash,
+            source_width: asset.metadata.width,
+            source_height: asset.metadata.height,
         };
         store.put_measurements(&key, &value)?;
         Ok(value)
@@ -1318,6 +1393,7 @@ impl ImageWorker {
             technical,
             hash: cached.hash.clone(),
             dimensions: cached.dimensions,
+            source: cached.source,
             embedding: cached.embedding.clone(),
         }
     }
@@ -1330,11 +1406,18 @@ impl ImageWorker {
             technical,
             hash,
             dimensions,
+            source,
             embedding,
         } = self.scored(&it.source_key);
         // Reload the shared metadata snapshot after any cold decode has
         // refined its dimensions. Warm evidence never needs pixel IO.
-        let metadata = self.pipeline.metadata_cancellable(item, &cancelled)?;
+        let mut metadata = self.pipeline.metadata_cancellable(item, &cancelled)?;
+        // The measurements hold the size the decode found, so a reopened run
+        // publishes it even when the render descriptor is gone (pruned, not
+        // written, or cleared mid-run) and the snapshot has only EXIF's.
+        if item.kind != MediaKind::Video && source.0 > 0 && source.1 > 0 {
+            (metadata.width, metadata.height) = source;
+        }
         let duplicate = self.hashes.get(&hash).copied();
         self.hashes.entry(hash.clone()).or_insert(item.id);
         let group = if profile != AnalysisProfile::Technical {
@@ -1491,6 +1574,7 @@ mod signature_tests {
             technical: Analysis::default(),
             hash: "hash".into(),
             dimensions: (4, 3),
+            source: (8, 6),
             embedding: Some(vec![1.0]),
             aesthetic: Some(0.7),
             faces: None,

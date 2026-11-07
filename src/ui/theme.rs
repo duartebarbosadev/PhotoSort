@@ -493,7 +493,117 @@ pub fn install(ctx: &egui::Context) {
         fonts.families.insert(family, chain);
     }
     ctx.set_fonts(fonts);
+    install_style(ctx);
+}
 
+/// The fonts Windows ships for Chinese and Japanese (Microsoft YaHei) and Korean
+/// (Malgun Gothic), so file and folder names Inter cannot draw stop showing as
+/// boxes. They are read on a background thread after the window opens, about
+/// 30 MB, and join every family as the last fallback: Inter and the icon font
+/// still draw everything they can.
+pub fn load_system_fallbacks(ctx: &egui::Context) {
+    #[cfg(target_os = "windows")]
+    {
+        let ctx = ctx.clone();
+        let started = std::thread::Builder::new()
+            .name("photosort-fonts".into())
+            .spawn(move || {
+                let fonts = system_fallbacks();
+                let added = !fonts.is_empty();
+                for font in fonts {
+                    ctx.add_font(font);
+                }
+                if added {
+                    ctx.request_repaint();
+                }
+            });
+        if let Err(error) = started {
+            tracing::warn!(%error, "system fallback fonts are not loaded");
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = ctx;
+}
+
+/// The installed Windows CJK fonts, each as the last fallback of every family.
+#[cfg(target_os = "windows")]
+fn system_fallbacks() -> Vec<egui::epaint::text::FontInsert> {
+    use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
+    let folder = std::env::var_os("SystemRoot")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| r"C:\Windows".into())
+        .join("Fonts");
+    [("system-cjk", "msyh.ttc"), ("system-hangul", "malgun.ttf")]
+        .into_iter()
+        .filter_map(|(name, file)| {
+            let bytes = std::fs::read(folder.join(file)).ok()?;
+            let families = [
+                FontFamily::Proportional,
+                FontFamily::Monospace,
+                FontFamily::Name(MEDIUM.into()),
+                FontFamily::Name(SEMIBOLD.into()),
+            ]
+            .into_iter()
+            .map(|family| InsertFontFamily {
+                family,
+                priority: FontPriority::Lowest,
+            })
+            .collect();
+            Some(FontInsert::new(
+                name,
+                egui::FontData::from_owned(bytes),
+                families,
+            ))
+        })
+        .collect()
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod system_font_tests {
+    use super::*;
+    use crate::ui::test_frame::TestFrame;
+    fn draws(ctx: &egui::Context, family: FontFamily, c: char) -> bool {
+        // Fonts apply at the start of a frame.
+        let _ = ctx.run_test(egui::RawInput::default(), |_| {});
+        ctx.fonts_mut(|fonts| fonts.has_glyph(&FontId::new(14.0, family.clone()), c))
+    }
+    #[test]
+    fn cjk_and_korean_names_draw_once_the_windows_fallbacks_are_added() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        assert!(
+            !draws(&ctx, FontFamily::Proportional, '夕'),
+            "Inter has no CJK"
+        );
+        let fonts = system_fallbacks();
+        if fonts.is_empty() {
+            return; // A Windows install without the CJK fonts.
+        }
+        for font in fonts {
+            ctx.add_font(font);
+        }
+        for family in [
+            FontFamily::Proportional,
+            FontFamily::Name(MEDIUM.into()),
+            FontFamily::Name(SEMIBOLD.into()),
+        ] {
+            for c in ['夕', '食', '照', 'あ', 'カ', '한', 'ç', 'ã'] {
+                assert!(draws(&ctx, family.clone(), c), "{family:?} {c}");
+            }
+        }
+        // Inter stays first: Latin text still uses it, not the fallback.
+        let a = |ctx: &egui::Context| {
+            ctx.fonts_mut(|f| f.glyph_width(&FontId::new(14.0, FontFamily::Proportional), 'a'))
+        };
+        let with_fallbacks = a(&ctx);
+        let plain = egui::Context::default();
+        install(&plain);
+        let _ = plain.run_test(egui::RawInput::default(), |_| {});
+        assert_eq!(with_fallbacks, a(&plain));
+    }
+}
+
+fn install_style(ctx: &egui::Context) {
     let mut style = (*ctx.global_style()).clone();
     let mut visuals = egui::Visuals::dark();
     visuals.panel_fill = PANEL;

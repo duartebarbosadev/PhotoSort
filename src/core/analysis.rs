@@ -257,11 +257,19 @@ pub struct Measurements {
     pub width: u32,
     pub height: u32,
     pub content_hash: String,
+    /// The decoded photo's stored (pre-orientation) size, as the cold run
+    /// publishes it. A reopened run publishes it without decoding, even when
+    /// the render descriptor that also holds it was pruned or never written
+    /// and the metadata snapshot has no size. Zero when the decode reported
+    /// none (videos keep their movie-header geometry).
+    pub source_width: u32,
+    pub source_height: u32,
 }
 impl Measurements {
     pub fn valid(&self) -> bool {
         let a = &self.analysis;
-        (1..=super::pipeline::ANALYSIS_EDGE).contains(&self.width)
+        (self.source_width == 0) == (self.source_height == 0)
+            && (1..=super::pipeline::ANALYSIS_EDGE).contains(&self.width)
             && (1..=super::pipeline::ANALYSIS_EDGE).contains(&self.height)
             && a.sharpness.is_finite()
             && a.sharpness >= 0.0
