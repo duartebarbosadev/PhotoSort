@@ -314,7 +314,11 @@ impl Pipeline {
         // A cached model result can skip image preparation entirely. Restore
         // source geometry from the render descriptor without decoding pixels,
         // while keeping the persisted EXIF snapshot separate and unchanged.
-        if media.kind == MediaKind::Raw || apple_heif(media) {
+        // Every still image needs this, not only RAW and HEIF: EXIF pixel
+        // dimensions can be missing (the pure-Rust reader then has none) or
+        // describe a different image, while a cold run publishes the decoded
+        // size. Videos keep their movie-header geometry.
+        if media.kind != MediaKind::Video {
             for render_key in [key.to_owned(), analysis_key(key)] {
                 if let Some(render) = self.render_info(&render_key) {
                     (meta.width, meta.height) = (render.width, render.height);
