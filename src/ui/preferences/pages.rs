@@ -573,7 +573,11 @@ impl PhotoSortApp {
                         .width(COMBO_WIDTH)
                         .selected_text(draft.processing.backend.label())
                         .show_ui(ui, |ui| {
-                            for backend in Backend::ALL {
+                            let current = draft.processing.backend;
+                            for backend in Backend::ALL
+                                .into_iter()
+                                .filter(|b| b.on_this_platform() || *b == current)
+                            {
                                 ui.selectable_value(
                                     &mut draft.processing.backend,
                                     backend,

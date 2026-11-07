@@ -48,7 +48,15 @@ cargo install cargo-vcpkg
 cargo vcpkg build
 ```
 
-No environment variables are needed. The build finds GStreamer in the installer's default
+vcpkg cannot build in a folder whose path has accented or other non-ASCII characters (such
+as `C:\Users\João\…`); spaces are fine. If yours does, give Cargo a plain build folder
+before both commands, and use it from then on:
+
+```powershell
+$env:CARGO_TARGET_DIR = "C:\photosort-target"
+```
+
+No other environment variables are needed. The build finds GStreamer in the installer's default
 folder (`.cargo/config.toml`); if you installed it elsewhere, set `PKG_CONFIG` and
 `PKG_CONFIG_PATH` to its `bin\pkg-config.exe` and `lib\pkgconfig`. GStreamer does not need
 to be on `PATH`: PhotoSort loads it when a video is first shown, and without it only video

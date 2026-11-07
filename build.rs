@@ -269,7 +269,7 @@ impl Native {
 
     #[cfg(not(windows))]
     fn link_vcpkg(&self) {
-        unreachable!("vcpkg libraries are only used on Windows")
+        unreachable!("{} comes from vcpkg only on Windows", self.port)
     }
 }
 

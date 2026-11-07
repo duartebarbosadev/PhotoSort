@@ -222,6 +222,14 @@ impl PhotoSortApp {
                                 1
                             }
                         };
+                        // Without the runtime no model can run, so its offer comes first.
+                        let runtime_first = snapshot.runtime.is_none();
+                        if runtime_first {
+                            ui.add_space(S2);
+                            ui.label(caption("Runtime"));
+                            ui.add_space(S1);
+                            self.runtime_section(ui, state, &snapshot);
+                        }
                         let titles = [
                             "Needed for the paused analysis",
                             "Used by Easy Delete, Pick Best, Cull and Organize",
@@ -243,10 +251,12 @@ impl PhotoSortApp {
                                 ui.add_space(S1 + 2.0);
                             }
                         }
-                        ui.add_space(S2);
-                        ui.label(caption("Runtime"));
-                        ui.add_space(S1);
-                        self.runtime_section(ui, state, &snapshot);
+                        if !runtime_first {
+                            ui.add_space(S2);
+                            ui.label(caption("Runtime"));
+                            ui.add_space(S1);
+                            self.runtime_section(ui, state, &snapshot);
+                        }
                         if let Some((path, valid)) = &snapshot.orientation_override {
                             ui.label(
                                 RichText::new(if *valid {
@@ -650,9 +660,9 @@ impl PhotoSortApp {
             installing.filter(|(k, _)| *k == package).map(|(_, p)| {
                 if p.total > 0 {
                     format!(
-                        "Downloading {:.0}% of {:.1} GB",
+                        "Downloading {:.0}% of {}",
                         p.bytes as f64 * 100.0 / p.total as f64,
-                        p.total as f64 / 1e9
+                        download_size(p.total)
                     )
                 } else {
                     "Working…".to_owned()
@@ -767,6 +777,14 @@ impl PhotoSortApp {
     }
 }
 
+/// "80 MB" or "3.0 GB".
+fn download_size(bytes: u64) -> String {
+    if bytes >= 1_000_000_000 {
+        format!("{:.1} GB", bytes as f64 / 1e9)
+    } else {
+        format!("{:.0} MB", bytes as f64 / 1e6)
+    }
+}
 /// The manual route: where the runtime library goes when installed by hand.
 fn manual_runtime_help(ui: &mut egui::Ui) {
     let name = if cfg!(target_os = "windows") {
