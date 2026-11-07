@@ -7,6 +7,11 @@ use std::ops::ControlFlow;
 /// Failures with no success before analysis stops as a whole.
 const SYSTEMIC_FAILURES: usize = 5;
 
+/// What a photo's tile shape is drawn from.
+fn shape(metadata: &Metadata) -> (u32, u32, u8) {
+    (metadata.width, metadata.height, metadata.orientation)
+}
+
 /// What browsing filters and sorts by in a photo's metadata: its rating and
 /// everything its capture time and day are read from.
 fn browse_key(metadata: &Metadata) -> (u8, Option<i64>, &str, Option<&str>, Option<i64>) {
@@ -315,7 +320,7 @@ impl PhotoSortApp {
             .metadata
             .get(&id)
             .is_none_or(|known| browse_key(known) != browse_key(&metadata));
-        self.metadata.insert(id, metadata);
+        self.replace_metadata(id, metadata);
         self.update_browse_item(id);
         self.metadata_failures.remove(&id);
         self.filter_dirty |= reorders && (self.filter == Filter::Rated || self.step == Step::Cull);
@@ -479,7 +484,7 @@ impl PhotoSortApp {
             if group > 0 && self.cull_group_run != Some(run) {
                 self.record_analysis_group(run, id, group);
             }
-            self.metadata.insert(id, metadata);
+            self.replace_metadata(id, metadata);
             self.metadata_failures.remove(&id);
             if let Some(original) = duplicate {
                 self.duplicates.insert(id, original);
@@ -490,6 +495,17 @@ impl PhotoSortApp {
                     self.filter,
                     Filter::Issues | Filter::Duplicates | Filter::Rated
                 );
+        }
+    }
+
+    /// Keeps a decode's metadata. A known photo whose size or orientation
+    /// differs advances `metadata_shapes`, so grids laid out from the old
+    /// shape lay out again; a new photo already changes the map's size.
+    fn replace_metadata(&mut self, id: MediaId, metadata: Metadata) {
+        if let Some(known) = self.metadata.insert(id, metadata)
+            && shape(&known) != shape(&self.metadata[&id])
+        {
+            self.metadata_shapes += 1;
         }
     }
 

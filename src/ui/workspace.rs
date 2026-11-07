@@ -205,6 +205,8 @@ pub struct PhotoSortApp {
     group_best: HashMap<usize, (MediaId, usize)>,
     /// Cull groups with a photo scored since their best was picked.
     group_best_stale: HashSet<usize>,
+    /// Advances when a known photo's size or orientation changes.
+    metadata_shapes: u64,
     /// The folder Cull's navigator highlights and scrolls the photos to.
     spy: navigator::Spy,
     /// Swipe compare, while it is open.
@@ -493,6 +495,7 @@ impl PhotoSortApp {
             cull_groups: Arc::default(),
             group_best: HashMap::new(),
             group_best_stale: HashSet::new(),
+            metadata_shapes: 0,
             spy: Default::default(),
             swipe: None,
             automatic_groups: Arc::default(),
