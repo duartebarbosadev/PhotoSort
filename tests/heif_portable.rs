@@ -267,7 +267,9 @@ fn libheif_decodes_follow_the_memory_allowance_with_what_they_need() {
     // says how much it needs, as on macOS; the usual allowance opens it.
     let mut small = Pipeline::new(64 << 20, cache.path().join("small"));
     small.limit_quiet_allowance(1024);
-    let refused = small.load(&media).unwrap_err();
+    let Err(refused) = small.load(&media) else {
+        panic!("a 1 KB allowance opened the photo");
+    };
     let too_large = refused
         .downcast_ref::<photosort::core::memory::TooLarge>()
         .unwrap_or_else(|| panic!("refused for memory: {refused:#}"));
