@@ -349,8 +349,8 @@ jobs:
         with:
           toolchain: stable
       - uses: ./.github/actions/windows-native
-      - name: Test the packaging scripts
-        run: python -B -m unittest discover -s scripts -p 'test_*.py'
+      - name: Test the packaging script
+        run: python -B -m unittest discover -s scripts -p 'test_package_windows.py'
       - name: Fetch ONNX Runtime
         # Only the two libraries PhotoSort loads, as Menu → AI models installs them.
         run: |

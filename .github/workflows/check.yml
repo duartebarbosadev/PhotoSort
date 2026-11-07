@@ -140,7 +140,8 @@ jobs:
         with:
           python-version: '3.13'
       - uses: ./.github/actions/windows-native
-      - run: python -B -m unittest discover -s scripts -p 'test_*.py'
+      # The other packaging scripts are for macOS and Linux, whose jobs test them.
+      - run: python -B -m unittest discover -s scripts -p 'test_package_windows.py'
       - run: cargo nextest run --locked --lib --bins --tests --no-fail-fast
       - run: cargo clippy --locked --all-targets -- -D warnings
   linux:

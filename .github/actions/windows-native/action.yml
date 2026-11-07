@@ -23,9 +23,11 @@ runs:
         EOF
         )"
         echo "vcpkg=vcpkg-$ImageOS-$key" >> "$GITHUB_OUTPUT"
+    # Restored and saved in separate steps, so each cache is kept as soon as it is
+    # filled, even when a later step of the job fails.
     - name: Restore the GStreamer installer
       id: gstreamer-cache
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}\gstreamer-installer
         key: gstreamer-msvc-x86_64-1.28.8
@@ -66,9 +68,15 @@ runs:
         # .cargo/config.toml points pkg-config here.
         $root = 'C:\Program Files\gstreamer\1.0\msvc_x86_64'
         if (-not (Test-Path "$root\bin\gstreamer-1.0-0.dll")) { throw "GStreamer is not in $root" }
+    - name: Save the GStreamer installer
+      if: steps.gstreamer-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}\gstreamer-installer
+        key: gstreamer-msvc-x86_64-1.28.8
     - name: Restore Exiv2, LibRaw and libheif
       id: vcpkg-cache
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           C:\photosort-vcpkg\installed
@@ -85,3 +93,11 @@ runs:
         if ($LASTEXITCODE -ne 0) { throw 'cargo install cargo-vcpkg failed' }
         cargo vcpkg build
         if ($LASTEXITCODE -ne 0) { throw 'cargo vcpkg build failed' }
+    - name: Save Exiv2, LibRaw and libheif
+      if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          C:\photosort-vcpkg\installed
+          C:\photosort-vcpkg\.vcpkg-root
+        key: ${{ steps.keys.outputs.vcpkg }}
