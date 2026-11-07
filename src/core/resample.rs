@@ -82,8 +82,13 @@ fn exact_with(
     threads: usize,
 ) -> DynamicImage {
     // `image` copies instead of filtering at the same size, and has nothing
-    // to sample from an empty source.
-    if (width, height) == image.dimensions() || image.width() == 0 || image.height() == 0 {
+    // to sample from an empty source or into an empty target.
+    if (width, height) == image.dimensions()
+        || image.width() == 0
+        || image.height() == 0
+        || width == 0
+        || height == 0
+    {
         return image.resize_exact(width, height, kernel.filter);
     }
     match image {
@@ -241,7 +246,10 @@ where
         let first = chunks.next();
         for (rows, out) in chunks {
             let columns = &columns;
-            scope.spawn(move || resize_rows(source, columns, rows, out));
+            // A panic here is the photo's error, as on the calling thread.
+            scope.spawn(super::crash::inherit(move || {
+                resize_rows(source, columns, rows, out)
+            }));
         }
         if let Some((rows, out)) = first {
             resize_rows(source, &columns, rows, out);
@@ -394,6 +402,18 @@ mod tests {
             .set_color_space(image::metadata::Cicp::DISPLAY_P3)
             .unwrap();
         assert_identical(&image, 50);
+    }
+
+    #[test]
+    fn empty_targets_match_image() {
+        let image = source(40, 30, 7);
+        for (width, height) in [(0, 10), (10, 0), (0, 0)] {
+            let expected = image.resize_exact(width, height, FilterType::Lanczos3);
+            for threads in [1, 4] {
+                let actual = exact_with(&image, width, height, LANCZOS3, threads);
+                assert_same(&actual, &expected, &format!("{width}x{height}"));
+            }
+        }
     }
 
     #[test]

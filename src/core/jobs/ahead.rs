@@ -16,7 +16,7 @@ use crate::core::{
     analysis::{self, Measurements, Thresholds},
     cache::{Limits, Writes},
     memory::{GIB, Machine, Pressure},
-    model::{Media, MediaKind},
+    model::{Media, MediaKind, Metadata},
     operations,
     pipeline::{Asset, Pipeline},
     processing::{Backend, RunConfig},
@@ -61,7 +61,6 @@ struct Job {
     index: usize,
     media: Media,
     store: Arc<Store>,
-    limits: Option<Limits>,
     cancelled: Cancelled,
     /// The largest decode, by `BYTES_PER_PIXEL`, a helper takes on.
     room: u64,
@@ -78,7 +77,6 @@ struct Run {
     token: u64,
     media: Arc<Vec<Media>>,
     store: Arc<Store>,
-    limits: Option<Limits>,
     cancelled: Cancelled,
     helpers: usize,
     room: u64,
@@ -102,6 +100,9 @@ pub(super) enum Taken {
 pub(super) struct Ahead {
     cache: PathBuf,
     writes: Arc<Writes>,
+    /// The cache limits the image worker applies now; helpers read them for
+    /// every photo, so a change mid-run reaches them too.
+    limits: Arc<Mutex<Option<Limits>>>,
     jobs: Option<Sender<Job>>,
     queue: Arc<Mutex<Receiver<Job>>>,
     done_tx: Sender<Done>,
@@ -135,6 +136,7 @@ impl Ahead {
         Self {
             cache,
             writes,
+            limits: Arc::default(),
             jobs: Some(jobs),
             queue: Arc::new(Mutex::new(queue)),
             done_tx,
@@ -146,13 +148,17 @@ impl Ahead {
         }
     }
 
+    /// The cache limits helper pipelines follow from their next photo on.
+    pub(super) fn configure_cache(&self, limits: Limits) {
+        *self.limits.lock().unwrap() = Some(limits);
+    }
+
     /// Starts preparing `media` ahead of the image worker, replacing any
     /// earlier run. `cancelled` is the run's own cancellation.
     pub(super) fn begin(
         &mut self,
         media: Arc<Vec<Media>>,
         store: Arc<Store>,
-        limits: Option<Limits>,
         cancelled: Cancelled,
         helpers: usize,
     ) {
@@ -164,9 +170,10 @@ impl Ahead {
             let done = self.done_tx.clone();
             let cache = self.cache.clone();
             let writes = self.writes.clone();
+            let limits = self.limits.clone();
             match thread::Builder::new()
                 .name(format!("analysis-helper-{}", self.threads.len()))
-                .spawn(move || work(&live, &queue, &done, cache, writes))
+                .spawn(move || work(&live, &queue, &done, &limits, cache, writes))
             {
                 Ok(thread) => self.threads.push(thread),
                 Err(error) => {
@@ -179,15 +186,15 @@ impl Ahead {
         if helpers == 0 {
             return;
         }
-        // Each helper and the image worker may decode at once; together
-        // they stay within what one decode may use without asking.
+        // Helpers share one quiet allowance with the image worker's typical
+        // photo. The image worker keeps the whole allowance for the large
+        // photos helpers leave to it, as it does next to the preview builders.
         let room = Machine::current().quiet_allowance() / (helpers as u64 + 1);
         self.live.store(self.token, Ordering::Release);
         self.run = Some(Run {
             token: self.token,
             media,
             store,
-            limits,
             cancelled,
             helpers,
             room,
@@ -226,7 +233,6 @@ impl Ahead {
                     index: run.next,
                     media: media.clone(),
                     store: run.store.clone(),
-                    limits: run.limits,
                     cancelled: run.cancelled.clone(),
                     room: run.room,
                 };
@@ -283,6 +289,7 @@ fn work(
     live: &AtomicU64,
     queue: &Mutex<Receiver<Job>>,
     done: &Sender<Done>,
+    limits: &Mutex<Option<Limits>>,
     cache: PathBuf,
     writes: Arc<Writes>,
 ) {
@@ -298,12 +305,19 @@ fn work(
         if job.token != live.load(Ordering::Acquire) {
             continue;
         }
-        // A panic leaves the photo to the image worker, which reports it.
-        let measured = crate::core::crash::catch(|| prepare(&mut pipeline, &job))
-            .ok()
-            .flatten()
-            .map(Box::new);
-        pipeline.clear_memory();
+        if let Some(limits) = *limits.lock().unwrap() {
+            pipeline.configure_cache(limits);
+        }
+        // A panic leaves the photo to the image worker, which reports it, and
+        // this helper still answers, so the image worker never waits on it.
+        let measured = crate::core::crash::catch(|| {
+            let measured = prepare(&mut pipeline, &job);
+            pipeline.clear_memory();
+            measured
+        })
+        .ok()
+        .flatten()
+        .map(Box::new);
         let reply = Done {
             token: job.token,
             index: job.index,
@@ -323,9 +337,6 @@ fn prepare(pipeline: &mut Pipeline, job: &Job) -> Option<Measured> {
     {
         return None;
     }
-    if let Some(limits) = job.limits {
-        pipeline.configure_cache(limits);
-    }
     let source_key = Pipeline::key(&job.media).ok()?;
     if (job.store)
         .measurements(&Store::measurements_key(&source_key))
@@ -334,8 +345,7 @@ fn prepare(pipeline: &mut Pipeline, job: &Job) -> Option<Measured> {
         return None;
     }
     let metadata = pipeline.metadata_cancellable(&job.media, &cancelled).ok()?;
-    let pixels = u64::from(metadata.width) * u64::from(metadata.height);
-    if pixels.saturating_mul(BYTES_PER_PIXEL) > job.room {
+    if pixels(&job.media, &metadata).saturating_mul(BYTES_PER_PIXEL) > job.room {
         return None;
     }
     let before = pipeline.stats.decodes;
@@ -357,6 +367,18 @@ fn prepare(pipeline: &mut Pipeline, job: &Job) -> Option<Measured> {
         asset,
         decodes: pipeline.stats.decodes - before,
     })
+}
+
+/// The source pixels a decode of `media` may hold, as large as either its
+/// metadata or its file header says, so a stale or zero EXIF size never lets
+/// a large photo past `room`. Unknown counts as too large.
+fn pixels(media: &Media, metadata: &Metadata) -> u64 {
+    let area = |(width, height): (u32, u32)| u64::from(width) * u64::from(height);
+    let header = image::image_dimensions(&media.path).map_or(0, area);
+    match area((metadata.width, metadata.height)).max(header) {
+        0 => u64::MAX,
+        pixels => pixels,
+    }
 }
 
 #[cfg(test)]
@@ -387,6 +409,27 @@ mod tests {
         )
     }
 
+    #[test]
+    fn a_missing_or_understated_size_never_passes_for_small() {
+        let dir = tempfile::tempdir().unwrap();
+        let photo = &photos(dir.path(), 1)[0];
+        let stated = |width, height| Metadata {
+            width,
+            height,
+            ..Default::default()
+        };
+        // The file header wins over a smaller or zero EXIF size.
+        assert_eq!(pixels(photo, &stated(0, 0)), 400 * 300);
+        assert_eq!(pixels(photo, &stated(40, 30)), 400 * 300);
+        assert_eq!(pixels(photo, &stated(4000, 3000)), 4000 * 3000);
+        // Neither readable: too large for a helper.
+        let unreadable = Media {
+            path: dir.path().join("missing.bmp"),
+            ..photo.clone()
+        };
+        assert_eq!(pixels(&unreadable, &stated(0, 0)), u64::MAX);
+    }
+
     /// `take`, asking again while a helper is still on the photo.
     fn take(ahead: &mut Ahead, index: usize) -> Taken {
         let deadline = Instant::now() + crate::test_support::worker_patience();
@@ -409,7 +452,7 @@ mod tests {
         let media = photos(dir.path(), 6);
         let store = Arc::new(Store::new(evidence.path().into(), true).unwrap());
         let mut ahead = Ahead::new(cache.path().into(), Arc::default());
-        ahead.begin(media.clone(), store, None, Arc::new(|| false), 3);
+        ahead.begin(media.clone(), store, Arc::new(|| false), 3);
         assert!(
             matches!(take(&mut ahead, 0), Taken::Absent),
             "the image worker takes the first photo itself"
@@ -476,7 +519,7 @@ mod tests {
                 .put_measurements(&Store::measurements_key(&source), &value)
                 .unwrap();
         }
-        ahead.begin(media.clone(), store.clone(), None, Arc::new(|| false), 2);
+        ahead.begin(media.clone(), store.clone(), Arc::new(|| false), 2);
         // The image worker is on the first photo; helpers get the others.
         assert!(matches!(take(&mut ahead, 0), Taken::Absent));
         for index in 1..media.len() {
@@ -490,7 +533,6 @@ mod tests {
         ahead.begin(
             media.clone(),
             fresh,
-            None,
             Arc::new(move || flag.load(Ordering::Relaxed)),
             2,
         );

@@ -243,8 +243,6 @@ struct ImageWorker {
     helpers: usize,
     /// Source decodes helpers made for analysis runs.
     ahead_decodes: u64,
-    /// The cache limits last applied, for helper pipelines.
-    cache_limits: Option<cache::Limits>,
 }
 
 impl ImageWorker {
@@ -312,7 +310,6 @@ impl ImageWorker {
             ahead,
             helpers: 1,
             ahead_decodes: 0,
-            cache_limits: None,
         }
     }
 
@@ -381,7 +378,7 @@ impl ImageWorker {
         self.models
             .configure_compiled_cache(self.subject_root.clone(), request.clear);
         self.pipeline.configure_cache(request.limits);
-        self.cache_limits = Some(request.limits);
+        self.ahead.configure_cache(request.limits);
         self.subject_persistent = request.limits.disk_mib > 0;
         if let Some(store) = &self.subject_store {
             store.persistent(self.subject_persistent);
@@ -848,7 +845,6 @@ impl ImageWorker {
                 self.ahead.begin(
                     media.clone(),
                     store.clone(),
-                    self.cache_limits,
                     Arc::new(move || cancelled.cancelled()),
                     self.helpers,
                 );
