@@ -363,6 +363,8 @@ fn prepare(pipeline: &mut Pipeline, job: &Job) -> Option<Measured> {
             width: asset.pixels.width(),
             height: asset.pixels.height(),
             content_hash,
+            source_width: asset.metadata.width,
+            source_height: asset.metadata.height,
         },
         asset,
         decodes: pipeline.stats.decodes - before,
@@ -483,6 +485,13 @@ mod tests {
                 asset.pixels.dimensions()
             );
             assert_eq!(
+                (
+                    measured.measurements.source_width,
+                    measured.measurements.source_height
+                ),
+                (asset.metadata.width, asset.metadata.height)
+            );
+            assert_eq!(
                 measured.measurements.content_hash,
                 operations::content_hash(&photo.path, || false).unwrap()
             );
@@ -514,6 +523,8 @@ mod tests {
                 width: asset.pixels.width(),
                 height: asset.pixels.height(),
                 content_hash: operations::content_hash(&photo.path, || false).unwrap(),
+                source_width: asset.metadata.width,
+                source_height: asset.metadata.height,
             };
             store
                 .put_measurements(&Store::measurements_key(&source), &value)
