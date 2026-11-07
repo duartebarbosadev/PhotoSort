@@ -501,6 +501,21 @@ fn danger_button(text: &str) -> egui::Button<'static> {
         .stroke(Stroke::new(1.0, RED.gamma_multiply(0.45)))
 }
 
+/// Settings > Performance, Run AI on. macOS starts on Automatic, others on CPU
+/// (`Backend::platform_default`).
+const AI_PROCESSING_HELP: &str = if cfg!(target_os = "macos") {
+    "Applies to the next analysis in every workflow. Automatic chooses a platform provider and is the default on this Mac. Missing or failing providers fall back to CPU per model.\n\nAcceleration requires a compatible ONNX Runtime and driver. First model preparation can take minutes and extra memory. Native compilation finishes before cancellation can release it; cached photo results remain reusable.\n\nSession providers can still use CPU for unsupported operations; they do not prove that every operation ran on a GPU."
+} else {
+    "Applies to the next analysis in every workflow. Automatic chooses a platform provider; CPU is the default on this computer. Missing or failing providers fall back to CPU per model.\n\nAcceleration requires a compatible ONNX Runtime and driver. First model preparation can take minutes and extra memory. Native compilation finishes before cancellation can release it; cached photo results remain reusable.\n\nSession providers can still use CPU for unsupported operations; they do not prove that every operation ran on a GPU."
+};
+/// Settings > Storage, Disk cache limit. Only macOS prepares AI models for
+/// the computer (Core ML), which the limit leaves alone.
+const DISK_CACHE_HELP: &str = if cfg!(target_os = "macos") {
+    "Limits apply when settings are saved. The default follows the free space on this disk. Zero disables persistent previews and AI evidence. AI models prepared for this Mac are kept separately, whatever this limit. A model, runtime or macOS update replaces them, and clearing caches removes them. Displayed images and models use additional memory."
+} else {
+    "Limits apply when settings are saved. The default follows the free space on this disk. Zero disables persistent previews and AI evidence. Displayed images and models use additional memory."
+};
+
 /// A size in MiB in plain words.
 fn size_text(mib: f64) -> String {
     if mib >= 1024.0 {
@@ -552,9 +567,7 @@ impl PhotoSortApp {
             rows.row(
                 "Run AI on",
                 "Automatic picks the fastest option for this computer.",
-                Some(
-                    "Applies to the next analysis in every workflow. Automatic chooses a platform provider and is the default on Mac. Missing or failing providers fall back to CPU per model.\n\nAcceleration requires a compatible ONNX Runtime and driver. First model preparation can take minutes and extra memory. Native compilation finishes before cancellation can release it; cached photo results remain reusable.\n\nSession providers can still use CPU for unsupported operations; they do not prove that every operation ran on a GPU.",
-                ),
+                Some(AI_PROCESSING_HELP),
                 |ui| {
                     egui::ComboBox::from_id_salt("inference-backend")
                         .width(COMBO_WIDTH)
@@ -698,16 +711,23 @@ impl PhotoSortApp {
             rows.row(
                 "Disk cache limit",
                 "Previews and AI results kept between sessions.",
-                Some("Limits apply when settings are saved. The default follows the free space on this disk. Zero disables persistent previews and AI evidence. AI models prepared for this computer are kept separately, whatever this limit. A model, runtime or macOS update replaces them, and clearing caches removes them. Displayed images and models use additional memory."),
+                Some(DISK_CACHE_HELP),
                 |ui| {
                     if scale(
                         ui,
-                        egui::Slider::new(&mut draft.cache.disk_mib, 0..=crate::core::cache::DISK_MAX_MIB)
-                            .logarithmic(true),
+                        egui::Slider::new(
+                            &mut draft.cache.disk_mib,
+                            0..=crate::core::cache::DISK_MAX_MIB,
+                        )
+                        .logarithmic(true),
                         "Disk cache",
                         f64::from(disk),
                         ("Off", "More"),
-                        &if disk == 0 { "Off".to_owned() } else { size_text(f64::from(disk)) },
+                        &if disk == 0 {
+                            "Off".to_owned()
+                        } else {
+                            size_text(f64::from(disk))
+                        },
                         Some(disk != defaults.disk_mib),
                     ) {
                         draft.cache.disk_mib = defaults.disk_mib;
@@ -761,13 +781,13 @@ impl PhotoSortApp {
                     "{}, kept outside the limit.",
                     size_text(usage.model_bytes as f64 / 1048576.0)
                 );
+                let (computer, system) = if cfg!(target_os = "macos") {
+                    ("this Mac", "macOS")
+                } else {
+                    ("this computer", "system")
+                };
                 let mut details = format!(
-                    "AI models prepared for {} are slow to prepare again, so the disk cache limit never removes them. A model, runtime or macOS update replaces them, and Clear caches removes them.",
-                    if cfg!(target_os = "macos") {
-                        "this Mac"
-                    } else {
-                        "this computer"
-                    }
+                    "AI models prepared for {computer} are slow to prepare again, so the disk cache limit never removes them. A model, runtime or {system} update replaces them, and Clear caches removes them."
                 );
                 if usage.pinned_disk_bytes > 0 {
                     details.push_str(&format!(
