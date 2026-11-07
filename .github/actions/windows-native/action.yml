@@ -1,0 +1,103 @@
+name: Windows native libraries
+description: >-
+  Installs GStreamer from its official MSVC installer and builds Exiv2, LibRaw and
+  libheif with vcpkg at the revision Cargo.toml pins, as CONTRIBUTING.md describes.
+  Both are cached. Needs the checkout, Python 3.11+ and the Rust toolchain.
+runs:
+  using: composite
+  steps:
+    - name: Choose the cache keys
+      id: keys
+      shell: bash
+      env:
+        # Outside target/, so the Rust cache does not carry it; cached on its own below.
+        # Only its installed tree is kept, which is all the build reads.
+        VCPKG_ROOT: C:\photosort-vcpkg
+      run: |
+        echo "VCPKG_ROOT=$VCPKG_ROOT" >> "$GITHUB_ENV"
+        # The vcpkg revision and ports decide what is built; the compiler comes with the image.
+        key="$(python -I - <<'EOF'
+        import hashlib, json, tomllib
+        vcpkg = tomllib.load(open("Cargo.toml", "rb"))["package"]["metadata"]["vcpkg"]
+        print(hashlib.sha256(json.dumps(vcpkg, sort_keys=True).encode()).hexdigest()[:16])
+        EOF
+        )"
+        echo "vcpkg=vcpkg-$ImageOS-$key" >> "$GITHUB_OUTPUT"
+    # Restored and saved in separate steps, so each cache is kept as soon as it is
+    # filled, even when a later step of the job fails.
+    - name: Restore the GStreamer installer
+      id: gstreamer-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}\gstreamer-installer
+        key: gstreamer-msvc-x86_64-1.28.8
+    - name: Install GStreamer
+      shell: pwsh
+      env:
+        GSTREAMER_VERSION: 1.28.8
+        # The installer's published .sha256sum, checked again below.
+        GSTREAMER_SHA256: e4c41ee6ee9c6c32a45d198463ec08d79bac3bd5fa58adc93d13fe4a08abc9d9
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $name = "gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.exe"
+        $url = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GSTREAMER_VERSION/msvc/$name"
+        $folder = Join-Path $env:RUNNER_TEMP 'gstreamer-installer'
+        $installer = Join-Path $folder $name
+        if (-not (Test-Path $installer)) {
+          New-Item -ItemType Directory -Force $folder | Out-Null
+          # The server sometimes ends the 540 MB transfer early; resume where it stopped.
+          foreach ($attempt in 1..6) {
+            curl.exe --fail --location --proto '=https' --retry 3 --retry-all-errors --retry-delay 5 `
+              --continue-at - --silent --show-error --output $installer $url
+            if ($LASTEXITCODE -eq 0) { break }
+            Write-Host "Download attempt $attempt stopped (curl exit $LASTEXITCODE); resuming"
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Could not download $url" }
+        }
+        $published = (curl.exe --fail --location --proto '=https' --retry 3 --silent --show-error "$url.sha256sum")
+        if ($LASTEXITCODE -ne 0) { throw "Could not download $url.sha256sum" }
+        $published = ($published -split '\s+')[0].ToLowerInvariant()
+        $actual = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
+        if ($actual -ne $env:GSTREAMER_SHA256 -or $published -ne $env:GSTREAMER_SHA256) {
+          Remove-Item $installer
+          throw "GStreamer installer SHA-256 $actual; published $published, expected $env:GSTREAMER_SHA256"
+        }
+        $process = Start-Process -FilePath $installer -Wait -PassThru `
+          -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/TYPE=full'
+        if ($process.ExitCode -ne 0) { throw "The GStreamer installer exited with $($process.ExitCode)" }
+        # .cargo/config.toml points pkg-config here.
+        $root = 'C:\Program Files\gstreamer\1.0\msvc_x86_64'
+        if (-not (Test-Path "$root\bin\gstreamer-1.0-0.dll")) { throw "GStreamer is not in $root" }
+    - name: Save the GStreamer installer
+      if: steps.gstreamer-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}\gstreamer-installer
+        key: gstreamer-msvc-x86_64-1.28.8
+    - name: Restore Exiv2, LibRaw and libheif
+      id: vcpkg-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          C:\photosort-vcpkg\installed
+          C:\photosort-vcpkg\.vcpkg-root
+        key: ${{ steps.keys.outputs.vcpkg }}
+    - name: Build Exiv2, LibRaw and libheif
+      if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        # cargo-vcpkg runs vcpkg's bootstrap script by its bare name, which this setting forbids.
+        Remove-Item Env:NoDefaultCurrentDirectoryInExePath -ErrorAction SilentlyContinue
+        cargo install cargo-vcpkg --version 0.1.7 --locked
+        if ($LASTEXITCODE -ne 0) { throw 'cargo install cargo-vcpkg failed' }
+        cargo vcpkg build
+        if ($LASTEXITCODE -ne 0) { throw 'cargo vcpkg build failed' }
+    - name: Save Exiv2, LibRaw and libheif
+      if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          C:\photosort-vcpkg\installed
+          C:\photosort-vcpkg\.vcpkg-root
+        key: ${{ steps.keys.outputs.vcpkg }}

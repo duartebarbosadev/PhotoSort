@@ -1,0 +1,35 @@
+name: Fetch the AI models
+description: >-
+  Downloads the seven pinned models into resources/models: the files Menu → AI models
+  downloads (src/core/model_assets.rs). The caller verifies them against
+  resources/SHA256SUMS, so a replaced file fails the build.
+inputs:
+  models-release:
+    description: Prerelease holding the converted models (CONTRIBUTING.md#converted-models).
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Fetch the downloadable models
+      shell: bash
+      run: |
+        fetch() {
+          curl --fail --location --proto '=https' --retry 3 --output "resources/models/$1" "$2"
+        }
+        fetch dinov2-small.onnx \
+          https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/model.onnx
+        fetch face_recognition_sface.onnx \
+          https://media.githubusercontent.com/media/opencv/opencv_zoo/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+        fetch orientation.onnx \
+          https://github.com/duartebarbosadev/deep-image-orientation-detection/releases/download/v2/orientation_model_v2_0.9882.onnx
+    - name: Fetch the converted models
+      # The aesthetic and MediaPipe exports have no upstream download, so they are
+      # assets of a prerelease in this repository.
+      shell: bash
+      env:
+        MODELS_RELEASE: ${{ inputs.models-release }}
+      run: |
+        for name in aesthetic.onnx face_detector.onnx face_landmarks_detector.onnx face_blendshapes.onnx; do
+          curl --fail --location --proto '=https' --retry 3 --output "resources/models/$name" \
+            "https://github.com/duartebarbosadev/PhotoSort/releases/download/$MODELS_RELEASE/$name"
+        done
