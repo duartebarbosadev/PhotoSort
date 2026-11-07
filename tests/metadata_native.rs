@@ -131,3 +131,21 @@ fn heif_container_rotation_and_sidecar_override_survive_native_metadata() {
     let metadata = metadata::read(&path);
     assert_eq!((metadata.orientation, metadata.rating), (8, 3));
 }
+#[test]
+fn an_unreadable_file_never_blocks_later_metadata_reads() {
+    // Exiv2 throws on files it cannot parse. The bridge must release its lock
+    // while that exception unwinds (MSVC needs /EHsc), or every later read hangs.
+    let temp = tempfile::tempdir().unwrap();
+    let unreadable = temp.path().join("not-a-photo.jpg");
+    std::fs::write(&unreadable, b"not an image").unwrap();
+    for _ in 0..3 {
+        assert_eq!(metadata::read(&unreadable).metadata_fields, 0);
+    }
+    let path = fixtures().join("mixed.jpg");
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || sender.send(metadata::read(&path).rating).unwrap());
+    let rating = receiver
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("a metadata read after an unreadable file must finish");
+    assert_eq!(rating, 4);
+}

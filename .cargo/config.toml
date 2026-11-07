@@ -3,3 +3,9 @@
 # cannot prevent creation of the POSIX uploader during environment construction.
 [env]
 ORT_DISABLE_TELEMETRY = { value = "1", force = true }
+# Windows (MSVC): find GStreamer where its official installer (or
+# `winget install gstreamerproject.gstreamer`) puts it. These names only apply to
+# this target, so other platforms keep their own pkg-config, and variables you set
+# yourself take precedence.
+PKG_CONFIG_x86_64_pc_windows_msvc = { value = 'C:\Program Files\gstreamer\1.0\msvc_x86_64\bin\pkg-config.exe', force = false }
+PKG_CONFIG_PATH_x86_64_pc_windows_msvc = { value = 'C:\Program Files\gstreamer\1.0\msvc_x86_64\lib\pkgconfig', force = false }

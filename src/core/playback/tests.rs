@@ -294,7 +294,7 @@ fn changed_source_stops_playback_and_releases_native_owner() {
 #[cfg(all(feature = "portable-video", not(target_os = "macos")))]
 #[test]
 fn portable_decoder_uses_one_owner_and_discards_old_frames_on_navigation() {
-    gst::init().unwrap();
+    portable::initialize().unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video");
     let catalog = crate::core::catalog::Catalog::scan(&root, || false, |_| {}).unwrap();
     let opened = Arc::new(AtomicUsize::new(0));

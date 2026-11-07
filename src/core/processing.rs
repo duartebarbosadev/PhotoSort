@@ -34,6 +34,16 @@ impl Backend {
         Self::Cuda,
         Self::DirectMl,
     ];
+    /// Whether this backend can run on this platform at all, so Settings only
+    /// offers what could work here (Core ML is Apple's, DirectML is Windows').
+    pub fn on_this_platform(self) -> bool {
+        match self {
+            Self::Cpu | Self::Auto => true,
+            Self::CoreMl => cfg!(target_os = "macos"),
+            Self::Cuda => cfg!(any(target_os = "windows", target_os = "linux")),
+            Self::DirectMl => cfg!(target_os = "windows"),
+        }
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::Cpu => "CPU",
@@ -344,5 +354,30 @@ impl Control {
     }
     pub fn snapshot(&self) -> usize {
         self.snapshot_run().threads
+    }
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::Backend;
+    #[test]
+    fn settings_offer_only_backends_that_can_run_here() {
+        assert!(Backend::Cpu.on_this_platform() && Backend::Auto.on_this_platform());
+        assert_eq!(
+            Backend::CoreMl.on_this_platform(),
+            cfg!(target_os = "macos")
+        );
+        assert_eq!(
+            Backend::DirectMl.on_this_platform(),
+            cfg!(target_os = "windows")
+        );
+        assert_eq!(
+            Backend::Cuda.on_this_platform(),
+            cfg!(any(target_os = "windows", target_os = "linux"))
+        );
+        // Whatever Automatic may try is always offered on its own platform.
+        for candidate in Backend::Auto.candidates() {
+            assert!(candidate.on_this_platform(), "{candidate:?}");
+        }
     }
 }

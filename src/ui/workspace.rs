@@ -416,6 +416,7 @@ impl PhotoSortApp {
 
     pub fn new(cc: &eframe::CreationContext<'_>, folder: Option<PathBuf>) -> Self {
         theme_install(&cc.egui_ctx);
+        super::theme::load_system_fallbacks(&cc.egui_ctx);
         let ctx = cc.egui_ctx.clone();
         let runtime = Runtime::new(move || ctx.request_repaint());
         let mut app = Self::with_runtime(runtime, None);

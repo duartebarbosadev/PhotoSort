@@ -12,6 +12,7 @@ mod worker;
 pub use worker::{Progress, State, Work, Worker};
 #[cfg(feature = "model-downloads")]
 mod download;
+pub mod runtime;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Id {
     Scene,
@@ -244,6 +245,8 @@ pub struct Snapshot {
     pub orientation_override: Option<(PathBuf, bool)>,
     pub rows: Vec<Row>,
     pub runtime: Option<PathBuf>,
+    /// The installed NVIDIA GPU support package, when complete.
+    pub cuda: Option<PathBuf>,
     pub hash_reads: usize,
 }
 #[derive(Default)]
@@ -354,6 +357,9 @@ impl Inspector {
                 }),
             rows,
             runtime: runtime_file(),
+            cuda: roots
+                .first()
+                .and_then(|root| runtime::installed(root, runtime::Package::Cuda)),
             hash_reads: self.hash_reads,
         })
     }
