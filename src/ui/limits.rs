@@ -29,12 +29,21 @@ pub(super) struct State {
     notice: Option<Notice>,
     /// The memory pressure last seen, to release textures once it rises.
     pressure: Pressure,
+    /// The counters when the open folder was opened: prompts are about
+    /// what happened in this folder, not in one opened before.
+    folder: Baseline,
+}
+#[derive(Clone, Copy, Debug, Default)]
+struct Baseline {
+    epoch: u64,
+    written: u64,
+    photos: u64,
+    evicted: u64,
+    detail_overflow: u64,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Notice {
     pub prompt: LimitPrompt,
-    /// The folder it was about (the runtime epoch); another folder drops it.
-    pub epoch: u64,
     pub title: String,
     pub body: String,
     /// The setting it offers, in MiB.
@@ -74,7 +83,6 @@ pub(super) fn detail_notice(bytes: u64, limits: Limits, max_mib: u32) -> Option<
         ),
         increase_to,
         quiet: false,
-        epoch: 0,
     })
 }
 /// The disk cache prompt once a trim removed previews of this session.
@@ -99,7 +107,6 @@ pub(super) fn disk_notice(needed: u64, limits: Limits, free: Option<u64>) -> Opt
         ),
         increase_to,
         quiet: false,
-        epoch: 0,
     })
 }
 
@@ -138,39 +145,47 @@ impl PhotoSortApp {
             // Smaller under pressure: let go of textures not on screen now.
             self.evict(0);
         }
-        let epoch = self.runtime.epoch();
-        if let Some(notice) = &self.limits.notice {
-            if notice.epoch == epoch {
-                return;
+        // Every pipeline's disk cache writes: the image worker's and the builder's.
+        let writes = self.runtime.cache.writes();
+        let load = |n: &std::sync::atomic::AtomicU64| n.load(std::sync::atomic::Ordering::Relaxed);
+        let now = Baseline {
+            epoch: self.runtime.epoch(),
+            written: load(&writes.written),
+            photos: load(&writes.photos),
+            evicted: load(&writes.evicted),
+            detail_overflow: self.stats.detail_overflow,
+        };
+        if now.epoch != self.limits.folder.epoch {
+            // Another folder: an unanswered prompt about the last one goes,
+            // and may come back if this folder runs into the same limit.
+            if let Some(notice) = self.limits.notice.take() {
+                self.limits.asked.remove(&notice.prompt);
             }
-            // Unanswered, about a folder no longer open: it may ask again.
-            self.limits.asked.remove(&notice.prompt);
-            self.limits.notice = None;
+            self.limits.folder = now;
         }
+        if self.limits.notice.is_some() {
+            return;
+        }
+        let folder = self.limits.folder;
         let quiet = &self.preferences.limit_prompts.quiet;
         let can_ask = |prompt| !quiet.contains(&prompt) && !self.limits.asked.contains(&prompt);
         let limits = self.preferences.cache;
+        // A photo of this folder was too large for detail memory.
         let detail = (can_ask(LimitPrompt::DetailMemory)
-            && self.stats.detail_overflow > u64::from(limits.originals_mib) * MIB)
-            .then(|| {
-                detail_notice(
-                    self.stats.detail_overflow,
-                    limits,
-                    Limits::originals_max_mib(),
-                )
-            })
+            && now.detail_overflow != folder.detail_overflow
+            && now.detail_overflow > u64::from(limits.originals_mib) * MIB)
+            .then(|| detail_notice(now.detail_overflow, limits, Limits::originals_max_mib()))
             .flatten();
         let notice = detail.or_else(|| {
-            // Every pipeline's writes: the image worker's and the builder's.
-            let writes = self.runtime.cache.writes();
-            let load =
-                |n: &std::sync::atomic::AtomicU64| n.load(std::sync::atomic::Ordering::Relaxed);
-            let (written, photos) = (load(&writes.written), load(&writes.photos));
-            (can_ask(LimitPrompt::DiskCache) && load(&writes.evicted) > 0 && photos > 0)
+            // A trim removed previews made while this folder was open.
+            let (written, photos) = match now.photos - folder.photos {
+                0 => (now.written, now.photos),
+                photos => (now.written - folder.written, photos),
+            };
+            (can_ask(LimitPrompt::DiskCache) && now.evicted > folder.evicted && photos > 0)
                 .then(|| {
-                    let per_photo = written / photos;
                     disk_notice(
-                        per_photo * self.media.len().max(1) as u64,
+                        written / photos * self.media.len().max(1) as u64,
                         limits,
                         Machine::current().free_disk,
                     )
@@ -179,7 +194,7 @@ impl PhotoSortApp {
         });
         if let Some(notice) = notice {
             self.limits.asked.insert(notice.prompt);
-            self.limits.notice = Some(Notice { epoch, ..notice });
+            self.limits.notice = Some(notice);
         }
     }
 
@@ -439,12 +454,16 @@ mod tests {
             app.limits.notice.as_ref().map(|n| n.prompt),
             Some(LimitPrompt::DetailMemory)
         );
-        // Unanswered when another folder opens: it goes, and may ask again.
+        // Unanswered when another folder opens: it goes, and asks again only
+        // once a photo of the new folder is too large.
         app.runtime.next_epoch();
         app.check_limits();
+        assert!(app.limits.notice.is_none());
+        app.stats.detail_overflow = 500 * MIB;
+        app.check_limits();
         assert_eq!(
-            app.limits.notice.as_ref().map(|n| n.epoch),
-            Some(app.runtime.epoch())
+            app.limits.notice.as_ref().map(|n| n.prompt),
+            Some(LimitPrompt::DetailMemory)
         );
         app.limits.notice.as_mut().unwrap().quiet = true;
         app.answer_limit_notice(true);

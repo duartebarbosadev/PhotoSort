@@ -115,20 +115,26 @@ fn display_previews_are_the_same_jpeg_pixels_whatever_the_cache_holds() {
         ..Default::default()
     });
     assert_eq!(*uncached.load(&m).unwrap().pixels, *fresh.pixels);
-    // From earlier versions: PNG thumbnails still open the grid; an opaque
-    // PNG preview is made again, so it shows the same pixels as above.
+    // From earlier versions, which kept every preview as a lossless PNG
+    // (here the photo itself, already preview-sized): the grid opens from
+    // the PNG thumbnail, and the preview becomes the JPEG a fresh render
+    // makes, the same pixels as above, without decoding the photo again.
     for jpg in with("jpg") {
-        image::open(&jpg)
-            .unwrap()
-            .save(jpg.with_extension("png"))
-            .unwrap();
+        let preview = jpg.with_extension("json").exists();
+        let old = if preview {
+            image::open(&m.path).unwrap()
+        } else {
+            image::open(&jpg).unwrap()
+        };
+        old.save(jpg.with_extension("png")).unwrap();
         fs::remove_file(jpg).unwrap();
     }
     let mut upgraded = Pipeline::new(1_000_000, cache.path().to_owned());
     assert!(upgraded.cached_thumbnail(&m, || false).is_some());
-    assert_eq!(upgraded.stats.decodes, 0);
     assert_eq!(*upgraded.load(&m).unwrap().pixels, *fresh.pixels);
-    assert_eq!(upgraded.stats.decodes, 1);
+    assert_eq!(upgraded.stats.decodes, 0);
+    // The JPEG replaced the old preview; the old thumbnail stays as it is.
+    assert_eq!((with("jpg").len(), with("png").len()), (1, 1));
 }
 #[test]
 fn grid_thumbnails_reopen_from_their_own_artifact_without_decoding() {

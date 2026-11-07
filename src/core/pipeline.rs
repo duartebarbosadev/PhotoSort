@@ -358,7 +358,7 @@ impl Pipeline {
             return None;
         }
         let saved = self.render_info(&source_key)?;
-        let image = read_cached_image(&self.disk, &thumb_key(&display_key), |_| true)?;
+        let (image, _) = read_cached_image(&self.disk, &thumb_key(&display_key))?;
         let mut meta = self.metadata_for_key(media, &source_key, &cancelled).ok()?;
         if media.kind != MediaKind::Video {
             (meta.width, meta.height) = (saved.width, saved.height);
@@ -372,9 +372,35 @@ impl Pipeline {
             decoder_warning: saved.warning,
         })
     }
+    /// A display preview an earlier version stored as PNG, made the JPEG a
+    /// fresh render makes now, without decoding the photo again: it shows,
+    /// and gives the rotation model, the same pixels as a fresh render. The
+    /// JPEG replaces the PNG on disk.
+    fn upgrade_preview(
+        &mut self,
+        key: &str,
+        preview: DynamicImage,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<DynamicImage> {
+        let preview = compact_opaque_proxy(preview, cancelled)?;
+        if !is_jpeg_preview(&preview, true) {
+            return Ok(preview);
+        }
+        let (bytes, format, read_back) =
+            encode_cached(&preview, true).context("Cannot encode a cached preview")?;
+        if write_cached(&bytes, format, &self.disk, key).is_some() {
+            let _ = std::fs::remove_file(self.disk.join(format!("{key}.png")));
+        }
+        Ok(read_back.unwrap_or(preview))
+    }
     /// Stores the grid thumbnail and returns it as a later session reads it
     /// back, so a fresh tile and a reopened one are the same pixels.
-    fn save_thumbnail(&mut self, source_key: &str, thumbnail: &RgbaImage) -> Option<RgbaImage> {
+    fn save_thumbnail(
+        &mut self,
+        source_key: &str,
+        thumbnail: &RgbaImage,
+        cancelled: &impl Fn() -> bool,
+    ) -> Option<RgbaImage> {
         if self.disk_budget == 0 || std::fs::create_dir_all(&self.disk).is_err() {
             return None;
         }
@@ -394,7 +420,7 @@ impl Pipeline {
         };
         let (bytes, format, read_back) = encode_cached(&image, true)?;
         write_cached(&bytes, format, &self.disk, &key)?;
-        self.note_cache_write(None, bytes.len() as u64, &|| false);
+        self.note_cache_write(None, bytes.len() as u64, cancelled);
         read_back.map(|image| image.to_rgba8())
     }
     /// Counts new cache bytes and trims the folder now and then. A trim lists
@@ -564,13 +590,14 @@ impl Pipeline {
         let saved = self.render_info(&key);
         let warning;
         let decoded = if let Some(saved) = saved
-            && let Some(proxy) = read_cached_image(&self.disk, &key, |image| {
-                // An opaque display preview is a JPEG now; an opaque PNG is an
-                // older lossless one, which would show (and give the rotation
-                // model) other pixels than a fresh render.
-                analysis || image.color().has_alpha()
-            }) {
+            && let Some((proxy, jpeg)) = read_cached_image(&self.disk, &key)
+        {
             self.stats.disk_hits += 1;
+            let proxy = if jpeg || analysis {
+                proxy
+            } else {
+                self.upgrade_preview(&key, proxy, cancelled)?
+            };
             // Geometry and warnings are part of the same rendered artifact.
             // Never publish cached pixels without the status that produced them.
             if media.kind != MediaKind::Video {
@@ -625,13 +652,25 @@ impl Pipeline {
             );
             // Display previews are JPEG, encoded even when nothing is written,
             // so what is shown (and what the rotation model reads) never
-            // depends on the cache. Analysis input stays lossless.
-            let Some((bytes, format, read_back)) = encode_cached(&proxy, !analysis) else {
-                anyhow::bail!("Cannot encode the preview of {}", media.name());
+            // depends on the cache. Analysis input stays lossless and is
+            // encoded only to be written.
+            let writing = self.disk_budget > 0 && std::fs::create_dir_all(&self.disk).is_ok();
+            let encoded = if writing || is_jpeg_preview(&proxy, !analysis) {
+                let Some(encoded) = encode_cached(&proxy, !analysis) else {
+                    anyhow::bail!("Cannot encode the preview of {}", media.name());
+                };
+                Some(encoded)
+            } else {
+                None
             };
-            let proxy = read_back.unwrap_or(proxy);
-            if self.disk_budget > 0
-                && std::fs::create_dir_all(&self.disk).is_ok()
+            let (proxy, encoded) = match encoded {
+                Some((bytes, format, read_back)) => {
+                    (read_back.unwrap_or(proxy), Some((bytes, format)))
+                }
+                None => (proxy, None),
+            };
+            if writing
+                && let Some((bytes, format)) = encoded
                 && write_cached(&bytes, format, &self.disk, &key).is_some()
             {
                 let _ = metadata::atomic_write(
@@ -675,7 +714,7 @@ impl Pipeline {
             } else {
                 source_key.clone()
             };
-            self.save_thumbnail(&display_key, &thumbnail)
+            self.save_thumbnail(&display_key, &thumbnail, cancelled)
                 .map_or(thumbnail, Arc::new)
         });
         let pixels = Arc::new(decoded.to_rgba8());
@@ -1336,20 +1375,19 @@ fn native_pixels(
 /// Display previews and grid thumbnails are JPEG at this quality: about a
 /// fifth of a PNG, so the same disk limit keeps several times more photos.
 const PREVIEW_QUALITY: u8 = 92;
-/// A cache image, marked as used: a JPEG, or a PNG that `accept_png` takes.
-fn read_cached_image(
-    disk: &Path,
-    key: &str,
-    accept_png: impl Fn(&DynamicImage) -> bool,
-) -> Option<DynamicImage> {
+/// A cache image, marked as used, and whether it is a JPEG (or the PNG
+/// older versions wrote for every preview).
+fn read_cached_image(disk: &Path, key: &str) -> Option<(DynamicImage, bool)> {
     ["jpg", "png"].iter().find_map(|ext| {
         let path = disk.join(format!("{key}.{ext}"));
-        let image = image::open(&path)
-            .ok()
-            .filter(|image| *ext == "jpg" || accept_png(image))?;
+        let image = image::open(&path).ok()?;
         super::cache::touch(&path);
-        Some(image)
+        Some((image, *ext == "jpg"))
     })
+}
+/// Whether `encode_cached` makes this image a JPEG.
+fn is_jpeg_preview(image: &DynamicImage, lossy: bool) -> bool {
+    lossy && matches!(image, DynamicImage::ImageRgb8(_))
 }
 /// With `lossy`, an opaque 8-bit image becomes a JPEG and comes back as a
 /// later read decodes it; anything else (analysis input, alpha, 16-bit) is a
@@ -1359,7 +1397,7 @@ fn encode_cached(
     lossy: bool,
 ) -> Option<(Vec<u8>, image::ImageFormat, Option<DynamicImage>)> {
     let mut bytes = Vec::new();
-    if lossy && matches!(image, DynamicImage::ImageRgb8(_)) {
+    if is_jpeg_preview(image, lossy) {
         image
             .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
                 &mut bytes,

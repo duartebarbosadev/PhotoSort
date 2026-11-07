@@ -26,7 +26,8 @@ use std::{
 #[derive(Default)]
 struct Queue {
     media: Arc<Vec<Media>>,
-    /// Indices of `media` in build order: outward from the photo on screen.
+    /// Indices of `media` in build order: outward from the photo on screen,
+    /// which comes last.
     order: Vec<usize>,
     next: usize,
     /// Photos being built right now.
@@ -59,15 +60,16 @@ pub(super) fn thread_count() -> usize {
         (crate::core::processing::available() / 2).clamp(1, 4)
     }
 }
-/// `0, 1, ..` reordered to start at `start` and alternate outward from it.
+/// `0, 1, ..` reordered to alternate outward from `start`. `start` itself
+/// goes last: it is on screen, so the image worker is decoding it already.
 fn outward(len: usize, start: usize) -> Vec<usize> {
     let start = start.min(len.saturating_sub(1));
     let mut order = Vec::with_capacity(len);
-    order.extend((start < len).then_some(start));
     for step in 1..len {
         order.extend(start.checked_add(step).filter(|&i| i < len));
         order.extend(start.checked_sub(step));
     }
+    order.extend((start < len).then_some(start));
     order
 }
 impl Builder {
@@ -238,8 +240,8 @@ mod tests {
     use crate::core::model::{Fingerprint, MediaId, MediaKind};
     #[test]
     fn the_builder_fills_the_cache_next_to_the_image_worker() {
-        assert_eq!(outward(5, 2), [2, 3, 1, 4, 0]);
-        assert_eq!(outward(3, 9), [2, 1, 0]);
+        assert_eq!(outward(5, 2), [3, 1, 4, 0, 2]);
+        assert_eq!(outward(3, 9), [1, 0, 2]);
         let photos = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
         // BMP decodes outside libvips in every build, so it is built here.

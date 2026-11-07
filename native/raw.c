@@ -62,24 +62,29 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe,
            advances processing state, so use a short-lived header-only handle
            here. No image/model work is repeated. */
         libraw_data_t *geometry = libraw_init(0);
-        if (geometry) {
-            libraw_set_progress_handler(geometry, progress, context);
-            int geometry_error = libraw_open_file(geometry, path);
-            if (!geometry_error) geometry_error = source_geometry(geometry, source_width, source_height);
-            libraw_close(geometry);
-            if (geometry_error == LIBRAW_CANCELLED_BY_CALLBACK) {
-                *error = geometry_error; libraw_close(raw); return 0;
-            }
+        if (!geometry) { *error = LIBRAW_UNSUFFICIENT_MEMORY; libraw_close(raw); return 0; }
+        libraw_set_progress_handler(geometry, progress, context);
+        int geometry_error = libraw_open_file(geometry, path);
+        if (!geometry_error) geometry_error = source_geometry(geometry, source_width, source_height);
+        libraw_close(geometry);
+        if (geometry_error == LIBRAW_CANCELLED_BY_CALLBACK) {
+            *error = geometry_error; libraw_close(raw); return 0;
         }
     }
-    const int geometry_known = *source_width && *source_height;
-    const unsigned long long full_output =
-        (unsigned long long)*source_width * *source_height * 3;
     /* Only a sensor decode holds the whole mosaic, so only it is bounded by
        memory; an embedded JPEG above is returned for any sensor size. */
     const unsigned long long sensor =
         (unsigned long long)raw->sizes.raw_width * raw->sizes.raw_height;
-    const int half = preview && geometry_known;
+    /* Pixel aspect stretching can make the result several times the sensor,
+       so a decode whose result size is unknown is not started. */
+    if (!*source_width || !*source_height) {
+        *error = PHOTOSORT_IMPOSSIBLE_SIZE;
+        *source_width = raw->sizes.raw_width;
+        *source_height = raw->sizes.raw_height;
+        libraw_close(raw); return 0;
+    }
+    const unsigned long long full_output =
+        (unsigned long long)*source_width * *source_height * 3;
     /* LibRaw sizes its 8-bit RGB result and its row offsets in 32-bit ints,
        so neither the sensor nor the full-size result (after pixel aspect
        stretching or Fuji's rotation) may pass INT_MAX bytes as RGB, whatever
@@ -87,19 +92,11 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe,
        crafted header comes near this. */
     if (sensor * 3 > INT_MAX || full_output > INT_MAX) {
         *error = PHOTOSORT_IMPOSSIBLE_SIZE;
-        if (!geometry_known) {
-            *source_width = raw->sizes.raw_width;
-            *source_height = raw->sizes.raw_height;
-        }
         libraw_close(raw); return 0;
     }
-    *needed = sensor * (half ? HALF_BYTES_PER_PIXEL : FULL_BYTES_PER_PIXEL);
+    *needed = sensor * (preview ? HALF_BYTES_PER_PIXEL : FULL_BYTES_PER_PIXEL);
     if (!sensor || *needed > allowance) {
         *error = sensor ? PHOTOSORT_NEEDS_MEMORY : LIBRAW_UNSUFFICIENT_MEMORY;
-        if (!geometry_known) {
-            *source_width = raw->sizes.width;
-            *source_height = raw->sizes.height;
-        }
         libraw_close(raw); return 0;
     }
     /* LibRaw's own mosaic cap (2 GB by default) follows the same allowance,
@@ -112,7 +109,7 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe,
     raw->params.output_bps = 8;
     raw->params.user_qual = 3;
     raw->params.user_flip = 0; /* EXIF/XMP orientation belongs to the shared pipeline. */
-    raw->params.half_size = half;
+    raw->params.half_size = preview;
     raw->params.no_auto_bright = preview ? 1 : 0;
     raw->params.auto_bright_thr = 0.01;
     raw->params.bright = preview ? 1.0 : 1.25;
@@ -122,7 +119,7 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe,
     *error = libraw_unpack(raw);
     if (!*error) *error = libraw_dcraw_process(raw);
     libraw_processed_image_t *image = *error ? 0 : libraw_dcraw_make_mem_image(raw, error);
-    if (image && (!preview || !geometry_known)) {
+    if (image && !preview) {
         *source_width = image->width;
         *source_height = image->height;
     }
