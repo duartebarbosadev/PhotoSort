@@ -156,22 +156,50 @@ fn system_pressure() -> Option<Pressure> {
     };
     (result == 0).then(|| Pressure::from_darwin(level))
 }
+/// The more pressing of two readings: how much memory is left (in this
+/// process's cgroup too), and the kernel's pressure stall information, which
+/// says how long tasks waited for memory lately (Linux 4.20 and later).
 #[cfg(target_os = "linux")]
 fn system_pressure() -> Option<Pressure> {
-    let info = std::fs::read_to_string("/proc/meminfo").ok()?;
-    let field = |name: &str| -> Option<u64> {
-        let line = info.lines().find(|line| line.starts_with(name))?;
-        line.split_whitespace().nth(1)?.parse().ok()
-    };
-    Some(Pressure::from_available(
-        field("MemAvailable:")?,
-        field("MemTotal:")?,
-    ))
+    let (total, available) = linux_memory()?;
+    let by_memory = Pressure::from_available(available, total);
+    let stalls = cgroup_dir()
+        .filter(|(_, v2)| *v2)
+        .and_then(|(dir, _)| std::fs::read_to_string(dir.join("memory.pressure")).ok())
+        .or_else(|| std::fs::read_to_string("/proc/pressure/memory").ok())
+        .and_then(|text| parse_psi(&text));
+    Some(by_memory.max(stalls.unwrap_or_default()))
 }
+/// How much memory is left, or the system's own signal that physical memory
+/// is low, which counts as critical.
 #[cfg(target_os = "windows")]
 fn system_pressure() -> Option<Pressure> {
     let (total, available) = windows_memory()?;
-    Some(Pressure::from_available(available, total))
+    Some(if low_memory_signalled() == Some(true) {
+        Pressure::Critical
+    } else {
+        Pressure::from_available(available, total)
+    })
+}
+#[cfg(target_os = "windows")]
+fn low_memory_signalled() -> Option<bool> {
+    use std::ffi::c_void;
+    unsafe extern "system" {
+        fn CreateMemoryResourceNotification(kind: i32) -> *mut c_void;
+        fn QueryMemoryResourceNotification(handle: *mut c_void, state: *mut i32) -> i32;
+    }
+    const LOW_MEMORY: i32 = 0;
+    static HANDLE: OnceLock<usize> = OnceLock::new();
+    // SAFETY: no arguments to keep alive; the handle lives as long as the process.
+    let handle =
+        *HANDLE.get_or_init(|| unsafe { CreateMemoryResourceNotification(LOW_MEMORY) } as usize);
+    if handle == 0 {
+        return None;
+    }
+    let mut state = 0;
+    // SAFETY: a valid notification handle and an out parameter for the call.
+    (unsafe { QueryMemoryResourceNotification(handle as *mut c_void, &mut state) } != 0)
+        .then_some(state != 0)
 }
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn system_pressure() -> Option<Pressure> {
@@ -251,10 +279,104 @@ fn total_ram() -> Option<u64> {
 }
 #[cfg(target_os = "linux")]
 fn total_ram() -> Option<u64> {
-    let info = std::fs::read_to_string("/proc/meminfo").ok()?;
-    let line = info.lines().find(|line| line.starts_with("MemTotal:"))?;
-    let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
-    kib.checked_mul(1024)
+    linux_memory().map(|(total, _)| total)
+}
+/// Total and available memory as this process can use it: the machine's,
+/// capped by its cgroup's limit (containers, Flatpak, systemd slices).
+#[cfg(target_os = "linux")]
+fn linux_memory() -> Option<(u64, u64)> {
+    let (mut total, mut available) =
+        parse_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)?;
+    if let Some((limit, used)) = cgroup_memory() {
+        total = total.min(limit);
+        available = available.min(limit.saturating_sub(used));
+    }
+    Some((total, available))
+}
+/// This process's memory cgroup folder, and whether it is cgroup v2.
+#[cfg(target_os = "linux")]
+fn cgroup_dir() -> Option<(std::path::PathBuf, bool)> {
+    let groups = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    let (v2, path) = parse_cgroup(&groups)?;
+    let root = Path::new(if v2 {
+        "/sys/fs/cgroup"
+    } else {
+        "/sys/fs/cgroup/memory"
+    });
+    let dir = root.join(path.trim_start_matches('/'));
+    // Inside a cgroup namespace the listed path is relative to its root.
+    Some((if dir.is_dir() { dir } else { root.into() }, v2))
+}
+/// The cgroup's memory limit and use, when it has a limit.
+#[cfg(target_os = "linux")]
+fn cgroup_memory() -> Option<(u64, u64)> {
+    let (dir, v2) = cgroup_dir()?;
+    let read = |name: &str| std::fs::read_to_string(dir.join(name)).ok();
+    let (limit, used) = if v2 {
+        (read("memory.max")?, read("memory.current")?)
+    } else {
+        (
+            read("memory.limit_in_bytes")?,
+            read("memory.usage_in_bytes")?,
+        )
+    };
+    Some((parse_limit(&limit)?, used.trim().parse().ok()?))
+}
+/// `MemTotal` and `MemAvailable` of /proc/meminfo, in bytes.
+#[cfg(any(target_os = "linux", test))]
+fn parse_meminfo(text: &str) -> Option<(u64, u64)> {
+    let field = |name: &str| -> Option<u64> {
+        let line = text.lines().find(|line| line.starts_with(name))?;
+        let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+        kib.checked_mul(1024)
+    };
+    Some((field("MemTotal:")?, field("MemAvailable:")?))
+}
+/// The memory cgroup in /proc/self/cgroup: a v1 line naming the memory
+/// controller (hybrid systems keep memory there), else v2's `0::/path`.
+#[cfg(any(target_os = "linux", test))]
+fn parse_cgroup(text: &str) -> Option<(bool, &str)> {
+    let lines = || {
+        text.lines().filter_map(|line| {
+            let mut parts = line.splitn(3, ':');
+            Some((parts.next()?, parts.next()?, parts.next()?))
+        })
+    };
+    lines()
+        .find(|(_, controllers, _)| controllers.split(',').any(|c| c == "memory"))
+        .map(|(_, _, path)| (false, path))
+        .or_else(|| {
+            lines()
+                .find(|(id, controllers, _)| *id == "0" && controllers.is_empty())
+                .map(|(_, _, path)| (true, path))
+        })
+}
+/// A cgroup memory limit; "max" or v1's near-2^63 "unlimited" is none.
+#[cfg(any(target_os = "linux", test))]
+fn parse_limit(text: &str) -> Option<u64> {
+    let limit: u64 = text.trim().parse().ok()?;
+    (limit < 1 << 60).then_some(limit)
+}
+/// Pressure stall information: the share of the last ten seconds that some
+/// (or all) tasks waited for memory.
+#[cfg(any(target_os = "linux", test))]
+fn parse_psi(text: &str) -> Option<Pressure> {
+    let avg10 = |kind: &str| -> Option<f64> {
+        let line = text.lines().find(|line| line.starts_with(kind))?;
+        line.split_whitespace()
+            .find_map(|field| field.strip_prefix("avg10="))?
+            .parse()
+            .ok()
+    };
+    let some = avg10("some ")?;
+    let full = avg10("full ").unwrap_or(0.0);
+    Some(if full >= 10.0 || some >= 40.0 {
+        Pressure::Critical
+    } else if some >= 10.0 {
+        Pressure::Warn
+    } else {
+        Pressure::Normal
+    })
 }
 #[cfg(target_os = "windows")]
 fn total_ram() -> Option<u64> {
@@ -313,11 +435,15 @@ fn free_disk(path: &Path) -> Option<u64> {
             free: *mut u64,
         ) -> i32;
     }
-    let wide: Vec<u16> = existing(path)?
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
+    // The canonical form is a verbatim `\\?\` path, so folders past the old
+    // 260-character limit work; the call wants a trailing separator.
+    let mut directory = std::fs::canonicalize(existing(path)?)
+        .ok()?
+        .into_os_string();
+    if !directory.to_string_lossy().ends_with('\\') {
+        directory.push("\\");
+    }
+    let wide: Vec<u16> = directory.encode_wide().chain(Some(0)).collect();
     let mut available = 0u64;
     // SAFETY: a NUL-terminated path; unused outputs may be null.
     let ok = unsafe {
@@ -378,5 +504,69 @@ mod tests {
         );
         assert_eq!(Pressure::Warn.share(1024), 512);
         assert_eq!(Pressure::Critical.share(1024), 256);
+    }
+    /// Runs on every CI system: each probe answers for real, without the
+    /// fallbacks `Machine::current` would hide a failure behind.
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn this_computers_memory_disk_and_pressure_probes_answer() {
+        let ram = total_ram().expect("total memory");
+        assert!(ram >= GIB, "{ram}");
+        let temp = tempfile::tempdir().unwrap();
+        assert!(free_disk(temp.path()).is_some_and(|free| free > 0));
+        // A cache folder not made yet is measured on its nearest parent, and
+        // folders past Windows' old 260-character limit work.
+        let mut deep = temp.path().to_owned();
+        for n in 0..12 {
+            deep.push(format!("folder-{n:02}-with-a-long-name-for-paths"));
+        }
+        assert!(deep.as_os_str().len() > 300);
+        assert!(free_disk(&deep.join("not-made")).is_some_and(|free| free > 0));
+        std::fs::create_dir_all(&deep).unwrap();
+        assert!(free_disk(&deep).is_some_and(|free| free > 0));
+        system_pressure().expect("memory pressure");
+        // The decisions and defaults with this computer's own readings.
+        let machine = Machine {
+            ram,
+            free_disk: free_disk(temp.path()),
+        };
+        assert_eq!(machine.fit(ram / 4), Fit::Fits);
+        assert_eq!(machine.fit(ram * 2), Fit::Impossible);
+        let limits = crate::core::cache::Limits::for_machine(machine);
+        assert!((128..=1024).contains(&limits.previews_mib));
+        assert!((512..=8192).contains(&limits.originals_mib));
+        assert!(limits.disk_mib <= 32_768);
+    }
+    #[test]
+    fn linux_memory_cgroup_and_stall_readings_parse() {
+        let meminfo = "MemTotal:       16303428 kB\nMemFree:  1 kB\nMemAvailable:    9876544 kB\n";
+        assert_eq!(
+            parse_meminfo(meminfo),
+            Some((16_303_428 * 1024, 9_876_544 * 1024))
+        );
+        assert_eq!(parse_meminfo("MemTotal: 5 kB\n"), None);
+        // cgroup v2, v1 (hybrid: memory stays on v1), and a namespace root.
+        assert_eq!(
+            parse_cgroup("0::/user.slice/app-flatpak.scope\n"),
+            Some((true, "/user.slice/app-flatpak.scope"))
+        );
+        assert_eq!(
+            parse_cgroup("12:cpu,cpuacct:/a\n4:memory:/docker/abc\n0::/x\n"),
+            Some((false, "/docker/abc"))
+        );
+        assert_eq!(parse_cgroup("0::/\n"), Some((true, "/")));
+        assert_eq!(parse_limit("max\n"), None);
+        assert_eq!(parse_limit("9223372036854771712\n"), None);
+        assert_eq!(parse_limit("2147483648\n"), Some(2 << 30));
+        let psi = |some: f64, full: f64| {
+            parse_psi(&format!(
+                "some avg10={some:.2} avg60=0.00 avg300=0.00 total=1\nfull avg10={full:.2} avg60=0.00 avg300=0.00 total=1\n"
+            ))
+        };
+        assert_eq!(psi(0.5, 0.0), Some(Pressure::Normal));
+        assert_eq!(psi(12.0, 1.0), Some(Pressure::Warn));
+        assert_eq!(psi(45.0, 2.0), Some(Pressure::Critical));
+        assert_eq!(psi(15.0, 11.0), Some(Pressure::Critical));
+        assert_eq!(parse_psi("nonsense"), None);
     }
 }

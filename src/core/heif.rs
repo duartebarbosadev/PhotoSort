@@ -98,10 +98,13 @@ pub(super) fn decode(
     // Memory, not pixel count, bounds a real photo; libheif still refuses
     // headers past any real size.
     let allowance = colors.allowance();
+    // libheif's own limits also cover reading the header, so they keep a
+    // floor: the check below then says what a decode needs.
+    let libheif = allowance.max(512 * 1024 * 1024);
     limits.set_max_image_size_pixels(super::memory::MAX_PIXELS);
     limits.set_max_color_profile_size(4 * 1024 * 1024);
-    limits.set_max_memory_block_size(allowance);
-    limits.set_max_total_memory(allowance);
+    limits.set_max_memory_block_size(libheif);
+    limits.set_max_total_memory(libheif);
     context.set_security_limits(&limits)?;
     context.set_max_decoding_threads(4);
     context.read_reader(Box::new(StreamReader::new(file, size)))?;
