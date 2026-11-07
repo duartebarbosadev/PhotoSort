@@ -77,6 +77,8 @@ struct CachedAnalysis {
     technical: Analysis,
     hash: String,
     dimensions: (u32, u32),
+    /// The decoded photo's stored size (`Measurements::source_width`).
+    source: (u32, u32),
     embedding: Option<Vec<f32>>,
     aesthetic: Option<f32>,
     faces: Option<faces::FaceSummary>,
@@ -203,6 +205,7 @@ struct Scored {
     technical: Analysis,
     hash: String,
     dimensions: (u32, u32),
+    source: (u32, u32),
     embedding: Option<Vec<f32>>,
 }
 
@@ -1145,6 +1148,7 @@ impl ImageWorker {
                 technical: value.analysis,
                 hash: value.content_hash,
                 dimensions: (value.width, value.height),
+                source: (value.source_width, value.source_height),
                 embedding: None,
                 aesthetic: None,
                 faces: None,
@@ -1199,6 +1203,8 @@ impl ImageWorker {
             width: asset.pixels.width(),
             height: asset.pixels.height(),
             content_hash,
+            source_width: asset.metadata.width,
+            source_height: asset.metadata.height,
         };
         store.put_measurements(&key, &value)?;
         Ok(value)
@@ -1387,6 +1393,7 @@ impl ImageWorker {
             technical,
             hash: cached.hash.clone(),
             dimensions: cached.dimensions,
+            source: cached.source,
             embedding: cached.embedding.clone(),
         }
     }
@@ -1399,11 +1406,18 @@ impl ImageWorker {
             technical,
             hash,
             dimensions,
+            source,
             embedding,
         } = self.scored(&it.source_key);
         // Reload the shared metadata snapshot after any cold decode has
         // refined its dimensions. Warm evidence never needs pixel IO.
-        let metadata = self.pipeline.metadata_cancellable(item, &cancelled)?;
+        let mut metadata = self.pipeline.metadata_cancellable(item, &cancelled)?;
+        // The measurements hold the size the decode found, so a reopened run
+        // publishes it even when the render descriptor is gone (pruned, not
+        // written, or cleared mid-run) and the snapshot has only EXIF's.
+        if item.kind != MediaKind::Video && source.0 > 0 && source.1 > 0 {
+            (metadata.width, metadata.height) = source;
+        }
         let duplicate = self.hashes.get(&hash).copied();
         self.hashes.entry(hash.clone()).or_insert(item.id);
         let group = if profile != AnalysisProfile::Technical {
@@ -1560,6 +1574,7 @@ mod signature_tests {
             technical: Analysis::default(),
             hash: "hash".into(),
             dimensions: (4, 3),
+            source: (8, 6),
             embedding: Some(vec![1.0]),
             aesthetic: Some(0.7),
             faces: None,
