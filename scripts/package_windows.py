@@ -149,6 +149,9 @@ def bundle_libraries(roots, sources, imports=pe_imports, is_system=system_librar
     """
     bundled = {}
     system = set()
+    # Import tables spell names in any case; keep each file's own name.
+    listings = [(key, {path.name.lower(): path for path in Path(folder).iterdir() if path.is_file()})
+                for key, folder in sources]
     pending = [(Path(path), tuple(allowed)) for path, allowed in roots]
     while pending:
         binary, allowed = pending.pop()
@@ -156,11 +159,8 @@ def bundle_libraries(roots, sources, imports=pe_imports, is_system=system_librar
             lower = name.lower()
             if lower in bundled or lower in system:
                 continue
-            found = None
-            for key, folder in sources:
-                if key in allowed and (Path(folder)/name).is_file():
-                    found = (Path(folder)/name, key)
-                    break
+            found = next(((files[lower], key) for key, files in listings
+                          if key in allowed and lower in files), None)
             if found:
                 bundled[lower] = found
                 # A library's own imports resolve from the same places as its loader's.

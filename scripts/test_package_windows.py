@@ -113,6 +113,8 @@ class BundleLibrariesTests(unittest.TestCase):
             'vcruntime140.dll': 'app', 'msvcp140.dll': 'app', 'gstreamer-1.0-0.dll': 'gstreamer',
             'glib-2.0-0.dll': 'gstreamer', 'avcodec-61.dll': 'gstreamer'})
         self.assertEqual(system, ['api-ms-win-crt-runtime-l1-1-0.dll', 'kernel32.dll'])
+        # Copied under the file's own name, not the import table's spelling.
+        self.assertEqual(bundled['vcruntime140.dll'][0].name, 'vcruntime140.dll')
 
     def test_a_library_outside_the_allowed_folders_fails(self):
         self.imports['onnxruntime.dll'].append('glib-2.0-0.dll')
