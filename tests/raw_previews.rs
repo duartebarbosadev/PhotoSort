@@ -374,3 +374,23 @@ fn a_sensor_too_large_for_libraw_to_size_is_refused_before_any_decode() {
     let (kind, embedded, _, error, _) = native_raw(&path, 1, 0);
     assert_eq!((kind, embedded, error), (Some(1), 1, 0));
 }
+
+#[test]
+fn raw_photos_in_folders_with_accented_names_decode() -> anyhow::Result<()> {
+    // LibRaw's narrow-path open reads the ANSI code page on Windows; the bridge
+    // must open these paths through its wide-character API instead.
+    let temp = tempfile::tempdir()?;
+    let library = temp.path().join("Férias São João 照片");
+    std::fs::create_dir(&library)?;
+    std::fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/samples/arw_sample.ARW"),
+        library.join("Praia ção.ARW"),
+    )?;
+    let catalog = Catalog::scan(&library, || false, |_| {})?;
+    let media = catalog.media.first().expect("one RAW photo");
+    assert_eq!(media.kind, MediaKind::Raw);
+    let mut pipeline = Pipeline::new(256 * 1024 * 1024, temp.path().join("cache"));
+    let loaded = pipeline.load(media)?;
+    assert!(loaded.pixels.width() > 0 && loaded.pixels.height() > 0);
+    Ok(())
+}

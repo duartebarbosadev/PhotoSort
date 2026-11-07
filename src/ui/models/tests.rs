@@ -117,6 +117,7 @@ fn model_dialog_fits_compact_and_wide_windows_without_loading_models_or_images()
         state.running = running;
         state.progress = Some(model_assets::Progress {
             id: Some(model_assets::Id::Scene),
+            package: None,
             bytes: 10,
             total: 100,
         });
@@ -213,6 +214,7 @@ fn retry_requires_verified_prerequisites_and_the_original_workflow_context() {
             }],
             runtime: None,
             orientation_override: None,
+            cuda: None,
             hash_reads: 0,
         })),
         ..Default::default()
@@ -248,6 +250,7 @@ fn verified_setup() -> model_assets::State {
             }],
             runtime: Some("verified-runtime".into()),
             orientation_override: None,
+            cuda: None,
             hash_reads: 0,
         })),
         ..Default::default()
@@ -369,11 +372,10 @@ fn repaired_models_update_footer_and_dialog_without_restarting_analysis() {
             .filter_map(|(_, n)| n.label().or_else(|| n.value()).map(str::to_owned))
             .collect();
     }
-    assert!(
-        !labels
-            .iter()
-            .any(|label| label.starts_with("The native AI runtime is missing"))
-    );
+    assert!(!labels.iter().any(
+        |label| label.starts_with("The native AI runtime is missing")
+            || label.starts_with("The AI runtime is missing")
+    ));
     if cfg!(feature = "onnx") {
         assert!(
             labels
@@ -501,4 +503,87 @@ fn model_panel_summarises_groups_and_links_every_model_source() {
     }
     assert!(app.analysis_run.is_none());
     assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+}
+/// Every label the model panel shows for `state`.
+fn model_panel_labels(app: &mut PhotoSortApp, state: &model_assets::State) -> Vec<String> {
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let mut labels = Vec::new();
+    for _ in 0..3 {
+        let out = ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800., 1400.),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.render_model_setup(ctx, state)
+            },
+        );
+        labels = out
+            .platform_output
+            .accesskit_update
+            .unwrap()
+            .nodes
+            .iter()
+            .filter_map(|(_, n)| n.label().or_else(|| n.value()).map(str::to_owned))
+            .collect();
+    }
+    labels
+}
+#[test]
+fn a_missing_runtime_is_offered_for_download_and_gpu_support_only_with_an_nvidia_driver() {
+    use model_assets::runtime::{self, Package};
+    let (_dir, mut app) = app();
+    let mut state = verified_setup();
+    Arc::make_mut(state.snapshot.as_mut().unwrap()).runtime = None;
+    let labels = model_panel_labels(&mut app, &state);
+    let offered = |labels: &[String], prefix: &str| labels.iter().any(|l| l.starts_with(prefix));
+    let downloads = cfg!(all(feature = "onnx", feature = "model-downloads"));
+    if let Some(cpu) = runtime::info(Package::Cpu).filter(|_| downloads) {
+        assert!(
+            offered(&labels, &format!("Download {}", cpu.title)),
+            "{labels:?}"
+        );
+        assert!(
+            offered(&labels, "The AI steps need ONNX Runtime"),
+            "{labels:?}"
+        );
+        assert!(!offered(&labels, "AI runtime not found"), "{labels:?}");
+    }
+    assert!(
+        !cfg!(not(target_os = "macos")) || !offered(&labels, "AI runtime not found · restore"),
+        "only the macOS bundle is restored: {labels:?}"
+    );
+    let gpu_offered = offered(&labels, "Download GPU support");
+    assert_eq!(
+        gpu_offered,
+        downloads && runtime::info(Package::Cuda).is_some() && runtime::nvidia_driver_present(),
+        "{labels:?}"
+    );
+    // Installed packages are reported, with a way to remove GPU support.
+    {
+        let snapshot = Arc::make_mut(state.snapshot.as_mut().unwrap());
+        snapshot.runtime = Some("runtime".into());
+        snapshot.cuda = Some("runtime-cuda".into());
+    }
+    let labels = model_panel_labels(&mut app, &state);
+    assert!(
+        offered(&labels, "AI runtime found")
+            || labels.iter().any(|l| l.contains("AI runtime found")),
+        "{labels:?}"
+    );
+    if runtime::info(Package::Cuda).is_some() {
+        assert!(
+            labels
+                .iter()
+                .any(|l| l.contains("NVIDIA GPU support installed")),
+            "{labels:?}"
+        );
+        assert!(!offered(&labels, "Download GPU support"), "{labels:?}");
+    }
 }

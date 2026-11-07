@@ -36,6 +36,80 @@ pub(super) fn run(
 ) -> Result<Installed> {
     run_url(asset, asset.url, true, root, cancelled, progress)
 }
+/// Downloads one pinned file to `destination`, which must not exist yet, and
+/// keeps it only when its size and SHA-256 match. Runtime packages use this.
+pub(super) fn fetch(
+    url: &str,
+    bytes: u64,
+    sha256: &str,
+    destination: &Path,
+    cancelled: &impl Fn() -> bool,
+    progress: &impl Fn(u64),
+) -> Result<()> {
+    async fn transfer(
+        url: &str,
+        bytes: u64,
+        sha256: &str,
+        destination: &Path,
+        cancelled: &impl Fn() -> bool,
+        progress: &impl Fn(u64),
+    ) -> Result<()> {
+        let client = reqwest::Client::builder()
+            .https_only(true)
+            .connect_timeout(Duration::from_secs(15))
+            .read_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(1800).max(Duration::from_secs(bytes / 50_000)))
+            .build()?;
+        let mut response = client.get(url).send().await?.error_for_status()?;
+        ensure!(
+            response.content_length().is_none_or(|n| n == bytes),
+            "Server returned an unexpected download size"
+        );
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(destination)
+            .with_context(|| format!("Create {}", destination.display()))?;
+        let mut hash = Sha256::new();
+        let mut received = 0u64;
+        while let Some(chunk) = response.chunk().await? {
+            ensure!(!cancelled(), "Cancelled");
+            ensure!(
+                received + chunk.len() as u64 <= bytes,
+                "Download is larger than expected"
+            );
+            file.write_all(&chunk)?;
+            hash.update(&chunk);
+            received += chunk.len() as u64;
+            progress(received);
+        }
+        ensure!(
+            received == bytes,
+            "Download is incomplete: {received} of {bytes} bytes"
+        );
+        ensure!(
+            hex(&hash.finalize()) == sha256,
+            "Download SHA-256 verification failed"
+        );
+        file.sync_all()?;
+        Ok(())
+    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let result = rt.block_on(async {
+        tokio::select! {
+            biased;
+            _ = async { loop { if cancelled() { break; } tokio::time::sleep(Duration::from_millis(50)).await; } } => anyhow::bail!("Cancelled"),
+            result = transfer(url, bytes, sha256, destination, cancelled, progress) => result,
+        }
+    });
+    rt.shutdown_timeout(Duration::from_millis(100));
+    if result.is_err() {
+        let _ = std::fs::remove_file(destination);
+    }
+    result
+}
 fn run_url(
     asset: &Asset,
     url: &str,

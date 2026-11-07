@@ -1,4 +1,25 @@
 #include <libraw/libraw.h>
+#ifdef _WIN32
+#include <stdlib.h>
+#include <windows.h>
+#endif
+/* Rust passes UTF-8 paths. LibRaw's narrow open uses the ANSI code page on
+   Windows, so photos in folders with accented names would not open; use its
+   wide-character open there. */
+static int open_path(libraw_data_t *raw, const char *path) {
+#ifdef _WIN32
+    int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+    if (length > 0) {
+        wchar_t *wide = (wchar_t *)malloc((size_t)length * sizeof(wchar_t));
+        if (!wide) return LIBRAW_UNSUFFICIENT_MEMORY;
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, length);
+        int error = libraw_open_wfile(raw, wide);
+        free(wide);
+        return error;
+    }
+#endif
+    return libraw_open_file(raw, path);
+}
 /* Keep LibRaw's version-specific structs on the C side of a tiny owned boundary. */
 static int source_geometry(libraw_data_t *raw, unsigned int *width, unsigned int *height) {
     raw->params.user_flip = 0;
@@ -30,7 +51,7 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe,
     libraw_data_t *raw = libraw_init(0);
     if (!raw) { *error = LIBRAW_UNSUFFICIENT_MEMORY; return 0; }
     libraw_set_progress_handler(raw, progress, context);
-    *error = libraw_open_file(raw, path);
+    *error = open_path(raw, path);
     if (*error) { libraw_close(raw); return 0; }
     if (recipe == 1) {
         *error = libraw_unpack_thumb(raw);
@@ -64,7 +85,7 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe,
         libraw_data_t *geometry = libraw_init(0);
         if (!geometry) { *error = LIBRAW_UNSUFFICIENT_MEMORY; libraw_close(raw); return 0; }
         libraw_set_progress_handler(geometry, progress, context);
-        int geometry_error = libraw_open_file(geometry, path);
+        int geometry_error = open_path(geometry, path);
         if (!geometry_error) geometry_error = source_geometry(geometry, source_width, source_height);
         libraw_close(geometry);
         if (geometry_error == LIBRAW_CANCELLED_BY_CALLBACK) {

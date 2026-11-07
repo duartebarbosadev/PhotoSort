@@ -222,6 +222,14 @@ impl PhotoSortApp {
                                 1
                             }
                         };
+                        // Without the runtime no model can run, so its offer comes first.
+                        let runtime_first = snapshot.runtime.is_none();
+                        if runtime_first {
+                            ui.add_space(S2);
+                            ui.label(caption("Runtime"));
+                            ui.add_space(S1);
+                            self.runtime_section(ui, state, &snapshot);
+                        }
                         let titles = [
                             "Needed for the paused analysis",
                             "Used by Easy Delete, Pick Best, Cull and Organize",
@@ -243,23 +251,11 @@ impl PhotoSortApp {
                                 ui.add_space(S1 + 2.0);
                             }
                         }
-                        ui.add_space(S2);
-                        ui.label(caption("Runtime"));
-                        ui.add_space(S1);
-                        let runtime = match snapshot.runtime.as_ref() {
-                            Some(path) => {
-                                ui.label(
-                                    RichText::new(format!("{}  Native AI runtime found", icon::CHECK_CIRCLE))
-                                        .color(GREEN)
-                                        .small(),
-                                )
-                                .on_hover_text(path.display().to_string());
-                                None
-                            }
-                            None => Some("Native AI runtime not found · restore the full app bundle"),
-                        };
-                        if let Some(text) = runtime {
-                            ui.label(RichText::new(text).color(RED).small());
+                        if !runtime_first {
+                            ui.add_space(S2);
+                            ui.label(caption("Runtime"));
+                            ui.add_space(S1);
+                            self.runtime_section(ui, state, &snapshot);
                         }
                         if let Some((path, valid)) = &snapshot.orientation_override {
                             ui.label(
@@ -393,7 +389,13 @@ impl PhotoSortApp {
                 notice(
                     ui,
                     RED,
-                    "The native AI runtime is missing. Restore the full app bundle, then check again. Model downloads do not install runtime libraries.",
+                    if model_assets::runtime::info(model_assets::runtime::Package::Cpu).is_some()
+                        && cfg!(feature = "model-downloads")
+                    {
+                        "The AI runtime is missing. Download it below, or install it yourself, then check again."
+                    } else {
+                        "The native AI runtime is missing. Restore the full app bundle, then check again. Model downloads do not install runtime libraries."
+                    },
                 );
             }
         }
@@ -634,6 +636,171 @@ impl PhotoSortApp {
             self.start_model_operation(Work::Import(id, path));
         }
     }
+}
+
+impl PhotoSortApp {
+    /// The AI runtime: found, or offered for download with its size and source,
+    /// and NVIDIA GPU support where a driver is present. Nothing downloads until
+    /// the user clicks; "Install it myself" explains the manual route instead.
+    fn runtime_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &model_assets::State,
+        snapshot: &model_assets::Snapshot,
+    ) {
+        use egui_phosphor::regular as icon;
+        use model_assets::runtime::{self, Package};
+        let editable =
+            cfg!(feature = "onnx") && !state.running && !self.busy && self.analysis_run.is_none();
+        let installing = state
+            .progress
+            .as_ref()
+            .and_then(|p| p.package.map(|k| (k, p)));
+        let progress_text = |package: Package| {
+            installing.filter(|(k, _)| *k == package).map(|(_, p)| {
+                if p.total > 0 {
+                    format!(
+                        "Downloading {:.0}% of {}",
+                        p.bytes as f64 * 100.0 / p.total as f64,
+                        download_size(p.total)
+                    )
+                } else {
+                    "Working…".to_owned()
+                }
+            })
+        };
+        match snapshot.runtime.as_ref() {
+            Some(path) => {
+                ui.label(
+                    RichText::new(format!("{}  AI runtime found", icon::CHECK_CIRCLE))
+                        .color(GREEN)
+                        .small(),
+                )
+                .on_hover_text(path.display().to_string());
+            }
+            None => match runtime::info(Package::Cpu) {
+                Some(info) if cfg!(feature = "model-downloads") => {
+                    notice(
+                        ui,
+                        ACCENT,
+                        &format!(
+                            "The AI steps need {} from {} ({:.0} MB download, checked against a pinned SHA-256). It installs into PhotoSort's data folder.",
+                            info.title,
+                            info.publisher,
+                            info.download_bytes() as f64 / 1e6
+                        ),
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        if let Some(text) = progress_text(Package::Cpu) {
+                            ui.label(RichText::new(text).color(ACCENT).small());
+                        } else {
+                            ui.add_enabled_ui(editable, |ui| {
+                                if ui
+                                    .add(primary(format!("Download {}", info.title)))
+                                    .on_hover_text(info.archives[0].url)
+                                    .clicked()
+                                {
+                                    self.start_model_operation(Work::InstallRuntime(Package::Cpu));
+                                }
+                            });
+                        }
+                        manual_runtime_help(ui);
+                    });
+                }
+                _ => {
+                    ui.label(
+                        RichText::new(if cfg!(target_os = "macos") {
+                            "AI runtime not found · restore the full app bundle"
+                        } else {
+                            "AI runtime not found"
+                        })
+                        .color(RED)
+                        .small(),
+                    );
+                    manual_runtime_help(ui);
+                }
+            },
+        }
+        // NVIDIA GPU support: offered only where it can work (an NVIDIA driver),
+        // since it is a large download.
+        let Some(cuda) = runtime::info(Package::Cuda) else {
+            return;
+        };
+        ui.add_space(S1);
+        if let Some(path) = snapshot.cuda.as_ref() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "{}  NVIDIA GPU support installed",
+                        icon::CHECK_CIRCLE
+                    ))
+                    .color(GREEN)
+                    .small(),
+                )
+                .on_hover_text(path.display().to_string());
+                ui.add_enabled_ui(editable, |ui| {
+                    if ui.small_button("Remove").clicked() {
+                        self.start_model_operation(Work::RemoveRuntime(Package::Cuda));
+                    }
+                });
+            });
+        } else if runtime::nvidia_driver_present() && cfg!(feature = "model-downloads") {
+            ui.label(RichText::new("NVIDIA GPU").font(semibold(13.0)));
+            ui.label(
+                RichText::new(format!(
+                    "An NVIDIA driver is installed. {} runs the AI steps on the graphics card. It is a {:.1} GB download from {}, checked against pinned SHA-256 hashes. Without it, analysis runs on the CPU.",
+                    cuda.title,
+                    cuda.download_bytes() as f64 / 1e9,
+                    cuda.publisher
+                ))
+                .small()
+                .color(MUTED),
+            );
+            ui.horizontal_wrapped(|ui| {
+                if let Some(text) = progress_text(Package::Cuda) {
+                    ui.label(RichText::new(text).color(ACCENT).small());
+                } else {
+                    ui.add_enabled_ui(editable, |ui| {
+                        if ui
+                            .button(format!(
+                                "Download GPU support · {:.1} GB",
+                                cuda.download_bytes() as f64 / 1e9
+                            ))
+                            .clicked()
+                        {
+                            self.start_model_operation(Work::InstallRuntime(Package::Cuda));
+                        }
+                    });
+                }
+            });
+        }
+    }
+}
+
+/// "80 MB" or "3.0 GB".
+fn download_size(bytes: u64) -> String {
+    if bytes >= 1_000_000_000 {
+        format!("{:.1} GB", bytes as f64 / 1e9)
+    } else {
+        format!("{:.0} MB", bytes as f64 / 1e6)
+    }
+}
+/// The manual route: where the runtime library goes when installed by hand.
+fn manual_runtime_help(ui: &mut egui::Ui) {
+    let name = if cfg!(target_os = "windows") {
+        "onnxruntime.dll"
+    } else if cfg!(target_os = "macos") {
+        "libonnxruntime.dylib"
+    } else {
+        "libonnxruntime.so"
+    };
+    let folder = crate::core::session::data_dir().join("runtime");
+    ui.label(RichText::new("Install it myself").small().color(MUTED))
+        .on_hover_text(format!(
+            "Copy {name} from ONNX Runtime {} into {}, or set ORT_DYLIB_PATH to its full path, then check again.",
+            crate::core::model_assets::runtime::ORT_VERSION,
+            folder.display()
+        ));
 }
 
 /// A rounded message line in the model panel.

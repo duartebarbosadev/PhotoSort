@@ -7,6 +7,9 @@
 <p align="center">
   <a href="https://github.com/duartebarbosadev/PhotoSort/actions/workflows/check.yml"><img src="https://github.com/duartebarbosadev/PhotoSort/actions/workflows/check.yml/badge.svg" alt="Rust checks"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
+  <a href="#build-from-source"><img src="https://img.shields.io/badge/rust-1.95%2B-orange.svg" alt="Rust 1.95 or later"></a>
+  <a href="#build-from-source"><img src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="Platforms: macOS, Windows, Linux"></a>
+  <a href="#built-with"><img src="https://img.shields.io/badge/ONNX%20Runtime-1.29.0-informational.svg" alt="ONNX Runtime 1.29.0"></a>
 </p>
 
 PhotoSort helps you go from a folder full of new photos to the ones worth keeping. It finds
@@ -168,7 +171,21 @@ else for developers are in [CONTRIBUTING.md](CONTRIBUTING.md).
 | --- | --- |
 | macOS | Supported and tested in CI |
 | Linux | Builds and passes tests in CI; desktop use not yet verified |
-| Windows | Builds and passes tests in CI; the full build and desktop use are not yet verified |
+| Windows | Full build and test suite verified on Windows 11 (CPU and NVIDIA CUDA); CI builds the minimal configuration |
+
+### Built with
+
+| Component | Used for | Version |
+| --- | --- | --- |
+| [Rust](https://www.rust-lang.org) and [egui](https://github.com/emilk/egui) | The app and its interface | Rust 1.95+, egui 0.36 |
+| [ONNX Runtime](https://onnxruntime.ai) | Local AI on the CPU, Apple Core ML or NVIDIA CUDA | 1.29.0 |
+| [LibRaw](https://www.libraw.org) | RAW photos | 0.21+ |
+| [Exiv2](https://exiv2.org) | Ratings, rotation and other metadata inside photos | 0.28+ |
+| [libheif](https://github.com/strukturag/libheif) | HEIC photos on Windows and Linux (macOS uses its own) | 1.23+ |
+| [GStreamer](https://gstreamer.freedesktop.org) | Video on Windows and Linux (macOS uses AVFoundation) | 1.20+ |
+
+Versions are minimums: macOS and Linux use what Homebrew or the distribution ships, and the
+Windows build pins exact versions in `Cargo.toml`. ONNX Runtime is pinned on every platform.
 
 ## Questions or feedback?
 

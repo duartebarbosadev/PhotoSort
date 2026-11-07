@@ -15,10 +15,15 @@ pub enum Work {
     Restore(Id),
     Download(Id),
     Remove(ManagedCopy),
+    /// Download and install an ONNX Runtime package into the data folder.
+    InstallRuntime(runtime::Package),
+    RemoveRuntime(runtime::Package),
 }
 #[derive(Clone)]
 pub struct Progress {
     pub id: Option<Id>,
+    /// The runtime package being installed, when that is the work.
+    pub package: Option<runtime::Package>,
     pub bytes: u64,
     pub total: u64,
 }
@@ -84,20 +89,23 @@ impl Worker {
                         let Ok(request) = rx.recv_timeout(Duration::from_millis(100)) else { continue; };
                         let cancelled = || stop.load(Ordering::Acquire) || request.cancelled.load(Ordering::Acquire);
                         let id = match &request.work {
-                            Work::Inspect => None,
+                            Work::Inspect | Work::InstallRuntime(_) | Work::RemoveRuntime(_) => None,
                             Work::Import(id, _) | Work::Restore(id) | Work::Download(id) => Some(*id),
                             Work::Remove(copy) => Some(copy.id()),
                         };
+                        let package = match &request.work {
+                            Work::InstallRuntime(package) => Some(*package),
+                            _ => None,
+                        };
                         let last = Mutex::new(Instant::now() - Duration::from_secs(1));
-                        let progress = |bytes| {
+                        let report = |bytes, total| {
                             let mut last = last.lock().unwrap();
                             if last.elapsed() < Duration::from_millis(75) { return; }
                             *last = Instant::now();
-                            state.lock().unwrap().progress = Some(Progress {
-                                id, bytes, total: id.map_or(0, |id| id.asset().bytes),
-                            });
+                            state.lock().unwrap().progress = Some(Progress { id, package, bytes, total });
                             wake();
                         };
+                        let progress = |bytes| report(bytes, id.map_or(0, |id| id.asset().bytes));
                         let mut completion = "Model check complete".to_owned();
                         let result = (|| -> Result<Snapshot> {
                             let root = roots.first().context("No managed model directory")?;
@@ -119,6 +127,17 @@ impl Worker {
                                         .find(|p| p.is_file()).context("No bundled copy is available")?;
                                     let installed = import(id.asset(), &source, root, &cancelled, &progress)?;
                                     inspector.remember_install(id.asset(), &installed);
+                                }
+                                Work::InstallRuntime(package) => {
+                                    runtime::install(root, package, &cancelled, &report)?;
+                                    completion = match package {
+                                        runtime::Package::Cpu => "ONNX Runtime installed".into(),
+                                        runtime::Package::Cuda => "NVIDIA GPU support installed · restart PhotoSort to use it".into(),
+                                    };
+                                }
+                                Work::RemoveRuntime(package) => {
+                                    runtime::remove(root, package)?;
+                                    completion = "Removed · restart PhotoSort to release the files in use".into();
                                 }
                                 Work::Download(id) => {
                                     #[cfg(feature = "model-downloads")]
@@ -176,16 +195,28 @@ impl Worker {
                 Work::Restore(..) => "Restoring and verifying bundled model…",
                 Work::Download(..) => "Downloading and verifying model…",
                 Work::Remove(..) => "Removing managed model copy…",
+                Work::InstallRuntime(..) => "Downloading and verifying the AI runtime…",
+                Work::RemoveRuntime(..) => "Removing the AI runtime…",
             }
             .into();
             state.progress = Some(Progress {
                 id: match &work {
-                    Work::Inspect | Work::Remove(_) => None,
+                    Work::Inspect
+                    | Work::Remove(_)
+                    | Work::InstallRuntime(_)
+                    | Work::RemoveRuntime(_) => None,
                     Work::Import(id, _) | Work::Restore(id) | Work::Download(id) => Some(*id),
+                },
+                package: match &work {
+                    Work::InstallRuntime(package) => Some(*package),
+                    _ => None,
                 },
                 bytes: 0,
                 total: match &work {
-                    Work::Inspect | Work::Remove(_) => 0,
+                    Work::Inspect | Work::Remove(_) | Work::RemoveRuntime(_) => 0,
+                    Work::InstallRuntime(package) => {
+                        runtime::info(*package).map_or(0, |info| info.download_bytes())
+                    }
                     Work::Import(id, _) | Work::Restore(id) | Work::Download(id) => {
                         id.asset().bytes
                     }
