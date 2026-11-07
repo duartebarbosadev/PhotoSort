@@ -53,6 +53,29 @@ pub struct Preferences {
     pub photo_size: f32,
     /// The first-run intro has played. Menu → Watch the intro replays it.
     pub intro_shown: bool,
+    /// Prompts about memory and cache limits the user turned off.
+    pub limit_prompts: LimitPrompts,
+}
+/// Prompts about memory and cache limits the user answered for good.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LimitPrompts {
+    /// Never ask about these again.
+    pub quiet: std::collections::BTreeSet<LimitPrompt>,
+    /// Open photos that need more than half the memory without asking.
+    pub open_large: bool,
+}
+impl LimitPrompts {
+    pub fn any(&self) -> bool {
+        self.open_large || !self.quiet.is_empty()
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum LimitPrompt {
+    /// A full-size photo did not fit in full-size detail memory.
+    DetailMemory,
+    /// The disk cache removed previews made in this session.
+    DiskCache,
 }
 /// The photo size every grid starts with: a photo's height in points.
 pub const PHOTO_SIZE: f32 = 120.0;
@@ -103,6 +126,7 @@ impl Default for Preferences {
             compact_strip: true,
             photo_size: PHOTO_SIZE,
             intro_shown: false,
+            limit_prompts: Default::default(),
         }
     }
 }

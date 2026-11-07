@@ -7,6 +7,7 @@ unsafe extern "C" {
         path: *const u8,
         len: c_long,
         edge: u32,
+        max_bytes: u64,
         w: *mut u32,
         h: *mut u32,
         source_w: *mut u32,
@@ -28,7 +29,8 @@ pub struct Rendered {
 }
 /// No cached objects escape ImageIO; its malloc-owned buffer is copied into Rust ownership.
 /// `None` requests original pixels; a bounded view never substitutes embedded thumbnails.
-pub fn decode(path: &Path, edge: Option<u32>) -> Result<Rendered> {
+/// A full-size decode is refused over `allowance` bytes, with what it needs.
+pub fn decode(path: &Path, edge: Option<u32>, allowance: u64) -> Result<Rendered> {
     ensure!(
         edge.is_none_or(|e| e > 0 && e <= 4096),
         "Invalid ImageIO preview edge"
@@ -42,22 +44,27 @@ pub fn decode(path: &Path, edge: Option<u32>) -> Result<Rendered> {
             bytes.as_ptr(),
             bytes.len() as c_long,
             edge.unwrap_or(0),
+            allowance,
             &mut w,
             &mut h,
             &mut sw,
             &mut sh,
         )
     });
-    ensure!(!owned.0.is_null(), "ImageIO could not decode image");
+    if owned.0.is_null() {
+        // The adapter reports the source size only when memory refused it.
+        if sw > 0 && sh > 0 {
+            super::memory::check_size(sw, sh)?;
+            super::memory::require(u64::from(sw) * u64::from(sh) * 12, allowance, sw, sh)?;
+        }
+        anyhow::bail!("ImageIO could not decode image");
+    }
     ensure!(
-        w > 0
-            && h > 0
-            && sw > 0
-            && sh > 0
-            && u64::from(w) * u64::from(h) <= 100_000_000
-            && u64::from(sw) * u64::from(sh) <= 100_000_000,
+        w > 0 && h > 0 && sw > 0 && sh > 0,
         "Invalid ImageIO dimensions"
     );
+    super::memory::check_size(w, h)?;
+    super::memory::check_size(sw, sh)?;
     let pixels =
         unsafe { std::slice::from_raw_parts(owned.0, w as usize * h as usize * 4) }.to_vec();
     Ok(Rendered {

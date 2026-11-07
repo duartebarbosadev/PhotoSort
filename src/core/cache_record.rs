@@ -83,7 +83,11 @@ pub(crate) fn read(path: &Path) -> Option<Vec<u8>> {
         .take(MAX_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .ok()?;
-    (bytes.len() <= MAX_BYTES).then_some(bytes)
+    if bytes.len() > MAX_BYTES {
+        return None;
+    }
+    super::cache::touch(path);
+    Some(bytes)
 }
 #[cfg(test)]
 mod tests {

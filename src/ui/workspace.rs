@@ -22,6 +22,8 @@ mod inspector;
 mod intro;
 #[path = "library.rs"]
 mod library;
+#[path = "limits.rs"]
+mod limits;
 #[path = "models.rs"]
 mod model_setup;
 #[path = "navigation.rs"]
@@ -72,6 +74,7 @@ use crate::core::{
     catalog::Catalog,
     inspection::{self, Request as InspectionRequest, View as InspectionView},
     jobs::{Event, ImageWork, IoWork, Runtime},
+    memory::TooLarge,
     model::*,
     operations::Plan,
     pipeline::Stats,
@@ -124,6 +127,8 @@ struct InspectionFrame {
     request: InspectionRequest,
     texture: Option<TextureHandle>,
     error: Option<String>,
+    /// Refused for memory: the canvas offers to open it anyway.
+    too_large: Option<TooLarge>,
 }
 struct Texture {
     handle: TextureHandle,
@@ -365,7 +370,12 @@ pub struct PhotoSortApp {
     toast: Option<clipboard::Toast>,
     inspection_wanted: Vec<InspectionRequest>,
     inspection_frames: HashMap<u64, InspectionFrame>,
+    /// Since when each canvas slot waits for full-size detail.
+    detail_waiting: HashMap<u64, Instant>,
     view_started: Instant,
+    /// Memory and cache limits: photos the user chose to open at full size
+    /// although they are large, and the prompts about limits.
+    limits: limits::State,
 }
 impl PhotoSortApp {
     fn report_scan_warnings(&mut self, warnings: &[String]) {
@@ -621,6 +631,8 @@ impl PhotoSortApp {
             toast: None,
             inspection_wanted: Vec::new(),
             inspection_frames: HashMap::new(),
+            detail_waiting: HashMap::new(),
+            limits: Default::default(),
             view_started: Instant::now(),
         };
         if let Some(folder) = folder {
@@ -996,7 +1008,7 @@ impl PhotoSortApp {
     }
     fn evict(&mut self, incoming: usize) {
         let mut total: usize = self.textures.values().map(|t| t.bytes).sum();
-        while total + incoming > 96 * 1024 * 1024 || self.textures.len() >= 240 {
+        while total + incoming > limits::texture_budget() || self.textures.len() >= 240 {
             let key = self
                 .textures
                 .iter()
@@ -1854,6 +1866,8 @@ impl PhotoSortApp {
             self.inspector_drawer(ctx);
         }
         self.show_toast(ctx);
+        self.check_limits();
+        self.show_limit_notice(ctx);
         self.photo_drag_overlay(ctx);
         let dropped = ctx.input(|i| {
             i.raw
@@ -1884,6 +1898,8 @@ impl PhotoSortApp {
                 .iter()
                 .any(|request| request.slot == *slot)
         });
+        self.detail_waiting
+            .retain(|slot, _| self.inspection_wanted.iter().any(|r| r.slot == *slot));
         self.sync_playback(ctx);
         // Views change only in frames like this one, so each frame either
         // saves them or comes back once to do it; an idle window then stops

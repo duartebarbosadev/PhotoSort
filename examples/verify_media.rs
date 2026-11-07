@@ -40,6 +40,7 @@ fn main() -> anyhow::Result<()> {
                 media: media.clone(),
                 region,
                 output_edge: 512,
+                allow_large: false,
             };
             let detail = pipeline.inspect(&request)?;
             assert_eq!(detail.dimensions(), (region.width, region.height));

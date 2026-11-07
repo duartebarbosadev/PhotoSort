@@ -2506,6 +2506,7 @@ fn person_faces_are_cut_sharp_from_the_original_a_few_at_a_time() {
                 media: app.media[0].clone(),
                 region: crate::core::inspection::Region::full(16, 16),
                 output_edge: 16,
+                allow_large: false,
             });
     }
     app.inspection_wanted.clear();

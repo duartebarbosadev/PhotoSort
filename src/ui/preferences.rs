@@ -134,6 +134,8 @@ impl PhotoSortApp {
         let pick_auto_on = next.pick_best_auto && !self.preferences.pick_best_auto;
         let rotation_auto_on = next.rotation_auto && !self.preferences.rotation_auto;
         self.preferences = next;
+        // A new cache limit or RAW look: build what that now needs.
+        self.build_previews();
         self.navigation_notice = None;
         self.preferences_unreadable = false;
         self.save_preferences();

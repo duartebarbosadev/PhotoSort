@@ -38,6 +38,7 @@ fn detail(pipeline: &mut Pipeline, media: &Media, dimensions: (u32, u32)) -> Arc
                 height: dimensions.1,
             },
             output_edge: dimensions.0.max(dimensions.1),
+            allow_large: false,
         })
         .unwrap()
 }
@@ -256,4 +257,24 @@ fn decoder_applies_clean_aperture_before_container_rotation() {
         assert_eq!((plane.width, plane.height), (64, 64));
         assert_eq!(pipeline.load(media).unwrap().pixels.dimensions(), expected);
     }
+}
+#[test]
+fn libheif_decodes_follow_the_memory_allowance_with_what_they_need() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let media = fixture(root.path(), "orientation-1.heic");
+    // libheif decodes at full size here, so a small allowance refuses it and
+    // says how much it needs, as on macOS; the usual allowance opens it.
+    let mut small = Pipeline::new(64 << 20, cache.path().join("small"));
+    small.limit_quiet_allowance(1024);
+    let Err(refused) = small.load(&media) else {
+        panic!("a 1 KB allowance opened the photo");
+    };
+    let too_large = refused
+        .downcast_ref::<photosort::core::memory::TooLarge>()
+        .unwrap_or_else(|| panic!("refused for memory: {refused:#}"));
+    assert!(too_large.needed > 1024);
+    assert!(too_large.width > 0 && too_large.height > 0);
+    let mut usual = Pipeline::new(64 << 20, cache.path().join("usual"));
+    assert!(usual.load(&media).is_ok());
 }

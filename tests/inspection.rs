@@ -26,6 +26,7 @@ fn request(media: &Media, region: Region) -> Request {
         media: media.clone(),
         region,
         output_edge: 512,
+        allow_large: false,
     }
 }
 
@@ -237,16 +238,33 @@ fn source_and_sidecar_changes_invalidate_original_detail() {
     assert_eq!(pipeline.stats.decodes, 3);
 }
 #[test]
-fn detail_budget_evicts_sources_but_never_downscales_a_native_crop() {
+fn detail_too_large_for_its_budget_is_kept_alone_for_the_photo_being_inspected() {
     let root = tempfile::tempdir().unwrap();
     let cache = tempfile::tempdir().unwrap();
     let media = photo(root.path(), "a.png", 96, 64);
+    let other = photo(root.path(), "b.png", 96, 64);
     let mut pipeline = Pipeline::new(1, cache.path().to_owned());
     let detail = pipeline
         .inspect(&request(&media, Region::full(96, 64)))
         .unwrap();
     assert_eq!(detail.dimensions(), (96, 64));
     assert_eq!(pipeline.stats.detail_bytes, 0);
+    assert_eq!(pipeline.stats.detail_overflow, 96 * 64 * 4);
+    // Panning the same photo reuses it instead of decoding it again.
+    let decodes = pipeline.stats.decodes;
+    let part = Region {
+        x: 10,
+        y: 10,
+        width: 40,
+        height: 30,
+    };
+    let crop = pipeline.inspect(&request(&media, part)).unwrap();
+    assert_eq!(crop.dimensions(), (40, 30));
+    assert_eq!(pipeline.stats.decodes, decodes);
+    // Another photo takes its place; the first is decoded again later.
+    pipeline.inspect(&request(&other, part)).unwrap();
+    pipeline.inspect(&request(&media, part)).unwrap();
+    assert_eq!(pipeline.stats.decodes, decodes + 2);
 }
 #[test]
 fn inspection_mailbox_coalesces_views_and_rejects_late_results() {
@@ -364,4 +382,35 @@ fn a_preview_holding_every_metadata_pixel_is_complete() {
     // A capped preview may hide a photo whose metadata understates its size.
     assert!(!View::preview_is_complete([2048, 1536], [2048, 1536]));
     assert!(!View::preview_is_complete([320, 240], [320, 240]));
+}
+#[test]
+fn open_anyway_raises_what_a_full_size_decode_may_use() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    // BMP decodes at full size in every build (no shrink-on-load region).
+    let path = root.path().join("large.bmp");
+    image::RgbImage::from_pixel(600, 400, image::Rgb([90, 120, 150]))
+        .save(&path)
+        .unwrap();
+    let media = Media {
+        id: MediaId::for_path(&path),
+        fingerprint: Fingerprint::read(&path).unwrap(),
+        path,
+        kind: MediaKind::Photo,
+    };
+    let mut pipeline = Pipeline::new(64 << 20, cache.path().to_owned());
+    // As if this photo needed more than half of a smaller Mac's memory.
+    pipeline.limit_quiet_allowance(1 << 20);
+    let mut wanted = request(&media, Region::full(600, 400));
+    let refused = pipeline
+        .inspect_with_warning(&wanted, &|| false)
+        .unwrap_err();
+    let too_large = refused
+        .downcast_ref::<photosort::core::memory::TooLarge>()
+        .expect("refused for memory, with what it needs");
+    assert!(too_large.needed > 1 << 20);
+    // "Open anyway" sends the same view with the allowance raised.
+    wanted.allow_large = true;
+    let (pixels, _) = pipeline.inspect_with_warning(&wanted, &|| false).unwrap();
+    assert_eq!(pixels.dimensions(), (512, 341));
 }

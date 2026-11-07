@@ -1164,7 +1164,9 @@ impl PhotoSortApp {
                     output_edge: (region.width.max(region.height) as f32 * scale * ppp)
                         .ceil()
                         .clamp(1.0, 4096.0) as u32,
+                    allow_large: self.limits.open_large.contains(&id),
                 };
+                let mut refused = None;
                 if let Some(frame) = self
                     .inspection_frames
                     .get(&slot)
@@ -1174,7 +1176,8 @@ impl PhotoSortApp {
                         paint_region(ui, texture, content, source, region, view, turns);
                         detail = true;
                     }
-                    if let Some(error) = &frame.error {
+                    refused = frame.too_large;
+                    if let Some(error) = frame.error.as_ref().filter(|_| refused.is_none()) {
                         ui.painter().text(
                             rect.left_bottom() + egui::vec2(10.0, -8.0),
                             Align2::LEFT_BOTTOM,
@@ -1184,6 +1187,20 @@ impl PhotoSortApp {
                         );
                         response.clone().on_hover_text(error);
                     }
+                } else {
+                    self.detail_loading_label(ui, rect, slot, id);
+                }
+                if let Some(too_large) = refused {
+                    let card = egui::Rect::from_min_max(
+                        content.left_bottom() - egui::vec2(0.0, 150.0),
+                        content.left_bottom() + egui::vec2(content.width().min(400.0), 0.0),
+                    );
+                    ui.scope_builder(
+                        egui::UiBuilder::new()
+                            .max_rect(card)
+                            .layout(egui::Layout::bottom_up(Align::Min)),
+                        |ui| self.large_photo_card(ui, id, too_large),
+                    );
                 }
                 self.inspection_wanted.push(request);
             } else if needs_original {

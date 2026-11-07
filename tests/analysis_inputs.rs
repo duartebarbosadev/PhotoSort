@@ -415,9 +415,13 @@ fn opaque_proxies_drop_redundant_alpha_without_changing_pixels_or_repeating_work
         let proxies: Vec<_> = std::fs::read_dir(cache.path())
             .unwrap()
             .map(|p| p.unwrap().path())
-            .filter(|p| p.extension().is_some_and(|ext| ext == "png"))
+            .filter(|p| {
+                p.extension()
+                    .is_some_and(|ext| ext == "png" || ext == "jpg")
+            })
             .collect();
-        // Display proxy, analysis proxy and the grid thumbnail.
+        // Display proxy, analysis proxy and the grid thumbnail (opaque display
+        // images are JPEG, which has no alpha channel to drop).
         assert_eq!(proxies.len(), 3);
         for path in proxies {
             assert_eq!(

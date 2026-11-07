@@ -17,10 +17,25 @@ pub const BUILD_ID: &str = env!("PHOTOSORT_VIPS_BUILD_ID");
 pub const LCMS_VERSION: &str = env!("PHOTOSORT_LCMS_VERSION");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Error(String);
+pub struct Error {
+    message: String,
+    needed: Option<u64>,
+}
+impl Error {
+    fn new(message: String) -> Self {
+        Self {
+            message,
+            needed: None,
+        }
+    }
+    /// Bytes a full-size render would need, when memory refused it.
+    pub fn needed(&self) -> Option<u64> {
+        self.needed
+    }
+}
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        self.message.fmt(f)
     }
 }
 impl std::error::Error for Error {}
@@ -36,6 +51,9 @@ pub struct Request {
     /// None retains source resolution/precision. Previews accept 1..=4096.
     pub edge: Option<u32>,
     pub region: Option<Region>,
+    /// Bytes a render may use; None is 512 MiB. Previews and regions are
+    /// bounded by their output, a full-size render by its source.
+    pub memory: Option<u64>,
 }
 #[derive(Debug)]
 pub enum Pixels {
@@ -68,6 +86,7 @@ struct NativeOutput {
     sample_bytes: u32,
     profiled: u32,
     source_sample_bytes: u32,
+    needed: u64,
 }
 impl Drop for NativeOutput {
     fn drop(&mut self) {
@@ -87,6 +106,7 @@ unsafe extern "C" {
         height: u32,
         orientation: u32,
         tile_edge: u32,
+        max_bytes: u64,
         cancelled: unsafe extern "C" fn(*mut c_void) -> c_int,
         context: *mut c_void,
         output: *mut NativeOutput,
@@ -98,7 +118,7 @@ unsafe extern "C" {
 }
 fn error_text(error: &[u8]) -> Error {
     let end = error.iter().position(|c| *c == 0).unwrap_or(error.len());
-    Error(String::from_utf8_lossy(&error[..end]).trim().to_owned())
+    Error::new(String::from_utf8_lossy(&error[..end]).trim().to_owned())
 }
 fn initialize() -> Result<(), Error> {
     static INIT: OnceLock<Result<(), Error>> = OnceLock::new();
@@ -157,7 +177,7 @@ pub fn render_region<F: Fn() -> bool + Sync>(
     cancelled: F,
 ) -> Result<Image, Error> {
     if request.region.is_none() || !(1..=8).contains(&orientation) || tile_edge > 4096 {
-        return Err(Error("Invalid oriented inspection request".into()));
+        return Err(Error::new("Invalid oriented inspection request".into()));
     }
     render_inner(path, request, orientation.into(), tile_edge, cancelled)
 }
@@ -169,22 +189,22 @@ fn render_inner<F: Fn() -> bool + Sync>(
     cancelled: F,
 ) -> Result<Image, Error> {
     if request.edge.is_some_and(|edge| !(1..=4096).contains(&edge)) {
-        return Err(Error("Preview edge must be between 1 and 4096".into()));
+        return Err(Error::new("Preview edge must be between 1 and 4096".into()));
     }
     if request
         .region
         .is_some_and(|r| r.width == 0 || r.height == 0)
     {
-        return Err(Error("Inspection region must not be empty".into()));
+        return Err(Error::new("Inspection region must not be empty".into()));
     }
     #[cfg(unix)]
     let path = CString::new(path.as_os_str().as_encoded_bytes());
     #[cfg(not(unix))]
     let path = CString::new(
         path.to_str()
-            .ok_or_else(|| Error("Image path is not valid Unicode".into()))?,
+            .ok_or_else(|| Error::new("Image path is not valid Unicode".into()))?,
     );
-    let path = path.map_err(|_| Error("Image path contains a null byte".into()))?;
+    let path = path.map_err(|_| Error::new("Image path contains a null byte".into()))?;
     let mut context = Cancellation {
         check: &cancelled,
         panicked: AtomicBool::new(false),
@@ -192,7 +212,7 @@ fn render_inner<F: Fn() -> bool + Sync>(
     let context_ptr = (&mut context as *mut Cancellation<'_, _>).cast();
     // Check before initializing the native engine or touching a file.
     if unsafe { check_cancel::<F>(context_ptr) } != 0 {
-        return Err(Error("Image preparation cancelled".into()));
+        return Err(Error::new("Image preparation cancelled".into()));
     }
     initialize()?;
     // libvips has one process-global error buffer. The application's image actor
@@ -205,7 +225,7 @@ fn render_inner<F: Fn() -> bool + Sync>(
             Err(TryLockError::Poisoned(error)) => break error.into_inner(),
             Err(TryLockError::WouldBlock) => {
                 if unsafe { check_cancel::<F>(context_ptr) } != 0 {
-                    return Err(Error(
+                    return Err(Error::new(
                         if context.panicked.load(Ordering::Relaxed) {
                             "Cancellation callback panicked; image preparation stopped"
                         } else {
@@ -218,6 +238,7 @@ fn render_inner<F: Fn() -> bool + Sync>(
             }
         }
     };
+    let budget = request.memory.unwrap_or(512 * 1024 * 1024);
     let mut output = NativeOutput::default();
     let mut error = [0u8; 2048];
     let mut warning = [0u8; 1024];
@@ -239,6 +260,7 @@ fn render_inner<F: Fn() -> bool + Sync>(
             region.height,
             orientation,
             tile_edge,
+            budget,
             check_cancel::<F>,
             context_ptr,
             &mut output,
@@ -249,15 +271,17 @@ fn render_inner<F: Fn() -> bool + Sync>(
         )
     };
     if context.panicked.load(Ordering::Relaxed) {
-        return Err(Error(
+        return Err(Error::new(
             "Cancellation callback panicked; image preparation stopped".into(),
         ));
     }
     if result != 0 {
-        return Err(error_text(&error));
+        let mut error = error_text(&error);
+        error.needed = (output.needed > 0).then_some(output.needed);
+        return Err(error);
     }
-    if output.width > 32768 || output.height > 32768 || !matches!(output.sample_bytes, 1 | 2) {
-        return Err(Error(
+    if output.width > 1 << 20 || output.height > 1 << 20 || !matches!(output.sample_bytes, 1 | 2) {
+        return Err(Error::new(
             "Native image dimensions or sample size exceed their limits".into(),
         ));
     }
@@ -267,10 +291,10 @@ fn render_inner<F: Fn() -> bool + Sync>(
         || output.width == 0
         || output.height == 0
         || !matches!(output.sample_bytes, 1 | 2)
-        || expected > 512 * 1024 * 1024
+        || expected > budget
         || expected != output.length as u64
     {
-        return Err(Error("Invalid native image buffer".into()));
+        return Err(Error::new("Invalid native image buffer".into()));
     }
     // SAFETY: the adapter returns initialized, suitably aligned g_malloc memory
     // with the independently checked sample count, held alive by output's Drop.
@@ -286,7 +310,7 @@ fn render_inner<F: Fn() -> bool + Sync>(
         }
     };
     if unsafe { check_cancel::<F>(context_ptr) } != 0 {
-        return Err(Error("Image preparation cancelled".into()));
+        return Err(Error::new("Image preparation cancelled".into()));
     }
     Ok(Image {
         width: output.width,
@@ -295,7 +319,7 @@ fn render_inner<F: Fn() -> bool + Sync>(
         source_height: output.source_height,
         profiled: output.profiled != 0,
         source_sample_bytes: output.source_sample_bytes,
-        decoder_warning: (warning[0] != 0).then(|| error_text(&warning).0),
+        decoder_warning: (warning[0] != 0).then(|| error_text(&warning).message),
         pixels,
     })
 }

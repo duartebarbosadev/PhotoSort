@@ -22,6 +22,7 @@ use std::{
 mod diagnostics;
 mod files;
 mod images;
+pub mod previews;
 mod similarity;
 mod subjects;
 
@@ -71,6 +72,8 @@ pub enum Event {
         request: super::inspection::Request,
         result: Result<Arc<RgbaImage>, String>,
         decoder_warning: Option<String>,
+        /// A full-size decode refused for memory, so the user can be asked.
+        too_large: Option<super::memory::TooLarge>,
         stats: Stats,
     },
     AnalysisError {
@@ -412,6 +415,8 @@ pub struct Runtime {
     pub raw_look: super::raw_look::Control,
     pub cache: super::cache::Control,
     pub browsing: super::browsing::Worker,
+    /// Builds the open folder's previews on disk in the background.
+    pub previews: previews::Builder,
     pub events: Receiver<Envelope>,
     io: SyncSender<Message<IoWork>>,
     images: SyncSender<Message<ImageWork>>,
@@ -472,6 +477,11 @@ impl Runtime {
         let processing = super::processing::Control::default();
         let raw_look = super::raw_look::Control::default();
         let inspection = Arc::new(Mutex::new(super::inspection::Queue::default()));
+        let previews = previews::Builder::new(
+            cache.clone(),
+            previews::thread_count(),
+            cache_control.writes(),
+        );
         let image_thread = images::spawn(images::Wiring {
             publisher,
             cache,
@@ -496,6 +506,7 @@ impl Runtime {
             processing,
             raw_look,
             browsing,
+            previews,
             events,
             io,
             images,
@@ -518,6 +529,7 @@ impl Runtime {
         self.generation.load(Ordering::Acquire)
     }
     pub fn next_epoch(&self) -> u64 {
+        self.previews.clear();
         self.playback.select(None);
         self.browsing.reset(None);
         self.cancel_analysis();
@@ -557,6 +569,7 @@ impl Runtime {
         self.playback.shutdown();
         self.model_assets.shutdown();
         self.browsing.shutdown();
+        self.previews.shutdown();
         self.stop.store(true, Ordering::Release);
         self.cancel_analysis();
         for thread in self.threads.drain(..) {

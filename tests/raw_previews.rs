@@ -120,6 +120,7 @@ fn shared_raw_preview_geometry_recipes_reuse_and_fallbacks() -> anyhow::Result<(
                         height: 32,
                     },
                     output_edge: 32,
+                    allow_large: false,
                 };
                 let detail = pipeline.inspect(&request)?;
                 assert_eq!(detail.dimensions(), (32, 32));
@@ -254,6 +255,8 @@ unsafe extern "C" {
     fn photosort_raw_decode(
         path: *const std::ffi::c_char,
         recipe: std::ffi::c_int,
+        allowance: u64,
+        needed: *mut u64,
         embedded: *mut std::ffi::c_int,
         source_width: *mut u32,
         source_height: *mut u32,
@@ -276,15 +279,22 @@ unsafe extern "C" fn keep_going(
 ) -> std::ffi::c_int {
     0
 }
-/// (image kind, embedded, source size, LibRaw error) for one native decode.
-fn native_raw(path: &std::path::Path, recipe: i32) -> (Option<i32>, i32, (u32, u32), i32) {
+/// (image kind, embedded, source size, LibRaw error, bytes needed) for one
+/// native decode allowed `allowance` bytes.
+fn native_raw(
+    path: &std::path::Path,
+    recipe: i32,
+    allowance: u64,
+) -> (Option<i32>, i32, (u32, u32), i32, u64) {
     let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
-    let (mut embedded, mut width, mut height, mut error) = (0, 0, 0, 0);
+    let (mut embedded, mut width, mut height, mut error, mut needed) = (0, 0, 0, 0, 0);
     // SAFETY: every out-pointer lives through the call; the image is freed here.
     unsafe {
         let image = photosort_raw_decode(
             path.as_ptr(),
             recipe,
+            allowance,
+            &mut needed,
             &mut embedded,
             &mut width,
             &mut height,
@@ -296,13 +306,12 @@ fn native_raw(path: &std::path::Path, recipe: i32) -> (Option<i32>, i32, (u32, u
         if !image.is_null() {
             libraw_dcraw_clear_mem(image);
         }
-        (kind, embedded, (width, height), error)
+        (kind, embedded, (width, height), error, needed)
     }
 }
 
-#[test]
-fn a_sensor_past_100_megapixels_still_previews_from_its_embedded_jpeg() {
-    // The sample's sensor directory claims 12000x9000 (108 MP), like a GFX100.
+/// The public ARW sample with its sensor directory claiming `width` x `height`.
+fn patched_arw(width: u16, height: u16) -> (tempfile::TempDir, PathBuf) {
     let mut bytes = std::fs::read(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/samples/arw_sample.ARW"),
     )
@@ -318,16 +327,22 @@ fn a_sensor_past_100_megapixels_still_previews_from_its_embedded_jpeg() {
     for n in 0..usize::from(u16_at(&bytes, sensor)) {
         let at = sensor + 2 + n * 12;
         match u16_at(&bytes, at) {
-            0x100 => bytes[at + 8..at + 10].copy_from_slice(&12000u16.to_le_bytes()),
-            0x101 => bytes[at + 8..at + 10].copy_from_slice(&9000u16.to_le_bytes()),
+            0x100 => bytes[at + 8..at + 10].copy_from_slice(&width.to_le_bytes()),
+            0x101 => bytes[at + 8..at + 10].copy_from_slice(&height.to_le_bytes()),
             _ => {}
         }
     }
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("large.ARW");
     std::fs::write(&path, bytes).unwrap();
+    (temp, path)
+}
+#[test]
+fn a_sensor_past_100_megapixels_previews_from_its_jpeg_and_decodes_when_memory_allows() {
+    // The sample's sensor directory claims 12000x9000 (108 MP), like a GFX100.
+    let (_temp, path) = patched_arw(12000, 9000);
 
-    let (kind, embedded, (width, height), error) = native_raw(&path, 1);
+    let (kind, embedded, (width, height), error, _) = native_raw(&path, 1, 0);
     assert_eq!(
         (kind, embedded, error),
         (Some(1), 1, 0),
@@ -337,7 +352,25 @@ fn a_sensor_past_100_megapixels_still_previews_from_its_embedded_jpeg() {
         u64::from(width) * u64::from(height) > 100_000_000,
         "{width}x{height}"
     );
-    // A sensor decode of that size stays refused.
-    let (kind, _, _, error) = native_raw(&path, 0);
-    assert_eq!((kind, error), (None, -100_007));
+    // A full-size decode says what it needs when that is over its allowance:
+    // 18 bytes a sensor pixel, about 1.9 GB here.
+    let gib = 1 << 30;
+    let (kind, _, (width, height), error, needed) = native_raw(&path, 0, gib);
+    assert_eq!((kind, error), (None, -200_001));
+    assert!(needed >= 108_000_000 * 18, "{needed}");
+    assert!(u64::from(width) * u64::from(height) > 100_000_000);
+    // Allowed more, the same decode goes past the memory check; only the
+    // patched file's short sensor data can stop it now.
+    let (_, _, _, error, _) = native_raw(&path, 0, 4 * gib);
+    assert_ne!(error, -200_001);
+}
+#[test]
+fn a_sensor_too_large_for_libraw_to_size_is_refused_before_any_decode() {
+    // 40000x40000 is 1.6 GP: LibRaw's 32-bit output sizing would overflow.
+    let (_temp, path) = patched_arw(40000, 40000);
+    let (kind, _, _, error, needed) = native_raw(&path, 0, u64::MAX);
+    assert_eq!((kind, error, needed), (None, -200_002, 0));
+    // The camera's own preview still shows.
+    let (kind, embedded, _, error, _) = native_raw(&path, 1, 0);
+    assert_eq!((kind, embedded, error), (Some(1), 1, 0));
 }

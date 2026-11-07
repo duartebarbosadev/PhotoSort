@@ -88,6 +88,55 @@ fn proxy_survives_memory_eviction_without_redecoding_source() {
     assert_eq!(p.stats.disk_hits, 1);
 }
 #[test]
+fn display_previews_are_the_same_jpeg_pixels_whatever_the_cache_holds() {
+    let d = TempDir::new().unwrap();
+    let m = photo(d.path(), "a.png");
+    let cache = TempDir::new().unwrap();
+    let with = |ext: &str| {
+        fs::read_dir(cache.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == ext))
+            .collect::<Vec<_>>()
+    };
+    let fresh = Pipeline::new(1_000_000, cache.path().to_owned())
+        .load(&m)
+        .unwrap();
+    // The display preview and the grid thumbnail.
+    assert_eq!((with("jpg").len(), with("png").len()), (2, 0));
+    // A new session reads the very pixels the first one showed.
+    let mut reopened = Pipeline::new(1_000_000, cache.path().to_owned());
+    assert_eq!(*reopened.load(&m).unwrap().pixels, *fresh.pixels);
+    assert_eq!(reopened.stats.decodes, 0);
+    // Without a disk cache the photo shows (and is analysed) the same way.
+    let mut uncached = Pipeline::new(1_000_000, cache.path().join("unused"));
+    uncached.configure_cache(photosort::core::cache::Limits {
+        disk_mib: 0,
+        ..Default::default()
+    });
+    assert_eq!(*uncached.load(&m).unwrap().pixels, *fresh.pixels);
+    // From earlier versions, which kept every preview as a lossless PNG
+    // (here the photo itself, already preview-sized): the grid opens from
+    // the PNG thumbnail, and the preview becomes the JPEG a fresh render
+    // makes, the same pixels as above, without decoding the photo again.
+    for jpg in with("jpg") {
+        let preview = jpg.with_extension("json").exists();
+        let old = if preview {
+            image::open(&m.path).unwrap()
+        } else {
+            image::open(&jpg).unwrap()
+        };
+        old.save(jpg.with_extension("png")).unwrap();
+        fs::remove_file(jpg).unwrap();
+    }
+    let mut upgraded = Pipeline::new(1_000_000, cache.path().to_owned());
+    assert!(upgraded.cached_thumbnail(&m, || false).is_some());
+    assert_eq!(*upgraded.load(&m).unwrap().pixels, *fresh.pixels);
+    assert_eq!(upgraded.stats.decodes, 0);
+    // The JPEG replaced the old preview; the old thumbnail stays as it is.
+    assert_eq!((with("jpg").len(), with("png").len()), (1, 1));
+}
+#[test]
 fn grid_thumbnails_reopen_from_their_own_artifact_without_decoding() {
     let d = TempDir::new().unwrap();
     let m = photo(d.path(), "a.png");

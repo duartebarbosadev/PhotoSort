@@ -54,6 +54,7 @@ fn transparent_heic_uses_straight_colors_in_every_workflow_and_after_restart() {
                     height: 64,
                 },
                 output_edge: 96,
+                allow_large: false,
             })
             .unwrap();
         assert_eq!(*detail, *display.pixels);

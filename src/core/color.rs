@@ -10,7 +10,6 @@ use std::{
 };
 
 const MAX_PROFILE: usize = 4 * 1024 * 1024;
-const MAX_IMAGE: usize = 512 * 1024 * 1024;
 const MAX_TRANSFORMS: usize = 4;
 const CHUNK_PIXELS: usize = 8192;
 #[derive(Clone)]
@@ -21,11 +20,22 @@ enum Transform {
 }
 #[derive(Default)]
 pub(super) struct Manager {
+    /// Largest decode allowed, in bytes; None is the memory-based default.
+    allowance: Option<u64>,
     cache: VecDeque<(blake3::Hash, Transform)>,
     pub initializations: u64,
     pub conversions: u64,
 }
 impl Manager {
+    /// Bytes a decode may use: half the memory unless the user chose to
+    /// open a larger photo (see `memory::Machine`).
+    pub fn allowance(&self) -> u64 {
+        self.allowance
+            .unwrap_or_else(|| super::memory::Machine::current().quiet_allowance())
+    }
+    pub fn set_allowance(&mut self, allowance: Option<u64>) {
+        self.allowance = allowance;
+    }
     pub fn clear(&mut self) {
         self.cache.clear();
     }
@@ -35,12 +45,12 @@ impl Manager {
         cancelled: &impl Fn() -> bool,
     ) -> Result<DynamicImage> {
         ensure!(!cancelled(), "Image preparation cancelled");
-        reader.limits(decode_limits());
+        reader.limits(decode_limits(self.allowance()));
         if reader.format() == Some(image::ImageFormat::Jpeg) {
             let mut input = reader.into_inner();
             let start = input.stream_position()?;
             let mut decoder = image::codecs::jpeg::JpegDecoder::new(&mut input)?;
-            decoder.set_limits(decode_limits())?;
+            decoder.set_limits(decode_limits(self.allowance()))?;
             let profile = decoder
                 .icc_profile()
                 .context("Cannot read embedded color profile")?;
@@ -65,10 +75,15 @@ impl Manager {
     ) -> Result<DynamicImage> {
         // into_decoder preserves codec limits but, unlike ImageReader::decode,
         // does not reserve the final DynamicImage allocation itself.
-        ensure!(
-            decoder.total_bytes() <= MAX_IMAGE as u64,
-            "Image exceeds the 512 MiB decode budget"
-        );
+        // The decoded pixels and one converted copy of them.
+        let (width, height) = decoder.dimensions();
+        super::memory::check_size(width, height)?;
+        super::memory::require(
+            decoder.total_bytes().saturating_mul(2),
+            self.allowance(),
+            width,
+            height,
+        )?;
         if let Some(profile) = &profile {
             ensure!(
                 profile.len() <= MAX_PROFILE,
@@ -94,10 +109,19 @@ impl Manager {
             "Embedded color profile exceeds 4 MiB"
         );
         let mut decoder = jpeg_decoder::Decoder::new(input);
-        decoder.set_max_decoding_buffer_size(MAX_IMAGE);
+        decoder
+            .set_max_decoding_buffer_size(usize::try_from(self.allowance()).unwrap_or(usize::MAX));
         decoder.read_info().context("Cannot read CMYK JPEG")?;
         let info = decoder.info().context("Missing CMYK JPEG dimensions")?;
-        decode_limits().check_dimensions(info.width.into(), info.height.into())?;
+        let (width, height) = (u32::from(info.width), u32::from(info.height));
+        super::memory::check_size(width, height)?;
+        // The CMYK samples and the RGB result.
+        super::memory::require(
+            u64::from(width) * u64::from(height) * 7,
+            self.allowance(),
+            width,
+            height,
+        )?;
         ensure!(
             info.pixel_format == jpeg_decoder::PixelFormat::CMYK32,
             "CMYK profile does not match JPEG color channels"
@@ -114,6 +138,7 @@ impl Manager {
             4,
             3,
             |src, dst| transform.transform(src, dst),
+            self.allowance(),
             cancelled,
         )?;
         ensure!(!cancelled(), "Color conversion cancelled");
@@ -226,6 +251,7 @@ impl Manager {
                     $source,
                     $target,
                     |src, dst| $transform.transform(src, dst),
+                    self.allowance(),
                     cancelled,
                 )?;
                 image = DynamicImage::$variant(
@@ -254,11 +280,11 @@ impl Manager {
     }
 }
 // One limit policy for standard images, embedded RAW JPEGs and CMYK fallback.
-fn decode_limits() -> image::Limits {
+fn decode_limits(allowance: u64) -> image::Limits {
     let mut limits = image::Limits::default();
-    limits.max_alloc = Some(MAX_IMAGE as u64);
-    limits.max_image_width = Some(32768);
-    limits.max_image_height = Some(32768);
+    limits.max_alloc = Some(allowance);
+    limits.max_image_width = Some(super::memory::MAX_EDGE);
+    limits.max_image_height = Some(super::memory::MAX_EDGE);
     limits
 }
 fn same<T: Copy + Default>(
@@ -281,6 +307,7 @@ fn expand<T: Copy + Default>(
     from: usize,
     to: usize,
     transform: impl Fn(&[T], &mut [T]) -> Result<(), moxcms::CmsError>,
+    allowance: u64,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Vec<T>> {
     let samples = (source.len() / from)
@@ -289,8 +316,8 @@ fn expand<T: Copy + Default>(
     ensure!(
         samples
             .checked_mul(std::mem::size_of::<T>())
-            .is_some_and(|bytes| bytes <= MAX_IMAGE),
-        "Color conversion exceeds the 512 MiB decode budget"
+            .is_some_and(|bytes| bytes as u64 <= allowance),
+        "Color conversion needs more memory than this photo may use"
     );
     let mut output = Vec::new();
     output.try_reserve_exact(samples)?;
@@ -435,7 +462,7 @@ mod tests {
         assert!(manager.cache.is_empty());
     }
     #[test]
-    fn jpeg_paths_keep_the_shared_dimension_limit_before_pixel_allocation() {
+    fn jpeg_paths_refuse_a_decode_over_the_allowance_before_pixel_allocation() {
         for color in [
             jpeg_encoder::ColorType::Rgb,
             jpeg_encoder::ColorType::Cmyk,
@@ -460,10 +487,16 @@ mod tests {
                 std::io::Cursor::new(bytes),
                 image::ImageFormat::Jpeg,
             );
+            // 8 x 32769 pixels are a real shape; a 512 KiB allowance is not
+            // enough for them, so nothing is allocated.
             let mut manager = Manager::default();
+            manager.set_allowance(Some(512 * 1024));
             let error = manager.decode(reader, &|| false).unwrap_err();
             assert!(
-                error.to_string().contains("Image size exceeds limit"),
+                error
+                    .downcast_ref::<super::super::memory::TooLarge>()
+                    .is_some()
+                    || error.to_string().contains("exceeds limit"),
                 "{error:#}"
             );
             assert_eq!(manager.conversions, 0);

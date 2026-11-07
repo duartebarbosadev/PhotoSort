@@ -556,6 +556,7 @@ impl PhotoSortApp {
             media: media.clone(),
             region,
             output_edge,
+            allow_large: false,
         })
     }
     /// A face cut sharp from the original photo: from the cache, or as soon

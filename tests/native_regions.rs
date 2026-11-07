@@ -34,6 +34,7 @@ fn request(media: &Media, x: u32, y: u32, width: u32, height: u32, edge: u32) ->
             height,
         },
         output_edge: edge,
+        allow_large: false,
     }
 }
 #[test]
@@ -274,6 +275,7 @@ fn rotated_fit_views_resize_before_materializing_and_keep_exact_orientation() {
                 width: 2500,
                 height: 1400,
             }),
+            memory: None,
         },
         1,
         0,

@@ -66,6 +66,7 @@ fn thumbnails_are_bounded_and_regions_use_unrotated_source_coordinates() {
         Request {
             edge: Some(100),
             region: None,
+            memory: None,
         },
         || false,
     )
@@ -89,6 +90,7 @@ fn thumbnails_are_bounded_and_regions_use_unrotated_source_coordinates() {
                 width: 32,
                 height: 21,
             }),
+            memory: None,
         },
         || false,
     )
@@ -104,7 +106,8 @@ fn thumbnails_are_bounded_and_regions_use_unrotated_source_coordinates() {
             &path,
             Request {
                 edge: Some(0),
-                region: None
+                region: None,
+                memory: None,
             },
             || false
         )
@@ -120,7 +123,8 @@ fn thumbnails_are_bounded_and_regions_use_unrotated_source_coordinates() {
                     y: 0,
                     width: 2,
                     height: 2
-                })
+                }),
+                memory: None,
             },
             || false
         )
@@ -153,7 +157,7 @@ fn flat_jpeg(path: &Path, width: u16, height: u16) {
     std::fs::write(path, jpeg).unwrap();
 }
 #[test]
-fn previews_of_sources_past_the_decode_budget_shrink_on_load() {
+fn previews_and_regions_of_huge_sources_decode_and_full_size_follows_memory() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("large.jpg");
     // 552 million samples, past the 512 MiB budget for a full-size decode.
@@ -163,6 +167,7 @@ fn previews_of_sources_past_the_decode_budget_shrink_on_load() {
         Request {
             edge: Some(256),
             region: None,
+            memory: None,
         },
         || false,
     )
@@ -173,8 +178,29 @@ fn previews_of_sources_past_the_decode_budget_shrink_on_load() {
         (24000, 23000)
     );
     assert!(rgba(preview).chunks(4).all(|p| p == [128, 128, 128, 255]));
+    // A 1:1 region decodes only its crop, whatever the source size.
+    let region = render_region(
+        &path,
+        Request {
+            edge: None,
+            region: Some(Region {
+                x: 12000,
+                y: 20000,
+                width: 300,
+                height: 200,
+            }),
+            memory: None,
+        },
+        1,
+        0,
+        || false,
+    )
+    .unwrap();
+    assert_eq!((region.width, region.height), (300, 200));
+    // A full-size render holds the source (one grey byte a pixel, plus RGBA
+    // out): refused over its memory, saying what it needs.
     let full = render(&path, Request::default(), || false).unwrap_err();
-    assert!(full.to_string().contains("512 MiB"), "{full}");
+    assert_eq!(full.needed(), Some(24000 * 23000 * 5), "{full}");
 }
 #[test]
 fn embedded_linear_profile_normalizes_rgb_but_preserves_alpha() {
@@ -186,7 +212,16 @@ fn embedded_linear_profile_normalizes_rgb_but_preserves_alpha() {
         Some(linear_profile()),
     );
     for edge in [None, Some(10)] {
-        let output = render(&path, Request { edge, region: None }, || false).unwrap();
+        let output = render(
+            &path,
+            Request {
+                edge,
+                region: None,
+                memory: None,
+            },
+            || false,
+        )
+        .unwrap();
         assert!(output.profiled);
         for pixel in rgba(output).as_chunks::<4>().0 {
             for sample in &pixel[..3] {
@@ -217,7 +252,16 @@ fn invalid_profiles_and_mismatched_cmyk_profiles_are_visible_errors() {
         let path = temp.path().join(format!("{name}.tiff"));
         tiff_fixture::write(&path, Some(&profile), 8, false, false);
         for edge in [None, Some(16)] {
-            let error = render(&path, Request { edge, region: None }, || false).unwrap_err();
+            let error = render(
+                &path,
+                Request {
+                    edge,
+                    region: None,
+                    memory: None,
+                },
+                || false,
+            )
+            .unwrap_err();
             assert!(error.to_string().contains("profile"), "{error}");
         }
     }
@@ -259,7 +303,8 @@ fn cancellation_and_callback_panics_never_publish_pixels_or_poison_next_job() {
             &path,
             Request {
                 edge: Some(32),
-                region: None
+                region: None,
+                memory: None,
             },
             || false
         )
@@ -360,6 +405,7 @@ fn original_jpeg_png_samples_are_read_only_and_bounded() {
             Request {
                 edge: Some(2048),
                 region: None,
+                memory: None,
             },
             || false,
         )
@@ -448,6 +494,7 @@ fn cmyk_and_ycck_jpeg_are_converted_before_exposing_rgb() {
             Request {
                 edge: Some(16),
                 region: None,
+                memory: None,
             },
             || false,
         )
@@ -477,7 +524,16 @@ fn exif_orientation_is_left_for_the_shared_pipeline() {
         )
         .unwrap();
     for (edge, expected) in [(None, (64, 32)), (Some(16), (16, 8))] {
-        let output = render(&path, Request { edge, region: None }, || false).unwrap();
+        let output = render(
+            &path,
+            Request {
+                edge,
+                region: None,
+                memory: None,
+            },
+            || false,
+        )
+        .unwrap();
         assert_eq!((output.width, output.height), expected);
         assert_eq!((output.source_width, output.source_height), (64, 32));
     }
@@ -493,7 +549,16 @@ fn profiles_discarded_by_the_png_loader_are_reported_instead_of_silent_fallback(
         Some(vec![0; 128]),
     );
     for edge in [None, Some(10)] {
-        let output = render(&path, Request { edge, region: None }, || false).unwrap();
+        let output = render(
+            &path,
+            Request {
+                edge,
+                region: None,
+                memory: None,
+            },
+            || false,
+        )
+        .unwrap();
         assert!(!output.profiled);
         assert!(
             output

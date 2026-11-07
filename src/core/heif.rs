@@ -95,14 +95,29 @@ pub(super) fn decode(
     let size = file.metadata()?.len();
     let mut context = HeifContext::new()?;
     let mut limits = context.security_limits();
-    limits.set_max_image_size_pixels(100_000_000);
+    // Memory, not pixel count, bounds a real photo; libheif still refuses
+    // headers past any real size.
+    let allowance = colors.allowance();
+    // libheif's own limits also cover reading the header, so they keep a
+    // floor: the check below then says what a decode needs.
+    let libheif = allowance.max(512 * 1024 * 1024);
+    limits.set_max_image_size_pixels(super::memory::MAX_PIXELS);
     limits.set_max_color_profile_size(4 * 1024 * 1024);
-    limits.set_max_memory_block_size(512 * 1024 * 1024);
-    limits.set_max_total_memory(512 * 1024 * 1024);
+    limits.set_max_memory_block_size(libheif);
+    limits.set_max_total_memory(libheif);
     context.set_security_limits(&limits)?;
     context.set_max_decoding_threads(4);
     context.read_reader(Box::new(StreamReader::new(file, size)))?;
     let handle = context.primary_image_handle()?;
+    let (width, height) = (handle.width(), handle.height());
+    super::memory::check_size(width, height)?;
+    // libheif's planes, the interleaved image and the color-managed copy.
+    super::memory::require(
+        u64::from(width) * u64::from(height) * 12,
+        allowance,
+        width,
+        height,
+    )?;
     let icc = handle.color_profile_raw();
     let mut options = DecodingOptions::new().context("Create HEIF decoding options")?;
     options.set_strict_decoding(true);
