@@ -15,8 +15,8 @@ concurrency:
   # they save the build caches that pull requests reuse.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  # Builds without the optional native libraries. Windows has no full native
-  # toolchain in CI yet, so this is its only coverage; Linux keeps it compiling.
+  # Builds without the optional native libraries, which keeps that configuration
+  # compiling on both systems. The full builds are checked below.
   minimal:
     name: Minimal build (${{ matrix.os }})
     timeout-minutes: 45
@@ -114,6 +114,35 @@ jobs:
         run: cargo clippy --locked --no-default-features --all-targets -- -D warnings
       - if: matrix.features != ''
         run: cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
+  # The full build with the native stack from CONTRIBUTING.md: GStreamer from its
+  # official installer, and Exiv2, LibRaw and libheif from vcpkg (about 15 minutes
+  # without the cache).
+  windows:
+    name: Windows
+    timeout-minutes: 120
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: full
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        with:
+          tool: nextest
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - uses: ./.github/actions/windows-native
+      - run: python -B -m unittest discover -s scripts -p 'test_*.py'
+      - run: cargo nextest run --locked --lib --bins --tests --no-fail-fast
+      - run: cargo clippy --locked --all-targets -- -D warnings
   linux:
     name: Linux + libvips
     timeout-minutes: 60

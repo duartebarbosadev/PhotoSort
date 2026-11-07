@@ -1,0 +1,3 @@
+# Byte for byte on every system: resources/SHA256SUMS pins these files, and the app
+# and the Windows zip ship them as they are.
+resources/** -text

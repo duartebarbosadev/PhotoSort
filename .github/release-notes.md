@@ -1,11 +1,13 @@
 <!-- Release notes template, filled in by .github/workflows/release.yml, which removes
 these comments. PhotoSort's update dialog shows the notes as plain text, so keep them
 readable without Markdown rendering. -->
-PhotoSort ${version} for Apple Silicon Macs.
+PhotoSort ${version} for Apple Silicon Macs and 64-bit Windows.
 
 Summarize the changes here before publishing.
 
 ## Download
+
+### Mac
 
 **${asset}** needs macOS ${minimum_macos} or later on an Apple Silicon Mac. Unzip it and
 move **PhotoSort.app** to Applications. The app includes ONNX Runtime ${onnxruntime} and
@@ -24,10 +26,23 @@ xattr -dr com.apple.quarantine /Applications/PhotoSort.app
 ```
 <!-- /not-notarized -->
 
+### Windows
+
+**${windows_asset}** runs on Windows 10 (version 1903 or later) and Windows 11, 64-bit
+(x64). Unzip it anywhere you like, for example in your Documents folder, and open
+**photosort.exe** in the **PhotoSort** folder. Nothing needs to be installed: the folder
+includes GStreamer for video, ONNX Runtime ${onnxruntime} and all AI models. NVIDIA GPU
+support is an optional download in **Menu → AI models**.
+
+The app is not signed, so Windows SmartScreen may warn the first time you open it. Choose
+**More info → Run anyway**.
+
+### Checksums
+
 SHA-256 (also in **${checksums}**):
 
 ```text
-${sha256}  ${asset}
+${sha256}
 ```
 
 ## Coming from PhotoSort 2.x
@@ -36,7 +51,7 @@ PhotoSort 3 is a native rewrite; the Python app ends at
 [v2.1.0](https://github.com/${repository}/releases/tag/v2.1.0).
 
 - PhotoSort 2.x announces this release on every platform, but this version is published
-  for Apple Silicon Macs only. On Windows, Linux and Intel Macs, keep using 2.1.0.
+  for Apple Silicon Macs and 64-bit Windows only. On Linux and Intel Macs, keep using 2.1.0.
 - PhotoSort 2.x's update prompt opens this page and does not install anything. Download
   the `.zip` above.
 
@@ -46,9 +61,12 @@ PhotoSort's source code is licensed under Apache-2.0. Because this app links Exi
 (GPL-2.0-or-later), the app itself is distributed under the GNU General Public License,
 version 3; its complete source is this release's tag,
 [v${version}](https://github.com/${repository}/tree/v${version}). The app bundles third-party
-components under their own terms, listed in `PhotoSort.app/Contents/Resources/licenses/`
-and `DependencyNotices/`:
-Exiv2 (GPL-2.0-or-later), LibRaw, libvips and ONNX Runtime among them. The aesthetic model
+components under their own terms, listed in `licenses/` and `DependencyNotices/` (in
+`PhotoSort.app/Contents/Resources/` on the Mac, `PhotoSort\resources\` on Windows):
+Exiv2 (GPL-2.0-or-later), LibRaw, libheif, libvips and ONNX Runtime among them. The
+Windows folder also includes GStreamer's official 1.28.8 build with its FFmpeg plugin
+(LGPL; source at https://gstreamer.freedesktop.org/src/) and Microsoft's Visual C++
+runtime. The aesthetic model
 `aesthetic.onnx` is distributed under AGPL-3.0 per its model card. Its corresponding source
 is the pinned upstream revision with
 [`scripts/export_aesthetic.py`](https://github.com/${repository}/blob/v${version}/scripts/export_aesthetic.py)

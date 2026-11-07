@@ -1,9 +1,9 @@
 name: Release
 # Run it from the Actions tab with a version (for example 3.0.1): it sets that version in
-# Cargo.toml and Cargo.lock, commits and tags it on main, builds the macOS app and creates a
-# draft GitHub release for review. Leave the version empty for a test build, which keeps
-# the app as a workflow artifact and creates no commit, tag or release. Pushing a v* tag
-# by hand still works; the tag must then match Cargo.toml.
+# Cargo.toml and Cargo.lock, commits and tags it on main, builds the macOS app and the
+# Windows zip and creates a draft GitHub release for review. Leave the version empty for a
+# test build, which keeps both as workflow artifacts and creates no commit, tag or release.
+# Pushing a v* tag by hand still works; the tag must then match Cargo.toml.
 on:
   push:
     tags: ['v*']
@@ -112,6 +112,8 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ env.RELEASE_TAG }}
+      signing: ${{ steps.signing.outputs.mode }}
+      minimum-macos: ${{ steps.app.outputs.minimum-macos }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -131,7 +133,6 @@ jobs:
           {
             echo "VERSION=$version"
             echo "ASSET=PhotoSort-$version-macos-arm64.zip"
-            echo "CHECKSUMS=PhotoSort-$version-SHA256SUMS.txt"
           } >> "$GITHUB_ENV"
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Choose signing
@@ -198,27 +199,9 @@ jobs:
           tar -xzf "$archive" -C "$extracted" "onnxruntime-osx-arm64-$ORT_VERSION/lib/libonnxruntime.dylib"
           mkdir -p resources/runtime
           cp "$extracted/onnxruntime-osx-arm64-$ORT_VERSION/lib/libonnxruntime.dylib" resources/runtime/
-      - name: Fetch the downloadable models
-        # The pinned files that Menu → AI models downloads (src/core/model_assets.rs).
-        run: |
-          fetch() {
-            curl --fail --location --proto '=https' --retry 3 --output "resources/models/$1" "$2"
-          }
-          fetch dinov2-small.onnx \
-            https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/model.onnx
-          fetch face_recognition_sface.onnx \
-            https://media.githubusercontent.com/media/opencv/opencv_zoo/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
-          fetch orientation.onnx \
-            https://github.com/duartebarbosadev/deep-image-orientation-detection/releases/download/v2/orientation_model_v2_0.9882.onnx
-      - name: Fetch the converted models
-        # The aesthetic and MediaPipe exports have no upstream download, so they are
-        # assets of a prerelease in this repository. The next step checks their pins,
-        # so a replaced asset fails the build.
-        run: |
-          for name in aesthetic.onnx face_detector.onnx face_landmarks_detector.onnx face_blendshapes.onnx; do
-            curl --fail --location --proto '=https' --retry 3 --output "resources/models/$name" \
-              "https://github.com/duartebarbosadev/PhotoSort/releases/download/$MODELS_RELEASE/$name"
-          done
+      - uses: ./.github/actions/fetch-models
+        with:
+          models-release: ${{ env.MODELS_RELEASE }}
       - name: Verify resources against SHA256SUMS
         working-directory: resources
         # Every pinned file, including each downloaded model and the runtime.
@@ -309,30 +292,6 @@ jobs:
           # Ship the stapled app, so first launch works offline.
           rm "dist/$ASSET"
           ditto -c -k --keepParent target/PhotoSort.app "dist/$ASSET"
-      - name: Write checksums and release notes
-        env:
-          SIGNING: ${{ steps.signing.outputs.mode }}
-          MINIMUM_MACOS: ${{ steps.app.outputs.minimum-macos }}
-        run: |
-          (cd dist && shasum -a 256 "$ASSET" > "$CHECKSUMS")
-          python3 -I - .github/release-notes.md dist/release-notes.md <<'EOF'
-          import os, re, string, sys
-          source, output = sys.argv[1:]
-          text = open(source).read()
-          # Keep the first-launch section that matches how this build was signed.
-          keep = "notarized" if os.environ["SIGNING"] == "notarized" else "not-notarized"
-          text = re.sub(r"<!-- (notarized|not-notarized) -->\n(.*?)<!-- /\1 -->\n",
-                        lambda m: m.group(2) if m.group(1) == keep else "", text, flags=re.S)
-          # The app's update dialog shows notes as plain text, comments included.
-          text = re.sub(r"<!--.*?-->\n?", "", text, flags=re.S)
-          checksums = os.environ["CHECKSUMS"]
-          values = dict(version=os.environ["VERSION"], asset=os.environ["ASSET"], checksums=checksums,
-                        sha256=open(f"dist/{checksums}").read().split()[0],
-                        minimum_macos=os.environ["MINIMUM_MACOS"], onnxruntime=os.environ["ORT_VERSION"],
-                        repository=os.environ["GITHUB_REPOSITORY"])
-          open(output, "w").write(string.Template(text).substitute(values))
-          EOF
-          cat dist/release-notes.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: photosort-macos-arm64
@@ -344,11 +303,228 @@ jobs:
         if: always() && steps.signing.outputs.mode != 'adhoc'
         run: security delete-keychain "$RUNNER_TEMP/photosort-signing.keychain-db" || true
 
+  windows:
+    name: Windows zip (x64)
+    needs: prepare
+    # Runs after a successful prepare, or without it for test builds and pushed tags.
+    if: always() && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped')
+    # The zip carries the Visual C++ runtime the build links, so the image only decides
+    # the compiler. Change it deliberately.
+    runs-on: windows-2025
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      # Read by option_env! when the release builds; enables update checks.
+      PHOTOSORT_RELEASE_REPOSITORY: duartebarbosadev/PhotoSort
+      ORT_VERSION: 1.29.0
+      # onnxruntime-win-x64-1.29.0.zip, as src/core/model_assets/runtime.rs pins it.
+      ORT_ARCHIVE_SHA256: c9b4b7086b529ad814f428c1bad028e20a25d7dc0699836775faace4ab5b78b2
+      MODELS_RELEASE: models-2
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag || (github.ref_type == 'tag' && github.ref_name || '') }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Check the version
+        id: version
+        run: |
+          version="$(python -I -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
+          if [[ -n "$RELEASE_TAG" && "$RELEASE_TAG" != "v$version" ]]; then
+            echo "::error::Tag $RELEASE_TAG does not match the Cargo.toml version $version"
+            exit 1
+          fi
+          {
+            echo "VERSION=$version"
+            echo "ASSET=PhotoSort-$version-windows-x64.zip"
+          } >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: ./.github/actions/windows-native
+      - name: Test the packaging scripts
+        run: python -B -m unittest discover -s scripts -p 'test_*.py'
+      - name: Fetch ONNX Runtime
+        # Only the two libraries PhotoSort loads, as Menu → AI models installs them.
+        run: |
+          curl --fail --location --proto '=https' --retry 3 --output "$RUNNER_TEMP/onnxruntime.zip" \
+            "https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION/onnxruntime-win-x64-$ORT_VERSION.zip"
+          mkdir -p resources/runtime
+          python -I - "$RUNNER_TEMP/onnxruntime.zip" resources/runtime <<'EOF'
+          import hashlib, os, shutil, sys, zipfile
+          archive, output = sys.argv[1:]
+          digest = hashlib.sha256(open(archive, "rb").read()).hexdigest()
+          if digest != os.environ["ORT_ARCHIVE_SHA256"]:
+              sys.exit(f"ONNX Runtime archive SHA-256 {digest}, expected {os.environ['ORT_ARCHIVE_SHA256']}")
+          folder = f"onnxruntime-win-x64-{os.environ['ORT_VERSION']}/lib/"
+          with zipfile.ZipFile(archive) as source:
+              for name in ("onnxruntime.dll", "onnxruntime_providers_shared.dll"):
+                  with source.open(folder + name) as library, open(os.path.join(output, name), "wb") as copy:
+                      shutil.copyfileobj(library, copy)
+          EOF
+      - uses: ./.github/actions/fetch-models
+        with:
+          models-release: ${{ env.MODELS_RELEASE }}
+      - name: Verify the models against SHA256SUMS
+        working-directory: resources
+        # Its runtime pin is the macOS library; the archive check above covers Windows.
+        run: grep -v '  runtime/' SHA256SUMS | sha256sum --check --strict -
+      - name: Build and package
+        run: python -B scripts/package_windows.py --zip "dist/$ASSET"
+      - name: Build the media check
+        # A test program, never shipped. Run from inside the unpacked zip, it decodes
+        # media with the libraries the zip bundles.
+        run: cargo build --release --locked --example verify_media
+      - name: Make sample videos
+        # With the installed GStreamer, before the check below hides it: one clip per
+        # container and codec family the bundled plugins must play, most with sound.
+        run: |
+          launch="/c/Program Files/gstreamer/1.0/msvc_x86_64/bin/gst-launch-1.0.exe"
+          video="videotestsrc num-buffers=45 ! video/x-raw,width=320,height=240,framerate=30/1"
+          audio="audiotestsrc num-buffers=60 ! audioconvert ! audioresample"
+          mkdir -p "$RUNNER_TEMP/videos"
+          cd "$RUNNER_TEMP/videos"
+          clip() {
+            # gst-launch takes the pipeline as separate words.
+            # shellcheck disable=SC2086
+            "$launch" -q $2
+            test -s "$1"
+          }
+          clip hevc.mov "$video ! x265enc ! h265parse ! qtmux name=mux ! filesink location=hevc.mov $audio ! avenc_aac ! mux."
+          clip vp9.webm "$video ! vp9enc ! webmmux name=mux ! filesink location=vp9.webm $audio ! opusenc ! mux."
+          clip h264.mkv "$video ! x264enc ! h264parse ! matroskamux name=mux ! filesink location=h264.mkv $audio ! vorbisenc ! mux."
+          clip av1.mp4 "$video ! svtav1enc ! av1parse ! mp4mux name=mux ! filesink location=av1.mp4 $audio ! avenc_aac ! mux."
+          clip mpeg2.mpg "$video ! avenc_mpeg2video ! mpegvideoparse ! mpegpsmux ! filesink location=mpeg2.mpg"
+          clip wmv.wmv "$video ! avenc_wmv2 ! asfmux name=mux ! filesink location=wmv.wmv $audio ! avenc_wmav2 ! mux."
+          clip mjpeg.avi "$video ! jpegenc ! avimux ! filesink location=mjpeg.avi"
+          ls -l
+      - name: Check the zip
+        # Outside the checkout, so nothing can come from ./resources, and with the
+        # installed GStreamer moved away, so everything must come from the zip.
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -I -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall("check")' "$GITHUB_WORKSPACE/dist/$ASSET"
+          app="$PWD/check/PhotoSort"
+          mv "/c/Program Files/gstreamer" "/c/Program Files/gstreamer-hidden"
+          unset GSTREAMER_1_0_ROOT_MSVC_X86_64
+          mkdir -p check-data check-cache
+          export PHOTOSORT_DATA_ROOT="$PWD/check-data" PHOTOSORT_CACHE_ROOT="$PWD/check-cache"
+          bundled="$("$app/photosort.exe" --version)"
+          if [[ "$bundled" != "PhotoSort $VERSION" ]]; then
+            echo "::error::The executable says '$bundled', expected 'PhotoSort $VERSION'"
+            exit 1
+          fi
+          "$app/photosort.exe" --check-runtime > check-runtime.json
+          # Every model and the runtime must come from the zip itself.
+          python -I - check-runtime.json "$app/resources" <<'EOF'
+          import json, os, sys
+          report = json.load(open(sys.argv[1]))["diagnostics"]
+          resources = os.path.normcase(os.path.realpath(sys.argv[2])) + os.sep
+          paths = [report["runtime"]["path"]] + [model["path"] for model in report["models"]]
+          outside = [path for path in paths if not os.path.normcase(os.path.realpath(path)).startswith(resources)]
+          sys.exit(f"Loaded from outside the zip: {outside}" if outside else None)
+          EOF
+          # RAW (LibRaw), HEIC (libheif) and video (the bundled GStreamer).
+          cp "$GITHUB_WORKSPACE/target/release/examples/verify_media.exe" "$app/"
+          "$app/verify_media.exe" \
+            "$GITHUB_WORKSPACE/tests/samples/arw_sample.ARW" \
+            "$GITHUB_WORKSPACE/tests/samples/GAB02000-min.png" \
+            "$GITHUB_WORKSPACE/tests/fixtures/heif/portable/orientation-6.heic" \
+            "$GITHUB_WORKSPACE/resources/intro/intro.mp4" \
+            "$RUNNER_TEMP"/videos/*
+          rm "$app/verify_media.exe"
+          # Nothing was written into the folder.
+          (cd "$app" && sha256sum --check --strict --quiet resources/BUNDLE-SHA256SUMS)
+      - name: Write the checksum
+        run: (cd dist && sha256sum "$ASSET" > "$ASSET.sha256")
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: photosort-windows-x64
+          path: dist/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  notes:
+    name: Checksums and release notes
+    needs: [macos, windows]
+    if: always() && needs.macos.result == 'success' && needs.windows.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.macos.outputs.version }}
+      ORT_VERSION: 1.29.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.macos.outputs.tag || github.ref }}
+          persist-credentials: false
+          sparse-checkout: .github/release-notes.md
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: photosort-*
+          path: dist
+          merge-multiple: true
+      - name: Write checksums and release notes
+        env:
+          WINDOWS_VERSION: ${{ needs.windows.outputs.version }}
+          SIGNING: ${{ needs.macos.outputs.signing }}
+          MINIMUM_MACOS: ${{ needs.macos.outputs.minimum-macos }}
+        run: |
+          if [[ "$WINDOWS_VERSION" != "$VERSION" ]]; then
+            echo "::error::The macOS build is $VERSION but the Windows build is $WINDOWS_VERSION"
+            exit 1
+          fi
+          mac="PhotoSort-$VERSION-macos-arm64.zip"
+          windows="PhotoSort-$VERSION-windows-x64.zip"
+          checksums="PhotoSort-$VERSION-SHA256SUMS.txt"
+          mkdir release
+          # The Windows job hashed its zip where it built it; this checks the transfer.
+          (cd dist && sha256sum --check --strict "$windows.sha256")
+          (cd dist && sha256sum "$mac" "$windows") > "release/$checksums"
+          mv "dist/$mac" "dist/$windows" release/
+          python3 -I - .github/release-notes.md release/release-notes.md "release/$checksums" <<'EOF'
+          import os, re, string, sys
+          source, output, checksums = sys.argv[1:]
+          text = open(source).read()
+          # Keep the first-launch section that matches how the Mac app was signed.
+          keep = "notarized" if os.environ["SIGNING"] == "notarized" else "not-notarized"
+          text = re.sub(r"<!-- (notarized|not-notarized) -->\n(.*?)<!-- /\1 -->\n",
+                        lambda m: m.group(2) if m.group(1) == keep else "", text, flags=re.S)
+          # The app's update dialog shows notes as plain text, comments included.
+          text = re.sub(r"<!--.*?-->\n?", "", text, flags=re.S)
+          version = os.environ["VERSION"]
+          values = dict(version=version, asset=f"PhotoSort-{version}-macos-arm64.zip",
+                        windows_asset=f"PhotoSort-{version}-windows-x64.zip",
+                        checksums=os.path.basename(checksums), sha256=open(checksums).read().strip(),
+                        minimum_macos=os.environ["MINIMUM_MACOS"], onnxruntime=os.environ["ORT_VERSION"],
+                        repository=os.environ["GITHUB_REPOSITORY"])
+          open(output, "w").write(string.Template(text).substitute(values))
+          EOF
+          cat release/release-notes.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: release/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
   release:
     name: Draft GitHub release
-    needs: macos
-    # Releases only; a test build stops at the workflow artifact.
-    if: always() && needs.macos.result == 'success' && needs.macos.outputs.tag != ''
+    needs: [macos, notes]
+    # Releases only; a test build stops at the workflow artifacts.
+    if: always() && needs.notes.result == 'success' && needs.macos.outputs.tag != ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -356,7 +532,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: photosort-macos-arm64
+          name: release
           path: dist
       - name: Create the draft release
         env:
@@ -373,4 +549,5 @@ jobs:
           fi
           gh release create "$TAG" --draft --verify-tag --title "PhotoSort $VERSION" \
             --notes-file dist/release-notes.md \
-            "dist/PhotoSort-$VERSION-macos-arm64.zip" "dist/PhotoSort-$VERSION-SHA256SUMS.txt"
+            "dist/PhotoSort-$VERSION-macos-arm64.zip" "dist/PhotoSort-$VERSION-windows-x64.zip" \
+            "dist/PhotoSort-$VERSION-SHA256SUMS.txt"
