@@ -43,7 +43,13 @@ runs:
         $installer = Join-Path $folder $name
         if (-not (Test-Path $installer)) {
           New-Item -ItemType Directory -Force $folder | Out-Null
-          curl.exe --fail --location --proto '=https' --retry 3 --silent --show-error --output $installer $url
+          # The server sometimes ends the 540 MB transfer early; resume where it stopped.
+          foreach ($attempt in 1..6) {
+            curl.exe --fail --location --proto '=https' --retry 3 --retry-all-errors --retry-delay 5 `
+              --continue-at - --silent --show-error --output $installer $url
+            if ($LASTEXITCODE -eq 0) { break }
+            Write-Host "Download attempt $attempt stopped (curl exit $LASTEXITCODE); resuming"
+          }
           if ($LASTEXITCODE -ne 0) { throw "Could not download $url" }
         }
         $published = (curl.exe --fail --location --proto '=https' --retry 3 --silent --show-error "$url.sha256sum")

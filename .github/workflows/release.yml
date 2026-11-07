@@ -402,7 +402,9 @@ jobs:
           clip h264.mkv "$video ! x264enc ! h264parse ! matroskamux name=mux ! filesink location=h264.mkv $audio ! vorbisenc ! mux."
           clip av1.mp4 "$video ! svtav1enc ! av1parse ! mp4mux name=mux ! filesink location=av1.mp4 $audio ! avenc_aac ! mux."
           clip mpeg2.mpg "$video ! avenc_mpeg2video ! mpegvideoparse ! mpegpsmux ! filesink location=mpeg2.mpg"
-          clip wmv.wmv "$video ! avenc_wmv2 ! asfmux name=mux ! filesink location=wmv.wmv $audio ! avenc_wmav2 ! mux."
+          # Silent: asfmux interleaves sound so that the player's preroll stalls on its
+          # files, with any GStreamer; files from other muxers (ffmpeg) play.
+          clip wmv.wmv "$video ! avenc_wmv2 ! asfmux ! filesink location=wmv.wmv"
           clip mjpeg.avi "$video ! jpegenc ! avimux ! filesink location=mjpeg.avi"
           ls -l
       - name: Check the zip
