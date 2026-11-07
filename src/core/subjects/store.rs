@@ -126,9 +126,12 @@ impl Store {
         self.read(key, Kind::Subjects, Features::valid)
     }
     pub fn measurements_key(source: &str) -> String {
-        blake3::hash(format!("measurements-v1-neutral1024-area640-luma-tiles:{source}").as_bytes())
-            .to_hex()
-            .to_string()
+        blake3::hash(
+            format!("measurements-v2-neutral1024-area640-luma-tiles-source-size:{source}")
+                .as_bytes(),
+        )
+        .to_hex()
+        .to_string()
     }
     pub fn measurements(&self, key: &str) -> Option<crate::core::analysis::Measurements> {
         self.read(
