@@ -617,6 +617,9 @@ fn roots(working_directory: bool) -> Vec<PathBuf> {
     if let Ok(exe) = std::env::current_exe()
         && let Some(parent) = exe.parent()
     {
+        // The Windows release zip: `resources` beside photosort.exe.
+        paths.push(parent.join("resources"));
+        // The macOS app bundle: Contents/MacOS/photosort and Contents/Resources.
         paths.push(parent.join("../Resources"));
         paths.push(parent.join("../../resources"));
     }
@@ -974,6 +977,13 @@ mod root_tests {
         assert!(super::roots(true).contains(&launched));
         assert!(!super::roots(false).contains(&launched));
         assert_eq!(super::roots(false)[0], super::super::session::data_dir());
+    }
+
+    #[test]
+    fn release_builds_find_resources_beside_the_executable() {
+        let exe = std::env::current_exe().unwrap();
+        let beside = exe.parent().unwrap().join("resources");
+        assert!(super::roots(false).contains(&beside));
     }
 }
 

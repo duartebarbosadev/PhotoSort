@@ -207,17 +207,17 @@ downloads or installs an update.
 ## Releases
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml) builds the macOS app for
-Apple Silicon and drafts a GitHub release. To release:
+Apple Silicon and a Windows x64 zip, and drafts a GitHub release with both. To release:
 
 1. Make sure `main` has what you want to ship and its checks pass.
 2. Open **Actions → Release → Run workflow** and enter the version, for example `3.0.1`.
    The workflow sets it in `Cargo.toml` and `Cargo.lock`, commits "Release 3.0.1" to
-   `main`, tags it `v3.0.1`, builds the app and creates a draft release. It refuses an
+   `main`, tags it `v3.0.1`, builds both and creates a draft release. It refuses an
    existing tag or a version older than the current one.
 3. Review the draft release, replace the summary placeholder in its notes, and publish it.
 
-Leave the version empty for a test build: it builds and checks the same app and keeps it
-as a workflow artifact, without a commit, tag or release. Pushing a `v*` tag by hand also
+Leave the version empty for a test build: it builds and checks the same app and zip and
+keeps them as workflow artifacts, without a commit, tag or release. Pushing a `v*` tag by hand also
 starts a release; the tag must then match the version already in `Cargo.toml`.
 
 The workflow runs on a pinned `macos-15` runner. It installs the Homebrew libraries, builds
@@ -227,11 +227,34 @@ four converted models from the `models-2` prerelease (see
 [Converted models](#converted-models)), checks every file against `resources/SHA256SUMS`,
 and packages the app with `--native-imaging` and
 `PHOTOSORT_RELEASE_REPOSITORY=duartebarbosadev/PhotoSort`. It then runs `photosort --check-runtime` from the finished bundle and uploads
-`PhotoSort-<version>-macos-arm64.zip`, its SHA-256 checksum file and notes filled in from
-[`.github/release-notes.md`](.github/release-notes.md). The app's update dialog shows release
-notes as plain text, so keep them readable without Markdown rendering. Bundled Homebrew
-libraries require the macOS version they were built for, so the runner image sets the
-app's minimum macOS; the packager writes it to `Info.plist` and the notes repeat it.
+`PhotoSort-<version>-macos-arm64.zip`. Bundled Homebrew libraries require the macOS version
+they were built for, so the runner image sets the app's minimum macOS; the packager writes it
+to `Info.plist` and the notes repeat it.
+
+The Windows job runs on a pinned `windows-2025` runner. It installs GStreamer and builds
+Exiv2, LibRaw and libheif as in [Building](#building) (both cached), downloads ONNX Runtime's
+Windows archive and the same models, and runs
+[`scripts/package_windows.py`](scripts/package_windows.py), which builds the release and
+writes `PhotoSort-<version>-windows-x64.zip`. The zip holds one `PhotoSort` folder:
+
+| Path | Contents |
+| --- | --- |
+| `photosort.exe` | The app |
+| `*.dll` beside it | The Visual C++ and OpenMP runtimes the build links, so no redistributable is needed |
+| `resources\` | Models, ONNX Runtime (`runtime\`), licenses and `DependencyNotices\`; found beside the executable |
+| `gstreamer\bin`, `gstreamer\lib\gstreamer-1.0` | GStreamer and the plugins the video player uses (`PLUGINS` in the script) |
+
+The script copies only the GStreamer plugins on its list, then reads the import tables of
+the executable, the plugins and ONNX Runtime to copy every library they load; one that is
+neither found nor part of Windows fails the build. To play a new format, add its plugin
+there. The job then unpacks the zip outside the checkout, moves the installed GStreamer
+away, and checks that `photosort --check-runtime` loads the runtime and models from the
+folder and that `examples/verify_media.rs`, run from inside it, decodes a RAW, a HEIC and
+one video per supported container.
+
+A last job writes `PhotoSort-<version>-SHA256SUMS.txt` for both zips and the notes, filled
+in from [`.github/release-notes.md`](.github/release-notes.md). The app's update dialog shows
+release notes as plain text, so keep them readable without Markdown rendering.
 
 Drafts are not "latest", so neither PhotoSort 3 nor PhotoSort 2.x sees a release until it
 is published. PhotoSort 2.x announces any newer published release on every platform and
@@ -239,8 +262,9 @@ opens its page, even without a build for that platform; the notes template says 
 
 **Test build.** Run the workflow with an empty version (Release → Run workflow, then pick a
 branch) or with `gh workflow run release.yml --ref <branch>`. It builds and checks
-everything, including signing and notarization when the secrets are set, and keeps the zip,
-checksums and notes as the `photosort-macos-arm64` workflow artifact for 14 days. It never
+everything, including signing and notarization when the secrets are set, and keeps the
+zips as the `photosort-macos-arm64` and `photosort-windows-x64` workflow artifacts and the
+checksums and notes as `release`, for 14 days. It never
 creates a commit, tag or release. To release from the command line instead, use
 `gh workflow run release.yml -f version=3.0.1`.
 
@@ -316,8 +340,10 @@ cargo run --release --no-default-features --features portable-video
 ## Checks
 
 CI ([`.github/workflows/check.yml`](.github/workflows/check.yml)) runs the minimal build on
-Ubuntu and Windows, the full build on macOS (with and without libvips), and the full libvips
-build in a Debian container. Formatting is checked once. Changes that only touch Markdown
+Ubuntu and Windows, the full build on macOS (with and without libvips) and on Windows, and
+the full libvips build in a Debian container. The Windows job installs GStreamer and builds
+the vcpkg libraries as in [Building](#building); the vcpkg build is cached until its pinned
+revision or ports change. Formatting is checked once. Changes that only touch Markdown
 files skip CI, and Rust build caches are saved from `main`, so pull requests reuse them.
 CI runs tests with [cargo-nextest](https://nexte.st), which runs every test in one parallel
 pool; `cargo nextest run` works the same locally, and plain `cargo test` still runs
