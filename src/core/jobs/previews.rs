@@ -189,6 +189,7 @@ fn run(shared: &Shared, cache: PathBuf, cap: u64, writes: Arc<Writes>) {
     let mut pipeline = Pipeline::new(0, cache);
     pipeline.share_writes(writes);
     pipeline.limit_quiet_allowance(cap);
+    pipeline.limit_threads(1);
     while let Some((generation, media, limits, look)) = next(shared) {
         // The system is short of memory: wait instead of adding to it.
         while Pressure::current() > Pressure::Normal

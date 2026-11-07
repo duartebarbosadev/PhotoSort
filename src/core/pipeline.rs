@@ -144,6 +144,8 @@ pub struct Pipeline {
     raw_look: super::raw_look::RawLook,
     /// Enhanced-look levels per RAW source, so 1:1 crops match the preview.
     raw_levels: HashMap<String, super::raw_look::Levels>,
+    /// Threads one proxy downscale may use; see `limit_threads`.
+    threads: usize,
 }
 impl Pipeline {
     pub fn new(budget: usize, disk: PathBuf) -> Self {
@@ -169,7 +171,14 @@ impl Pipeline {
             started: std::time::SystemTime::now(),
             raw_look: Default::default(),
             raw_levels: HashMap::new(),
+            threads: super::processing::available(),
         }
+    }
+    /// Pipelines that already run several at a time (background builders,
+    /// analysis helpers) keep each downscale on their own thread, so they
+    /// add up to the cores they were given rather than a multiple of them.
+    pub fn limit_threads(&mut self, threads: usize) {
+        self.threads = threads.max(1);
     }
     pub fn standard() -> Self {
         Self::new(128 * 1024 * 1024, session::cache_dir())
@@ -627,18 +636,20 @@ impl Pipeline {
                     (meta.width, meta.height)
                 };
                 let scale = f64::from(edge) / f64::from(width.max(height));
-                oriented.resize_exact(
+                super::resample::exact_lanczos3(
+                    &oriented,
                     (f64::from(width) * scale).round().max(1.0) as u32,
                     (f64::from(height) * scale).round().max(1.0) as u32,
-                    image::imageops::FilterType::Lanczos3,
+                    self.threads,
                 )
             } else if oriented.width() > edge || oriented.height() > edge {
+                // The same pixels as resize(.., Lanczos3) and resize(..,
+                // Triangle), without their full-size float buffer and on
+                // several threads.
                 if analysis {
-                    oriented.resize(edge, edge, image::imageops::FilterType::Lanczos3)
+                    super::resample::fit_lanczos3(&oriented, edge, self.threads)
                 } else {
-                    // The same pixels as resize(.., Triangle), without its
-                    // full-size float buffer.
-                    super::resample::fit_triangle(&oriented, edge)
+                    super::resample::fit_triangle(&oriented, edge, self.threads)
                 }
             } else {
                 (*oriented).clone()
