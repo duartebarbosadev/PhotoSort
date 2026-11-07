@@ -14,12 +14,76 @@ use std::{
 const EDGE: i32 = 1280;
 static INITIALIZED: OnceLock<Result<(), String>> = OnceLock::new();
 
-fn initialize() -> Result<()> {
+pub(super) fn initialize() -> Result<()> {
     INITIALIZED
-        .get_or_init(|| gst::init().map_err(|e| e.to_string()))
+        .get_or_init(|| {
+            #[cfg(windows)]
+            windows::locate()?;
+            gst::init().map_err(|e| e.to_string())
+        })
         .as_ref()
         .map_err(|e| anyhow::anyhow!("GStreamer initialization: {e}"))?;
     Ok(())
+}
+
+/// On Windows the GStreamer DLLs are delay-loaded (see build.rs): PhotoSort starts
+/// without them, and only video is unavailable until GStreamer is installed. Before
+/// the first GStreamer call, point the loader at an installation: one bundled next
+/// to the executable, the one `GSTREAMER_1_0_ROOT_MSVC_X86_64` names, or the
+/// installer's default folder.
+#[cfg(windows)]
+mod windows {
+    use std::{
+        os::windows::ffi::OsStrExt,
+        path::{Path, PathBuf},
+    };
+    const DEFAULT_ROOT: &str = r"C:\Program Files\gstreamer\1.0\msvc_x86_64";
+    const CORE: &str = "gstreamer-1.0-0.dll";
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn SetDllDirectoryW(path: *const u16) -> i32;
+        fn LoadLibraryW(name: *const u16) -> *mut std::ffi::c_void;
+    }
+    fn wide(path: &Path) -> Vec<u16> {
+        path.as_os_str().encode_wide().chain([0]).collect()
+    }
+    pub(super) fn candidates() -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+        if let Some(dir) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(Path::to_path_buf))
+        {
+            roots.push(dir.join("gstreamer"));
+        }
+        if let Some(root) = std::env::var_os("GSTREAMER_1_0_ROOT_MSVC_X86_64") {
+            roots.push(PathBuf::from(root));
+        }
+        roots.push(PathBuf::from(DEFAULT_ROOT));
+        roots.into_iter().map(|root| root.join("bin")).collect()
+    }
+    pub(super) fn locate() -> Result<(), String> {
+        let bin = candidates()
+            .into_iter()
+            .find(|bin| bin.join(CORE).is_file())
+            .ok_or_else(|| {
+                "GStreamer is not installed. Install it with `winget install gstreamerproject.gstreamer`, then restart PhotoSort".to_string()
+            })?;
+        // SAFETY: both strings are NUL-terminated and outlive the calls.
+        unsafe {
+            if SetDllDirectoryW(wide(&bin).as_ptr()) == 0 {
+                return Err(format!("Could not use GStreamer in {}", bin.display()));
+            }
+            if LoadLibraryW(wide(&bin.join(CORE)).as_ptr()).is_null() {
+                return Err(format!(
+                    "Could not load GStreamer from {}: {}",
+                    bin.display(),
+                    std::io::Error::last_os_error()
+                ));
+            }
+        }
+        tracing::info!(path = %bin.display(), "GStreamer found");
+        Ok(())
+    }
 }
 
 pub struct Player {
@@ -275,7 +339,7 @@ mod tests {
     }
     #[test]
     fn real_video_playback_and_posters() {
-        gst::init().unwrap();
+        initialize().unwrap();
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video");
         for (name, size) in [
             ("motion.mp4", (320, 180)),
@@ -332,7 +396,7 @@ mod tests {
     }
     #[test]
     fn paused_end_seek_completes_and_can_seek_back() {
-        gst::init().unwrap();
+        initialize().unwrap();
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video/motion.mp4");
         let audio = gst::ElementFactory::make("fakesink").build().unwrap();
         let mut player = Player::open_with_audio(&path, &|| false, Some(audio)).unwrap();
@@ -408,7 +472,7 @@ mod tests {
     }
     #[test]
     fn seek_does_not_replay_a_queued_eof_from_the_previous_segment() {
-        gst::init().unwrap();
+        initialize().unwrap();
         let audio = gst::ElementFactory::make("fakesink")
             .property("sync", true)
             .build()

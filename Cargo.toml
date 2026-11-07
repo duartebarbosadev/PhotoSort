@@ -12,6 +12,20 @@ publish = false
 # One integration test binary (tests/integration.rs lists the files) links much faster than one per file.
 autotests = false
 
+# Windows: `cargo vcpkg build` builds the native libraries into target/vcpkg, where
+# build.rs and libheif-sys find them. Other platforms use pkg-config (see CONTRIBUTING.md).
+[package.metadata.vcpkg]
+git = "https://github.com/microsoft/vcpkg"
+rev = "65886d79ccce671dc24ffbf9a348836beacb7f6f"
+dependencies = [
+    "exiv2[core,bmff,png,xmp]",
+    "libraw[core,dng-lossy,openmp]",
+    "libheif[core,libde265]",
+]
+
+[package.metadata.vcpkg.target]
+x86_64-pc-windows-msvc = { triplet = "x64-windows-static-md" }
+
 [dependencies]
 photosort-imaging-vips = { path = "crates/imaging-vips", optional = true }
 moxcms = "0.8.1"
@@ -96,6 +110,10 @@ raw = []
 [build-dependencies]
 cc = "1"
 pkg-config = "0.3"
+
+[target.'cfg(windows)'.build-dependencies]
+# Finds the libraries `cargo vcpkg build` installed; libheif-sys already uses it.
+vcpkg = "0.2.15"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 gst = { package = "gstreamer", version = "0.24", optional = true }

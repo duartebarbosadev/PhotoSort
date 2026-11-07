@@ -29,9 +29,30 @@ sudo apt-get install build-essential pkg-config \
   libxrandr-dev libxinerama-dev libegl1-mesa-dev
 ```
 
-**Windows** (untested): install Exiv2 0.28+, LibRaw, libheif 1.23+ with an HEVC decoder
-plugin, and the official GStreamer MSVC runtime and development packages, all
-discoverable through pkg-config.
+**Windows** (10 version 1903 or later, or 11; x64). Install Rust, the Visual Studio C++
+build tools and GStreamer:
+
+```powershell
+winget install Rustlang.Rustup
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+winget install gstreamerproject.gstreamer
+```
+
+Then build Exiv2, LibRaw and libheif. Their versions are pinned in `Cargo.toml`
+(`[package.metadata.vcpkg]`), and `cargo vcpkg build` builds them into `target\vcpkg`,
+where the build finds them by itself. The first run takes about 15 minutes; later runs
+reuse the result:
+
+```powershell
+cargo install cargo-vcpkg
+cargo vcpkg build
+```
+
+No environment variables are needed. The build finds GStreamer in the installer's default
+folder (`.cargo/config.toml`); if you installed it elsewhere, set `PKG_CONFIG` and
+`PKG_CONFIG_PATH` to its `bin\pkg-config.exe` and `lib\pkgconfig`. GStreamer does not need
+to be on `PATH`: PhotoSort loads it when a video is first shown, and without it only video
+is unavailable.
 
 ## Development setup
 
@@ -46,9 +67,17 @@ cp -R tests/samples ~/photosort-scratch
 cargo run --release -- --folder ~/photosort-scratch
 ```
 
-The AI models and ONNX Runtime are not in git. For the AI steps, put the runtime library
-in `resources/runtime/` (or set `ORT_DYLIB_PATH`). Menu → AI models downloads all seven
-models into the app's data folder. Alternatively, put them in `resources/models/`: copy
+On Windows, in PowerShell:
+
+```powershell
+Copy-Item -Recurse tests\samples $HOME\photosort-scratch
+cargo run --release -- --folder $HOME\photosort-scratch
+```
+
+The AI models and ONNX Runtime are not in git. **Menu → AI models** offers to download
+ONNX Runtime and all seven models into the app's data folder, and on Windows with an NVIDIA
+driver, NVIDIA GPU support (see [AI models and ONNX Runtime](#ai-models-and-onnx-runtime)).
+Or put the runtime library in `resources/runtime/` (or set `ORT_DYLIB_PATH`). Alternatively, put them in `resources/models/`: copy
 them from an existing `PhotoSort.app/Contents/Resources`, or recreate the converted ones
 with the recipes in [resources/ASSETS.md](resources/ASSETS.md); the face recipes start from
 `assets/models/face_landmarker.task` in the `python-final` tag. `cargo run -- --diagnostics`
@@ -88,21 +117,40 @@ Every download is verified by size and SHA-256 before it is installed, and nothi
 unless you ask. The same panel restores a bundled copy or imports a prepared ONNX file;
 [resources/ASSETS.md](resources/ASSETS.md) has the provenance and export recipes.
 
-ONNX Runtime is loaded at run time and is never downloaded by the app. PhotoSort looks for
-it in this order:
+ONNX Runtime is loaded at run time. The app bundle includes it; elsewhere **Menu → AI
+models** offers to download it, and nothing downloads unless you ask. Downloads come from
+their publishers, are pinned by size and SHA-256 in
+[`src/core/model_assets/runtime.rs`](src/core/model_assets/runtime.rs), and only the
+libraries PhotoSort loads are kept:
+
+| Package | Platforms | Download | Source |
+| --- | --- | --- | --- |
+| ONNX Runtime 1.29.0 | Windows x64, macOS arm64, Linux x64 | 11–80 MB | Microsoft's GitHub release |
+| NVIDIA GPU support | Windows x64, with an NVIDIA driver | 3.0 GB (2.4 GB installed) | ONNX Runtime's CUDA 12 build (Microsoft), and CUDA 12.9 runtime, cuBLAS, cuFFT and cuDNN 9.28 (NVIDIA's redistributable archives) |
+
+GPU support needs only the NVIDIA driver, not the CUDA Toolkit. After installing it,
+restart PhotoSort and choose **NVIDIA CUDA** in Settings. On Linux, install ONNX Runtime's
+`gpu_cuda12` build, CUDA 12 and cuDNN 9 yourself and point `ORT_DYLIB_PATH` at its
+`libonnxruntime.so`.
+
+PhotoSort looks for the runtime in this order:
 
 1. The path in `ORT_DYLIB_PATH`.
-2. `runtime/libonnxruntime.dylib` (`onnxruntime.dll` on Windows, `libonnxruntime.so` on
+2. NVIDIA GPU support installed from **Menu → AI models** (`runtime-cuda` in the app's data
+   folder). Its runtime also runs every model on the CPU, so it is used whichever backend
+   is selected.
+3. `runtime/libonnxruntime.dylib` (`onnxruntime.dll` on Windows, `libonnxruntime.so` on
    Linux) in the app's data folder, in `./resources`, or in the app bundle's resources.
-3. `/opt/homebrew/lib/libonnxruntime.dylib` and `/usr/local/lib/libonnxruntime.so`.
+4. `/opt/homebrew/lib/libonnxruntime.dylib` and `/usr/local/lib/libonnxruntime.so`.
 
-The bundled runtime is ONNX Runtime 1.29.0. `photosort --diagnostics` shows which files
-were found, and `photosort --check-runtime` loads the runtime and runs every model.
+`photosort --diagnostics` shows which files were found, and `photosort --check-runtime`
+loads the runtime and runs every model (`--runtime-backend cuda` on the GPU).
 
 Settings selects the inference backend: CPU, Automatic, Apple Core ML, NVIDIA CUDA or
 Windows DirectML. New installs default to Automatic on macOS (Core ML) and to CPU on Windows
-and Linux, where CUDA and DirectML are not yet verified on real hardware; saved preferences
-keep their choice. A backend that fails falls back to CPU with an explanation, per model.
+and Linux; saved preferences keep their choice. NVIDIA CUDA is verified on Windows 11 with
+an RTX 4080 (all seven models on the GPU); DirectML and CUDA on Linux are not yet verified on
+real hardware. A backend that fails falls back to CPU with an explanation, per model.
 Core ML can take minutes to prepare on first use; prepared models are cached afterwards.
 
 ## Command-line options

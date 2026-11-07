@@ -167,6 +167,7 @@ mod tests {
                 })
                 .collect(),
             runtime: Some("runtime".into()),
+            cuda: None,
             orientation_override: None,
             hash_reads: 6,
         }
@@ -221,6 +222,7 @@ mod tests {
         let snapshot = Snapshot {
             rows: Vec::new(),
             runtime: None,
+            cuda: None,
             orientation_override: None,
             hash_reads: 0,
         };

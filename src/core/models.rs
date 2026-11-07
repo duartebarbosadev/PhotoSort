@@ -226,6 +226,8 @@ impl Models {
                 "ONNX Runtime library is missing: {}",
                 runtime.display()
             );
+            #[cfg(target_os = "windows")]
+            search_runtime_directory(&runtime);
             ort::init_from(&runtime)?
                 .with_name("PhotoSort")
                 .with_telemetry(false)
@@ -627,16 +629,26 @@ pub fn model_path(name: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 pub fn runtime_path() -> Option<PathBuf> {
+    let name = if cfg!(target_os = "macos") {
+        "libonnxruntime.dylib"
+    } else if cfg!(target_os = "windows") {
+        "onnxruntime.dll"
+    } else {
+        "libonnxruntime.so"
+    };
     std::env::var_os("ORT_DYLIB_PATH")
         .map(PathBuf::from)
+        // NVIDIA GPU support carries a runtime that also runs every model on the
+        // CPU, so once installed it is used whichever backend is selected.
         .or_else(|| {
-            let name = if cfg!(target_os = "macos") {
-                "libonnxruntime.dylib"
-            } else if cfg!(target_os = "windows") {
-                "onnxruntime.dll"
-            } else {
-                "libonnxruntime.so"
-            };
+            super::model_assets::runtime::installed(
+                &super::session::data_dir(),
+                super::model_assets::runtime::Package::Cuda,
+            )
+            .map(|directory| directory.join(name))
+            .filter(|path| path.is_file())
+        })
+        .or_else(|| {
             resource_roots()
                 .into_iter()
                 .map(|p| p.join("runtime").join(name))
@@ -646,6 +658,31 @@ pub fn runtime_path() -> Option<PathBuf> {
                 ])
                 .find(|p| p.is_file())
         })
+}
+/// ONNX Runtime loads its CUDA provider by full path, but cuDNN and its parts
+/// are loaded by name, and Windows looks for those beside the executable and on
+/// PATH, not beside the provider. Put the runtime's folder first on this
+/// process's PATH once, so NVIDIA libraries installed with it are found.
+#[cfg(all(target_os = "windows", feature = "onnx"))]
+fn search_runtime_directory(runtime: &std::path::Path) {
+    static ADDED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    let Some(directory) = runtime.parent() else {
+        return;
+    };
+    ADDED.get_or_init(|| {
+        let mut paths = vec![directory.to_path_buf()];
+        paths.extend(
+            std::env::var_os("PATH")
+                .iter()
+                .flat_map(std::env::split_paths),
+        );
+        if let Ok(joined) = std::env::join_paths(paths) {
+            // SAFETY: Windows serializes environment access inside the process
+            // (GetEnvironmentVariableW/SetEnvironmentVariableW take a lock), so
+            // a concurrent read elsewhere cannot observe a torn value.
+            unsafe { std::env::set_var("PATH", joined) };
+        }
+    });
 }
 pub fn orientation_model() -> Option<PathBuf> {
     std::env::var_os("PHOTOSORT_ROTATION_MODEL")
