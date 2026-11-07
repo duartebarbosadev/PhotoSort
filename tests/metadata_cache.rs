@@ -40,6 +40,10 @@ fn metadata_restart_reuses_source_snapshot_across_browsing_display_and_analysis(
     assert_eq!((first.stats.metadata_reads, first.stats.decodes), (1, 0));
     assert_eq!((expected.rating, expected.orientation), (4, 6));
     drop(first);
+    let snapshot: Vec<_> = records(cache.path())
+        .into_iter()
+        .map(|path| (fs::read(&path).unwrap(), path))
+        .collect();
     let mut reopened = pipeline(cache.path());
     let actual = reopened.metadata(&media).unwrap();
     assert_eq!(
@@ -56,8 +60,17 @@ fn metadata_restart_reuses_source_snapshot_across_browsing_display_and_analysis(
     );
     assert_eq!(reopened.stats.metadata_disk_hits, 1);
     // Display dimensions must not replace the raw metadata-only snapshot.
+    for (bytes, path) in &snapshot {
+        assert_eq!(&fs::read(path).unwrap(), bytes, "{}", path.display());
+    }
+    // A reopened read reports the decoded source size, which the EXIF-less
+    // PNG's snapshot lacks without the native reader, and is otherwise the
+    // same snapshot.
+    let mut restored = pipeline(cache.path()).metadata(&media).unwrap();
+    assert_eq!((restored.width, restored.height), (32, 16));
+    (restored.width, restored.height) = (expected.width, expected.height);
     assert_eq!(
-        serde_json::to_value(pipeline(cache.path()).metadata(&media).unwrap()).unwrap(),
+        serde_json::to_value(restored).unwrap(),
         serde_json::to_value(expected).unwrap()
     );
 }

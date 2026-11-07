@@ -154,6 +154,88 @@ fn restart_and_folder_return_reclassify_without_pixels_measurements_or_content_r
     );
     rt.shutdown();
 }
+/// The source geometry each `Analyzed` event of one technical run carries.
+fn analyzed_geometry(rt: &Runtime, media: Arc<Vec<Media>>) -> HashMap<MediaId, (u32, u32)> {
+    let accepted = rt.analyze(media, AnalysisProfile::Technical).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let mut geometry = HashMap::new();
+    loop {
+        assert!(Instant::now() < deadline, "Analysis timed out");
+        match rt.events.recv_timeout(Duration::from_secs(1)) {
+            Ok(e) => match e.event {
+                Event::Analyzed {
+                    run, id, metadata, ..
+                } if run == accepted => {
+                    geometry.insert(id, (metadata.width, metadata.height));
+                }
+                Event::AnalysisDone { run, .. } if run == accepted => return geometry,
+                Event::AnalysisError { error, .. } | Event::Error(error) => panic!("{error}"),
+                _ => {}
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(e) => panic!("{e}"),
+        }
+    }
+}
+#[test]
+fn reopened_analysis_publishes_the_decoded_source_geometry() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    // No EXIF size at all: the pure-Rust metadata reader has none to give.
+    create(root.path());
+    // An EXIF size that is not the image's, as exports that resize can leave.
+    let mut exif = b"II*\0\x08\0\0\0".to_vec();
+    let entry = |exif: &mut Vec<u8>, tag: u16, value: u32| {
+        exif.extend(tag.to_le_bytes());
+        exif.extend(4u16.to_le_bytes());
+        exif.extend(1u32.to_le_bytes());
+        exif.extend(value.to_le_bytes());
+    };
+    exif.extend(1u16.to_le_bytes());
+    entry(&mut exif, 0x8769, 26);
+    exif.extend(0u32.to_le_bytes());
+    exif.extend(2u16.to_le_bytes());
+    entry(&mut exif, 0xA002, 6000);
+    entry(&mut exif, 0xA003, 4000);
+    exif.extend(0u32.to_le_bytes());
+    let pixels = image::RgbImage::from_fn(320, 240, |x, y| {
+        let v = if (x / 2 + y) % 2 == 0 { 90 } else { 170 };
+        image::Rgb([v, v, v])
+    });
+    let mut bytes = Vec::new();
+    let mut encoder = image::codecs::png::PngEncoder::new(&mut bytes);
+    image::ImageEncoder::set_exif_metadata(&mut encoder, exif).unwrap();
+    image::ImageEncoder::write_image(
+        encoder,
+        pixels.as_raw(),
+        320,
+        240,
+        image::ExtendedColorType::Rgb8,
+    )
+    .unwrap();
+    fs::write(root.path().join("resized.png"), bytes).unwrap();
+    let media = scan(root.path());
+    let expected: HashMap<MediaId, (u32, u32)> = media
+        .iter()
+        .map(|m| {
+            let size = if m.path.ends_with("photo.png") {
+                (640, 480)
+            } else {
+                (320, 240)
+            };
+            (m.id, size)
+        })
+        .collect();
+
+    let mut rt = Runtime::with_cache(|| {}, cache.path().into());
+    assert_eq!(analyzed_geometry(&rt, media.clone()), expected, "cold");
+    rt.shutdown();
+    // A reopened cache has every measurement, so no pixels are decoded; the
+    // geometry must still be the decoded size, not the EXIF snapshot's.
+    let mut rt = Runtime::with_cache(|| {}, cache.path().into());
+    assert_eq!(analyzed_geometry(&rt, media.clone()), expected, "reopened");
+    rt.shutdown();
+}
 #[test]
 fn corrupt_records_recompute_and_source_replacement_and_sidecar_edits_invalidate() {
     let root = tempfile::tempdir().unwrap();
