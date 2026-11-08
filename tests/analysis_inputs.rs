@@ -167,7 +167,7 @@ fn palette_analysis_filters_colors_instead_of_aliasing_palette_indices() {
 }
 
 #[test]
-#[ignore = "requires PHOTOSORT_SAMPLE_DIR and PHOTOSORT_ANALYSIS_REFERENCE captured by scripts/capture_analysis_reference.py"]
+#[ignore = "requires PHOTOSORT_SAMPLE_DIR and PHOTOSORT_ANALYSIS_REFERENCE, a directory of reference analysis inputs captured from the python-final tag"]
 fn seven_samples_use_neutral_inputs_and_raw_embedded_or_fallback_paths() -> anyhow::Result<()> {
     use photosort::core::{analysis, model::MediaKind, operations};
     use std::{path::PathBuf, time::Instant};
