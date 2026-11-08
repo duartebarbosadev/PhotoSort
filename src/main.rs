@@ -56,7 +56,9 @@ fn run(options: photosort::core::startup::Options) -> eframe::Result {
         let mut output =
             diagnostic_output::writer().map_err(|e| eframe::Error::AppCreation(e.into()))?;
         let report = photosort::core::diagnostics::check_runtime_with_backend(
-            options.runtime_backend.unwrap_or_default(),
+            options
+                .runtime_backend
+                .unwrap_or(photosort::core::processing::Backend::Cpu),
             &|| false,
         )
         .map_err(|e| eframe::Error::AppCreation(e.into()))?;

@@ -180,8 +180,9 @@ impl Lease {
         Ok(())
     }
     /// Removes this model's other copies, left by an earlier model file,
-    /// runtime or macOS, now that this one is ready. Copies from before
-    /// copies named their model go too. A copy another window has open stays.
+    /// runtime or macOS, now that this one is ready. A copy without a model
+    /// name, whose preparation stopped early, goes too. A copy another window
+    /// has open stays.
     fn supersede(&self, cancelled: &dyn Fn() -> bool) {
         let Ok(guard) = namespace(&self.root) else {
             return;

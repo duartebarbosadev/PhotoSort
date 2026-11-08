@@ -147,9 +147,7 @@ pub(super) fn quality(face: &Face) -> f32 {
     let middle = (a[0] + e[0]) / 2.0;
     let centred = 1.0 - ((middle - (l + r) / 2.0).abs() / (w / 2.0)).min(1.0);
     let level = 1.0 - ((a[1] - e[1]).abs() / w).min(1.0);
-    let open = face
-        .blink
-        .map_or(0.5, |[x, y]| 1.0 - x.max(y).clamp(0.0, 1.0));
+    let open = 1.0 - face.blink[0].max(face.blink[1]).clamp(0.0, 1.0);
     let whole = if l >= 0.0 && t >= 0.0 && r <= 1.0 && b <= 1.0 {
         1.0
     } else {
@@ -770,7 +768,7 @@ impl PhotoSortApp {
 
 /// The clearest faces of each person among their candidate photos, read
 /// from the face evidence the Faces grouping cached. Nothing is decoded or
-/// written; a miss (cache off, an old record) leaves the person out.
+/// written; a miss (cache off, or trimmed) leaves the person out.
 fn look_up_portraits(root: Option<PathBuf>, jobs: Vec<(String, Vec<Candidate>)>) -> Portraits {
     let Some(store) = root.and_then(|root| Store::new(root, true).ok()) else {
         return HashMap::new();
@@ -816,7 +814,7 @@ mod tests {
             bbox,
             eyes,
             landmarks: vec![[0.5, 0.5]],
-            blink: Some(blink),
+            blink,
         }
     }
 

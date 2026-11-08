@@ -42,7 +42,7 @@ fn face(width: u32, height: u32, spacing: f32, ratios: [f32; 2], blink: [f32; 2]
         ],
         eyes: [points[33], points[263]],
         landmarks: points,
-        blink: Some(blink),
+        blink,
     }
 }
 
@@ -86,13 +86,10 @@ fn unknown_is_never_closed() {
     // Clear cases.
     assert_eq!(judge(40.0, [0.03, 0.03], [0.8, 0.75]), EyeState::Closed);
     assert_eq!(judge(40.0, [0.25, 0.3], [0.1, 0.2]), EyeState::Open);
-    // A legacy face without landmarks or blink scores.
-    let mut legacy = face(1024, 1024, 40.0, [0.03, 0.03], [0.9, 0.9]);
-    legacy.landmarks.clear();
-    assert_eq!(faces::eye_state(&legacy, 1024, 1024), EyeState::Unknown);
-    legacy = face(1024, 1024, 40.0, [0.03, 0.03], [0.9, 0.9]);
-    legacy.blink = None;
-    assert_eq!(faces::eye_state(&legacy, 1024, 1024), EyeState::Unknown);
+    // A face without landmarks.
+    let mut bare = face(1024, 1024, 40.0, [0.03, 0.03], [0.9, 0.9]);
+    bare.landmarks.clear();
+    assert_eq!(faces::eye_state(&bare, 1024, 1024), EyeState::Unknown);
 }
 
 fn person(x: f32, state: EyeState) -> Person {

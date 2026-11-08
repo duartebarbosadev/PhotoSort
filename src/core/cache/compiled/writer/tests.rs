@@ -45,23 +45,6 @@ fn stable_native_cache_reuses_verified_bytes_and_holds_a_process_lease() {
     assert!(!path.exists());
 }
 #[test]
-fn retired_prepared_cpu_entries_are_removed_by_maintenance() {
-    let (_temp, root) = root();
-    drop(ready(&root, 1, b"coreml"));
-    let legacy = root.join(format!("{:064x}.onnx-cache", 2));
-    fs::create_dir(&legacy).unwrap();
-    fs::write(legacy.join(".owner"), OWNER).unwrap();
-    fs::write(legacy.join("optimized.onnx"), vec![0; 4096]).unwrap();
-    // Measuring alone never deletes; maintenance with any budget drops the
-    // retired format but keeps the reusable Core ML program.
-    crate::core::cache::maintain(&root, None, || false).unwrap();
-    assert!(legacy.exists());
-    let usage = crate::core::cache::maintain(&root, Some(1_000_000), || false).unwrap();
-    assert!(!legacy.exists());
-    assert!(root.join(format!("{:064x}.coreml", 1)).exists());
-    assert!(usage.disk_bytes > 0 && usage.disk_bytes < 4096 + 1_000);
-}
-#[test]
 fn changed_weights_runtime_or_recipe_cannot_reuse_an_old_directory() {
     let (temp, _) = root();
     let model = temp.path().join("model");
@@ -222,12 +205,12 @@ fn prepared_models_stay_outside_the_disk_limit_until_a_newer_copy_replaces_them(
     assert!(!preview.exists(), "previews still honour the disk limit");
     assert!(acquire(1, "aesthetic").reused);
     // An update gives the model a new copy: the old one goes, other models stay.
-    let legacy = root.join(format!("{:064x}.coreml", 4));
-    fs::create_dir(&legacy).unwrap();
-    fs::write(legacy.join(".owner"), OWNER).unwrap();
+    let unnamed = root.join(format!("{:064x}.coreml", 4));
+    fs::create_dir(&unnamed).unwrap();
+    fs::write(unnamed.join(".owner"), OWNER).unwrap();
     let held = acquire(5, "aesthetic");
     let new = save(6, "aesthetic");
-    assert!(!old.exists() && !legacy.exists());
+    assert!(!old.exists() && !unnamed.exists());
     assert!(new.exists() && other.exists());
     assert!(held.path.exists(), "a copy another window has open stays");
 }

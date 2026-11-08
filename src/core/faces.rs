@@ -9,7 +9,6 @@ pub struct Faces {
     pub closed_eyes: usize,
     /// Largest verified face rectangle, in normalized source coordinates.
     pub primary: Option<[f32; 4]>,
-    #[serde(default)]
     pub geometry: Vec<Face>,
 }
 /// Lightweight review evidence. Detailed landmarks stay in the shared artifact
@@ -20,7 +19,6 @@ pub struct FaceSummary {
     pub closed_eyes: usize,
     pub primary: Option<[f32; 4]>,
     /// Each face's eyes, for comparing one person across similar photos.
-    #[serde(default)]
     pub eyes: Vec<FaceEyes>,
 }
 
@@ -42,8 +40,7 @@ impl Faces {
             && self.closed_eyes <= self.count
             && self.geometry.iter().all(|f| {
                 !f.landmarks.is_empty()
-                    && f.blink
-                        .is_some_and(|b| b.iter().all(|v| (0.0..=1.0).contains(v)))
+                    && f.blink.iter().all(|v| (0.0..=1.0).contains(v))
                     && f.bbox
                         .iter()
                         .chain(f.eyes.iter().flatten())
@@ -72,13 +69,9 @@ pub struct Face {
     pub bbox: [f32; 4],
     pub eyes: [[f32; 2]; 2],
     /// All normalized points from the existing verified Face Mesh pass.
-    /// Empty only for legacy cache records; motion comparison treats this as unknown.
-    #[serde(default)]
     pub landmarks: Vec<[f32; 2]>,
     /// MediaPipe blendshape eye-blink scores (subject's left, right), 0–1.
-    /// `None` only in legacy records, which `Faces::complete` rejects.
-    #[serde(default)]
-    pub blink: Option<[f32; 2]>,
+    pub blink: [f32; 2],
 }
 impl Face {
     /// This face's eyes and where it is, judged from its stored landmarks
@@ -106,8 +99,9 @@ struct Detection {
     size: f32,
     angle: f32,
 }
-/// Part of the face-cache identity; change it whenever a rule below changes.
-pub const RECIPE: &str = "faces-v5-tiles";
+/// Part of the face-cache identity; change it whenever a rule below or the
+/// stored face layout changes.
+pub const RECIPE: &str = "faces-v6-tiles";
 /// Eyes count as closed when the Face Mesh eye aspect ratio is clearly shut
 /// (`SHUT_EYE_RATIO`), or when both MediaPipe blink scores reach `CLOSED_BLINK`
 /// and the ratio agrees (`CLOSED_EYE_RATIO`).
@@ -378,7 +372,7 @@ fn detect(
             bbox,
             eyes: [point(33), point(263)],
             landmarks: (0..landmarks.len() / 3).map(point).collect(),
-            blink: Some(blink),
+            blink,
         };
         let left = eye_aspect_ratio(landmarks, [33, 160, 158, 133, 153, 144]);
         let right = eye_aspect_ratio(landmarks, [362, 385, 387, 263, 373, 380]);
@@ -493,24 +487,25 @@ pub fn rejudge(
         "Unexpected blendshape output"
     );
     refined.blink =
-        Some([shapes[0][EYE_BLINK_LEFT], shapes[0][EYE_BLINK_RIGHT]].map(|v| v.clamp(0.0, 1.0)));
+        [shapes[0][EYE_BLINK_LEFT], shapes[0][EYE_BLINK_RIGHT]].map(|v| v.clamp(0.0, 1.0));
     Ok(Some(refined))
 }
 /// One shared face artifact used by Organize, quality, subjects and duplicates.
-/// Existing complete subject records can seed it without another model pass.
+/// Faces a subject record already holds (`known`) fill it without another
+/// model pass when the face record itself was trimmed from the cache.
 pub fn cached(
     models: &mut super::models::Models,
     asset: &Asset,
     store: &super::subjects::store::Store,
     source: &str,
-    legacy: Option<&Faces>,
+    known: Option<&Faces>,
     cancelled: impl Fn() -> bool,
 ) -> Result<Faces> {
     cached_lazy(
         models,
         store,
         source,
-        legacy,
+        known,
         || Ok(asset.clone()),
         cancelled,
     )
@@ -520,7 +515,7 @@ pub fn cached_lazy(
     models: &mut super::models::Models,
     store: &super::subjects::store::Store,
     source: &str,
-    legacy: Option<&Faces>,
+    known: Option<&Faces>,
     mut asset: impl FnMut() -> Result<Asset>,
     cancelled: impl Fn() -> bool,
 ) -> Result<Faces> {
@@ -529,7 +524,7 @@ pub fn cached_lazy(
     if let Some(faces) = store.faces(&key) {
         return Ok(faces);
     }
-    let faces = if let Some(faces) = legacy.filter(|f| f.complete()) {
+    let faces = if let Some(faces) = known.filter(|f| f.complete()) {
         faces.clone()
     } else {
         analyze_cancellable(models, &asset()?, &cancelled)?
@@ -567,9 +562,9 @@ const RIGHT_EYE: [usize; 6] = [362, 385, 387, 263, 373, 380];
 /// The eye measures of `face`, found in a `width` x `height` image (the
 /// analysis image). Landmarks are normalized, so they are scaled back to
 /// pixels first: the eye aspect ratio must not change with the photo's
-/// shape. `None` for legacy records without landmarks or blink scores.
+/// shape. `None` when the eye landmarks are missing or not finite.
 pub fn eye_measures(face: &Face, width: u32, height: u32) -> Option<EyeMeasures> {
-    let blink = face.blink?;
+    let blink = face.blink;
     let (w, h) = (width as f32, height as f32);
     let point = |i: usize| face.landmarks.get(i).map(|[x, y]| [x * w, y * h]);
     let ratio = |eye: [usize; 6]| -> Option<f32> {
@@ -887,7 +882,7 @@ mod tests {
     use super::*;
     /// A face whose eyes, in a `width` × `height` frame, are `gap` pixels
     /// apart and open to `ratio` (lid gap over eye width).
-    fn face(width: u32, height: u32, gap: f32, ratio: f32, blink: Option<[f32; 2]>) -> Face {
+    fn face(width: u32, height: u32, gap: f32, ratio: f32, blink: [f32; 2]) -> Face {
         let (w, h) = (width as f32, height as f32);
         let mut landmarks = vec![[0.5, 0.5]; 478];
         let eye = 0.4 * gap;
@@ -917,8 +912,8 @@ mod tests {
     }
     #[test]
     fn stored_faces_are_judged_by_the_easy_delete_rule_on_any_frame_shape() {
-        let open = Some([0.1, 0.1]);
-        let blinking = Some([0.8, 0.7]);
+        let open = [0.1, 0.1];
+        let blinking = [0.8, 0.7];
         // Non-square frames: the ratio is measured in pixels, not normalized.
         for (width, height) in [(1024, 768), (577, 1024)] {
             let eyes =
@@ -942,13 +937,13 @@ mod tests {
                     "{ratio}"
                 );
             }
-            // Too small to read, or a legacy record.
+            // Too small to read.
             assert_eq!(eyes(15.0, 0.02, blinking).state, EyeState::Unknown);
-            assert_eq!(eyes(60.0, 0.02, None).state, EyeState::Unknown);
         }
-        let mut legacy = face(1024, 768, 60.0, 0.3, open);
-        legacy.landmarks.clear();
-        assert_eq!(legacy.eyes(1024, 768).state, EyeState::Unknown);
+        // Without landmarks the eyes cannot be told.
+        let mut bare = face(1024, 768, 60.0, 0.3, open);
+        bare.landmarks.clear();
+        assert_eq!(bare.eyes(1024, 768).state, EyeState::Unknown);
     }
     #[test]
     fn the_summary_carries_each_faces_eyes() {
@@ -957,8 +952,8 @@ mod tests {
             closed_eyes: 1,
             primary: None,
             geometry: vec![
-                face(1024, 768, 60.0, 0.05, Some([0.9, 0.9])),
-                face(1024, 768, 60.0, 0.3, Some([0.0, 0.0])),
+                face(1024, 768, 60.0, 0.05, [0.9, 0.9]),
+                face(1024, 768, 60.0, 0.3, [0.0, 0.0]),
             ],
         };
         let summary = faces.summary(1024, 768);

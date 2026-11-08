@@ -15,17 +15,10 @@ pub struct Limits {
     pub previews_mib: u32,
     pub originals_mib: u32,
     pub disk_mib: u32,
-    /// Which defaults these limits were saved with. Missing from files
-    /// written while the disk default was 1 GiB.
-    #[serde(default)]
-    pub defaults: u32,
 }
-/// The disk default went from 1 GiB to 4 GiB in defaults version 2; in
-/// version 3 every default scales with this computer's memory and free disk.
-const DEFAULTS: u32 = 3;
-const OLD_DISK_DEFAULT_MIB: u32 = 1024;
-/// The fixed defaults of versions 1 and 2.
-const FIXED: (u32, u32, u32) = (128, 256, 4096);
+/// The disk default when the free space is unknown, and the most a nearly
+/// full disk gets.
+const DISK_DEFAULT_MIB: u32 = 4096;
 pub const PREVIEWS_MIB: std::ops::RangeInclusive<u32> = 64..=2048;
 pub const DISK_MAX_MIB: u32 = 131_072;
 const ORIGINALS_MIN_MIB: u32 = 256;
@@ -47,15 +40,14 @@ impl Limits {
     pub fn for_machine(machine: super::memory::Machine) -> Self {
         let ram = machine.ram / MIB;
         let disk = match machine.free_disk.map(|free| free / MIB) {
-            None => FIXED.2,
-            Some(free) if free < 40 * 1024 => (free / 10).min(u64::from(FIXED.2)) as u32,
+            None => DISK_DEFAULT_MIB,
+            Some(free) if free < 40 * 1024 => (free / 10).min(u64::from(DISK_DEFAULT_MIB)) as u32,
             Some(free) => (free / 20 / 1024 * 1024).clamp(4096, 32_768) as u32,
         };
         Self {
             previews_mib: power_of_two(ram / 64, 128, 1024),
             originals_mib: power_of_two(ram / 16, 512, 8192),
             disk_mib: disk,
-            defaults: DEFAULTS,
         }
     }
     /// The most full-size detail memory Settings offers: half the memory.
@@ -67,7 +59,6 @@ impl Limits {
         ORIGINALS_MIN_MIB..=Self::originals_max_mib()
     }
     pub fn normalize(&mut self) {
-        self.migrate(Self::default());
         self.previews_mib = self
             .previews_mib
             .clamp(*PREVIEWS_MIB.start(), *PREVIEWS_MIB.end());
@@ -75,25 +66,6 @@ impl Limits {
             .originals_mib
             .clamp(ORIGINALS_MIN_MIB, ORIGINALS_MAX_MIB);
         self.disk_mib = self.disk_mib.min(DISK_MAX_MIB);
-    }
-    /// Settings still on an old default move to `current` once, and only
-    /// upwards; a limit the user chose is kept.
-    fn migrate(&mut self, current: Self) {
-        if self.defaults >= DEFAULTS {
-            return;
-        }
-        if self.defaults < 2 && self.disk_mib == OLD_DISK_DEFAULT_MIB {
-            self.disk_mib = FIXED.2;
-        }
-        let raise = |value: &mut u32, old: u32, new: u32| {
-            if *value == old {
-                *value = new.max(old);
-            }
-        };
-        raise(&mut self.previews_mib, FIXED.0, current.previews_mib);
-        raise(&mut self.originals_mib, FIXED.1, current.originals_mib);
-        raise(&mut self.disk_mib, FIXED.2, current.disk_mib);
-        self.defaults = DEFAULTS;
     }
 }
 #[derive(Clone, Debug, Default)]
@@ -321,10 +293,6 @@ fn prune(
             let lock = namespace
                 .as_ref()
                 .and_then(|_| compiled::lease(&entry.path()).ok());
-            if lock.is_some() && max_bytes.is_some() && compiled::retired(&entry.path()) {
-                compiled::remove(&entry.path(), &cancelled)?;
-                continue;
-            }
             if lock.is_some() && max_bytes.is_some() && clear_models {
                 compiled::remove(&entry.path(), &cancelled)?;
                 continue;
@@ -400,7 +368,7 @@ fn prune(
 mod tests {
     use super::*;
     #[test]
-    fn defaults_follow_the_machine_and_old_defaults_move_up_once_but_chosen_limits_stay() {
+    fn defaults_follow_the_machine_and_chosen_limits_stay() {
         use crate::core::memory::{GIB, Machine};
         let machine = |ram: u64, free: Option<u64>| Machine {
             ram: ram * GIB,
@@ -427,29 +395,11 @@ mod tests {
         assert_eq!(Limits::for_machine(machine(16, Some(12))).disk_mib, 1228);
         assert_eq!(Limits::for_machine(machine(16, None)).disk_mib, 4096);
 
-        let current = Limits::for_machine(machine(32, Some(500)));
-        let mut old: Limits =
-            serde_json::from_str(r#"{"previews_mib":128,"originals_mib":256,"disk_mib":1024}"#)
-                .unwrap();
-        old.migrate(current);
-        assert_eq!(sizes(old), (512, 2048, 25600));
-        // Never lower: on a small disk the old 4 GB default stays.
-        let mut small: Limits = serde_json::from_str(
-            r#"{"previews_mib":128,"originals_mib":256,"disk_mib":4096,"defaults":2}"#,
-        )
-        .unwrap();
-        small.migrate(Limits::for_machine(machine(8, Some(12))));
-        assert_eq!(sizes(small), (128, 512, 4096));
-        let mut custom: Limits = serde_json::from_str(
-            r#"{"previews_mib":96,"originals_mib":300,"disk_mib":2048,"defaults":2}"#,
-        )
-        .unwrap();
-        custom.migrate(current);
-        assert_eq!(sizes(custom), (96, 300, 2048));
-        // Chosen again after the move, 1 GiB survives a save and reload.
-        old.disk_mib = 1024;
+        // A chosen limit survives a save and reload.
+        let mut chosen = Limits::for_machine(machine(32, Some(500)));
+        chosen.disk_mib = 1024;
         let mut reloaded: Limits =
-            serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
         reloaded.normalize();
         assert_eq!(reloaded.disk_mib, 1024);
     }

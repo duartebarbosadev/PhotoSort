@@ -924,11 +924,6 @@ fn tree_invalidation_is_scoped_and_date_filters_reuse_shared_calendar_keys() {
         Some("2024-0"),
         Some("2024-04-01")
     ));
-    let old: Options = serde_json::from_str(
-        r#"{"rating":"All","group":null,"sort":"Oldest","folder":{"path":null,"recursive":true}}"#,
-    )
-    .unwrap();
-    assert!(old.date.is_none());
 }
 #[test]
 fn hundred_thousand_tree_entries_are_cached_and_latest_projection_wins() {
