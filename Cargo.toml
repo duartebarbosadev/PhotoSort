@@ -150,7 +150,7 @@ path = "tests/integration.rs"
 [dev-dependencies]
 photosort = { path = ".", features = ["test-isolation"] }
 jpeg-encoder = "0.7.1"
-# Writes EXIF into the UI gallery's generated photos.
+# Writes EXIF into the UI gallery's photos and reads it back in the rotation tests.
 kamadak-exif = "0.6"
 # Headless rendering for the UI screenshot gallery and visual checks.
 egui_kittest = { version = "0.36.2", features = ["wgpu", "eframe"] }
