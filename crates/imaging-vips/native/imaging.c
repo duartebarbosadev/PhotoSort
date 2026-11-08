@@ -52,7 +52,14 @@ static int native_failure(char *error, size_t capacity) {
     g_free(message);
     return result;
 }
+#ifdef _WIN32
+/* glib_data_win.c: GLib's variables, before anything reads them. */
+int photosort_glib_data(char *error, size_t capacity);
+#endif
 int photosort_vips_init(char *error, size_t capacity) {
+#ifdef _WIN32
+    if (photosort_glib_data(error, capacity)) return -1;
+#endif
     if (vips_init("photosort")) return native_failure(error, capacity);
     if (!vips_icc_present()) return fail(error, capacity, "libvips requires Little CMS support");
     /* One Rust image actor owns reuse. No hidden global operation/file cache.

@@ -39,14 +39,16 @@ winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --quiet
 winget install gstreamerproject.gstreamer
 ```
 
-Then build Exiv2, LibRaw, libheif and libvips. Their versions are pinned in `Cargo.toml`
-(`[package.metadata.vcpkg]`), and `cargo vcpkg build` builds them into `target\vcpkg`,
-where the build finds them by itself. The first run takes about 25 minutes; later runs
-reuse the result:
+Then build Exiv2, LibRaw, libheif and the libraries libvips uses. Their versions are
+pinned in `Cargo.toml` (`[package.metadata.vcpkg]`), and `cargo vcpkg build` builds them
+into `target\vcpkg`, where the build finds them by itself. The first run takes about 20
+minutes; later runs reuse the result. Then build libvips itself (a few minutes; see
+[libvips](#libvips)):
 
 ```powershell
 cargo install cargo-vcpkg
 cargo vcpkg build
+python scripts/build_vips.py
 ```
 
 vcpkg cannot build in a folder whose path has accented or other non-ASCII characters (such
@@ -243,7 +245,6 @@ writes `PhotoSort-<version>-windows-x64.zip`. The zip holds one `PhotoSort` fold
 | --- | --- |
 | `photosort.exe` | The app |
 | `*.dll` beside it | The Visual C++ and OpenMP runtimes the build links, so no redistributable is needed |
-| `photosort_vips.dll` | libvips and its codecs (see [libvips](#libvips)) |
 | `resources\` | Models, ONNX Runtime (`runtime\`), licenses and `DependencyNotices\`; found beside the executable |
 | `gstreamer\bin`, `gstreamer\lib\gstreamer-1.0` | GStreamer and the plugins the video player uses (`PLUGINS` in the script) |
 
@@ -353,8 +354,8 @@ PhotoSort decodes JPEG, PNG, TIFF and GIF through libvips and Little CMS
 their own services, and WebP and BMP use the Rust `image` crate. libvips shrinks JPEGs
 while decoding, and it supports ICC-profiled CMYK TIFF.
 
-On macOS and Linux, build the private libvips copy once (delete `.tools/vips` to rebuild
-it), then point pkg-config at it before building PhotoSort:
+Build the private libvips copy once (delete `.tools/vips` to rebuild it). On macOS and
+Linux, point pkg-config at it before building PhotoSort:
 
 ```sh
 python3 -B scripts/build_vips.py
@@ -372,13 +373,18 @@ sudo apt-get install python3 python3-venv cmake ninja-build libglib2.0-dev \
 export LD_LIBRARY_PATH="$PWD/.tools/vips/lib"
 ```
 
-On Windows, `cargo vcpkg build` (see [Building](#building)) builds libvips 8.18 with the
-same codecs and Highway SIMD, in a vcpkg triplet of its own (`native/vcpkg-triplets`), and
-the adapter's build links it into `photosort_vips.dll`; nothing else is needed. The
-adapter's own tests build outside the main `target` folder, so point them at the vcpkg tree:
+On Windows, `python scripts/build_vips.py` builds a static libvips with MSVC, after
+`cargo vcpkg build` (see [Building](#building)): GLib comes from the installed GStreamer,
+which PhotoSort already uses for video, and the codecs, Little CMS and Highway from vcpkg.
+The build links it into `photosort.exe`, which finds `.tools/vips` by itself
+(`PHOTOSORT_VIPS_PREFIX` names another), so there is one GLib in the process and no extra
+DLL. PhotoSort delay-loads GStreamer and points Windows at it before decoding its first
+image. The adapter's own tests build outside the main `target` folder and link GLib
+directly, so point them at the vcpkg tree and put GStreamer on `PATH`:
 
 ```powershell
 $env:VCPKG_ROOT = "$PWD\target\vcpkg"
+$env:PATH = "C:\Program Files\gstreamer\1.0\msvc_x86_64\bin;$env:PATH"
 cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
 ```
 

@@ -10,6 +10,15 @@ use image::RgbaImage;
 pub use native::thumbnail;
 #[cfg(not(target_os = "macos"))]
 pub use portable::thumbnail;
+/// Windows: makes GStreamer's DLLs loadable, including the GLib that libvips (the
+/// photo decoder) shares with it. Call before the first image or video is decoded;
+/// later calls return the first result. Elsewhere there is nothing to do.
+pub fn locate_runtime() -> Result<()> {
+    #[cfg(windows)]
+    return portable::locate();
+    #[cfg(not(windows))]
+    Ok(())
+}
 use std::{
     path::Path,
     sync::{

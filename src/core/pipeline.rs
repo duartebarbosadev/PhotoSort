@@ -872,6 +872,7 @@ impl Pipeline {
         let (raw, width, height, warning, precision_retained, already_oriented) = {
             if native_raster(media) {
                 self.stats.native_renders += 1;
+                super::playback::locate_runtime()?;
                 let rendered = photosort_imaging_vips::render(
                     &media.path,
                     photosort_imaging_vips::Request {
@@ -1027,6 +1028,7 @@ impl Pipeline {
             self.stats.decodes += 1;
             self.stats.native_renders += 1;
             self.stats.native_regions += 1;
+            super::playback::locate_runtime()?;
             let rendered = photosort_imaging_vips::render_region(
                 &request.media.path,
                 photosort_imaging_vips::Request {
@@ -1271,6 +1273,7 @@ impl Pipeline {
         if native_raster(media) {
             self.stats.decodes += 1;
             self.stats.native_renders += 1;
+            super::playback::locate_runtime()?;
             let rendered = photosort_imaging_vips::render(
                 &media.path,
                 photosort_imaging_vips::Request {

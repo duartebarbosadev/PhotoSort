@@ -54,20 +54,20 @@ python3 scripts/build_vips.py
 
 On Debian/Ubuntu, see the package list in `.github/workflows/check.yml`.
 
-On Windows (MSVC), `cargo vcpkg build` in the repository root builds libvips 8.18 instead,
-with the same codecs (JPEG, PNG, TIFF, Little CMS and the bundled GIF loader) and Highway
-SIMD, as static libraries in a vcpkg triplet of their own
-(`native/vcpkg-triplets/x64-windows-static-md-vips.cmake`).
-`build.rs` reads their pkg-config files and links them with the adapter into
-`photosort_vips.dll`, which exports only the adapter's three functions. The application
-links GStreamer's GLib, whose import library has the same name as vcpkg's static GLib, so
-libvips' copy stays inside the DLL. The DLL is written to the build script's output folder
-(which Cargo puts on `PATH` for `cargo run` and tests) and copied beside the profile's
-executables. The build recipe is vcpkg's ABI hash for the installed libvips, which covers
-the port, its features, the triplet, the compiler and every dependency. vcpkg installs an
-already installed port again only when asked, so after changing the triplet run
-`vcpkg remove libvips:x64-windows-static-md-vips` in the vcpkg tree before
-`cargo vcpkg build` (CI's cache key covers the triplet).
+On Windows (MSVC) the same script builds a static libvips, after `cargo vcpkg build` in
+the repository root: GLib comes from the installed GStreamer (PhotoSort's video player),
+and libjpeg-turbo, libpng, libtiff, Little CMS, expat, zlib and Highway are vcpkg's static
+libraries. `build.rs` finds the prefix (`.tools/vips`, or `PHOTOSORT_VIPS_PREFIX`), reads
+the pkg-config files of that prefix, vcpkg and GStreamer, and links libvips and the codecs
+into the application statically (under names of their own, so GStreamer's `jpeg.lib` or
+`tiff.lib` cannot stand in for them) and GLib through GStreamer's import libraries. The
+process has one GLib, shared with video, and no extra DLL.
+
+PhotoSort delay-loads GStreamer's DLLs so that it starts without them, and points Windows
+at them (`core::playback::locate_runtime`) before the first image is decoded. A delay-loaded
+DLL cannot export variables to the program, and libvips reads two GLib variables
+(`g_ascii_table`, `g_param_spec_types`) through macros, so `native/glib_data_win.c` defines
+their import slots, linked whole, and fills them from GLib before `vips_init`.
 
 ## Testing
 
@@ -91,15 +91,16 @@ PHOTOSORT_SAMPLE_DIR="$PWD/tests/samples" cargo test --locked \
 
 On Linux, also set `LD_LIBRARY_PATH` to the prefix's `lib` directory before running tests
 or the application. On Windows, set `VCPKG_ROOT` to the vcpkg tree instead of
-`PKG_CONFIG_PATH` (by default `target\vcpkg` in the repository root).
+`PKG_CONFIG_PATH` (by default `target\vcpkg` in the repository root), and put GStreamer's
+`bin` folder on `PATH`: the adapter's tests link GLib directly.
 
 ## Packaging
 
 On macOS, `python3 scripts/package_macos.py` bundles the private build (`--native-prefix`
 selects another prefix). The packager resolves transitive native libraries, keeps their
 licence notices, audits the resulting dependency graph and verifies the code signature. On
-Windows, `python scripts/package_windows.py` bundles `photosort_vips.dll` and the vcpkg
-licence notices.
+Windows, libvips is part of `photosort.exe`, and `python scripts/package_windows.py` bundles
+its licence notices and build provenance with the vcpkg and GStreamer ones.
 
 CI builds and tests the adapter on macOS, Linux and Windows.
 

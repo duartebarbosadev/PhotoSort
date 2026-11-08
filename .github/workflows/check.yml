@@ -95,8 +95,11 @@ jobs:
       - run: python -B -m unittest discover -s scripts -p 'test_package_windows.py'
       - run: cargo nextest run --locked --lib --bins --tests --no-fail-fast
       - run: cargo clippy --locked --all-targets -- -D warnings
-      # libvips from vcpkg, linked into photosort_vips.dll (crates/imaging-vips/build.rs).
-      - run: cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
+      # The adapter's own tests link GStreamer's GLib directly, without the app's delay-load.
+      - run: |
+          $env:PATH = "C:\Program Files\gstreamer\1.0\msvc_x86_64\bin;$env:PATH"
+          cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'adapter tests failed' }
   linux:
     name: Linux
     timeout-minutes: 60
