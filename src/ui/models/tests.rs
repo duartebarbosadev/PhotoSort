@@ -458,8 +458,11 @@ fn model_panel_summarises_groups_and_links_every_model_source() {
             .any(|l| l == "0 of 7 models installed · 0.0 MB downloaded or imported")
     );
     // What the paused analysis needs comes first, then the shared and
-    // optional groups; nothing is said twice.
-    for group in ["NEEDED FOR THE PAUSED ANALYSIS", "OPTIONAL FEATURES"] {
+    // single-step groups; nothing is said twice.
+    for group in [
+        "NEEDED FOR THE PAUSED ANALYSIS",
+        "USED BY PEOPLE FOLDERS AND FIX ROTATION",
+    ] {
         assert!(labels.iter().any(|l| l == group), "{group}: {labels:?}");
     }
     assert_eq!(labels.iter().filter(|l| *l == "Missing").count(), 7);

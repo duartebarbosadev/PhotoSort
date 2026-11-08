@@ -48,7 +48,6 @@ tokio = { version = "1", features = ["rt", "time", "macros"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland", "accesskit"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tiff", "webp", "bmp", "gif"] }
-kamadak-exif = "0.6"
 # MIT. Reads MP4/MOV headers for video duration, frame rate and codec.
 mp4 = "0.14"
 # Page count only: lossless pixel rotation must refuse multi-page TIFF.
@@ -80,7 +79,7 @@ tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "registry"] }
 tracing-appender = { version = "0.2.5", default-features = false }
 
-# Keep local development/test output modest across native/minimal feature builds.
+# Keep development and test output small.
 # Tests inherit this profile; retain filename/line backtraces without full type data.
 [profile.dev]
 debug = "line-tables-only"
@@ -151,5 +150,7 @@ path = "tests/integration.rs"
 [dev-dependencies]
 photosort = { path = ".", features = ["test-isolation"] }
 jpeg-encoder = "0.7.1"
+# Writes EXIF into the UI gallery's generated photos.
+kamadak-exif = "0.6"
 # Headless rendering for the UI screenshot gallery and visual checks.
 egui_kittest = { version = "0.36.2", features = ["wgpu", "eframe"] }

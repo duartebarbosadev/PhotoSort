@@ -2120,8 +2120,8 @@ impl PhotoSortApp {
     pub fn gallery_compact_strip(&mut self, compact: bool) {
         self.preferences.compact_strip = compact;
     }
-    /// Closes the Local AI models dialog. Builds without the native runtime
-    /// open it whenever a step would analyze.
+    /// Closes the Local AI models dialog, which opens whenever a step would
+    /// analyze without ONNX Runtime.
     pub fn gallery_close_model_dialog(&mut self) {
         self.model_dialog = false;
     }

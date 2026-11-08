@@ -272,7 +272,7 @@ pub fn review(
 }
 /// The JPEG and HEIC of one capture, before any similarity grouping, so the
 /// pair is never reviewed as two near-duplicate frames. A preview that cannot
-/// be decoded (HEIC in a build without HEIF support) only skips its pair.
+/// be decoded only skips its pair.
 fn format_pairs(
     inputs: &[Input],
     assigned: &HashSet<usize>,
