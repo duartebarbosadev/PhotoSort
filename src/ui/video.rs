@@ -26,7 +26,7 @@ impl PhotoSortApp {
     /// Organize, Easy Delete and Pick Best show it beside their board or
     /// grid, outside Review.
     fn video_target(&self, ctx: &egui::Context) -> Option<&Media> {
-        if self.busy || self.scanning || !playback::supported() {
+        if self.busy || self.scanning {
             return None;
         }
         let id = self.active?;
@@ -191,16 +191,6 @@ impl PhotoSortApp {
                         self.set_active(id);
                         self.focused_slot = slot;
                     }
-                } else if !playback::supported() {
-                    if ui
-                        .add_enabled(
-                            self.can_open_desktop(id),
-                            egui::Button::new("Open in external player"),
-                        )
-                        .clicked()
-                    {
-                        self.open_desktop(id, crate::core::desktop::Action::OpenVideo);
-                    }
                 } else if let Some(error) = state.error.as_ref().filter(|_| owns) {
                     let mut recovery = |ui: &mut egui::Ui| {
                         ui.label(RichText::new("Playback unavailable").color(RED))
@@ -327,7 +317,7 @@ fn playback_controls(ui: &mut egui::Ui, player: &playback::Player, state: &playb
     );
 }
 
-#[cfg(all(test, any(target_os = "macos", feature = "portable-video")))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::worker_patience;

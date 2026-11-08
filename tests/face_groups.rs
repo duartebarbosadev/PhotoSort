@@ -423,7 +423,6 @@ fn shared_verified_faces_reuse_previous_work_and_cancel_without_publishing() {
             .is_none()
     );
 }
-#[cfg(feature = "onnx")]
 #[test]
 #[ignore = "requires seven samples and native SFace, detector and landmark models"]
 fn native_people_grouping_reuses_detection_inference_and_survives_restart() -> anyhow::Result<()> {
@@ -545,7 +544,6 @@ fn native_people_grouping_reuses_detection_inference_and_survives_restart() -> a
     Ok(())
 }
 
-#[cfg(feature = "onnx")]
 #[test]
 #[ignore = "requires native face models and SFace"]
 fn native_portrait_recognition_aligns_and_groups_brightness_variants() -> anyhow::Result<()> {
@@ -706,7 +704,6 @@ fn native_portrait_recognition_aligns_and_groups_brightness_variants() -> anyhow
     Ok(())
 }
 
-#[cfg(feature = "onnx")]
 #[test]
 #[ignore = "requires native face models and SFace"]
 fn native_distant_faces_are_found_and_recognized_from_the_display_image() -> anyhow::Result<()> {

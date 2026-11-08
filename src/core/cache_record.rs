@@ -23,7 +23,7 @@ pub(crate) enum Kind {
     Metadata = 10,
     /// Each person's eyes, judged for Easy Delete (`core::eyes`).
     Eyes = 12,
-    #[cfg(any(test, all(feature = "onnx", target_os = "macos")))]
+    #[cfg(any(test, target_os = "macos"))]
     Compiled = 11,
 }
 pub(crate) fn encode(kind: Kind, value: &impl Serialize) -> Result<Vec<u8>> {

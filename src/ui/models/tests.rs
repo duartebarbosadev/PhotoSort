@@ -97,7 +97,6 @@ fn model_dialog_fits_compact_and_wide_windows_without_loading_models_or_images()
     app.model_issue = Some(model_assets::Issue {
         missing: model_assets::ALL.iter().map(|a| a.id).collect(),
         runtime_missing: true,
-        unsupported: !cfg!(feature = "onnx"),
     });
     app.model_removal = app
         .runtime
@@ -202,7 +201,6 @@ fn retry_requires_verified_prerequisites_and_the_original_workflow_context() {
     app.model_issue = Some(model_assets::Issue {
         missing: vec![model_assets::Id::Scene],
         runtime_missing: true,
-        unsupported: false,
     });
     let mut state = model_assets::State {
         snapshot: Some(Arc::new(model_assets::Snapshot {
@@ -223,7 +221,7 @@ fn retry_requires_verified_prerequisites_and_the_original_workflow_context() {
     let snapshot = Arc::make_mut(state.snapshot.as_mut().unwrap());
     snapshot.runtime = Some("runtime".into());
     snapshot.rows[0].health = Health::Verified("model".into());
-    assert_eq!(app.model_retry_ready(&state), cfg!(feature = "onnx"));
+    assert!(app.model_retry_ready(&state));
     state.running = true;
     assert!(!app.model_retry_ready(&state));
     state.running = false;
@@ -235,7 +233,6 @@ fn pending_recovery(app: &mut PhotoSortApp) {
     app.model_issue = Some(model_assets::Issue {
         missing: vec![model_assets::Id::Scene],
         runtime_missing: true,
-        unsupported: false,
     });
     app.status = "Local AI needs model setup · your current reviews are preserved".into();
 }
@@ -344,7 +341,7 @@ fn repaired_models_update_footer_and_dialog_without_restarting_analysis() {
     );
     state.running = false;
     let message = app.model_recovery_status(&state).unwrap();
-    assert_eq!(message.contains("Models ready"), cfg!(feature = "onnx"));
+    assert!(message.contains("Models ready"));
     let ctx = egui::Context::default();
     theme_install(&ctx);
     ctx.enable_accesskit();
@@ -376,18 +373,16 @@ fn repaired_models_update_footer_and_dialog_without_restarting_analysis() {
         |label| label.starts_with("The native AI runtime is missing")
             || label.starts_with("The AI runtime is missing")
     ));
-    if cfg!(feature = "onnx") {
-        assert!(
-            labels
-                .iter()
-                .any(|label| label.starts_with("The models this analysis needs are ready."))
-        );
-        assert!(
-            !labels
-                .iter()
-                .any(|label| label.starts_with("Needed for this analysis"))
-        );
-    }
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.starts_with("The models this analysis needs are ready."))
+    );
+    assert!(
+        !labels
+            .iter()
+            .any(|label| label.starts_with("Needed for this analysis"))
+    );
     app.set_step(Step::Organize);
     for _ in 0..3 {
         let out = ctx.run_test(egui::RawInput::default(), |ui| {
@@ -469,26 +464,17 @@ fn model_panel_summarises_groups_and_links_every_model_source() {
     }
     assert_eq!(labels.iter().filter(|l| *l == "Missing").count(), 7);
     // Every model downloads from its pinned file; Import stays in Details.
-    // Builds without downloads offer Import instead and say why, once.
-    let downloads = cfg!(feature = "model-downloads");
     let count = |pred: &dyn Fn(&str) -> bool| labels.iter().filter(|l| pred(l)).count();
     let total = model_assets::ALL.len();
     assert_eq!(
         count(&|l| l.starts_with("Download ") && l.ends_with(" MB")),
-        if downloads { total } else { 0 }
+        total
     );
-    assert_eq!(
-        count(&|l| l == "Import prepared model…"),
-        if downloads { 0 } else { total }
-    );
-    assert_eq!(
-        count(&|l| l.starts_with("This build cannot download models")),
-        usize::from(!downloads && cfg!(feature = "onnx"))
-    );
+    assert_eq!(count(&|l| l == "Import prepared model…"), 0);
     assert_eq!(count(&|l| l.contains("no public download")), 0);
     // The aesthetic model's AGPL-3.0 licence is stated beside its download.
     let agpl = model_assets::Id::Aesthetic.asset().download_note.unwrap();
-    assert_eq!(count(&|l| l == agpl), usize::from(downloads));
+    assert_eq!(count(&|l| l == agpl), 1);
     // Every model links its upstream page; links open only when clicked.
     let links = nodes
         .iter()
@@ -543,8 +529,7 @@ fn a_missing_runtime_is_offered_for_download_and_gpu_support_only_with_an_nvidia
     Arc::make_mut(state.snapshot.as_mut().unwrap()).runtime = None;
     let labels = model_panel_labels(&mut app, &state);
     let offered = |labels: &[String], prefix: &str| labels.iter().any(|l| l.starts_with(prefix));
-    let downloads = cfg!(all(feature = "onnx", feature = "model-downloads"));
-    if let Some(cpu) = runtime::info(Package::Cpu).filter(|_| downloads) {
+    if let Some(cpu) = runtime::info(Package::Cpu) {
         assert!(
             offered(&labels, &format!("Download {}", cpu.title)),
             "{labels:?}"
@@ -562,7 +547,7 @@ fn a_missing_runtime_is_offered_for_download_and_gpu_support_only_with_an_nvidia
     let gpu_offered = offered(&labels, "Download GPU support");
     assert_eq!(
         gpu_offered,
-        downloads && runtime::info(Package::Cuda).is_some() && runtime::nvidia_driver_present(),
+        runtime::info(Package::Cuda).is_some() && runtime::nvidia_driver_present(),
         "{labels:?}"
     );
     // Installed packages are reported, with a way to remove GPU support.

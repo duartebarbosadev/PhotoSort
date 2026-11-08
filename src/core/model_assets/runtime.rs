@@ -41,7 +41,6 @@ impl Info {
     }
 }
 
-#[cfg(any(feature = "model-downloads", test))]
 const LIBRARY_SUFFIXES: [&str; 3] = [".dll", ".so", ".dylib"];
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -228,13 +227,6 @@ pub(super) fn install(
     cancelled: &impl Fn() -> bool,
     progress: &impl Fn(u64, u64),
 ) -> Result<PathBuf> {
-    #[cfg(not(feature = "model-downloads"))]
-    {
-        let _ = (root, cancelled, progress);
-        let info = info(package).context("This package is not available on this platform")?;
-        anyhow::bail!("This build cannot download {}", info.title);
-    }
-    #[cfg(feature = "model-downloads")]
     install_from(
         root,
         package,
@@ -254,13 +246,11 @@ pub(super) fn install(
 }
 
 /// Places one archive at the given path; `install_from` verifies it afterwards.
-#[cfg(feature = "model-downloads")]
 type Obtain<'a> = dyn Fn(&Archive, &Path, &dyn Fn() -> bool, &dyn Fn(u64)) -> Result<()> + 'a;
 
 /// Installs `package` from archives `obtain` provides (downloads in the app,
 /// local copies in tests). Each archive is checked by size and SHA-256 before
 /// anything is unpacked, whatever its source.
-#[cfg(feature = "model-downloads")]
 fn install_from(
     root: &Path,
     package: Package,
@@ -294,7 +284,6 @@ fn install_from(
     Ok(destination)
 }
 
-#[cfg(feature = "model-downloads")]
 fn verify(file: &Path, archive: &Archive, cancelled: &dyn Fn() -> bool) -> Result<()> {
     let mut input = File::open(file)?;
     let mut hash = Sha256::new();
@@ -323,7 +312,6 @@ fn verify(file: &Path, archive: &Archive, cancelled: &dyn Fn() -> bool) -> Resul
 
 /// Unpacks only the listed members with the system `tar` (bsdtar on Windows 10+
 /// and macOS reads .zip and .tgz; GNU tar on Linux reads .tgz).
-#[cfg(feature = "model-downloads")]
 fn extract(
     archive: &Path,
     spec: &Archive,
@@ -380,7 +368,6 @@ fn extract(
 
 /// Windows ships bsdtar as `%SystemRoot%\System32\tar.exe`; use it by full path so
 /// another `tar` on PATH (Git's GNU tar cannot read .zip) is never picked.
-#[cfg(feature = "model-downloads")]
 fn tar_program() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
@@ -399,7 +386,6 @@ fn tar_program() -> PathBuf {
 /// Moves the completed `staging` folder to `destination`. An existing copy is
 /// set aside first and removed afterwards; if it is in use (Windows keeps
 /// loaded libraries locked), the error asks for a restart and nothing changes.
-#[cfg(feature = "model-downloads")]
 fn replace_directory(staging: PathBuf, destination: &Path) -> Result<()> {
     if destination.exists() {
         let old = destination.with_extension("old");
@@ -484,7 +470,6 @@ mod tests {
     /// `PHOTOSORT_RUNTIME_ARCHIVES=<folder> PHOTOSORT_RUNTIME_ROOT=<data folder>
     /// cargo test runtime_packages_install_from_local_archives -- --ignored`.
     /// Copies with any other content are refused like a bad download.
-    #[cfg(feature = "model-downloads")]
     #[test]
     #[ignore = "needs the pinned archives on disk"]
     fn runtime_packages_install_from_local_archives() {
@@ -508,7 +493,6 @@ mod tests {
             eprintln!("{}: {files} files in {}", info.title, directory.display());
         }
     }
-    #[cfg(feature = "model-downloads")]
     #[test]
     fn a_download_with_other_content_is_refused_and_nothing_is_installed() {
         let Some(info) = info(Package::Cpu) else {

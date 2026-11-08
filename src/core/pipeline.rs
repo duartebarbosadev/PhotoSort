@@ -196,8 +196,7 @@ impl Pipeline {
         hash.update(media.path.as_os_str().as_encoded_bytes());
         hash.update(
             format!(
-                "{fingerprint:?}-{sidecar:?}-v8-render-status-srgb-neutral-analysis-native_metadata={}",
-                cfg!(feature = "metadata-native")
+                "{fingerprint:?}-{sidecar:?}-v8-render-status-srgb-neutral-analysis-native_metadata=true"
             )
             .as_bytes(),
         );
@@ -215,11 +214,11 @@ impl Pipeline {
             hash.update(b"raw-shared-preview-v1");
         }
         if media.kind == MediaKind::Video {
-            #[cfg(all(feature = "portable-video", not(target_os = "macos")))]
+            #[cfg(not(target_os = "macos"))]
             hash.update(b"gstreamer-rgba-poster-v1");
             hash.update(b"movie-source-geometry-v2");
         }
-        #[cfg(all(feature = "heif", target_os = "macos"))]
+        #[cfg(target_os = "macos")]
         if media
             .path
             .extension()
@@ -227,7 +226,7 @@ impl Pipeline {
         {
             hash.update(b"imageio-bounded-straight-alpha-v2");
         }
-        #[cfg(all(feature = "heif", not(target_os = "macos")))]
+        #[cfg(not(target_os = "macos"))]
         if media
             .path
             .extension()
@@ -269,8 +268,7 @@ impl Pipeline {
         // names are derived separately and must never become persisted EXIF.
         let record_key = blake3::hash(
             format!(
-                "metadata-v6-subsec:heif={}:os={}:{key}",
-                cfg!(feature = "heif"),
+                "metadata-v6-subsec:heif=true:os={}:{key}",
                 std::env::consts::OS
             )
             .as_bytes(),
@@ -1304,7 +1302,7 @@ impl Pipeline {
             let image = native_pixels(rendered.pixels, rendered.width, rendered.height)?;
             return Ok(Some(orient(image, meta.orientation).into_rgba8()));
         }
-        #[cfg(all(feature = "heif", target_os = "macos"))]
+        #[cfg(target_os = "macos")]
         if apple_heif(media) {
             self.stats.decodes += 1;
             let decoded = decode_heif(
@@ -1542,7 +1540,7 @@ fn decode(
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("heic") || e.eq_ignore_ascii_case("heif"))
     {
-        #[cfg(all(feature = "heif", not(target_os = "macos")))]
+        #[cfg(not(target_os = "macos"))]
         return super::heif::decode(
             &media.path,
             metadata
@@ -1553,7 +1551,7 @@ fn decode(
             cancelled,
         )
         .map(|image| Decoded::full(image, metadata.orientation, true));
-        #[cfg(any(not(feature = "heif"), target_os = "macos"))]
+        #[cfg(target_os = "macos")]
         return decode_heif(
             &media.path,
             (!_original).then_some(PROXY_EDGE),
@@ -1566,72 +1564,27 @@ fn decode(
         .with_context(|| format!("Cannot decode {}", media.name()))
         .map(|image| Decoded::full(image, metadata.orientation, false))
 }
-#[cfg(any(target_os = "macos", feature = "portable-video"))]
 fn video_thumbnail(path: &Path, cancelled: &impl Fn() -> bool) -> Result<DynamicImage> {
     super::playback::thumbnail(path, cancelled)
-}
-#[cfg(all(not(target_os = "macos"), not(feature = "portable-video")))]
-fn video_thumbnail(path: &Path, cancelled: &impl Fn() -> bool) -> Result<DynamicImage> {
-    use std::{
-        process::{Command, Stdio},
-        time::{Duration, Instant},
-    };
-    let directory = tempfile::tempdir()?;
-    let output = directory.path().join("frame.png");
-    let mut child = Command::new("ffmpeg")
-        .args(["-v", "error", "-nostdin", "-threads", "1", "-i"])
-        .arg(path)
-        .args([
-            "-frames:v",
-            "1",
-            "-vf",
-            "scale=1280:1280:force_original_aspect_ratio=decrease",
-        ])
-        .arg(&output)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("Video thumbnails need FFmpeg on PATH")?;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if let Some(status) = child.try_wait()? {
-            anyhow::ensure!(status.success(), "FFmpeg could not decode this video");
-            break;
-        }
-        if cancelled() || Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            anyhow::bail!("Video thumbnail cancelled or timed out after 10 seconds");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    Ok(image::open(output)?)
 }
 #[derive(Clone, Copy)]
 #[repr(i32)]
 enum RawRecipe {
     Original = 0,
     Preview = 1,
-    #[cfg(feature = "raw")]
     PreviewFallback = 2,
 }
 /// Only a sensor decode is bounded by memory (raw.c); an embedded JPEG is
 /// bounded by its own size, so a 150 MP RAW still shows a preview and thumbnail.
-#[cfg(any(feature = "raw", test))]
 fn check_raw_source(width: u32, height: u32) -> Result<()> {
     super::memory::check_size(width, height)
 }
 /// raw.c: a sensor decode would need more than its allowance.
-#[cfg(any(feature = "raw", test))]
 const RAW_NEEDS_MEMORY: i32 = -200001;
 /// raw.c: LibRaw could not size the result safely; never overridden.
-#[cfg(any(feature = "raw", test))]
 const RAW_IMPOSSIBLE_SIZE: i32 = -200002;
 /// LibRaw: the file or its mosaic is larger than LibRaw accepts.
-#[cfg(any(feature = "raw", test))]
 const LIBRAW_TOO_BIG: i32 = -100012;
-#[cfg(any(feature = "raw", test))]
 fn raw_failure(error: i32, needed: u64, width: u32, height: u32) -> anyhow::Error {
     match error {
         RAW_NEEDS_MEMORY => super::memory::TooLarge {
@@ -1654,7 +1607,6 @@ struct RawDecoded {
     source: (u32, u32),
     embedded: bool,
 }
-#[cfg(feature = "raw")]
 fn decode_raw_recipe(
     path: &Path,
     recipe: RawRecipe,
@@ -1771,22 +1723,8 @@ fn decode_raw_recipe(
         embedded: false,
     })
 }
-#[cfg(not(feature = "raw"))]
-fn decode_raw_recipe(
-    _: &Path,
-    _: RawRecipe,
-    _: &mut super::color::Manager,
-    _: &impl Fn() -> bool,
-) -> Result<RawDecoded> {
-    anyhow::bail!("This build has no LibRaw support. Build with the raw feature.")
-}
 
-#[cfg(not(feature = "heif"))]
-fn decode_heif(_: &Path, _: Option<u32>, _: u64) -> Result<Decoded> {
-    anyhow::bail!("This build has no HEIF support. Build with the heif feature.")
-}
-
-#[cfg(all(feature = "heif", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 fn decode_heif(path: &Path, edge: Option<u32>, allowance: u64) -> Result<Decoded> {
     let rendered = super::apple_image::decode(path, edge, allowance)?;
     Ok(Decoded {
@@ -1797,7 +1735,7 @@ fn decode_heif(path: &Path, edge: Option<u32>, allowance: u64) -> Result<Decoded
 }
 
 fn apple_heif(media: &Media) -> bool {
-    cfg!(all(target_os = "macos", feature = "heif"))
+    cfg!(target_os = "macos")
         && media.kind == MediaKind::Photo
         && media
             .path

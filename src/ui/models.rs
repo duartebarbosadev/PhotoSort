@@ -106,15 +106,14 @@ impl PhotoSortApp {
         })
     }
     fn model_retry_ready(&self, state: &model_assets::State) -> bool {
-        if !cfg!(feature = "onnx") || state.running || !self.model_retry_valid() {
+        if state.running || !self.model_retry_valid() {
             return false;
         }
         let Some(snapshot) = state.snapshot.as_ref() else {
             return false;
         };
         self.model_issue.as_ref().is_some_and(|issue| {
-            !issue.unsupported
-                && (!issue.runtime_missing || snapshot.runtime.is_some())
+            (!issue.runtime_missing || snapshot.runtime.is_some())
                 && issue.missing.iter().all(|id| {
                     if *id == model_assets::Id::Rotation
                         && let Some((_, valid)) = &snapshot.orientation_override
@@ -350,16 +349,9 @@ impl PhotoSortApp {
             self.model_removal = None;
         }
     }
-    /// Messages that apply to the whole panel: the build, the paused
-    /// analysis, the runtime and a build without downloads, each said once.
+    /// Messages that apply to the whole panel: the paused analysis and the
+    /// runtime, each said once.
     fn model_notices(&mut self, ui: &mut egui::Ui, state: &model_assets::State) {
-        if !cfg!(feature = "onnx") {
-            notice(
-                ui,
-                RED,
-                "This build has no AI inference support. Use a full PhotoSort build for AI workflows; manual review remains available.",
-            );
-        }
         if self.model_retry_ready(state) {
             notice(
                 ui,
@@ -389,9 +381,7 @@ impl PhotoSortApp {
                 notice(
                     ui,
                     RED,
-                    if model_assets::runtime::info(model_assets::runtime::Package::Cpu).is_some()
-                        && cfg!(feature = "model-downloads")
-                    {
+                    if model_assets::runtime::info(model_assets::runtime::Package::Cpu).is_some() {
                         "The AI runtime is missing. Download it below, or install it yourself, then check again."
                     } else {
                         "The native AI runtime is missing. Restore the full app bundle, then check again. Model downloads do not install runtime libraries."
@@ -406,21 +396,6 @@ impl PhotoSortApp {
                     self.cancel_analysis();
                 }
             });
-        }
-        let import_only = cfg!(feature = "onnx")
-            && !cfg!(feature = "model-downloads")
-            && state.snapshot.as_ref().is_some_and(|snapshot| {
-                snapshot
-                    .rows
-                    .iter()
-                    .any(|row| !matches!(row.health, Health::Verified(_)) && row.bundled.is_none())
-            });
-        if import_only {
-            notice(
-                ui,
-                MUTED,
-                "This build cannot download models. Import the prepared .onnx file from another copy of this build.",
-            );
         }
     }
     /// One model: name, plain-language purpose, status and the one action
@@ -439,8 +414,7 @@ impl PhotoSortApp {
             .then_some(state.progress.as_ref())
             .flatten()
             .filter(|p| p.id == Some(row.id));
-        let editable =
-            cfg!(feature = "onnx") && !state.running && !self.busy && self.analysis_run.is_none();
+        let editable = !state.running && !self.busy && self.analysis_run.is_none();
         egui::Frame::new()
             .fill(CARD)
             .corner_radius(R_TILE)
@@ -468,19 +442,15 @@ impl PhotoSortApp {
                                     if ui.add(primary("Restore bundled copy")).clicked() {
                                         self.start_model_operation(Work::Restore(row.id));
                                     }
-                                } else if cfg!(feature = "model-downloads") {
-                                    if ui
-                                        .add(primary(format!(
-                                            "Download {:.1} MB",
-                                            asset.bytes as f64 / 1e6
-                                        )))
-                                        .on_hover_text(asset.url)
-                                        .clicked()
-                                    {
-                                        self.start_model_operation(Work::Download(row.id));
-                                    }
-                                } else if ui.button("Import prepared model…").clicked() {
-                                    self.import_model(row.id);
+                                } else if ui
+                                    .add(primary(format!(
+                                        "Download {:.1} MB",
+                                        asset.bytes as f64 / 1e6
+                                    )))
+                                    .on_hover_text(asset.url)
+                                    .clicked()
+                                {
+                                    self.start_model_operation(Work::Download(row.id));
                                 }
                             });
                         }
@@ -526,7 +496,6 @@ impl PhotoSortApp {
                 // Terms worth reading before choosing to download.
                 if let Some(note) = asset.download_note
                     && !ready
-                    && cfg!(feature = "model-downloads")
                 {
                     ui.add(egui::Label::new(RichText::new(note).small().color(ACCENT)).wrap());
                 }
@@ -553,15 +522,10 @@ impl PhotoSortApp {
         line(ui, "Origin", asset.origin);
         line(ui, "File", asset.name);
         line(ui, "SHA-256", asset.checksum());
-        let downloadable = cfg!(feature = "model-downloads");
         line(
             ui,
             "Download",
-            if downloadable {
-                "Public pinned file, verified after download"
-            } else {
-                "Not included in this build · import a prepared copy"
-            },
+            "Public pinned file, verified after download",
         );
         if let Health::Invalid(_, why) = &row.health {
             line(ui, "Problem", why);
@@ -569,14 +533,10 @@ impl PhotoSortApp {
         if !ready {
             ui.add_enabled_ui(editable, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    // The card's main action is Import when nothing else
-                    // can restore this model; do not offer it twice.
-                    let import_is_primary = row.bundled.is_none() && !downloadable;
-                    if !import_is_primary && ui.small_button("Import prepared model…").clicked() {
+                    if ui.small_button("Import prepared model…").clicked() {
                         self.import_model(row.id);
                     }
                     if row.bundled.is_some()
-                        && downloadable
                         && ui
                             .small_button(format!("Download {:.1} MB", asset.bytes as f64 / 1e6))
                             .clicked()
@@ -650,8 +610,7 @@ impl PhotoSortApp {
     ) {
         use egui_phosphor::regular as icon;
         use model_assets::runtime::{self, Package};
-        let editable =
-            cfg!(feature = "onnx") && !state.running && !self.busy && self.analysis_run.is_none();
+        let editable = !state.running && !self.busy && self.analysis_run.is_none();
         let installing = state
             .progress
             .as_ref()
@@ -679,7 +638,7 @@ impl PhotoSortApp {
                 .on_hover_text(path.display().to_string());
             }
             None => match runtime::info(Package::Cpu) {
-                Some(info) if cfg!(feature = "model-downloads") => {
+                Some(info) => {
                     notice(
                         ui,
                         ACCENT,
@@ -744,7 +703,7 @@ impl PhotoSortApp {
                     }
                 });
             });
-        } else if runtime::nvidia_driver_present() && cfg!(feature = "model-downloads") {
+        } else if runtime::nvidia_driver_present() {
             ui.label(RichText::new("NVIDIA GPU").font(semibold(13.0)));
             ui.label(
                 RichText::new(format!(

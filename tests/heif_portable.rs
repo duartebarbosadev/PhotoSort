@@ -1,4 +1,4 @@
-#![cfg(all(feature = "heif", not(target_os = "macos")))]
+#![cfg(not(target_os = "macos"))]
 use image::DynamicImage;
 use photosort::core::{
     inspection::{Region, Request},

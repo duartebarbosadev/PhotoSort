@@ -1025,7 +1025,6 @@ fn date_tree_preserves_written_camera_day_across_timezone_offsets() {
     assert_eq!(photosort::core::dates::calendar(None, None), None);
 }
 
-#[cfg(feature = "metadata-native")]
 #[test]
 #[ignore = "requires the seven original samples; read-only metadata/navigation check"]
 fn calendar_and_folder_navigation_reuse_all_seven_sample_metadata_snapshots() -> anyhow::Result<()>

@@ -140,16 +140,8 @@ impl Worker {
                                     completion = "Removed · restart PhotoSort to release the files in use".into();
                                 }
                                 Work::Download(id) => {
-                                    #[cfg(feature = "model-downloads")]
-                                    {
-                                        let installed = download::run(id.asset(), root, &cancelled, &progress)?;
-                                        inspector.remember_install(id.asset(), &installed);
-                                    }
-                                    #[cfg(not(feature = "model-downloads"))]
-                                    {
-                                        let _ = id;
-                                        anyhow::bail!("Downloads are not included in this build; import a prepared model");
-                                    }
+                                    let installed = download::run(id.asset(), root, &cancelled, &progress)?;
+                                    inspector.remember_install(id.asset(), &installed);
                                 }
                             }
                             inspector.inspect(&roots, &cancelled)

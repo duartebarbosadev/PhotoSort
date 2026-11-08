@@ -1,5 +1,3 @@
-#![cfg(feature = "heif")]
-
 use photosort::core::{
     inspection::{Region, Request},
     model::{Fingerprint, Media, MediaId, MediaKind, Step},

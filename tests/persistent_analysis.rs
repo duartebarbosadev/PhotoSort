@@ -445,7 +445,6 @@ fn evidence_validation_and_recipes_separate_measurements_from_ai_and_settings() 
     assert!(store.put_aesthetic(&a, f32::NAN).is_err());
 }
 #[test]
-#[cfg(feature = "onnx")]
 #[ignore = "requires prepared native ONNX models and all seven original samples"]
 fn native_seven_sample_quality_restart_reuses_models_pixels_hashes_and_measurements() {
     let sample = std::path::PathBuf::from(
@@ -632,7 +631,6 @@ fn shared_face_cache_and_legacy_evidence_do_not_request_pixels_or_initialize_mod
 }
 
 #[test]
-#[cfg(feature = "onnx")]
 #[ignore = "requires prepared native Quality and face models"]
 fn native_portrait_quality_restart_preserves_face_evidence_without_pixel_requests() {
     let root = tempfile::tempdir().unwrap();

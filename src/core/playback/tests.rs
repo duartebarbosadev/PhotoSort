@@ -291,7 +291,7 @@ fn changed_source_stops_playback_and_releases_native_owner() {
     player.shutdown();
     assert_eq!(counts.closed.load(Ordering::Relaxed), 1);
 }
-#[cfg(all(feature = "portable-video", not(target_os = "macos")))]
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn portable_decoder_uses_one_owner_and_discards_old_frames_on_navigation() {
     portable::initialize().unwrap();

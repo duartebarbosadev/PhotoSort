@@ -1,4 +1,4 @@
-#![cfg(all(feature = "heif", target_os = "macos"))]
+#![cfg(target_os = "macos")]
 use photosort::core::{
     cache::Limits,
     catalog::Catalog,

@@ -37,8 +37,8 @@ opener = { version = "0.9", features = ["reveal"] }
 anyhow = "1.0"
 semver = "1"
 sha2 = "0.11"
-reqwest = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
-tokio = { version = "1", features = ["rt", "time", "macros"], optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+tokio = { version = "1", features = ["rt", "time", "macros"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland", "accesskit"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tiff", "webp", "bmp", "gif"] }
@@ -63,7 +63,7 @@ trash = "5.2"
 quick-xml = "0.41"
 # zlib for compressed PNG text (XMP) carried through pixel rotation.
 miniz_oxide = "0.9"
-ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "coreml", "cuda", "directml"], optional = true }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "coreml", "cuda", "directml"] }
 
 tempfile = "3"
 half = { version = "2.7", default-features = false, features = ["std"] }
@@ -97,15 +97,7 @@ all = "warn"
 # Test and example builds only (via the dev-dependency below): application
 # data and caches go to a per-process temporary folder, never the user's.
 test-isolation = []
-default = ["raw", "heif", "onnx", "metadata-native", "model-downloads", "updates", "portable-video"]
 native-imaging = ["dep:photosort-imaging-vips"]
-portable-video = ["dep:gst", "dep:gst_app", "dep:gst_video"]
-updates = ["dep:reqwest", "dep:tokio"]
-model-downloads = ["dep:reqwest", "dep:tokio"]
-metadata-native = []
-heif = ["dep:libheif-rs"]
-onnx = ["dep:ort"]
-raw = []
 
 [build-dependencies]
 cc = "1"
@@ -116,10 +108,10 @@ pkg-config = "0.3"
 vcpkg = "0.2.15"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-gst = { package = "gstreamer", version = "0.24", optional = true }
-gst_app = { package = "gstreamer-app", version = "0.24", optional = true }
-gst_video = { package = "gstreamer-video", version = "0.24", optional = true }
-libheif-rs = { version = "3.0", default-features = false, features = ["v1_23"], optional = true }
+gst = { package = "gstreamer", version = "0.24" }
+gst_app = { package = "gstreamer-app", version = "0.24" }
+gst_video = { package = "gstreamer-video", version = "0.24" }
+libheif-rs = { version = "3.0", default-features = false, features = ["v1_23"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # mmap/munmap for image-sized buffers (see src/allocator.rs).
@@ -152,7 +144,7 @@ name = "integration"
 path = "tests/integration.rs"
 
 [dev-dependencies]
-photosort = { path = ".", default-features = false, features = ["test-isolation"] }
+photosort = { path = ".", features = ["test-isolation"] }
 jpeg-encoder = "0.7.1"
 # Headless rendering for the UI screenshot gallery and visual checks.
 egui_kittest = { version = "0.36.2", features = ["wgpu", "eframe"] }

@@ -241,7 +241,6 @@ fn regional_pruning_benchmark() -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "onnx")]
 #[test]
 #[ignore = "seven read-only samples and native model runtime required"]
 fn seven_sample_regions_keep_grouping_and_reuse_image_model_work() -> Result<()> {

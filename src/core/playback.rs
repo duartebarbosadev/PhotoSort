@@ -1,14 +1,14 @@
 //! One lazy playback owner, independent of image/model/file queues.
 #[cfg(target_os = "macos")]
 mod native;
-#[cfg(all(feature = "portable-video", not(target_os = "macos")))]
+#[cfg(not(target_os = "macos"))]
 mod portable;
 use super::model::{Fingerprint, Media, MediaId, MediaKind};
 use anyhow::Result;
 use image::RgbaImage;
 #[cfg(target_os = "macos")]
 pub use native::thumbnail;
-#[cfg(all(feature = "portable-video", not(target_os = "macos")))]
+#[cfg(not(target_os = "macos"))]
 pub use portable::thumbnail;
 use std::{
     path::Path,
@@ -72,20 +72,10 @@ fn open(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Box<dyn Backend>> {
     {
         Ok(Box::new(native::Player::open(path, cancelled)?))
     }
-    #[cfg(all(feature = "portable-video", not(target_os = "macos")))]
+    #[cfg(not(target_os = "macos"))]
     {
         Ok(Box::new(portable::Player::open(path, cancelled)?))
     }
-    #[cfg(all(not(feature = "portable-video"), not(target_os = "macos")))]
-    {
-        let _ = (path, cancelled);
-        anyhow::bail!(
-            "In-app playback is not available on this platform yet. Use the external player."
-        )
-    }
-}
-pub fn supported() -> bool {
-    cfg!(any(target_os = "macos", feature = "portable-video"))
 }
 /// Commands and frames replace previous values; UI rate cannot create an unbounded queue.
 pub struct Player {
@@ -453,7 +443,7 @@ impl Drop for Player {
     }
 }
 
-#[cfg(all(test, any(target_os = "macos", feature = "portable-video")))]
+#[cfg(test)]
 pub(crate) fn test_player() -> Player {
     tests::player().0
 }

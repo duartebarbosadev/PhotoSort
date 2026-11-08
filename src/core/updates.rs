@@ -10,7 +10,6 @@ use std::{
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
-#[cfg(feature = "updates")]
 mod network;
 
 const INTERVAL: u64 = 24 * 60 * 60;
@@ -74,9 +73,6 @@ impl Source {
         })
     }
     pub fn configured() -> std::result::Result<Self, String> {
-        if !cfg!(feature = "updates") {
-            return Err("Online update checks are not included in this build.".into());
-        }
         let repo = option_env!("PHOTOSORT_RELEASE_REPOSITORY").ok_or_else(|| {
             "This development build has no Rust release source configured.".to_string()
         })?;
@@ -200,17 +196,7 @@ impl Worker {
         }
     }
     pub fn start(&mut self, source: Source, current: String) -> Result<bool> {
-        self.start_task(move |cancelled| {
-            #[cfg(feature = "updates")]
-            {
-                network::check(&source, &current, cancelled)
-            }
-            #[cfg(not(feature = "updates"))]
-            {
-                let _ = (source, current, cancelled);
-                anyhow::bail!("Online update checks are not included in this build")
-            }
-        })
+        self.start_task(move |cancelled| network::check(&source, &current, cancelled))
     }
     pub(crate) fn start_task(
         &mut self,

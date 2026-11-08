@@ -20,7 +20,6 @@ fn main() -> eframe::Result {
     // its initialization event and background uploader from being created.
     // SAFETY: this is the first application action, before native UI, model
     // loading or any application worker can start or read the environment.
-    #[cfg(feature = "onnx")]
     unsafe {
         std::env::set_var("ORT_DISABLE_TELEMETRY", "1");
     }
