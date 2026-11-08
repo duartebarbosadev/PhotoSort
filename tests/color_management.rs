@@ -67,19 +67,9 @@ fn display_analysis_and_detail_share_one_color_conversion_and_restart_reuses_cor
         assert_eq!(pixels.get_pixel(0, 0).0, [188, 188, 188, 127]);
     }
     assert_eq!(pipeline.stats.decodes, 1);
-    #[cfg(not(feature = "native-imaging"))]
-    assert_eq!(pipeline.stats.color_initializations, 1);
-    #[cfg(not(feature = "native-imaging"))]
-    assert_eq!(pipeline.stats.color_transforms, 1);
-    #[cfg(feature = "native-imaging")]
     assert_eq!(pipeline.stats.native_renders, 1);
     let second = photo(&temp.path().join("same-profile.png"), true);
     pipeline.load(&second).unwrap();
-    #[cfg(not(feature = "native-imaging"))]
-    assert_eq!(pipeline.stats.color_initializations, 1);
-    #[cfg(not(feature = "native-imaging"))]
-    assert_eq!(pipeline.stats.color_transforms, 2);
-    #[cfg(feature = "native-imaging")]
     assert_eq!(pipeline.stats.native_renders, 2);
     drop(pipeline);
     let mut pipeline = Pipeline::new(8 * 1024 * 1024, cache);
@@ -118,8 +108,6 @@ fn untagged_images_remain_byte_exact_and_cancellation_cannot_cache_a_conversion(
         pipeline.load(&tagged).unwrap().pixels.get_pixel(0, 0).0,
         [188, 188, 188, 127]
     );
-    #[cfg(not(feature = "native-imaging"))]
-    assert_eq!(pipeline.stats.color_transforms, 1);
 }
 
 #[cfg(target_os = "macos")]
@@ -260,10 +248,7 @@ fn cmyk_and_ycck_profiles_preserve_ink_channels_and_share_corrected_results() {
             })
             .unwrap();
         assert_eq!(pipeline.stats.decodes, before + 1);
-        #[cfg(feature = "native-imaging")]
         assert_eq!(pipeline.stats.native_renders, pipeline.stats.decodes);
-        #[cfg(not(feature = "native-imaging"))]
-        assert_eq!(pipeline.stats.color_initializations, 1);
         // Display previews are stored as JPEG; analysis and detail are exact.
         assert_eq!(display.pixels.dimensions(), analysis.pixels.dimensions());
         assert_eq!(analysis.pixels.as_raw(), detail.as_raw());
@@ -279,19 +264,9 @@ fn cmyk_and_ycck_profiles_preserve_ink_channels_and_share_corrected_results() {
             .map(|(a, b)| i16::from(*a).abs_diff(i16::from(*b)))
             .max()
             .unwrap();
-        // Independent CMMs are not pixel-identical. Preserve the existing
-        // moxcms bound; track the measured libvips/LCMS fixture envelope
-        // separately.
-        let bound = if cfg!(feature = "native-imaging") {
-            9
-        } else {
-            8
-        };
-        assert!(
-            max <= bound,
-            "{name}: maximum difference from ColorSync {max}"
-        );
-        #[cfg(feature = "native-imaging")]
+        // Independent CMMs are not pixel-identical: the measured libvips/LCMS
+        // fixture envelope.
+        assert!(max <= 9, "{name}: maximum difference from ColorSync {max}");
         {
             let mean = analysis
                 .pixels
@@ -318,8 +293,6 @@ fn cmyk_and_ycck_profiles_preserve_ink_channels_and_share_corrected_results() {
         assert_eq!(restarted.stats.decodes, 0);
         assert_eq!(std::fs::read(&path).unwrap(), original);
     }
-    #[cfg(not(feature = "native-imaging"))]
-    assert_eq!(pipeline.stats.color_transforms, 2);
 }
 
 #[test]
@@ -346,9 +319,6 @@ fn a_cmyk_profile_on_rgb_jpeg_is_rejected_before_color_conversion() {
         .load(&media)
         .err()
         .expect("mismatched profile must fail");
-    #[cfg(not(feature = "native-imaging"))]
-    assert!(format!("{error:#}").contains("CMYK profile does not match JPEG color channels"));
-    #[cfg(feature = "native-imaging")]
     {
         assert!(
             format!("{error:#}").contains("profile is invalid or does not match image channels")

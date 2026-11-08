@@ -1,4 +1,3 @@
-#![cfg(feature = "native-imaging")]
 use image::{ImageEncoder, Rgba, RgbaImage};
 use photosort::core::{
     catalog::Catalog,

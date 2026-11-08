@@ -1,4 +1,3 @@
-#![cfg(feature = "native-imaging")]
 use crate::test_support;
 use image::{DynamicImage, Rgba, RgbaImage};
 use photosort::core::{
