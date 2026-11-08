@@ -225,6 +225,9 @@ class BundleIntegrityTests(unittest.TestCase):
                 (root/'resources/model.onnx').write_bytes(b'model')
                 (root/'resources/icons/app_icon.png').write_bytes(png_header(1024, 1024))
                 (root/'LICENSE').write_text('license')
+                # Every build links the private libvips (scripts/build_vips.py).
+                (root/'.tools/vips/lib/pkgconfig').mkdir(parents=True)
+                (root/'.tools/vips/lib/pkgconfig/vips.pc').write_text('Version: 8.18.7\n')
                 target = root/'build'
                 (target/'release').mkdir(parents=True)
                 (target/'release/photosort').write_bytes(b'fixture executable')
