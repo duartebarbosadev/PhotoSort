@@ -399,8 +399,8 @@ fn shared_verified_faces_reuse_previous_work_and_cancel_without_publishing() {
         thumbnail: pixels,
         metadata: Default::default(),
     };
-    let legacy = Faces::default();
-    faces::cached(&mut models, &asset, &store, "source", Some(&legacy), || {
+    let known = Faces::default();
+    faces::cached(&mut models, &asset, &store, "source", Some(&known), || {
         false
     })
     .unwrap();
@@ -409,7 +409,7 @@ fn shared_verified_faces_reuse_previous_work_and_cancel_without_publishing() {
     faces::cached(&mut models, &asset, &reopened, "source", None, || false).unwrap();
     assert_eq!((models.initializations, models.inferences), (0, 0));
     assert!(
-        faces::cached(&mut models, &asset, &store, "cancel", Some(&legacy), || {
+        faces::cached(&mut models, &asset, &store, "cancel", Some(&known), || {
             true
         })
         .is_err()

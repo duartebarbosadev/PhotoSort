@@ -146,10 +146,8 @@ fn backend_and_thread_snapshots_are_coherent_and_changes_remain_lazy() {
     assert_eq!((models.initializations, models.inferences), (0, 0));
 }
 #[test]
-fn backend_choice_persists_and_old_preferences_preserve_cpu_execution() {
+fn backend_choice_persists() {
     use processing::Backend;
-    let old: Preferences = serde_json::from_str(r#"{"mode":"Custom","custom_threads":1}"#).unwrap();
-    assert_eq!(old.backend, Backend::Cpu);
     // New installs use Automatic only where it has been verified.
     assert_eq!(
         Preferences::default().backend,

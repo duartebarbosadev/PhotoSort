@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn unknown_eyes_are_not_closed_so_the_score_decides() {
-        // A small, sunglassed, squinting or legacy face is Unknown: it never
+        // A small, sunglassed or squinting face is Unknown: it never
         // loses to an open one on eyes.
         let unknown = face(0.3, EyeState::Unknown, None);
         let c = rank(vec![

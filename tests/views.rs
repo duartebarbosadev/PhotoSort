@@ -200,43 +200,8 @@ fn all_workflow_bookmarks_reconcile_from_one_catalog_snapshot() {
 }
 
 #[test]
-fn older_decision_sessions_migrate_without_losing_user_choices() {
-    let (_dir, catalog, _) = fixture();
-    let m = &catalog.media[0];
-    let mut old = m.fingerprint;
-    old.identity = [0; 4];
-    let mut session = Session {
-        suggested: Default::default(),
-        pick_suggested: Default::default(),
-        rotations_staged: Default::default(),
-        organize: None,
-        manual_groups: Default::default(),
-        scene_groups: Default::default(),
-        decisions: [(
-            m.id,
-            Decision {
-                rating: Some(5),
-                ..Default::default()
-            },
-        )]
-        .into_iter()
-        .collect(),
-        fingerprints: [(m.id, old)].into_iter().collect(),
-    };
-    session.reconcile(&catalog.media);
-    assert_eq!(session.decisions[&m.id].rating, Some(5));
-    assert_eq!(session.fingerprints[&m.id], m.fingerprint);
-}
-
-#[test]
-fn group_order_preferences_round_trip_and_legacy_views_default_to_flat() {
+fn group_order_preferences_round_trip() {
     use photosort::core::browsing::{GroupSort, Options};
-    let old =
-        r#"{"rating":"All","group":null,"sort":"Oldest","folder":{"path":null,"recursive":true}}"#;
-    assert_eq!(
-        serde_json::from_str::<Options>(old).unwrap().group_sort,
-        GroupSort::Flat
-    );
     let view = Bookmark {
         browse: Options {
             group_sort: GroupSort::Similarity,

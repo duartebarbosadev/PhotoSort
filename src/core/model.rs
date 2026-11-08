@@ -138,7 +138,6 @@ pub struct Details {
     pub scene: Option<u16>,
     pub color_space: Option<u16>,
     pub bit_depth: Option<u16>,
-    #[serde(default)]
     pub video: Option<super::video_info::VideoInfo>,
 }
 
@@ -146,35 +145,26 @@ pub struct Details {
 pub struct Metadata {
     pub width: u32,
     pub height: u32,
-    #[serde(default, alias = "exif_fields")]
     pub metadata_fields: usize,
-    #[serde(default)]
     pub embedded_metadata_writable: bool,
     pub camera: String,
     pub lens: String,
     pub captured: String,
     /// Capture and filesystem creation times in Unix milliseconds.
-    #[serde(default)]
     pub captured_ms: Option<i64>,
-    #[serde(default)]
     pub created_ms: Option<i64>,
-    #[serde(default)]
     pub grouping_date: Option<String>,
     pub exposure: String,
     pub aperture: String,
     pub iso: String,
     pub orientation: u8,
     /// Native container transform before an authoritative sidecar override.
-    #[serde(default)]
     pub container_orientation: Option<u8>,
     pub rating: u8,
     pub gps: Option<(f64, f64)>,
-    #[serde(default)]
     pub location: Option<super::geography::Location>,
-    #[serde(default)]
     pub details: Details,
     /// Milliseconds after `captured_ms`'s second, from EXIF SubSecTimeOriginal.
-    #[serde(default)]
     pub captured_subsec_ms: Option<u16>,
 }
 

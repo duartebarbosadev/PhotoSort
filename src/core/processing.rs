@@ -5,11 +5,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 /// Auto selects a provider for this platform and falls back to CPU per model.
-/// `Default` stays CPU, the value preference files written before the backend
-/// setting existed must keep; new installs use [`Backend::platform_default`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// New installs use [`Backend::platform_default`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Backend {
-    #[default]
     Cpu,
     Auto,
     CoreMl,
@@ -156,8 +154,6 @@ pub enum Mode {
 pub struct Preferences {
     pub mode: Mode,
     pub custom_threads: usize,
-    /// Missing from preference files that predate this setting; those keep CPU.
-    #[serde(default)]
     pub backend: Backend,
 }
 impl Default for Preferences {

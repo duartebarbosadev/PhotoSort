@@ -5,12 +5,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Analysis {
     pub sharpness: f64,
-    #[serde(default)]
     pub quality_sharpness: Option<f64>,
     pub aesthetic: Option<f32>,
     pub faces: Option<super::faces::FaceSummary>,
     pub brightness: f64,
-    #[serde(default)]
     pub black_fraction: f64,
     pub score: f64,
     pub hash: u64,

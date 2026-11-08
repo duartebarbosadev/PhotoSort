@@ -241,14 +241,7 @@ impl Session {
             self.fingerprints
                 .get(id)
                 .zip(fingerprints.get(id))
-                .is_some_and(|(saved, current)| {
-                    // Migrate pre-identity decision sessions without silently discarding choices.
-                    // New view bookmarks always require the complete identity snapshot.
-                    saved == current
-                        || (saved.identity == [0; 4]
-                            && saved.bytes == current.bytes
-                            && saved.modified_ns == current.modified_ns)
-                })
+                .is_some_and(|(saved, current)| saved == current)
         });
         self.fingerprints = fingerprints;
     }

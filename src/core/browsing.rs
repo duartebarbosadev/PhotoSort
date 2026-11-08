@@ -83,9 +83,7 @@ impl GroupSort {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Options {
-    #[serde(default)]
     pub group_sort: GroupSort,
-    #[serde(default)]
     pub date: Option<String>,
     pub rating: RatingFilter,
     pub group: Option<usize>,

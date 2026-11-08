@@ -183,11 +183,11 @@ fn smoke_startup_validates_delay_and_preserves_folder_selection() {
 }
 
 #[test]
-fn older_preference_files_gain_defaults_and_every_newer_setting_round_trips() {
+fn a_partial_preference_file_gains_defaults_and_every_setting_round_trips() {
     use photosort::core::{geography::Layout, preferences::StripPosition, processing};
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("preferences.json");
-    // Written before any of the settings below existed.
+    // A file holding one setting: the rest take their defaults.
     std::fs::write(&path, br#"[1, {"show_shortcuts": false}]"#).unwrap();
     let mut p = Preferences::load(&path).unwrap();
     assert!(!p.show_shortcuts);
@@ -195,10 +195,7 @@ fn older_preference_files_gain_defaults_and_every_newer_setting_round_trips() {
     assert_eq!(p.easy_delete.blur, 100.0);
     assert_eq!(p.navigation, Default::default());
     assert_eq!(p.location_layout, Layout::CountryRegionCity);
-    assert!(
-        p.keep_companions,
-        "files saved before the setting keep companions together"
-    );
+    assert!(p.keep_companions, "companions stay together by default");
     assert_eq!(p.strip_position, StripPosition::Bottom);
     assert!(p.show_filenames);
     assert_eq!(p.processing.mode, processing::Mode::Balanced);
@@ -232,24 +229,4 @@ fn older_preference_files_gain_defaults_and_every_newer_setting_round_trips() {
     p.navigation.rating = Some(9);
     p.normalize();
     assert_eq!(p.navigation.rating, None);
-}
-#[test]
-fn the_cull_only_strip_preference_becomes_the_global_one() {
-    use photosort::core::preferences::StripPosition;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("preferences.json");
-    // Written when the strip position and file names applied to Cull only.
-    std::fs::write(
-        &path,
-        br#"[1, {"cull_strip": "Left", "show_filenames": false}]"#,
-    )
-    .unwrap();
-    let migrated = Preferences::load(&path).unwrap();
-    assert_eq!(migrated.strip_position, StripPosition::Left);
-    assert!(!migrated.show_filenames);
-    // Saving writes the new name, and the choice survives another load.
-    migrated.save(&path).unwrap();
-    let saved = std::fs::read_to_string(&path).unwrap();
-    assert!(saved.contains("strip_position") && !saved.contains("cull_strip"));
-    assert_eq!(Preferences::load(&path).unwrap(), migrated);
 }

@@ -284,17 +284,6 @@ fn navigator_selection_and_expansion_resume_without_creating_file_decisions() {
     app.prepare_bookmark();
     assert_eq!(app.navigator, saved.navigator);
     assert_eq!(app.browse.folder, saved.browse.folder);
-    // A view saved before a navigator click scrolled kept the folder
-    // clicked, maybe a date or the Dates tab: it opens with every folder.
-    let mut old = saved.clone();
-    old.navigator_scrolls = false;
-    old.navigator.mode = Mode::Groups;
-    old.browse.date = Some("2024-01-01".into());
-    app.saved_views.bookmarks.insert(Step::Cull, old);
-    app.prepare_bookmark();
-    assert_eq!(app.navigator.mode, Mode::Folders);
-    assert_eq!(app.browse.date, None);
-    assert_eq!(app.browse.folder, Default::default());
     assert!(app.decisions.is_empty() && app.plan.is_none());
     assert_eq!(app.stats.decodes, 0);
     assert!(app.requested.is_empty());

@@ -89,37 +89,22 @@ impl Store {
         let working = self.path(key).ok()?;
         let persistent = self.persistent.load(Ordering::Acquire);
         let disk = self.root.join(format!("{key}.bin"));
-        // A corrupt current record is a miss, never a fallback to an older value.
-        let binary = if working.try_exists().ok()? {
-            Some(working.clone())
+        // A corrupt record is a miss.
+        let path = if working.try_exists().ok()? {
+            working.clone()
         } else if persistent && disk.try_exists().ok()? {
-            Some(disk)
+            disk
         } else {
-            None
+            return None;
         };
-        if let Some(path) = binary {
-            let bytes = codec::read(&path)?;
-            let value = codec::decode(kind, &bytes)?;
-            if !valid(&value) {
-                return None;
-            }
-            if pin && path != working {
-                self::pin(&path, &working, &bytes).ok()?;
-            }
-            return Some(value);
-        }
-        // Read existing JSON once, validate it, then pin the new representation.
-        // Legacy files remain regenerable cache entries managed by the same budget.
-        let bytes = codec::read(&working.with_extension("json")).or_else(|| {
-            persistent
-                .then(|| codec::read(&self.root.join(format!("{key}.json"))))
-                .flatten()
-        })?;
-        let value = serde_json::from_slice(&bytes).ok()?;
+        let bytes = codec::read(&path)?;
+        let value = codec::decode(kind, &bytes)?;
         if !valid(&value) {
             return None;
         }
-        self.write(key, kind, &value).ok()?;
+        if pin && path != working {
+            self::pin(&path, &working, &bytes).ok()?;
+        }
         Some(value)
     }
     pub fn get(&self, key: &str) -> Option<Features> {

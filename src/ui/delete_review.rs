@@ -106,7 +106,7 @@ impl PhotoSortApp {
         }
     }
     /// The categories a tab shows: one group, or every group ("All"). A saved
-    /// set of several groups, from before tabs, opens on All.
+    /// set of several groups, or one group with no photos, opens on All.
     fn delete_tab_categories(&self, saved: Option<&HashSet<Category>>) -> HashSet<Category> {
         match saved.filter(|set| set.len() == 1) {
             Some(single)
@@ -1630,10 +1630,10 @@ mod tests {
         );
     }
     #[test]
-    fn saved_views_from_before_tabs_open_on_all_and_tabs_select_one_group() {
+    fn saved_groups_other_than_one_tab_open_on_all_and_tabs_select_one_group() {
         let mut app = app();
-        let legacy: HashSet<_> = [Category::Exact, Category::Dark].into_iter().collect();
-        app.delete_categories = app.delete_tab_categories(Some(&legacy));
+        let several: HashSet<_> = [Category::Exact, Category::Dark].into_iter().collect();
+        app.delete_categories = app.delete_tab_categories(Some(&several));
         assert_eq!(app.delete_tab(), None);
         app.refilter();
         assert_eq!(app.delete_review_ids().len(), 3);

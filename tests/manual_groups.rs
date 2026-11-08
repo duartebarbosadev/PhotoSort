@@ -369,16 +369,9 @@ fn scene_and_subject_namespaces_roundtrip_independently_and_reject_changed_membe
         ..Default::default()
     };
     let json = serde_json::to_value(&session).unwrap();
-    let mut loaded: Session = serde_json::from_value(json.clone()).unwrap();
+    let mut loaded: Session = serde_json::from_value(json).unwrap();
     assert_eq!(loaded.manual_groups, session.manual_groups);
     assert_eq!(loaded.scene_groups, session.scene_groups);
-    let mut old_format = json;
-    old_format.as_object_mut().unwrap().remove("scene_groups");
-    let old: Session = serde_json::from_value(old_format).unwrap();
-    assert_eq!(old.manual_groups, session.manual_groups);
-    assert!(old.scene_groups.is_empty());
-    let legacy: Session = serde_json::from_str(r#"{"decisions":{},"fingerprints":{}}"#).unwrap();
-    assert!(legacy.manual_groups.is_empty());
     let mut changed = m;
     changed[0].fingerprint.identity[3] += 1;
     changed.pop();

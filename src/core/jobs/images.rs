@@ -545,7 +545,8 @@ impl ImageWorker {
         Ok(people)
     }
 
-    /// Faces for duplicate review, upgrading cached geometry that lacks landmarks.
+    /// Faces for duplicate review, found and added to the subject record when
+    /// it has none yet.
     fn evidence_faces(
         &mut self,
         request: &EvidenceRequest,
@@ -556,32 +557,17 @@ impl ImageWorker {
             .store
             .get(&request.input.key)
             .context("Shared model evidence is no longer available")?;
-        let complete = features
-            .faces
-            .as_ref()
-            .is_some_and(|f| f.geometry.iter().all(|f| !f.landmarks.is_empty()));
-        if !complete {
+        if features.faces.is_none() {
             let faces = faces::cached(
                 &mut self.models,
                 asset,
                 &request.store,
                 &request.input.source,
-                features.faces.as_ref(),
+                None,
                 || scope.cancelled(),
             )?;
-            // Retain reusable crop identities when only the missing
-            // landmarks were upgraded; changed crops require re-encoding.
-            let same_crops = features.faces.as_ref().is_some_and(|old| {
-                old.geometry.len() == faces.geometry.len()
-                    && old
-                        .geometry
-                        .iter()
-                        .zip(&faces.geometry)
-                        .all(|(a, b)| a.bbox == b.bbox && a.eyes == b.eyes)
-            });
-            if !same_crops {
-                features.identities = None;
-            }
+            // Identities describe face crops, so new faces need new ones.
+            features.identities = None;
             features.faces = Some(faces);
             request.store.put(&request.input.key, &features)?;
         }

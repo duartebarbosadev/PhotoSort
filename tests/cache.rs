@@ -93,7 +93,7 @@ fn maintenance_cancels_and_missing_directory_is_a_noop() {
     );
 }
 #[test]
-fn cache_preferences_are_bounded_backward_compatible_and_cli_parses() {
+fn cache_preferences_are_bounded_and_cli_parses() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("prefs.json");
     std::fs::write(&path, b"[1,{}]").unwrap();
@@ -103,7 +103,6 @@ fn cache_preferences_are_bounded_backward_compatible_and_cli_parses() {
         previews_mib: 0,
         originals_mib: u32::MAX,
         disk_mib: u32::MAX,
-        ..Limits::default()
     };
     p.save(&path).unwrap();
     let loaded = Preferences::load(&path).unwrap();
@@ -113,7 +112,6 @@ fn cache_preferences_are_bounded_backward_compatible_and_cli_parses() {
             previews_mib: 64,
             originals_mib: 32768,
             disk_mib: cache::DISK_MAX_MIB,
-            ..Limits::default()
         }
     );
     assert!(
@@ -159,7 +157,6 @@ fn lowered_memory_limits_evict_without_redecoding_and_zero_disk_disables_writes(
         previews_mib: 64,
         originals_mib: 256,
         disk_mib: 0,
-        ..Limits::default()
     });
     assert!(
         pipeline.stats.resident_bytes <= 64 * 1024 * 1024

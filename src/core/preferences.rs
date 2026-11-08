@@ -38,9 +38,7 @@ pub struct Preferences {
     pub raw_look: super::raw_look::RawLook,
     /// Finish every interface animation instantly.
     pub reduce_motion: bool,
-    /// Where Review shows the strip of photos, in every step. Older files
-    /// stored it as Cull's own `cull_strip`.
-    #[serde(alias = "cull_strip")]
+    /// Where Review shows the strip of photos, in every step.
     pub strip_position: StripPosition,
     /// File names under thumbnails in every step's grid and photo strip.
     pub show_filenames: bool,

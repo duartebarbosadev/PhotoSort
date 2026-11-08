@@ -196,7 +196,7 @@ impl Pipeline {
         hash.update(media.path.as_os_str().as_encoded_bytes());
         hash.update(
             format!(
-                "{fingerprint:?}-{sidecar:?}-v8-render-status-srgb-neutral-analysis-native_metadata=true"
+                "{fingerprint:?}-{sidecar:?}-v9-render-status-srgb-neutral-analysis-native_metadata=true"
             )
             .as_bytes(),
         );
@@ -374,7 +374,7 @@ impl Pipeline {
             return None;
         }
         let saved = self.render_info(&source_key)?;
-        let (image, _) = read_cached_image(&self.disk, &thumb_key(&display_key))?;
+        let image = read_cached_image(&self.disk, &thumb_key(&display_key))?;
         let mut meta = self.metadata_for_key(media, &source_key, &cancelled).ok()?;
         if media.kind != MediaKind::Video {
             (meta.width, meta.height) = (saved.width, saved.height);
@@ -387,27 +387,6 @@ impl Pipeline {
             metadata: meta,
             decoder_warning: saved.warning,
         })
-    }
-    /// Converts a PNG display preview from an older cache to the JPEG a fresh
-    /// render makes, without decoding the photo again: it shows,
-    /// and gives the rotation model, the same pixels as a fresh render. The
-    /// JPEG replaces the PNG on disk.
-    fn upgrade_preview(
-        &mut self,
-        key: &str,
-        preview: DynamicImage,
-        cancelled: &impl Fn() -> bool,
-    ) -> Result<DynamicImage> {
-        let preview = compact_opaque_proxy(preview, cancelled)?;
-        if !is_jpeg_preview(&preview, true) {
-            return Ok(preview);
-        }
-        let (bytes, format, read_back) =
-            encode_cached(&preview, true).context("Cannot encode a cached preview")?;
-        if write_cached(&bytes, format, &self.disk, key).is_some() {
-            let _ = std::fs::remove_file(self.disk.join(format!("{key}.png")));
-        }
-        Ok(read_back.unwrap_or(preview))
     }
     /// Stores the grid thumbnail and returns it as a later session reads it
     /// back, so a fresh tile and a reopened one are the same pixels.
@@ -606,14 +585,9 @@ impl Pipeline {
         let saved = self.render_info(&key);
         let warning;
         let decoded = if let Some(saved) = saved
-            && let Some((proxy, jpeg)) = read_cached_image(&self.disk, &key)
+            && let Some(proxy) = read_cached_image(&self.disk, &key)
         {
             self.stats.disk_hits += 1;
-            let proxy = if jpeg || analysis {
-                proxy
-            } else {
-                self.upgrade_preview(&key, proxy, cancelled)?
-            };
             // Geometry and warnings are part of the same rendered artifact.
             // Never publish cached pixels without the status that produced them.
             if media.kind != MediaKind::Video {
@@ -1393,14 +1367,13 @@ fn native_pixels(
 /// Display previews and grid thumbnails are JPEG at this quality: about a
 /// fifth of a PNG, so the same disk limit keeps several times more photos.
 const PREVIEW_QUALITY: u8 = 92;
-/// A cache image, marked as used, and whether it is a JPEG (or a PNG from
-/// an older cache).
-fn read_cached_image(disk: &Path, key: &str) -> Option<(DynamicImage, bool)> {
+/// A cache image (see `encode_cached` for which are JPEG), marked as used.
+fn read_cached_image(disk: &Path, key: &str) -> Option<DynamicImage> {
     ["jpg", "png"].iter().find_map(|ext| {
         let path = disk.join(format!("{key}.{ext}"));
         let image = image::open(&path).ok()?;
         super::cache::touch(&path);
-        Some((image, *ext == "jpg"))
+        Some(image)
     })
 }
 /// Whether `encode_cached` makes this image a JPEG.

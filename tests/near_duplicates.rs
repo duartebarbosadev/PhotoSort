@@ -256,17 +256,17 @@ fn face_motion_matches_reference_assignment_and_expression_changes() {
         }
         assert!(face_motion(&c.first, &c.second, &alignment, 1000, 800, || true).is_none());
     }
-    let old = photosort::core::faces::Face {
+    let bare = photosort::core::faces::Face {
         bbox: [0.2, 0.2, 0.5, 0.5],
         eyes: [[0.3, 0.3], [0.4, 0.3]],
         landmarks: Vec::new(),
-        blink: None,
+        blink: [0.0; 2],
     };
     let identity = Alignment::validate([[1., 0., 0.], [0., 1., 0.]], 1., 100, 100).unwrap();
     assert!(
         face_motion(
-            std::slice::from_ref(&old),
-            std::slice::from_ref(&old),
+            std::slice::from_ref(&bare),
+            std::slice::from_ref(&bare),
             &identity,
             100,
             100,
@@ -274,9 +274,6 @@ fn face_motion_matches_reference_assignment_and_expression_changes() {
         )
         .is_none()
     );
-    let value = serde_json::json!({"bbox":[0.2,0.2,0.5,0.5],"eyes":[[0.3,0.3],[0.4,0.3]]});
-    let legacy: photosort::core::faces::Face = serde_json::from_value(value).unwrap();
-    assert!(legacy.landmarks.is_empty());
 }
 
 #[test]
@@ -290,7 +287,7 @@ fn review_rows_retain_summary_only_and_face_evidence_roundtrips_without_inferenc
             bbox: [0.2, 0.2, 0.6, 0.6],
             eyes: [[0.3, 0.3], [0.5, 0.3]],
             landmarks: vec![[0.4, 0.4]; 468],
-            blink: Some([0.9, 0.8]),
+            blink: [0.9, 0.8],
         }],
     };
     let persisted = serde_json::to_vec(&faces).unwrap();
@@ -311,7 +308,4 @@ fn review_rows_retain_summary_only_and_face_evidence_roundtrips_without_inferenc
             .contains("landmarks")
     );
     assert!(bytes.len() < 512);
-    let legacy = serde_json::json!({"faces":faces,"sharpness":0.0,"aesthetic":null,"brightness":0.0,"score":0.0,"hash":0,"color":[0,0,0],"issues":[]});
-    let old: photosort::core::analysis::Analysis = serde_json::from_value(legacy).unwrap();
-    assert_eq!(old.faces.unwrap().count, 1);
 }

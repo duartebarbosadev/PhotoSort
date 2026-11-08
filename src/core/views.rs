@@ -33,10 +33,6 @@ pub struct Bookmark {
     pub filter: browsing::Filter,
     pub browse: browsing::Options,
     pub navigator: browsing::tree::State,
-    /// Whether a click in Cull's navigator scrolls to a folder. Views saved
-    /// without it open with every folder shown.
-    #[serde(default)]
-    pub navigator_scrolls: bool,
     pub group_anchor: Option<MediaId>,
     pub group_mode: GroupMode,
     pub delete_current: Option<MediaId>,
@@ -92,7 +88,6 @@ impl Default for Bookmark {
             filter: Default::default(),
             browse: Default::default(),
             navigator: Default::default(),
-            navigator_scrolls: true,
             group_anchor: None,
             group_mode: GroupMode::Current,
             delete_current: None,
@@ -186,6 +181,8 @@ impl Bookmark {
         });
     }
 }
+/// The saved views format.
+const VERSION: u32 = 2;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Saved {
@@ -370,11 +367,13 @@ impl Saved {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let (version, saved): (u32, Self) = serde_json::from_slice(&std::fs::read(path)?)?;
-        if version != 1 {
+        // Views saved in another format open as new; they are only presentation.
+        let (version, saved): (u32, serde_json::Value) =
+            serde_json::from_slice(&std::fs::read(path)?)?;
+        if version != VERSION {
             return Ok(Self::default());
         }
-        Ok(saved)
+        Ok(serde_json::from_value(saved)?)
     }
     pub fn save(&self, root: &Path) -> anyhow::Result<()> {
         let mut saved = self.clone();
@@ -382,7 +381,7 @@ impl Saved {
             .bookmarks
             .values_mut()
             .for_each(Bookmark::make_storable);
-        super::metadata::atomic_write(&Self::path(root), &serde_json::to_vec(&(1, saved))?)
+        super::metadata::atomic_write(&Self::path(root), &serde_json::to_vec(&(VERSION, saved))?)
     }
 }
 
@@ -451,15 +450,5 @@ mod tests {
         assert_eq!(view.view, inspection::View::default());
         assert_eq!(view.browse.folder, Default::default());
         assert!(view.navigator.collapsed.is_empty());
-    }
-    #[test]
-    fn a_view_saved_in_the_removed_list_or_icons_layout_opens_as_the_grid() {
-        for layout in ["List", "Icons"] {
-            let json = format!(r#"{{"layout":"{layout}","review":false,"query":"a"}}"#);
-            let view: super::Bookmark = serde_json::from_str(&json).unwrap();
-            assert!(!view.review);
-            assert_eq!(view.query, "a");
-            assert!(!view.navigator_scrolls);
-        }
     }
 }

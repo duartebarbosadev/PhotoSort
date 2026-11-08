@@ -423,7 +423,6 @@ mod tests {
             previews_mib: 256,
             originals_mib,
             disk_mib,
-            defaults: 3,
         }
     }
     #[test]

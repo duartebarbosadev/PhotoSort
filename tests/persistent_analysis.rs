@@ -599,12 +599,12 @@ fn reopened_measurements_preserve_float_bits_at_threshold_boundaries() {
     }
 }
 #[test]
-fn shared_face_cache_and_legacy_evidence_do_not_request_pixels_or_initialize_models() {
+fn shared_face_cache_and_known_faces_do_not_request_pixels_or_initialize_models() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::new(root.path().into(), true).unwrap();
     let mut models = photosort::core::models::Models::default();
-    let legacy = photosort::core::faces::Faces::default();
-    for previous in [Some(&legacy), None] {
+    let known = photosort::core::faces::Faces::default();
+    for previous in [Some(&known), None] {
         let faces = photosort::core::faces::cached_lazy(
             &mut models,
             &store,

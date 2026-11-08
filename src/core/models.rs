@@ -46,7 +46,7 @@ impl Default for Models {
             cpu_threads: super::processing::Preferences::default()
                 .threads(super::processing::available()),
             compiled_cache: None,
-            backend: Backend::default(),
+            backend: Backend::Cpu,
             processing: Control::default(),
             cancellation: None,
             sessions: Default::default(),

@@ -105,32 +105,7 @@ fn similarity_settings_persist_with_reference_bounds_and_reclassify_cached_regio
 }
 
 #[test]
-fn legacy_regional_cache_migrates_once_and_pins_exact_values_without_persistence() {
-    let root = tempfile::tempdir().unwrap();
-    let key = Store::regional_key("legacy-photo");
-    let value = Embedding {
-        vectors: vec![(0..384).map(|i| (i as f32 - 191.5) / 384.0).collect(); 6],
-    };
-    let legacy = root.path().join(format!("{key}.json"));
-    let binary = root.path().join(format!("{key}.bin"));
-    std::fs::write(&legacy, serde_json::to_vec(&value).unwrap()).unwrap();
-    let store = Store::new(root.path().into(), true).unwrap();
-    assert_eq!(store.regional(&key).unwrap().vectors, value.vectors);
-    assert!(binary.is_file());
-    assert!(std::fs::metadata(&binary).unwrap().len() < std::fs::metadata(&legacy).unwrap().len());
-    cache::maintain(root.path(), Some(0), || false).unwrap();
-    store.persistent(false);
-    assert_eq!(store.regional(&key).unwrap().vectors, value.vectors);
-    assert!(!binary.exists() && !legacy.exists());
-    assert!(
-        Store::new(root.path().into(), true)
-            .unwrap()
-            .regional(&key)
-            .is_none()
-    );
-}
-#[test]
-fn damaged_binary_is_a_miss_even_when_an_old_json_record_exists() {
+fn damaged_binary_is_a_miss() {
     let root = tempfile::tempdir().unwrap();
     let key = Store::regional_key("damaged");
     let value = Embedding {
@@ -140,11 +115,6 @@ fn damaged_binary_is_a_miss_even_when_an_old_json_record_exists() {
     store.put_regional(&key, &value).unwrap();
     let binary = root.path().join(format!("{key}.bin"));
     let original = std::fs::read(&binary).unwrap();
-    std::fs::write(
-        root.path().join(format!("{key}.json")),
-        serde_json::to_vec(&value).unwrap(),
-    )
-    .unwrap();
     for index in [0, 7, 8, 9, original.len() - 1] {
         let mut damaged = original.clone();
         damaged[index] ^= 1;
@@ -161,25 +131,4 @@ fn damaged_binary_is_a_miss_even_when_an_old_json_record_exists() {
         value.vectors,
         "Pinned evidence is isolated from disk replacement"
     );
-}
-#[test]
-fn concurrent_legacy_readers_share_valid_pinned_evidence_after_disk_clear() {
-    let root = tempfile::tempdir().unwrap();
-    let key = Store::regional_key("shared");
-    let value = Embedding {
-        vectors: vec![vec![0.125; 384]; 6],
-    };
-    std::fs::write(
-        root.path().join(format!("{key}.json")),
-        serde_json::to_vec(&value).unwrap(),
-    )
-    .unwrap();
-    let store = Store::new(root.path().into(), true).unwrap();
-    std::thread::scope(|scope| {
-        for _ in 0..8 {
-            scope.spawn(|| assert_eq!(store.regional(&key).unwrap().vectors, value.vectors));
-        }
-    });
-    cache::maintain(root.path(), Some(0), || false).unwrap();
-    assert_eq!(store.regional(&key).unwrap().vectors, value.vectors);
 }
