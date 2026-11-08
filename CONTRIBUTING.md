@@ -38,9 +38,10 @@ winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --quiet
 winget install gstreamerproject.gstreamer
 ```
 
-Then build Exiv2, LibRaw and libheif. Their versions are pinned in `Cargo.toml`
+Then build Exiv2, LibRaw, libheif and libvips (for the optional
+[libvips backend](#libvips-backend)). Their versions are pinned in `Cargo.toml`
 (`[package.metadata.vcpkg]`), and `cargo vcpkg build` builds them into `target\vcpkg`,
-where the build finds them by itself. The first run takes about 15 minutes; later runs
+where the build finds them by itself. The first run takes about 25 minutes; later runs
 reuse the result:
 
 ```powershell
@@ -232,10 +233,12 @@ they were built for, so the runner image sets the app's minimum macOS; the packa
 to `Info.plist` and the notes repeat it.
 
 The Windows job runs on a pinned `windows-2025` runner. It installs GStreamer and builds
-Exiv2, LibRaw and libheif as in [Building](#building) (both cached), downloads ONNX Runtime's
-Windows archive and the same models, and runs
-[`scripts/package_windows.py`](scripts/package_windows.py), which builds the release and
-writes `PhotoSort-<version>-windows-x64.zip`. The zip holds one `PhotoSort` folder:
+Exiv2, LibRaw, libheif and libvips as in [Building](#building) (both cached), downloads ONNX
+Runtime's Windows archive and the same models, and runs
+[`scripts/package_windows.py`](scripts/package_windows.py), which builds the release with
+the default image backend and writes `PhotoSort-<version>-windows-x64.zip` (`--native-imaging`
+builds with libvips instead and adds its `photosort_vips.dll`; see
+[libvips backend](#libvips-backend)). The zip holds one `PhotoSort` folder:
 
 | Path | Contents |
 | --- | --- |
@@ -370,6 +373,20 @@ also set `LD_LIBRARY_PATH` before running tests:
 sudo apt-get install python3 python3-venv cmake ninja-build libglib2.0-dev \
   libexpat1-dev libjpeg-dev libpng-dev libtiff-dev liblcms2-dev libhwy-dev zlib1g-dev
 export LD_LIBRARY_PATH="$PWD/.tools/vips/lib"
+```
+
+On Windows, `cargo vcpkg build` (see [Building](#building)) builds libvips 8.18 with the
+same codecs and Highway SIMD, in a vcpkg triplet of its own (`native/vcpkg-triplets`), and
+the adapter's build links it into `photosort_vips.dll`, so only the feature is needed. The
+Windows zip does not use it: on a Ryzen 7 7800X3D it opens 24 MP JPEGs at full size about
+nine times faster, but makes their 2048 px previews and analysis images slower than the
+default backend (see [crates/imaging-vips/README.md](crates/imaging-vips/README.md)). The
+adapter's own tests build outside the main `target` folder, so point them at the vcpkg tree:
+
+```powershell
+cargo test --locked --features native-imaging
+$env:VCPKG_ROOT = "$PWD\target\vcpkg"
+cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
 ```
 
 ## Reference tests

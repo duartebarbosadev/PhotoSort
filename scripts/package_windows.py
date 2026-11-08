@@ -6,6 +6,7 @@ nothing installed:
     PhotoSort/
       photosort.exe
       vcruntime140.dll, ...       Visual C++ runtime, app-local
+      photosort_vips.dll          with --native-imaging: libvips and its codecs (crates/imaging-vips)
       resources/                  models, ONNX Runtime, licenses (models::resource_roots)
       gstreamer/bin/              GStreamer and its libraries (playback::portable)
       gstreamer/lib/gstreamer-1.0/  the plugins PhotoSort's playbin pipeline uses
@@ -30,6 +31,8 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = tomllib.loads((ROOT/'Cargo.toml').read_text(encoding='utf-8'))['package']['version']
 DEFAULT_GSTREAMER = Path(r'C:\Program Files\gstreamer\1.0\msvc_x86_64')
 TRIPLET = 'x64-windows-static-md'
+# libvips and its libraries (Cargo.toml, native/vcpkg-triplets), linked into photosort_vips.dll.
+VIPS_TRIPLET = 'x64-windows-static-md-vips'
 
 # Plugins (lib/gstreamer-1.0/<name>.dll) for core::playback::portable: playbin with
 # a videoflip ! videoscale ! videoconvert ! appsink video sink, and the formats in
@@ -225,6 +228,7 @@ def main():
     parser.add_argument('--no-build', action='store_true', help='Package the release binary an earlier build made, without running Cargo')
     parser.add_argument('--gstreamer', type=Path, help=f'GStreamer MSVC x86_64 installation (default: GSTREAMER_1_0_ROOT_MSVC_X86_64 or {DEFAULT_GSTREAMER})')
     parser.add_argument('--vc-redist', type=Path, help='The x64 folder of the Visual C++ redistributable (default: from the installed build tools)')
+    parser.add_argument('--native-imaging', action='store_true', help='Build with the libvips image engine and bundle its photosort_vips.dll')
     parser.add_argument('--vcpkg-root', type=Path, help='vcpkg tree the build used, for license notices (default: VCPKG_ROOT or <target>/vcpkg)')
     args = parser.parse_args()
     if sys.platform != 'win32':
@@ -245,9 +249,11 @@ def main():
     if not all(vc_folders):
         parser.error(f'No Visual C++ runtime folders in {vc_redist}')
     vcpkg_root = (args.vcpkg_root or Path(os.environ.get('VCPKG_ROOT', str(target/'vcpkg')))).resolve()
-    vcpkg_share = vcpkg_root/'installed'/TRIPLET/'share'
-    if not vcpkg_share.is_dir():
-        parser.error(f'No vcpkg {TRIPLET} installation in {vcpkg_root}')
+    vcpkg_shares = [vcpkg_root/'installed'/triplet/'share'
+                    for triplet in (TRIPLET, *((VIPS_TRIPLET,) if args.native_imaging else ()))]
+    for share in vcpkg_shares:
+        if not share.is_dir():
+            parser.error(f'No vcpkg {share.parent.name} installation in {vcpkg_root}')
     runtime = ROOT/'resources/runtime'
     if not (runtime/'onnxruntime.dll').is_file():
         parser.error('Put ONNX Runtime (onnxruntime.dll, onnxruntime_providers_shared.dll) in resources/runtime first')
@@ -256,7 +262,9 @@ def main():
         if not (target/'release/photosort.exe').is_file():
             parser.error('--no-build needs a release build; package once without it first')
     else:
-        subprocess.run(['cargo', 'build', '--release', '--locked', '--target-dir', str(target)], cwd=ROOT, check=True)
+        features = ['--features', 'native-imaging'] if args.native_imaging else []
+        subprocess.run(['cargo', 'build', '--release', '--locked', '--target-dir', str(target), *features],
+                       cwd=ROOT, check=True)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=destination.parent, prefix='photosort-package-') as staging:
@@ -281,6 +289,9 @@ def main():
         # as the DLL directory) and the Visual C++ runtime from its own folder. ONNX
         # Runtime is loaded by path before GStreamer, so only the runtime folder serves it.
         sources = [('gstreamer', gstreamer/'bin'), *(('app', path) for path in vc_folders)]
+        if args.native_imaging:
+            # The imaging-vips build script leaves photosort_vips.dll beside the executable.
+            sources.append(('app', target/'release'))
         roots = [(exe, ('gstreamer', 'app')),
                  *((path, ('gstreamer', 'app')) for path in sorted(plugins.glob('*.dll'))),
                  *((path, ('app',)) for path in sorted((resources/'runtime').glob('*.dll')))]
@@ -291,10 +302,12 @@ def main():
 
         notices = resources/'DependencyNotices'
         shutil.copytree(gstreamer/'share/licenses', notices/'gstreamer')
-        for port in sorted(vcpkg_share.iterdir()):
-            if (port/'copyright').is_file():
-                (notices/'vcpkg'/port.name).mkdir(parents=True)
-                shutil.copy2(port/'copyright', notices/'vcpkg'/port.name/'copyright')
+        for share in vcpkg_shares:
+            for port in sorted(share.iterdir()):
+                if (port/'copyright').is_file():
+                    # A port built for both triplets has the same notice.
+                    (notices/'vcpkg'/port.name).mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(port/'copyright', notices/'vcpkg'/port.name/'copyright')
         manifest = resources/'BUNDLE-SHA256SUMS'
         manifest.write_text(folder_manifest(folder, manifest), encoding='utf-8', newline='\n')
 

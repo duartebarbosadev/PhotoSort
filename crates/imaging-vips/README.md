@@ -52,6 +52,21 @@ python3 scripts/build_vips.py
 
 On Debian/Ubuntu, see the package list in `.github/workflows/check.yml`.
 
+On Windows (MSVC), `cargo vcpkg build` in the repository root builds libvips 8.18 instead,
+with the same codecs (JPEG, PNG, TIFF, Little CMS and the bundled GIF loader) and Highway
+SIMD, as static libraries in a vcpkg triplet of their own
+(`native/vcpkg-triplets/x64-windows-static-md-vips.cmake`).
+`build.rs` reads their pkg-config files and links them with the adapter into
+`photosort_vips.dll`, which exports only the adapter's three functions. The application
+links GStreamer's GLib, whose import library has the same name as vcpkg's static GLib, so
+libvips' copy stays inside the DLL. The DLL is written to the build script's output folder
+(which Cargo puts on `PATH` for `cargo run` and tests) and copied beside the profile's
+executables. The build recipe is vcpkg's ABI hash for the installed libvips, which covers
+the port, its features, the triplet, the compiler and every dependency. vcpkg installs an
+already installed port again only when asked, so after changing the triplet run
+`vcpkg remove libvips:x64-windows-static-md-vips` in the vcpkg tree before
+`cargo vcpkg build` (CI's cache key covers the triplet).
+
 ## Testing
 
 From the repository root:
@@ -73,7 +88,8 @@ PHOTOSORT_SAMPLE_DIR="$PWD/tests/samples" cargo test --locked \
 ```
 
 On Linux, also set `LD_LIBRARY_PATH` to the prefix's `lib` directory before running tests
-or the application.
+or the application. On Windows, set `VCPKG_ROOT` to the vcpkg tree instead of
+`PKG_CONFIG_PATH` (by default `target\vcpkg` in the repository root).
 
 ## Using it in the app
 
@@ -85,7 +101,24 @@ cargo run --release --features native-imaging -- --folder /path/to/photos
 On macOS, `python3 scripts/package_macos.py --native-imaging` bundles the private build
 (`--native-prefix` selects another prefix). The packager resolves transitive native
 libraries, keeps their licence notices, audits the resulting dependency graph and verifies
-the code signature.
+the code signature. On Windows, `python scripts/package_windows.py --native-imaging`
+bundles `photosort_vips.dll` and the vcpkg licence notices.
 
-CI builds and tests this backend on macOS and Linux. Desktop use on Linux and Windows
-native builds have not been verified, so the default backend remains the default.
+CI builds and tests this backend on macOS, Linux and Windows, and the macOS release ships
+it. Desktop use on Linux has not been verified, so the default backend remains the default.
+
+### Windows timings
+
+The Windows zip keeps the default backend. `cargo run --release --example bench_pipeline`
+on 188 24 MP JPEGs (Ryzen 7 7800X3D, warm OS cache, mean of two runs, seconds):
+
+| Stage | Default | libvips |
+| --- | --- | --- |
+| Cold 2048 px previews | 37.7 | 64.6 |
+| Technical analysis (1024 px, from the 2048 px render) | 28.4 | 50.8 |
+| Original detail and revisit | 20.9 | 2.3 |
+
+For a 2048 px preview of a 6000×4000 JPEG, `vips_thumbnail` keeps at least a factor of two
+for its final Lanczos3 reduce, so it decodes the whole source (about 80 ms) and then reduces
+it (about 170 ms, with AVX2). The default backend decodes at full size too, but resizes with
+a triangle filter on every core. Full-size and region renders are where libvips wins.

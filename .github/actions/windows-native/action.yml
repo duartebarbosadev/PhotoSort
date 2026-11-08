@@ -1,7 +1,8 @@
 name: Windows native libraries
 description: >-
-  Installs GStreamer from its official MSVC installer and builds Exiv2, LibRaw and
-  libheif with vcpkg at the revision Cargo.toml pins, as CONTRIBUTING.md describes.
+  Installs GStreamer from its official MSVC installer and builds Exiv2, LibRaw,
+  libheif and libvips with vcpkg at the revision Cargo.toml pins, as CONTRIBUTING.md
+  describes.
   Both are cached. Needs the checkout, Python 3.11+ and the Rust toolchain.
 runs:
   using: composite
@@ -15,11 +16,15 @@ runs:
         VCPKG_ROOT: C:\photosort-vcpkg
       run: |
         echo "VCPKG_ROOT=$VCPKG_ROOT" >> "$GITHUB_ENV"
-        # The vcpkg revision and ports decide what is built; the compiler comes with the image.
+        # The vcpkg revision, ports and triplet decide what is built; the compiler comes
+        # with the image.
         key="$(python -I - <<'EOF'
-        import hashlib, json, tomllib
+        import hashlib, json, pathlib, tomllib
         vcpkg = tomllib.load(open("Cargo.toml", "rb"))["package"]["metadata"]["vcpkg"]
-        print(hashlib.sha256(json.dumps(vcpkg, sort_keys=True).encode()).hexdigest()[:16])
+        digest = hashlib.sha256(json.dumps(vcpkg, sort_keys=True).encode())
+        for triplet in sorted(pathlib.Path(vcpkg["overlay-triplets-path"]).glob("*.cmake")):
+            digest.update(triplet.read_bytes())
+        print(digest.hexdigest()[:16])
         EOF
         )"
         echo "vcpkg=vcpkg-$ImageOS-$key" >> "$GITHUB_OUTPUT"
@@ -74,7 +79,7 @@ runs:
       with:
         path: ${{ runner.temp }}\gstreamer-installer
         key: gstreamer-msvc-x86_64-1.28.8
-    - name: Restore Exiv2, LibRaw and libheif
+    - name: Restore the vcpkg libraries
       id: vcpkg-cache
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -82,7 +87,7 @@ runs:
           C:\photosort-vcpkg\installed
           C:\photosort-vcpkg\.vcpkg-root
         key: ${{ steps.keys.outputs.vcpkg }}
-    - name: Build Exiv2, LibRaw and libheif
+    - name: Build the vcpkg libraries
       if: steps.vcpkg-cache.outputs.cache-hit != 'true'
       shell: pwsh
       run: |
@@ -93,7 +98,7 @@ runs:
         if ($LASTEXITCODE -ne 0) { throw 'cargo install cargo-vcpkg failed' }
         cargo vcpkg build
         if ($LASTEXITCODE -ne 0) { throw 'cargo vcpkg build failed' }
-    - name: Save Exiv2, LibRaw and libheif
+    - name: Save the vcpkg libraries
       if: steps.vcpkg-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:

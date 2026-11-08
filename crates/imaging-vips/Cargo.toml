@@ -10,6 +10,10 @@ publish = false
 cc = "1"
 pkg-config = "0.3"
 
+[target.'cfg(windows)'.build-dependencies]
+# Windows (MSVC): finds the libvips that `cargo vcpkg build` installed (see build.rs).
+vcpkg = "0.2.15"
+
 [dev-dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "tiff"] }
 moxcms = "0.8.1"

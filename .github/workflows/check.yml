@@ -82,8 +82,9 @@ jobs:
       - if: matrix.features != ''
         run: cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
   # The full build with the native stack from CONTRIBUTING.md: GStreamer from its
-  # official installer, and Exiv2, LibRaw and libheif from vcpkg (about 15 minutes
-  # without the cache).
+  # official installer, and Exiv2, LibRaw, libheif and libvips from vcpkg (about 25
+  # minutes without the cache). Tests run with the default image backend, which the
+  # release zip ships; the libvips backend is built, linted and its adapter tested.
   windows:
     name: Windows
     timeout-minutes: 120
@@ -99,6 +100,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: full
+          workspaces: |
+            . -> target
+            crates/imaging-vips -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
@@ -111,6 +115,9 @@ jobs:
       - run: python -B -m unittest discover -s scripts -p 'test_package_windows.py'
       - run: cargo nextest run --locked --lib --bins --tests --no-fail-fast
       - run: cargo clippy --locked --all-targets -- -D warnings
+      # libvips from vcpkg, linked into photosort_vips.dll (crates/imaging-vips/build.rs).
+      - run: cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
+      - run: cargo clippy --locked --features native-imaging --all-targets -- -D warnings
   linux:
     name: Linux + libvips
     timeout-minutes: 60
