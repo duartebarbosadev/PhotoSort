@@ -7,8 +7,8 @@ use std::{
 };
 const OWNER: &[u8] = b"PhotoSort compiled models v1\n";
 
-/// Prepared CPU graphs (`.onnx-cache`) are no longer created; existing ones are
-/// still recognized as owned so maintenance can delete them.
+/// Leftover prepared CPU graphs (`.onnx-cache`) count as owned, so cache
+/// maintenance deletes them.
 pub(super) fn retired(path: &Path) -> bool {
     path.extension().is_some_and(|e| e == "onnx-cache")
 }

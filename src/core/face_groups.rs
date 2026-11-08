@@ -331,9 +331,8 @@ impl Person {
 /// Deterministic average-linkage grouping. A face joins the person whose faces
 /// it matches best on average, if that average reaches `MIN_SIMILARITY`; then
 /// people whose faces match each other that well on average are merged, unless
-/// they appear together in a photo. Requiring a match with every member instead
-/// let one poor face (a tiny inset selfie) split a person in two: sunglasses
-/// photos averaged 0.72 with someone's other faces but 0.47 with that one.
+/// they appear together in a photo. Averaging keeps one poor face, such as a
+/// tiny inset selfie, from splitting a person in two.
 /// Unlike subject grouping, this has no geometric pair graph: a running sum of
 /// 128-float descriptors per person gives the average without pairwise storage.
 /// Exact descriptors collapse immediately. Memory is O(n); diverse-library

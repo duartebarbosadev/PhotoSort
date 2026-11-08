@@ -21,6 +21,3 @@ tempfile = "3"
 jpeg-encoder = "0.7.1"
 tiff = "0.11.3"
 
-[profile.dev]
-debug = "line-tables-only"
-incremental = false

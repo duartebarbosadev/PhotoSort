@@ -1392,8 +1392,8 @@ fn app_logic(
 #[test]
 fn smoke_exit_closes_an_occluded_or_minimized_window() {
     // eframe skips `ui` for a hidden window, and egui's input time stays at
-    // the last shown frame. A smoke run started behind another app used to
-    // wait until its window was shown again.
+    // the last shown frame. A smoke run started behind another app must
+    // still quit without its window being shown.
     for minimized in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let mut app =

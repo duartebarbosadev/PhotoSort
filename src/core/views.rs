@@ -33,10 +33,8 @@ pub struct Bookmark {
     pub filter: browsing::Filter,
     pub browse: browsing::Options,
     pub navigator: browsing::tree::State,
-    /// Saved since a click in Cull's navigator scrolls to a folder. Older
-    /// views kept the folder clicked as a filter, and could filter by a date
-    /// or show the Groups navigator, which no longer exists: they open with
-    /// every folder shown. Missing from older views, so false.
+    /// Whether a click in Cull's navigator scrolls to a folder. Views saved
+    /// without it open with every folder shown.
     #[serde(default)]
     pub navigator_scrolls: bool,
     pub group_anchor: Option<MediaId>,

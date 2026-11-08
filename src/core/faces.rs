@@ -608,14 +608,10 @@ fn counted_closed(m: &EyeMeasures) -> bool {
 /// a doubtful face is Unknown, never closed:
 /// - Closed: both eyes shut by shape (each ratio under `CLOSED_EYE_RATIO`,
 ///   the mean under `SHUT_EYE_RATIO`) and by both blink scores (at least
-///   `STRICT_BLINK`). A squint or a laugh narrows the eyes to a ratio of
-///   about 0.12 to 0.2 and raises the blink scores: it stays Unknown. So
-///   does a wink or one eye hidden. On a 79-photo phone library, the six
-///   closed faces had ratios of 0.016 to 0.037 and blink scores of 0.72 to
-///   0.85.
+///   `STRICT_BLINK`). A squint, a laugh, a wink or one hidden eye stays
+///   Unknown.
 /// - Open: each ratio at least `OPEN_EYE_RATIO` and neither blink score
-///   above `OPEN_BLINK`. Open faces there had ratios of 0.2 to 0.43 and
-///   blink scores up to 0.3.
+///   above `OPEN_BLINK`.
 /// - Unknown: everything else, and faces under `MIN_EYE_PIXELS`.
 ///
 /// Every face it calls Closed is counted by `counted_closed` too, so the

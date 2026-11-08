@@ -515,8 +515,8 @@ fn details_panel_compares_every_open_photo_and_returns_to_one_photo() {
         assert!(single.iter().any(|t| t == "Flash"));
         assert!(single.iter().all(|t| t != "Off"));
     }
-    // Organize keeps Show in Finder but no longer repeats where the photo
-    // goes or offers renaming here; F2 and the board still do.
+    // Organize offers Show in Finder, but not the destination or renaming:
+    // F2 and the board handle those.
     app.step = Step::Organize;
     let organize = texts(&mut app, 300.0);
     assert!(
