@@ -225,7 +225,7 @@ def main():
     parser.add_argument('--no-build', action='store_true', help='Package the release binary an earlier build made, without running Cargo')
     parser.add_argument('--gstreamer', type=Path, help=f'GStreamer MSVC x86_64 installation (default: GSTREAMER_1_0_ROOT_MSVC_X86_64 or {DEFAULT_GSTREAMER})')
     parser.add_argument('--vc-redist', type=Path, help='The x64 folder of the Visual C++ redistributable (default: from the installed build tools)')
-    parser.add_argument('--native-prefix', type=Path, help='Private libvips build linked into the app, for its notices (default: PHOTOSORT_VIPS_PREFIX or .tools/vips)')
+    parser.add_argument('--native-prefix', type=Path, help='Private libvips build linked into the app (default: PHOTOSORT_VIPS_PREFIX or .tools/vips); the build makes it if it is missing')
     parser.add_argument('--vcpkg-root', type=Path, help='vcpkg tree the build used, for license notices (default: VCPKG_ROOT or <target>/vcpkg)')
     args = parser.parse_args()
     if sys.platform != 'win32':
@@ -249,10 +249,8 @@ def main():
     vcpkg_share = vcpkg_root/'installed'/TRIPLET/'share'
     if not vcpkg_share.is_dir():
         parser.error(f'No vcpkg {TRIPLET} installation in {vcpkg_root}')
-    # libvips is linked into photosort.exe (scripts/build_vips.py); bundle its notices.
+    # libvips is linked into photosort.exe (scripts/build_vips.py); its notices are bundled.
     native_prefix = (args.native_prefix or Path(os.environ.get('PHOTOSORT_VIPS_PREFIX', str(ROOT/'.tools/vips')))).resolve()
-    if not (native_prefix/'share/licenses/libvips').is_dir() or not (native_prefix/'photosort-build.json').is_file():
-        parser.error(f'No libvips build in {native_prefix}; run python scripts/build_vips.py')
     runtime = ROOT/'resources/runtime'
     if not (runtime/'onnxruntime.dll').is_file():
         parser.error('Put ONNX Runtime (onnxruntime.dll, onnxruntime_providers_shared.dll) in resources/runtime first')
@@ -261,7 +259,11 @@ def main():
         if not (target/'release/photosort.exe').is_file():
             parser.error('--no-build needs a release build; package once without it first')
     else:
-        subprocess.run(['cargo', 'build', '--release', '--locked', '--target-dir', str(target)], cwd=ROOT, check=True)
+        # The libvips build script uses (and if needed makes) this prefix.
+        subprocess.run(['cargo', 'build', '--release', '--locked', '--target-dir', str(target)], cwd=ROOT,
+                       env={**os.environ, 'PHOTOSORT_VIPS_PREFIX': str(native_prefix)}, check=True)
+    if not (native_prefix/'share/licenses/libvips').is_dir() or not (native_prefix/'photosort-build.json').is_file():
+        parser.error(f'No libvips build in {native_prefix}; build without --no-build first')
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=destination.parent, prefix='photosort-package-') as staging:

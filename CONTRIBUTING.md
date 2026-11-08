@@ -7,22 +7,24 @@ runs, the opt-in reference tests and the developer tools in `examples/`.
 
 ## Building
 
-You need Rust 1.95 or later, a C/C++ compiler and pkg-config. Every build also needs
-LibRaw 0.21+, Exiv2 0.28+ and libvips 8.18+ (the image engine; see [libvips](#libvips)),
-and on Linux and Windows libheif 1.23+ with an HEVC decoder plugin and GStreamer 1.20+. On
-macOS, HEIF and video use system frameworks.
+You need Rust 1.95 or later, a C/C++ compiler, pkg-config and Python 3.11+. Every build
+also needs LibRaw 0.21+ and Exiv2 0.28+, and on Linux and Windows libheif 1.23+ with an HEVC
+decoder plugin and GStreamer 1.20+. On macOS, HEIF and video use system frameworks. The
+first `cargo build` also builds libvips, the image engine, with Python and a download (a
+few minutes, once; see [libvips](#libvips)).
 
-**macOS** (with the Xcode command line tools), then build libvips as in [libvips](#libvips):
+**macOS** (with the Xcode command line tools):
 
 ```sh
 brew install libraw exiv2 pkg-config glib jpeg-turbo libpng libtiff little-cms2 highway
 ```
 
 **Linux** (Debian 13 "trixie", as in CI; other distributions may ship older libheif or
-Exiv2 versions), then build libvips as in [libvips](#libvips):
+Exiv2 versions):
 
 ```sh
-sudo apt-get install build-essential pkg-config \
+sudo apt-get install build-essential pkg-config python3 python3-venv curl \
+  libglib2.0-dev libexpat1-dev libjpeg-dev libpng-dev libtiff-dev liblcms2-dev libhwy-dev zlib1g-dev \
   libraw-dev libexiv2-dev libheif-dev libheif-plugin-libde265 \
   libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav \
@@ -42,13 +44,12 @@ winget install gstreamerproject.gstreamer
 Then build Exiv2, LibRaw, libheif and the libraries libvips uses. Their versions are
 pinned in `Cargo.toml` (`[package.metadata.vcpkg]`), and `cargo vcpkg build` builds them
 into `target\vcpkg`, where the build finds them by itself. The first run takes about 20
-minutes; later runs reuse the result. Then build libvips itself (a few minutes; see
-[libvips](#libvips)):
+minutes; later runs reuse the result. After it, `cargo build` builds libvips itself the
+first time (see [libvips](#libvips)):
 
 ```powershell
 cargo install cargo-vcpkg
 cargo vcpkg build
-python scripts/build_vips.py
 ```
 
 vcpkg cannot build in a folder whose path has accented or other non-ASCII characters (such
@@ -354,31 +355,23 @@ PhotoSort decodes JPEG, PNG, TIFF and GIF through libvips and Little CMS
 their own services, and WebP and BMP use the Rust `image` crate. libvips shrinks JPEGs
 while decoding, and it supports ICC-profiled CMYK TIFF.
 
-Build the private libvips copy once (delete `.tools/vips` to rebuild it). On macOS and
-Linux, point pkg-config at it before building PhotoSort:
+PhotoSort uses a private libvips build in `.tools/vips`, made by
+[`scripts/build_vips.py`](scripts/build_vips.py) with only the codecs it needs. The first
+`cargo build` runs the script by itself (Python 3.11+ and a download; a few minutes) and
+later builds reuse the result; delete `.tools/vips` to rebuild it. To use another build,
+set `PHOTOSORT_VIPS_PREFIX` to its prefix, or `PKG_CONFIG_PATH` to its `lib/pkgconfig` on
+macOS and Linux. The script can also be run by hand, for example to choose `--prefix`.
+
+On Linux, set `LD_LIBRARY_PATH` before running tests or the app:
 
 ```sh
-python3 -B scripts/build_vips.py
-export PKG_CONFIG_PATH="$PWD/.tools/vips/lib/pkgconfig"
-cargo test --locked
-cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
-```
-
-On Debian, install the libvips build dependencies too, and also set `LD_LIBRARY_PATH`
-before running tests or the app:
-
-```sh
-sudo apt-get install python3 python3-venv cmake ninja-build libglib2.0-dev \
-  libexpat1-dev libjpeg-dev libpng-dev libtiff-dev liblcms2-dev libhwy-dev zlib1g-dev
 export LD_LIBRARY_PATH="$PWD/.tools/vips/lib"
 ```
 
-On Windows, `python scripts/build_vips.py` builds a static libvips with MSVC, after
-`cargo vcpkg build` (see [Building](#building)): GLib comes from the installed GStreamer,
-which PhotoSort already uses for video, and the codecs, Little CMS and Highway from vcpkg.
-The build links it into `photosort.exe`, which finds `.tools/vips` by itself
-(`PHOTOSORT_VIPS_PREFIX` names another), so there is one GLib in the process and no extra
-DLL. PhotoSort delay-loads GStreamer and points Windows at it before decoding its first
+On Windows the script builds a static libvips with MSVC, after `cargo vcpkg build` (see
+[Building](#building)): GLib comes from the installed GStreamer, which PhotoSort already
+uses for video, and the codecs, Little CMS and Highway from vcpkg. The build links it into
+`photosort.exe`, so there is one GLib in the process and no extra DLL. PhotoSort delay-loads GStreamer and points Windows at it before decoding its first
 image. The adapter's own tests build outside the main `target` folder and link GLib
 directly, so point them at the vcpkg tree and put GStreamer on `PATH`:
 

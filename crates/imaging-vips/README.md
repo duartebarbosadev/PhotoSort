@@ -45,14 +45,12 @@ rebuild of the same version needs a cache clear.
 verifies the upstream source checksum, builds in temporary directories, keeps licence
 notices and provenance, and never overwrites an existing prefix. Highway SIMD is on by
 default (`--no-simd` builds the scalar variant). The script does not install system
-packages; on macOS install the dependencies first:
+packages (see CONTRIBUTING.md for the macOS and Debian lists).
 
-```sh
-brew install glib jpeg-turbo libpng libtiff little-cms2 highway
-python3 scripts/build_vips.py
-```
-
-On Debian/Ubuntu, see the package list in `.github/workflows/check.yml`.
+`build.rs` runs the script itself when it finds no libvips: it uses `PHOTOSORT_VIPS_PREFIX`
+if set, else one pkg-config finds (on macOS and Linux), else `.tools/vips`, building that
+prefix on first use. A lock file beside the prefix keeps concurrent builds from building it
+twice, and a failed attempt removes its partial prefix.
 
 On Windows (MSVC) the same script builds a static libvips, after `cargo vcpkg build` in
 the repository root: GLib comes from the installed GStreamer (PhotoSort's video player),
@@ -74,7 +72,6 @@ their import slots, linked whole, and fills them from GLib before `vips_init`.
 From the repository root:
 
 ```sh
-export PKG_CONFIG_PATH="$PWD/.tools/vips/lib/pkgconfig"
 cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
 cargo clippy --locked --manifest-path crates/imaging-vips/Cargo.toml --all-targets -- -D warnings
 ```
@@ -90,9 +87,9 @@ PHOTOSORT_SAMPLE_DIR="$PWD/tests/samples" cargo test --locked \
 ```
 
 On Linux, also set `LD_LIBRARY_PATH` to the prefix's `lib` directory before running tests
-or the application. On Windows, set `VCPKG_ROOT` to the vcpkg tree instead of
-`PKG_CONFIG_PATH` (by default `target\vcpkg` in the repository root), and put GStreamer's
-`bin` folder on `PATH`: the adapter's tests link GLib directly.
+or the application. On Windows, set `VCPKG_ROOT` to the vcpkg tree (by default
+`target\vcpkg` in the repository root), and put GStreamer's `bin` folder on `PATH`: the
+adapter's tests link GLib directly.
 
 ## Packaging
 

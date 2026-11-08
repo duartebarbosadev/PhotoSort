@@ -8,6 +8,28 @@ fn main() {
         return;
     }
     let dependencies = [("vips", "8.18"), ("lcms2", "2.16")];
+    // A libvips named by PHOTOSORT_VIPS_PREFIX, else one pkg-config already finds (such
+    // as PKG_CONFIG_PATH naming a private build), else the private build in .tools/vips,
+    // built by scripts/build_vips.py the first time.
+    println!("cargo:rerun-if-env-changed=PHOTOSORT_VIPS_PREFIX");
+    let explicit = std::env::var_os("PHOTOSORT_VIPS_PREFIX").map(std::path::PathBuf::from);
+    let found = explicit.is_none()
+        && pkg_config::Config::new()
+            .cargo_metadata(false)
+            .atleast_version("8.18")
+            .probe("vips")
+            .is_ok();
+    if !found {
+        let prefix = explicit.unwrap_or_else(private::default_prefix);
+        private::ensure_built(&prefix, &[]);
+        let pkgconfig = prefix.join("lib").join("pkgconfig");
+        let path = std::env::var_os("PKG_CONFIG_PATH").unwrap_or_default();
+        let joined =
+            std::env::join_paths(std::iter::once(pkgconfig).chain(std::env::split_paths(&path)))
+                .expect("PKG_CONFIG_PATH");
+        // SAFETY: build scripts are single-threaded; pkg-config reads it below.
+        unsafe { std::env::set_var("PKG_CONFIG_PATH", joined) };
+    }
     for (name, version) in dependencies {
         let library = pkg_config::Config::new()
             .cargo_metadata(false)
@@ -51,6 +73,111 @@ fn is_recipe(recipe: &str) -> bool {
     recipe == "external" || (recipe.len() == 64 && recipe.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
+/// PhotoSort's private libvips (scripts/build_vips.py), built on first use.
+mod private {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        process::{Command, Stdio},
+        time::{Duration, Instant},
+    };
+
+    /// The repository root: this crate lives in crates/imaging-vips.
+    fn repository() -> PathBuf {
+        let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
+        manifest
+            .ancestors()
+            .nth(2)
+            .expect("repository root")
+            .to_owned()
+    }
+
+    /// Where scripts/build_vips.py installs by default.
+    pub fn default_prefix() -> PathBuf {
+        repository().join(".tools").join("vips")
+    }
+
+    /// Builds libvips into `prefix` unless it is there. Takes a few minutes once, and
+    /// needs Python 3.11+ and network access; later builds reuse the prefix (delete it
+    /// to rebuild). A lock beside it keeps concurrent builds from building it twice.
+    pub fn ensure_built(prefix: &Path, env: &[(&str, &Path)]) {
+        let done = prefix.join("lib").join("pkgconfig").join("vips.pc");
+        println!("cargo:rerun-if-changed={}", done.display());
+        let script = repository().join("scripts").join("build_vips.py");
+        println!("cargo:rerun-if-changed={}", script.display());
+        if done.is_file() {
+            return;
+        }
+        if prefix.exists() {
+            panic!(
+                "{} holds no complete libvips build; delete it so the build can make one",
+                prefix.display()
+            );
+        }
+        let parent = prefix.parent().expect("libvips prefix has a parent");
+        fs::create_dir_all(parent).expect("create the libvips prefix's folder");
+        let lock = prefix.with_extension("lock");
+        let start = Instant::now();
+        while fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)
+            .is_err()
+        {
+            // Another build is making it (or a crashed one left the lock behind).
+            if done.is_file() {
+                return;
+            }
+            if start.elapsed() > Duration::from_secs(30 * 60) {
+                panic!(
+                    "Waited 30 minutes for another libvips build; if none is running, delete {}",
+                    lock.display()
+                );
+            }
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        if done.is_file() {
+            let _ = fs::remove_file(&lock);
+            return;
+        }
+        println!(
+            "cargo:warning=Building libvips into {} (first build only, a few minutes; delete it to rebuild)",
+            prefix.display()
+        );
+        let python = std::env::var_os("PYTHON")
+            .unwrap_or_else(|| if cfg!(windows) { "python" } else { "python3" }.into());
+        let mut command = Command::new(&python);
+        command
+            .arg("-B")
+            .arg(&script)
+            .arg("--prefix")
+            .arg(prefix)
+            // Cargo reads build-script stdout as instructions; keep the build's log apart.
+            .stdout(Stdio::from(std::io::stderr()));
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        let status = command.status();
+        let _ = fs::remove_file(&lock);
+        if !status.as_ref().is_ok_and(|status| status.success()) {
+            // A failed attempt must not look like an unfinished one next time.
+            if !done.is_file() && prefix.exists() {
+                let _ = fs::remove_dir_all(prefix);
+            }
+            panic!(
+                "Building libvips with {} failed ({}). See the log above, or run \
+                 `{} scripts/build_vips.py` yourself (CONTRIBUTING.md lists what it needs).",
+                script.display(),
+                match status {
+                    Ok(status) => status.to_string(),
+                    Err(error) => format!("{} could not start: {error}", python.to_string_lossy()),
+                },
+                python.to_string_lossy()
+            );
+        }
+    }
+}
+
 /// Windows (MSVC): scripts/build_vips.py builds libvips as a static library against the
 /// GLib of the GStreamer installation PhotoSort uses for video, and the codecs from
 /// `cargo vcpkg build`. This links them into the application: libvips and the codecs
@@ -78,15 +205,12 @@ mod msvc {
         ] {
             println!("cargo:rerun-if-env-changed={name}");
         }
-        let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
-        // The prefix scripts/build_vips.py installs into by default.
         let prefix = std::env::var_os("PHOTOSORT_VIPS_PREFIX")
             .map(PathBuf::from)
-            .unwrap_or_else(|| manifest.join("../../.tools/vips"));
-        let vcpkg = vcpkg::find_vcpkg_root(&vcpkg::Config::new())
-            .expect("vcpkg tree; run cargo vcpkg build")
-            .join("installed")
-            .join(TRIPLET);
+            .unwrap_or_else(super::private::default_prefix);
+        let vcpkg_root = vcpkg::find_vcpkg_root(&vcpkg::Config::new())
+            .expect("vcpkg tree; run cargo vcpkg build");
+        let vcpkg = vcpkg_root.join("installed").join(TRIPLET);
         let gstreamer = std::env::var_os("GSTREAMER_1_0_ROOT_MSVC_X86_64")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(GSTREAMER));
@@ -95,12 +219,10 @@ mod msvc {
             (vcpkg.join("lib/pkgconfig"), Linkage::Static),
             (gstreamer.join("lib/pkgconfig"), Linkage::Dynamic),
         ];
-        if !prefix.join("lib/pkgconfig/vips.pc").is_file() {
-            panic!(
-                "No libvips in {}: run python scripts/build_vips.py (see CONTRIBUTING.md)",
-                prefix.display()
-            );
-        }
+        // The build script finds the same vcpkg tree and GStreamer.
+        let mut env = vec![("VCPKG_ROOT", vcpkg_root.as_path())];
+        env.push(("GSTREAMER_1_0_ROOT_MSVC_X86_64", gstreamer.as_path()));
+        super::private::ensure_built(&prefix, &env);
         let modules = Modules::load(&sources, "vips");
         for (name, minimum, key) in [
             ("vips", "8.18", "PHOTOSORT_VIPS_VERSION"),
