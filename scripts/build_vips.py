@@ -1,4 +1,4 @@
-"""Build PhotoSort's minimal native image engine without a global installation.
+"""Build libvips with only the codecs PhotoSort uses, without a global installation.
 
 Requires C/C++ build tools, pkg-config, and development libraries for GLib/GIO,
 libjpeg, libpng, libtiff, Little CMS, zlib and Highway (pkg-config name libhwy).

@@ -11,7 +11,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-mod fallback;
 mod movie;
 mod native;
 
@@ -85,14 +84,8 @@ pub fn read_cancellable(path: &Path, cancelled: &impl Fn() -> bool) -> Result<Me
         orientation: 1,
         ..Default::default()
     };
-    let native_loaded = if let Some(snapshot) = native::read(path) {
+    if let Some(snapshot) = native::read(path) {
         snapshot.apply(&mut result, &mut dates);
-        true
-    } else {
-        false
-    };
-    if !native_loaded {
-        fallback::read(path, &mut result, &mut dates);
     }
     #[cfg(target_os = "macos")]
     if path

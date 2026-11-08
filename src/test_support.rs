@@ -1,5 +1,5 @@
 //! Shared by unit tests (`lib.rs`, `main.rs`) and integration tests (`#[path]`).
-//! An integration test crate may use it only under some features.
+//! Each test crate uses only part of it.
 #![allow(dead_code)]
 
 use std::time::Duration;

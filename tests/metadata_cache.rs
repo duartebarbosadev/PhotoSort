@@ -63,8 +63,7 @@ fn metadata_restart_reuses_source_snapshot_across_browsing_display_and_analysis(
     for (bytes, path) in &snapshot {
         assert_eq!(&fs::read(path).unwrap(), bytes, "{}", path.display());
     }
-    // A reopened read reports the decoded source size, which the EXIF-less
-    // PNG's snapshot lacks without the native reader, and is otherwise the
+    // A reopened read reports the decoded source size and is otherwise the
     // same snapshot.
     let mut restored = pipeline(cache.path()).metadata(&media).unwrap();
     assert_eq!((restored.width, restored.height), (32, 16));
