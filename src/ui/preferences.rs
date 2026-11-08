@@ -420,7 +420,7 @@ impl PhotoSortApp {
                         ("AI models", format!("ONNX Runtime · {backend}")),
                         (
                             "Images",
-                            if cfg!(feature = "native-imaging") { "libvips" } else { "image-rs" }.to_owned(),
+                            "libvips".to_owned(),
                         ),
                         (
                             "Metadata",

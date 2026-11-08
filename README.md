@@ -179,13 +179,15 @@ else for developers are in [CONTRIBUTING.md](CONTRIBUTING.md).
 | --- | --- | --- |
 | [Rust](https://www.rust-lang.org) and [egui](https://github.com/emilk/egui) | The app and its interface | Rust 1.95+, egui 0.36 |
 | [ONNX Runtime](https://onnxruntime.ai) | Local AI on the CPU, Apple Core ML or NVIDIA CUDA | 1.29.0 |
+| [libvips](https://www.libvips.org) and [Little CMS](https://www.littlecms.com) | JPEG, PNG, TIFF and GIF photos, color management | 8.18+, 2.16+ |
 | [LibRaw](https://www.libraw.org) | RAW photos | 0.21+ |
 | [Exiv2](https://exiv2.org) | Ratings, rotation and other metadata inside photos | 0.28+ |
 | [libheif](https://github.com/strukturag/libheif) | HEIC photos on Windows and Linux (macOS uses its own) | 1.23+ |
 | [GStreamer](https://gstreamer.freedesktop.org) | Video on Windows and Linux (macOS uses AVFoundation) | 1.20+ |
 
-Versions are minimums: macOS and Linux use what Homebrew or the distribution ships, and the
-Windows build pins exact versions in `Cargo.toml`. ONNX Runtime is pinned on every platform.
+Versions are minimums: macOS and Linux use what Homebrew or the distribution ships (libvips
+is a private build, `scripts/build_vips.py`), and the Windows build pins exact versions in
+`Cargo.toml`. ONNX Runtime is pinned on every platform.
 
 ## Questions or feedback?
 

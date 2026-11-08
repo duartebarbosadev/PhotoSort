@@ -1,4 +1,3 @@
-#![cfg(feature = "native-imaging")]
 use crate::test_support;
 use image::{DynamicImage, Rgba, RgbaImage};
 use photosort::core::{
@@ -146,6 +145,7 @@ fn sixteen_bit_inspection_matches_a_full_precision_decode_for_all_orientations()
         .unwrap()
         .media
         .remove(0);
+    photosort::core::playback::locate_runtime().unwrap();
     let full = photosort_imaging_vips::render(&path, Default::default(), || false).unwrap();
     let photosort_imaging_vips::Pixels::U16(values) = full.pixels else {
         panic!("native precision lost")
@@ -265,6 +265,7 @@ fn image_actor_discards_old_epochs_and_reuses_inspection_across_workflows() {
 fn rotated_fit_views_resize_before_materializing_and_keep_exact_orientation() {
     let root = tempfile::tempdir().unwrap();
     let (media, _) = source(root.path());
+    photosort::core::playback::locate_runtime().unwrap();
     let base = photosort_imaging_vips::render_region(
         &media.path,
         photosort_imaging_vips::Request {

@@ -228,7 +228,7 @@ fn main() -> Result<()> {
     let failures = values["errors"].as_object().unwrap().len();
     println!(
         "{}",
-        json!({"root":root,"profile":mode,"threads":threads,"count":media.len(),"native_imaging":cfg!(feature="native-imaging"),"phases":phases,"results":values})
+        json!({"root":root,"profile":mode,"threads":threads,"count":media.len(),"phases":phases,"results":values})
     );
     ensure!(
         failures == 0,

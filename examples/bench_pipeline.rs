@@ -103,7 +103,7 @@ fn main() -> Result<()> {
     stages.push(json!({"name":"new_owner_disk_proxies","ms":start.elapsed().as_secs_f64()*1000.,"stats":stats(pipeline.stats)}));
     println!(
         "{}",
-        json!({"native_imaging":cfg!(feature="native-imaging"),"count":catalog.media.len(),"scan_ms":scan_ms,"stages":stages,"measurements":measurements})
+        json!({"count":catalog.media.len(),"scan_ms":scan_ms,"stages":stages,"measurements":measurements})
     );
     Ok(())
 }

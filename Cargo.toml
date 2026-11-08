@@ -21,13 +21,19 @@ dependencies = [
     "exiv2[core,bmff,png,xmp]",
     "libraw[core,dng-lossy,openmp]",
     "libheif[core,libde265]",
+    # What scripts/build_vips.py builds libvips with, besides GStreamer's GLib (expat,
+    # libjpeg-turbo, Little CMS and zlib already come with the ports above).
+    "libpng",
+    "tiff",
+    "highway",
 ]
 
 [package.metadata.vcpkg.target]
 x86_64-pc-windows-msvc = { triplet = "x64-windows-static-md" }
 
 [dependencies]
-photosort-imaging-vips = { path = "crates/imaging-vips", optional = true }
+# JPEG, PNG, TIFF and GIF decoding, color conversion and resizing (libvips).
+photosort-imaging-vips = { path = "crates/imaging-vips" }
 moxcms = "0.8.1"
 # One bounded metadata cache owned by the shared imaging actor.
 lru = { version = "0.18.5", default-features = false }
@@ -97,7 +103,6 @@ all = "warn"
 # Test and example builds only (via the dev-dependency below): application
 # data and caches go to a per-process temporary folder, never the user's.
 test-isolation = []
-native-imaging = ["dep:photosort-imaging-vips"]
 
 [build-dependencies]
 cc = "1"

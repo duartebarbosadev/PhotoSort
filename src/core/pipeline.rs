@@ -200,10 +200,9 @@ impl Pipeline {
             )
             .as_bytes(),
         );
-        #[cfg(feature = "native-imaging")]
         hash.update(
             format!(
-                "vips-working-2048-v2:{}:{}:{}",
+                "vips-working-2048-shrink-on-load-v3:{}:{}:{}",
                 photosort_imaging_vips::VIPS_VERSION,
                 photosort_imaging_vips::LCMS_VERSION,
                 photosort_imaging_vips::BUILD_ID
@@ -871,9 +870,9 @@ impl Pipeline {
         }
         self.stats.decodes += 1;
         let (raw, width, height, warning, precision_retained, already_oriented) = {
-            #[cfg(feature = "native-imaging")]
             if native_raster(media) {
                 self.stats.native_renders += 1;
+                super::playback::locate_runtime()?;
                 let rendered = photosort_imaging_vips::render(
                     &media.path,
                     photosort_imaging_vips::Request {
@@ -894,18 +893,6 @@ impl Pipeline {
                     false,
                 )
             } else {
-                let decoded = decode(media, meta, original, &mut self.colors, cancelled)?;
-                (
-                    decoded.image,
-                    decoded.source.0,
-                    decoded.source.1,
-                    None,
-                    true,
-                    decoded.oriented,
-                )
-            }
-            #[cfg(not(feature = "native-imaging"))]
-            {
                 let decoded = decode(media, meta, original, &mut self.colors, cancelled)?;
                 (
                     decoded.image,
@@ -996,7 +983,6 @@ impl Pipeline {
             None => false,
         }
     }
-    #[cfg(feature = "native-imaging")]
     fn inspect_native_region(
         &mut self,
         request: &super::inspection::Request,
@@ -1042,6 +1028,7 @@ impl Pipeline {
             self.stats.decodes += 1;
             self.stats.native_renders += 1;
             self.stats.native_regions += 1;
+            super::playback::locate_runtime()?;
             let rendered = photosort_imaging_vips::render_region(
                 &request.media.path,
                 photosort_imaging_vips::Request {
@@ -1155,7 +1142,6 @@ impl Pipeline {
             self.forget_detail(&oversized);
         }
         let mut meta = self.metadata_for_key(&request.media, &key, cancelled)?;
-        #[cfg(feature = "native-imaging")]
         if native_raster(&request.media)
             && ![key.clone(), format!("working:{key}")].iter().any(|k| {
                 self.details
@@ -1284,12 +1270,10 @@ impl Pipeline {
         edge: u32,
         cancelled: &(impl Fn() -> bool + Sync),
     ) -> Result<Option<RgbaImage>> {
-        // Builds without these loaders decode at full size first.
-        let _ = (media, meta, edge, &cancelled);
-        #[cfg(feature = "native-imaging")]
         if native_raster(media) {
             self.stats.decodes += 1;
             self.stats.native_renders += 1;
+            super::playback::locate_runtime()?;
             let rendered = photosort_imaging_vips::render(
                 &media.path,
                 photosort_imaging_vips::Request {
@@ -1388,7 +1372,6 @@ impl Pipeline {
         Ok(usage)
     }
 }
-#[cfg(feature = "native-imaging")]
 fn native_pixels(
     pixels: photosort_imaging_vips::Pixels,
     width: u32,
@@ -1744,7 +1727,6 @@ fn apple_heif(media: &Media) -> bool {
 }
 
 /// A full-size libvips render refused for memory says what it needs.
-#[cfg(feature = "native-imaging")]
 fn vips_failure(error: photosort_imaging_vips::Error, meta: &Metadata) -> anyhow::Error {
     match error.needed() {
         Some(needed) => super::memory::TooLarge {
@@ -1758,8 +1740,7 @@ fn vips_failure(error: photosort_imaging_vips::Error, meta: &Metadata) -> anyhow
 }
 
 fn native_raster(media: &Media) -> bool {
-    cfg!(feature = "native-imaging")
-        && media.kind == MediaKind::Photo
+    media.kind == MediaKind::Photo
         && media.path.extension().is_some_and(|e| {
             ["jpg", "jpeg", "png", "tif", "tiff", "gif"]
                 .iter()

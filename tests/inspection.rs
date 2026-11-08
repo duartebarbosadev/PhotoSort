@@ -206,14 +206,7 @@ fn original_detail_retains_native_pixels_and_reuses_preview_decode_across_steps(
     }
     // Native browsing prepares a bounded image, then one source-resolution
     // neighborhood on demand. Every subsequent workflow shares that tile.
-    assert_eq!(
-        pipeline.stats.decodes,
-        if cfg!(feature = "native-imaging") {
-            2
-        } else {
-            1
-        }
-    );
+    assert_eq!(pipeline.stats.decodes, 2);
     assert!(pipeline.stats.detail_bytes <= 8 * 1024 * 1024);
 }
 #[test]

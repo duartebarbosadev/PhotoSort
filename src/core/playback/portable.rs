@@ -18,7 +18,7 @@ pub(super) fn initialize() -> Result<()> {
     INITIALIZED
         .get_or_init(|| {
             #[cfg(windows)]
-            windows::locate()?;
+            locate().map_err(|e| e.to_string())?;
             gst::init().map_err(|e| e.to_string())
         })
         .as_ref()
@@ -26,11 +26,21 @@ pub(super) fn initialize() -> Result<()> {
     Ok(())
 }
 
-/// On Windows the GStreamer DLLs are delay-loaded (see build.rs): PhotoSort starts
-/// without them, and only video is unavailable until GStreamer is installed. Before
-/// the first GStreamer call, point the loader at an installation: one bundled next
-/// to the executable, the one `GSTREAMER_1_0_ROOT_MSVC_X86_64` names, or the
-/// installer's default folder.
+/// Points the DLL loader at GStreamer once, before the first call into it or into
+/// libvips, which uses its GLib.
+#[cfg(windows)]
+pub(super) fn locate() -> Result<()> {
+    static LOCATED: OnceLock<Result<(), String>> = OnceLock::new();
+    LOCATED
+        .get_or_init(windows::locate)
+        .clone()
+        .map_err(anyhow::Error::msg)
+}
+
+/// On Windows the GStreamer DLLs are delay-loaded (see build.rs), so PhotoSort starts
+/// without them. Before the first call into GStreamer or its GLib, point the loader
+/// at an installation: one bundled next to the executable, the one
+/// `GSTREAMER_1_0_ROOT_MSVC_X86_64` names, or the installer's default folder.
 #[cfg(windows)]
 mod windows {
     use std::{

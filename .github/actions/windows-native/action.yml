@@ -1,8 +1,9 @@
 name: Windows native libraries
 description: >-
-  Installs GStreamer from its official MSVC installer and builds Exiv2, LibRaw and
-  libheif with vcpkg at the revision Cargo.toml pins, as CONTRIBUTING.md describes.
-  Both are cached. Needs the checkout, Python 3.11+ and the Rust toolchain.
+  Installs GStreamer from its official MSVC installer, builds Exiv2, LibRaw, libheif
+  and libvips' codecs with vcpkg at the revision Cargo.toml pins, then libvips itself
+  with scripts/build_vips.py against GStreamer's GLib, as CONTRIBUTING.md describes.
+  All three are cached. Needs the checkout, Python 3.11+ and the Rust toolchain.
 runs:
   using: composite
   steps:
@@ -74,7 +75,7 @@ runs:
       with:
         path: ${{ runner.temp }}\gstreamer-installer
         key: gstreamer-msvc-x86_64-1.28.8
-    - name: Restore Exiv2, LibRaw and libheif
+    - name: Restore the vcpkg libraries
       id: vcpkg-cache
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -82,7 +83,7 @@ runs:
           C:\photosort-vcpkg\installed
           C:\photosort-vcpkg\.vcpkg-root
         key: ${{ steps.keys.outputs.vcpkg }}
-    - name: Build Exiv2, LibRaw and libheif
+    - name: Build the vcpkg libraries
       if: steps.vcpkg-cache.outputs.cache-hit != 'true'
       shell: pwsh
       run: |
@@ -93,7 +94,7 @@ runs:
         if ($LASTEXITCODE -ne 0) { throw 'cargo install cargo-vcpkg failed' }
         cargo vcpkg build
         if ($LASTEXITCODE -ne 0) { throw 'cargo vcpkg build failed' }
-    - name: Save Exiv2, LibRaw and libheif
+    - name: Save the vcpkg libraries
       if: steps.vcpkg-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -101,3 +102,27 @@ runs:
           C:\photosort-vcpkg\installed
           C:\photosort-vcpkg\.vcpkg-root
         key: ${{ steps.keys.outputs.vcpkg }}
+    # libvips only changes with its build script or the libraries it builds against
+    # (GStreamer's GLib and the vcpkg codecs), so reuse it until one of them does.
+    - name: Choose the libvips cache key
+      id: vips-key
+      shell: bash
+      run: echo "key=vips-$ImageOS-$(python -B scripts/build_vips.py --cache-key)" >> "$GITHUB_OUTPUT"
+    - name: Restore libvips
+      id: vips-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .tools/vips
+        key: ${{ steps.vips-key.outputs.key }}
+    - name: Build libvips
+      if: steps.vips-cache.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: |
+        python -B scripts/build_vips.py
+        if ($LASTEXITCODE -ne 0) { throw 'scripts/build_vips.py failed' }
+    - name: Save libvips
+      if: steps.vips-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .tools/vips
+        key: ${{ steps.vips-key.outputs.key }}

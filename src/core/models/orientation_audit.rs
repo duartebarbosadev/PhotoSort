@@ -73,7 +73,7 @@ fn inspect_rotation_view_evidence_without_mutating_samples() -> Result<()> {
     std::fs::write(
         output,
         serde_json::to_vec_pretty(&serde_json::json!({
-            "native_imaging":cfg!(feature="native-imaging"),"model":model,
+            "model":model,
             "source_decodes":pipeline.stats.decodes,"initializations":models.initializations,
             "inferences":models.inferences,"records":records,
             "limits":"Softmax values are not calibrated correctness probabilities. No accuracy claim without reviewed labels."

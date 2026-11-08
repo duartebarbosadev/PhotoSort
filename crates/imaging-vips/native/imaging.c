@@ -52,7 +52,14 @@ static int native_failure(char *error, size_t capacity) {
     g_free(message);
     return result;
 }
+#ifdef _WIN32
+/* glib_data_win.c: GLib's variables, before anything reads them. */
+int photosort_glib_data(char *error, size_t capacity);
+#endif
 int photosort_vips_init(char *error, size_t capacity) {
+#ifdef _WIN32
+    if (photosort_glib_data(error, capacity)) return -1;
+#endif
     if (vips_init("photosort")) return native_failure(error, capacity);
     if (!vips_icc_present()) return fail(error, capacity, "libvips requires Little CMS support");
     /* One Rust image actor owns reuse. No hidden global operation/file cache.
@@ -162,8 +169,30 @@ int photosort_vips_render(const char *path, uint32_t edge,
         if (vips_crop(header, &working, sx, sy, sw, sh, NULL)) goto native_error;
     } else if (edge && ((uint32_t)w > edge || (uint32_t)h > edge)) {
         /* Let native loaders shrink before decoding whenever supported. Source
-         * headers are inspected above, but no source pixels were evaluated. */
-        if (vips_thumbnail_source(source, &working, edge,
+         * headers are inspected above, but no source pixels were evaluated.
+         * vips_thumbnail keeps at least 2x for its final reduce, so a 24 MP
+         * JPEG would decode at full size for a 2048 px preview. Instead decode
+         * with libjpeg-turbo's scaled IDCT at the largest 1/2, 1/4 or 1/8 that
+         * still covers the edge, then reduce once. */
+        const char *loader = NULL;
+        int shrink = 1;
+        if (!vips_image_get_string(header, VIPS_META_LOADER, &loader) && loader &&
+            g_str_has_prefix(loader, "jpegload")) {
+            uint32_t longest = (uint32_t)MAX(w, h);
+            for (int s = 8; s > 1; s /= 2)
+                if (longest / (uint32_t)s >= edge) { shrink = s; break; }
+        }
+        if (shrink > 1) {
+            VipsImage *shrunk = NULL;
+            if (vips_jpegload_source(source, &shrunk, "shrink", shrink,
+                "access", VIPS_ACCESS_SEQUENTIAL, "fail_on", VIPS_FAIL_ON_WARNING, NULL))
+                goto native_error;
+            int failed = vips_thumbnail_image(shrunk, &working, edge,
+                "height", edge, "size", VIPS_SIZE_DOWN, "no_rotate", TRUE,
+                "output_profile", "srgb", "intent", VIPS_INTENT_RELATIVE, NULL);
+            g_object_unref(shrunk);
+            if (failed) goto native_error;
+        } else if (vips_thumbnail_source(source, &working, edge,
             "height", edge, "size", VIPS_SIZE_DOWN, "no_rotate", TRUE,
             "output_profile", "srgb", "intent", VIPS_INTENT_RELATIVE,
             "fail_on", VIPS_FAIL_ON_WARNING, NULL)) goto native_error;

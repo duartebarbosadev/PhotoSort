@@ -3,6 +3,10 @@
 Requires C/C++ build tools, pkg-config, and development libraries for GLib/GIO,
 libjpeg, libpng, libtiff, Little CMS, zlib and Highway (pkg-config name libhwy).
 Use --no-simd for a scalar comparison build. Python is a build tool only.
+
+On Windows (MSVC) libvips is a static library that PhotoSort links into its
+executable: GLib comes from the GStreamer installation the app already uses for
+video, so the process has one GLib, and the codecs come from `cargo vcpkg build`.
 """
 import argparse
 import hashlib
@@ -43,6 +47,21 @@ ninja==1.13.2 \\
     --hash=sha256:1db9852e528efa7702f5123969f86678663e46d57ff28ab13f5fd84d64a85fb1
 """
 DEPENDENCIES = ["glib-2.0", "gio-2.0", "libjpeg", "libpng", "libtiff-4", "lcms2", "zlib"]
+WINDOWS = os.name == "nt"
+GSTREAMER = Path(r"C:\Program Files\gstreamer\1.0\msvc_x86_64")
+
+
+def build_environment():
+    """pkg-config for the build. On Windows: vcpkg's static codecs first, then GStreamer,
+    which supplies only GLib (vcpkg's tree has none), with GStreamer's pkg-config."""
+    env = os.environ.copy()
+    if WINDOWS:
+        gstreamer = Path(env.get("GSTREAMER_1_0_ROOT_MSVC_X86_64", GSTREAMER))
+        target = Path(env.get("CARGO_TARGET_DIR", ROOT / "target"))
+        vcpkg = Path(env.get("VCPKG_ROOT", target / "vcpkg")) / "installed/x64-windows-static-md"
+        env.setdefault("PKG_CONFIG", str(gstreamer / "bin/pkg-config.exe"))
+        env["PKG_CONFIG_PATH"] = os.pathsep.join([str(vcpkg / "lib/pkgconfig"), str(gstreamer / "lib/pkgconfig")])
+    return env
 
 
 def write_build_record(prefix, provenance):
@@ -68,8 +87,10 @@ def main():
     parser.add_argument("--simd", action=argparse.BooleanOptionalAction, default=True, help="Use Highway SIMD (default); --no-simd builds the scalar comparison")
     parser.add_argument("--cache-key", action="store_true", help="Print a key for caching the built prefix and exit")
     args = parser.parse_args()
+    env = build_environment()
     dependencies = {
-        name: subprocess.check_output(["pkg-config", "--modversion", name], text=True).strip()
+        name: subprocess.check_output([env.get("PKG_CONFIG", "pkg-config"), "--modversion", name],
+                                      env=env, text=True).strip()
         for name in DEPENDENCIES + (["libhwy"] if args.simd else [])
     }
     if args.cache_key:
@@ -93,6 +114,10 @@ def main():
         source = source / f"vips-{VERSION}"
         if not (source / "meson.build").is_file():
             raise RuntimeError("Expected libvips source directory is missing")
+        if WINDOWS:
+            # The fuzzers use __attribute__((weak)), which MSVC lacks (as vcpkg's port does).
+            build_file = source / "meson.build"
+            build_file.write_text(build_file.read_text().replace("subdir('fuzz')", ""))
         tools = work / "tools"
         venv.EnvBuilder(with_pip=True).create(tools)
         binaries = tools / ("Scripts" if os.name == "nt" else "bin")
@@ -101,7 +126,6 @@ def main():
         requirements.write_text(BUILD_TOOLS)
         subprocess.run([str(python), "-m", "pip", "install", "--require-hashes", "--only-binary=:all:",
                         "-r", str(requirements)], check=True)
-        env = os.environ.copy()
         env["PATH"] = str(binaries) + os.pathsep + env.get("PATH", "")
         build = work / "build"
         # Keep the private runtime/pkg-config layout identical on multiarch Linux and macOS.
@@ -111,9 +135,26 @@ def main():
                    "-Dnsgif=true", "-Dppm=false", "-Danalyze=false", "-Dradiance=false"]
         if args.simd:
             options.append("-Dhighway=enabled")
-        subprocess.run(["meson", "setup", str(build), str(source), "--prefix=" + str(prefix), *options], env=env, check=True)
-        subprocess.run(["meson", "compile", "-C", str(build), "-j", "4"], env=env, check=True)
-        subprocess.run(["meson", "install", "-C", str(build)], env=env, check=True)
+        if WINDOWS:
+            # Linked into photosort.exe with the dynamic CRT, like the vcpkg libraries.
+            options += ["--vsenv", "--default-library=static", "-Db_vscrt=md"]
+            # GStreamer's pkg-config escapes the space in its folder name, which Meson
+            # cannot read back, so name GLib's code generators here (two are Python scripts).
+            glib_bin = Path(env["PKG_CONFIG"]).parent
+            native = work / "native.ini"
+            native.write_text("[binaries]\n" + "".join(
+                f"{tool} = ['{python.as_posix()}', '{(glib_bin / tool).as_posix()}']\n"
+                for tool in ("glib-mkenums", "glib-genmarshal")
+            ) + f"glib-compile-resources = '{(glib_bin / 'glib-compile-resources.exe').as_posix()}'\n")
+            setup_options = ["--native-file", str(native)]
+        else:
+            setup_options = []
+        # Windows looks commands up on this process's PATH, not the child's.
+        meson = shutil.which("meson", path=env["PATH"])
+        subprocess.run([meson, "setup", str(build), str(source), "--prefix=" + str(prefix), *options, *setup_options],
+                       env=env, check=True)
+        subprocess.run([meson, "compile", "-C", str(build), "-j", "4"], env=env, check=True)
+        subprocess.run([meson, "install", "-C", str(build)], env=env, check=True)
         # Keep the native library's license and exact build provenance with it.
         license_dir = prefix / "share/licenses/libvips"
         license_dir.mkdir(parents=True, exist_ok=True)

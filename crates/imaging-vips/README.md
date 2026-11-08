@@ -1,13 +1,15 @@
 # PhotoSort native image engine
 
-`photosort-imaging-vips` is an optional image backend for PhotoSort, enabled with the
-`native-imaging` feature. It hands JPEG, PNG, TIFF and GIF decoding, color conversion,
-thumbnail shrinking and region reads to libvips 8.18+ and Little CMS 2.16+, behind the same
-shared image pipeline (`core::pipeline`) as the default Rust backend. RAW, HEIF and video
-keep their own services. No workflow calls this crate directly.
+`photosort-imaging-vips` is PhotoSort's image engine for JPEG, PNG, TIFF and GIF. It hands
+their decoding, color conversion, preview shrinking and region reads to libvips 8.18+ and
+Little CMS 2.16+, behind the shared image pipeline (`core::pipeline`). RAW, HEIF and video
+keep their own services, and WebP and BMP use the Rust `image` crate. No workflow calls
+this crate directly.
 
-Compared with the default backend it is faster on large JPEG/PNG/TIFF files (libvips can
-shrink while decoding) and it supports ICC-profiled CMYK TIFF.
+JPEG previews shrink while decoding: the adapter opens a JPEG with libjpeg-turbo's scaled
+IDCT at the largest 1/2, 1/4 or 1/8 that still covers the requested edge, then reduces once
+(`vips_thumbnail` alone keeps at least 2x for its final reduce, so a 24 MP JPEG would decode
+at full size for a 2048 px preview). It also supports ICC-profiled CMYK TIFF.
 
 ## What the adapter owns
 
@@ -43,21 +45,33 @@ rebuild of the same version needs a cache clear.
 verifies the upstream source checksum, builds in temporary directories, keeps licence
 notices and provenance, and never overwrites an existing prefix. Highway SIMD is on by
 default (`--no-simd` builds the scalar variant). The script does not install system
-packages; on macOS install the dependencies first:
+packages (see CONTRIBUTING.md for the macOS and Debian lists).
 
-```sh
-brew install glib jpeg-turbo libpng libtiff little-cms2 highway
-python3 scripts/build_vips.py
-```
+`build.rs` runs the script itself when it finds no libvips: it uses `PHOTOSORT_VIPS_PREFIX`
+if set, else one pkg-config finds (on macOS and Linux), else `.tools/vips`, building that
+prefix on first use. A lock file beside the prefix keeps concurrent builds from building it
+twice, and a failed attempt removes its partial prefix.
 
-On Debian/Ubuntu, see the package list in `.github/workflows/check.yml`.
+On Windows (MSVC) the same script builds a static libvips, after `cargo vcpkg build` in
+the repository root: GLib comes from the installed GStreamer (PhotoSort's video player),
+and libjpeg-turbo, libpng, libtiff, Little CMS, expat, zlib and Highway are vcpkg's static
+libraries. `build.rs` finds the prefix (`.tools/vips`, or `PHOTOSORT_VIPS_PREFIX`), reads
+the pkg-config files of that prefix, vcpkg and GStreamer, and links libvips and the codecs
+into the application statically (under names of their own, so GStreamer's `jpeg.lib` or
+`tiff.lib` cannot stand in for them) and GLib through GStreamer's import libraries. The
+process has one GLib, shared with video, and no extra DLL.
+
+PhotoSort delay-loads GStreamer's DLLs so that it starts without them, and points Windows
+at them (`core::playback::locate_runtime`) before the first image is decoded. A delay-loaded
+DLL cannot export variables to the program, and libvips reads two GLib variables
+(`g_ascii_table`, `g_param_spec_types`) through macros, so `native/glib_data_win.c` defines
+their import slots, linked whole, and fills them from GLib before `vips_init`.
 
 ## Testing
 
 From the repository root:
 
 ```sh
-export PKG_CONFIG_PATH="$PWD/.tools/vips/lib/pkgconfig"
 cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
 cargo clippy --locked --manifest-path crates/imaging-vips/Cargo.toml --all-targets -- -D warnings
 ```
@@ -73,19 +87,30 @@ PHOTOSORT_SAMPLE_DIR="$PWD/tests/samples" cargo test --locked \
 ```
 
 On Linux, also set `LD_LIBRARY_PATH` to the prefix's `lib` directory before running tests
-or the application.
+or the application. On Windows, set `VCPKG_ROOT` to the vcpkg tree (by default
+`target\vcpkg` in the repository root), and put GStreamer's `bin` folder on `PATH`: the
+adapter's tests link GLib directly.
 
-## Using it in the app
+## Packaging
 
-```sh
-export PKG_CONFIG_PATH="$PWD/.tools/vips/lib/pkgconfig"
-cargo run --release --features native-imaging -- --folder /path/to/photos
-```
+On macOS, `python3 scripts/package_macos.py` bundles the private build (`--native-prefix`
+selects another prefix). The packager resolves transitive native libraries, keeps their
+licence notices, audits the resulting dependency graph and verifies the code signature. On
+Windows, libvips is part of `photosort.exe`, and `python scripts/package_windows.py` bundles
+its licence notices and build provenance with the vcpkg and GStreamer ones.
 
-On macOS, `python3 scripts/package_macos.py --native-imaging` bundles the private build
-(`--native-prefix` selects another prefix). The packager resolves transitive native
-libraries, keeps their licence notices, audits the resulting dependency graph and verifies
-the code signature.
+CI builds and tests the adapter on macOS, Linux and Windows.
 
-CI builds and tests this backend on macOS and Linux. Desktop use on Linux and Windows
-native builds have not been verified, so the default backend remains the default.
+## Timings
+
+`cargo run --release --example bench_pipeline` on 188 24 MP JPEGs (Windows 11, Ryzen 7
+7800X3D, idle, two runs each, seconds). The earlier Rust decoders are shown for comparison:
+
+| Stage | Rust `image` | libvips, `vips_thumbnail` only | libvips, shrink while decoding |
+| --- | ---: | ---: | ---: |
+| Cold 2048 px previews | 38.2 | 64.0 | 33.3 |
+| Technical analysis (1024 px, from the 2048 px render) | 27.2 | 50.7 | 21.8 |
+| Original detail and revisit | 21.7 | 2.35 | 1.9 |
+
+Without the forced shrink, a 2048 px preview of a 6000×4000 JPEG decoded the whole source
+(about 80 ms) and then ran a 19-tap Lanczos3 reduce over 24 MP (about 170 ms, with AVX2).

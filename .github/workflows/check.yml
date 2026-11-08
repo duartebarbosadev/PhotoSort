@@ -19,21 +19,9 @@ jobs:
   # has no doctests, which nextest skips. Examples have no tests, so they are not
   # linked by it; clippy --all-targets still checks that they compile.
   macos:
-    name: ${{ matrix.name }}
+    name: macOS
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: macOS
-            features: ''
-          # The configuration the release workflow ships.
-          - name: macOS + libvips
-            features: native-imaging
     runs-on: macos-latest
-    env:
-      # Passed through the environment, never expanded into scripts. Cargo takes an empty list.
-      FEATURES: ${{ matrix.features }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -44,7 +32,6 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: ${{ matrix.features }}
           workspaces: |
             . -> target
             crates/imaging-vips -> target
@@ -55,35 +42,29 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
-      - run: brew install libraw exiv2 pkg-config
-      - if: matrix.features != ''
-        run: brew install glib jpeg-turbo libpng libtiff little-cms2 highway
+      - run: brew install libraw exiv2 pkg-config glib jpeg-turbo libpng libtiff little-cms2 highway
       # The private engine only changes with its build script or the libraries it builds
       # against, so reuse it until one of them does.
-      - if: matrix.features != ''
-        id: vips-key
+      - id: vips-key
         run: echo "key=vips-$ImageOS-$(python3 -B scripts/build_vips.py --cache-key)" >> "$GITHUB_OUTPUT"
-      - if: matrix.features != ''
-        id: vips-cache
+      - id: vips-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .tools/vips
           key: ${{ steps.vips-key.outputs.key }}
-      - if: matrix.features != '' && steps.vips-cache.outputs.cache-hit != 'true'
+      - if: steps.vips-cache.outputs.cache-hit != 'true'
         run: python3 -B scripts/build_vips.py
-      - if: matrix.features != ''
-        run: |
+      - run: |
           # setup-python exports its own PKG_CONFIG_PATH, which would hide
           # the private engine from the build scripts that follow.
           echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/.tools/vips/lib/pkgconfig" >> "$GITHUB_ENV"
       - run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
-      - run: cargo nextest run --locked --lib --bins --tests --no-fail-fast --features "$FEATURES"
-      - run: cargo clippy --locked --features "$FEATURES" --all-targets -- -D warnings
-      - if: matrix.features != ''
-        run: cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
+      - run: cargo nextest run --locked --lib --bins --tests --no-fail-fast
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
   # The full build with the native stack from CONTRIBUTING.md: GStreamer from its
-  # official installer, and Exiv2, LibRaw and libheif from vcpkg (about 15 minutes
-  # without the cache).
+  # official installer, and Exiv2, LibRaw, libheif and libvips from vcpkg (about 25
+  # minutes without the cache).
   windows:
     name: Windows
     timeout-minutes: 120
@@ -99,6 +80,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: full
+          workspaces: |
+            . -> target
+            crates/imaging-vips -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
@@ -111,8 +95,13 @@ jobs:
       - run: python -B -m unittest discover -s scripts -p 'test_package_windows.py'
       - run: cargo nextest run --locked --lib --bins --tests --no-fail-fast
       - run: cargo clippy --locked --all-targets -- -D warnings
+      # The adapter's own tests link GStreamer's GLib directly, without the app's delay-load.
+      - run: |
+          $env:PATH = "C:\Program Files\gstreamer\1.0\msvc_x86_64\bin;$env:PATH"
+          cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'adapter tests failed' }
   linux:
-    name: Linux + libvips
+    name: Linux
     timeout-minutes: 60
     runs-on: ubuntu-latest
     container:
@@ -163,10 +152,8 @@ jobs:
       - name: Build the private image engine without root privileges
         if: steps.vips-cache.outputs.cache-hit != 'true'
         run: runuser -u photosort -- python3 -B scripts/build_vips.py --prefix /tmp/photosort-vips
-      - run: runuser -u photosort -- cargo nextest run --locked --lib --bins --tests --no-fail-fast --features native-imaging
+      - run: runuser -u photosort -- cargo nextest run --locked --lib --bins --tests --no-fail-fast
       - run: runuser -u photosort -- cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
       # Formatting does not depend on the platform; check it once.
       - run: runuser -u photosort -- cargo fmt --all --check
-      - run: runuser -u photosort -- cargo clippy --locked --features native-imaging --all-targets -- -D warnings
-      # Without libvips: the image-rs pipeline beside GStreamer and libheif.
       - run: runuser -u photosort -- cargo clippy --locked --all-targets -- -D warnings
