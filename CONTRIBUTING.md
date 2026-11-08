@@ -109,8 +109,8 @@ CI runs these on macOS, Windows and Linux. Run them before opening a pull reques
 
 ```sh
 cargo fmt --all --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
 ```
 
 CI uses [cargo-nextest](https://nexte.st); `cargo nextest run` works the same locally.
@@ -131,7 +131,7 @@ One moves a small text file to the system Trash.
 
 ```sh
 PHOTOSORT_SAMPLE_DIR=tests/samples cargo test --release -- --ignored
-PHOTOSORT_SAMPLE_DIR="$PWD/tests/samples" cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml -- --ignored
+PHOTOSORT_SAMPLE_DIR="$PWD/tests/samples" cargo test --locked -p photosort-imaging-vips -- --ignored
 ```
 
 ## Developer tools

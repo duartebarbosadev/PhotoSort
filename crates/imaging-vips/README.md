@@ -66,11 +66,11 @@ their import slots, linked whole, and fills them from GLib before `vips_init`.
 
 ## Testing
 
-From the repository root:
+The crate is part of the workspace, so `cargo clippy --workspace` checks it and this runs
+its tests:
 
 ```sh
-cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
-cargo clippy --locked --manifest-path crates/imaging-vips/Cargo.toml --all-targets -- -D warnings
+cargo test --locked -p photosort-imaging-vips
 ```
 
 The tests cover transparency, ICC correction, 16-bit low bits, CMYK/YCCK JPEG, packed,
@@ -79,18 +79,16 @@ concurrent initialization and cancellation/panic recovery. `src/tiff_fixture.rs`
 the TIFF fixtures. An opt-in test decodes the repository's sample photos:
 
 ```sh
-PHOTOSORT_SAMPLE_DIR="$PWD/tests/samples" cargo test --locked \
-  --manifest-path crates/imaging-vips/Cargo.toml original_jpeg_png_samples -- --ignored
+PHOTOSORT_SAMPLE_DIR="$PWD/tests/samples" cargo test --locked -p photosort-imaging-vips \
+  original_jpeg_png_samples -- --ignored
 ```
 
 On Linux, set `LD_LIBRARY_PATH` to the prefix's `lib` directory first. On Windows, the
-tests build outside the main `target` folder and link GLib directly, so point them at the
-vcpkg tree and put GStreamer on `PATH`:
+tests link GStreamer's GLib directly, so put it on `PATH`:
 
 ```powershell
-$env:VCPKG_ROOT = "$PWD\target\vcpkg"
 $env:PATH = "C:\Program Files\gstreamer\1.0\msvc_x86_64\bin;$env:PATH"
-cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
+cargo test --locked -p photosort-imaging-vips
 ```
 
 ## Packaging

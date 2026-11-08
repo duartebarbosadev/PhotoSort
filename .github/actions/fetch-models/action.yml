@@ -5,7 +5,7 @@ description: >-
   resources/SHA256SUMS, so a replaced file fails the build.
 inputs:
   models-release:
-    description: Prerelease holding the converted models (CONTRIBUTING.md#converted-models).
+    description: Prerelease holding the converted models (docs/RELEASING.md#converted-models).
     required: true
 runs:
   using: composite
