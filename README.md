@@ -18,11 +18,17 @@ sideways photos and sorts everything into folders. Nothing on disk changes until
 the exact list of moves and deletions, and everything runs on your computer: no photo is ever
 uploaded.
 
+> [!WARNING]
+> PhotoSort moves, renames and deletes your photos. **Back up your photos before you use
+> it**, and keep that backup until you have checked the result. See
+> [Keep your photos safe](#keep-your-photos-safe).
+
 [![PhotoSort reviewing a photo in Cull](assets/screenshots/cull.webp)](assets/screenshots/cull.webp)
 
 <p align="center">
   <a href="#download">Download</a> ·
   <a href="#five-steps">Five steps</a> ·
+  <a href="#keep-your-photos-safe">Keep your photos safe</a> ·
   <a href="#useful-shortcuts">Shortcuts</a> ·
   <a href="#local-ai">Local AI</a> ·
   <a href="#build-from-source">Build from source</a>
@@ -106,6 +112,22 @@ Marks, ratings and folder plans stay staged while you work. **Review changes**
 (Shift+Enter) lists every move, rename, rating and file sent to Trash before anything
 happens. If PhotoSort is interrupted halfway, reopen the folder to finish or retry the rest;
 finished changes are never repeated.
+
+## Keep your photos safe
+
+PhotoSort changes the files in the folder you open, so treat it like any tool that edits your
+library:
+
+- **Back up first.** Copy the folder to another drive, or make sure your backup (Time
+  Machine, File History, a NAS or cloud backup) has a current copy before you apply changes.
+- **Work on a copy of new imports.** Leave the photos on the memory card, or copy them, until
+  you have finished sorting and backed up the result.
+- **Read the review list.** Check every move and deletion in **Review changes** before you
+  apply it.
+- **Empty the Trash later.** Deleted photos go to the system Trash (Recycle Bin on Windows),
+  not straight off the disk. Keep them there until you are sure.
+- **Leave originals untouched if you prefer.** **Settings → Save changes to → Sidecars
+  only** writes ratings and rotations to XMP sidecars instead of into the photo files.
 
 ## Useful shortcuts
 
