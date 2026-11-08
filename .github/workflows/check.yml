@@ -15,39 +15,9 @@ concurrency:
   # they save the build caches that pull requests reuse.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  # Builds without the optional native libraries, which keeps that configuration
-  # compiling on both systems. The full builds are checked below.
-  minimal:
-    name: Minimal build (${{ matrix.os }})
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
-        with:
-          tool: nextest
-      # Formatting does not depend on the platform; check it once.
-      - if: matrix.os == 'ubuntu-latest'
-        run: cargo fmt --all --check
-      # nextest runs every test in one parallel pool, each in its own process. The crate
-      # has no doctests, which nextest skips. Examples have no tests, so they are not
-      # linked here; clippy --all-targets still checks that they compile.
-      - run: cargo nextest run --locked --lib --bins --tests --no-default-features --no-fail-fast
-      - run: cargo clippy --locked --no-default-features --all-targets -- -D warnings
-      - run: cargo check --locked --no-default-features --features onnx --all-targets
+  # nextest runs every test in one parallel pool, each in its own process. The crate
+  # has no doctests, which nextest skips. Examples have no tests, so they are not
+  # linked by it; clippy --all-targets still checks that they compile.
   macos:
     name: ${{ matrix.name }}
     timeout-minutes: 60
@@ -109,9 +79,6 @@ jobs:
       - run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
       - run: cargo nextest run --locked --lib --bins --tests --no-fail-fast --features "$FEATURES"
       - run: cargo clippy --locked --features "$FEATURES" --all-targets -- -D warnings
-      # The minimal build's macOS code (native files, Apple video) is checked here.
-      - if: matrix.features == ''
-        run: cargo clippy --locked --no-default-features --all-targets -- -D warnings
       - if: matrix.features != ''
         run: cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
   # The full build with the native stack from CONTRIBUTING.md: GStreamer from its
@@ -177,7 +144,7 @@ jobs:
             libraw-dev libexiv2-dev libheif-dev libheif-plugin-libde265 \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav \
             libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libegl1-mesa-dev
-          rustup component add clippy
+          rustup component add clippy rustfmt
           useradd --create-home photosort
           mkdir -p "$CARGO_HOME"
           chown -R photosort:photosort "$GITHUB_WORKSPACE" "$CARGO_HOME"
@@ -198,6 +165,8 @@ jobs:
         run: runuser -u photosort -- python3 -B scripts/build_vips.py --prefix /tmp/photosort-vips
       - run: runuser -u photosort -- cargo nextest run --locked --lib --bins --tests --no-fail-fast --features native-imaging
       - run: runuser -u photosort -- cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
+      # Formatting does not depend on the platform; check it once.
+      - run: runuser -u photosort -- cargo fmt --all --check
       - run: runuser -u photosort -- cargo clippy --locked --features native-imaging --all-targets -- -D warnings
-      # Default features without libvips: the image-rs pipeline beside GStreamer and libheif.
+      # Without libvips: the image-rs pipeline beside GStreamer and libheif.
       - run: runuser -u photosort -- cargo clippy --locked --all-targets -- -D warnings

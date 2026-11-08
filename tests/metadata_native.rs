@@ -1,4 +1,3 @@
-#![cfg(feature = "metadata-native")]
 use photosort::core::{metadata, model::*, pipeline::Pipeline};
 use std::path::{Path, PathBuf};
 fn fixtures() -> PathBuf {
@@ -120,7 +119,7 @@ fn seven_samples_match_python_metadata_richness_and_preserve_all_bytes() {
 }
 
 #[test]
-#[cfg(all(feature = "heif", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 fn heif_container_rotation_and_sidecar_override_survive_native_metadata() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("rotated.heic");

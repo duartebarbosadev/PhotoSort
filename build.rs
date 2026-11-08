@@ -12,46 +12,42 @@ fn main() {
         // GStreamer is not on PATH after its installer runs, and a missing DLL must not stop
         // PhotoSort from starting. Its DLLs load on first use instead, after
         // core::playback::portable has pointed Windows at the installation.
-        if std::env::var_os("CARGO_FEATURE_PORTABLE_VIDEO").is_some() {
-            for dll in [
-                "gstreamer-1.0-0.dll",
-                "gstbase-1.0-0.dll",
-                "gstapp-1.0-0.dll",
-                "gstvideo-1.0-0.dll",
-                "gobject-2.0-0.dll",
-                "glib-2.0-0.dll",
-                "gio-2.0-0.dll",
-            ] {
-                println!("cargo:rustc-link-arg=/DELAYLOAD:{dll}");
-            }
-            println!("cargo:rustc-link-lib=delayimp");
+        for dll in [
+            "gstreamer-1.0-0.dll",
+            "gstbase-1.0-0.dll",
+            "gstapp-1.0-0.dll",
+            "gstvideo-1.0-0.dll",
+            "gobject-2.0-0.dll",
+            "glib-2.0-0.dll",
+            "gio-2.0-0.dll",
+        ] {
+            println!("cargo:rustc-link-arg=/DELAYLOAD:{dll}");
         }
+        println!("cargo:rustc-link-lib=delayimp");
     }
 
-    if std::env::var_os("CARGO_FEATURE_METADATA_NATIVE").is_some() {
-        println!("cargo:rerun-if-changed=native/metadata.cpp");
-        let library = Native::find(
-            "exiv2",
-            "exiv2",
-            "0.28",
-            "Install Exiv2 (macOS: brew install exiv2; Ubuntu: libexiv2-dev; Windows: cargo vcpkg build), or disable metadata-native",
-        );
-        let mut build = cc::Build::new();
-        build.cpp(true).std("c++17").file("native/metadata.cpp");
-        if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
-            // Without /EHsc, MSVC does not run destructors while an Exiv2 exception
-            // unwinds to the bridge's catch: the metadata mutex's lock_guard would
-            // stay locked after the first unreadable file, and every later read would hang.
-            build.flag("/EHsc");
-        }
-        library.configure(&mut build);
-        build.compile("photosort_metadata");
-        // ELF linkers may discard shared libraries seen before their static callers.
-        library.link();
-        if library.vcpkg {
-            // Exiv2 reports file and process details through psapi; its .pc names it, vcpkg does not.
-            println!("cargo:rustc-link-lib=psapi");
-        }
+    println!("cargo:rerun-if-changed=native/metadata.cpp");
+    let library = Native::find(
+        "exiv2",
+        "exiv2",
+        "0.28",
+        "Install Exiv2 (macOS: brew install exiv2; Ubuntu: libexiv2-dev; Windows: cargo vcpkg build)",
+    );
+    let mut build = cc::Build::new();
+    build.cpp(true).std("c++17").file("native/metadata.cpp");
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        // Without /EHsc, MSVC does not run destructors while an Exiv2 exception
+        // unwinds to the bridge's catch: the metadata mutex's lock_guard would
+        // stay locked after the first unreadable file, and every later read would hang.
+        build.flag("/EHsc");
+    }
+    library.configure(&mut build);
+    build.compile("photosort_metadata");
+    // ELF linkers may discard shared libraries seen before their static callers.
+    library.link();
+    if library.vcpkg {
+        // Exiv2 reports file and process details through psapi; its .pc names it, vcpkg does not.
+        println!("cargo:rustc-link-lib=psapi");
     }
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
@@ -86,9 +82,7 @@ fn main() {
         }
     }
 
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
-        && std::env::var_os("CARGO_FEATURE_HEIF").is_some()
-    {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         println!("cargo:rerun-if-changed=native/apple_image.m");
         println!("cargo:rerun-if-changed=native/apple_image.h");
         cc::Build::new()
@@ -99,15 +93,13 @@ fn main() {
         }
     }
 
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos")
-        && std::env::var_os("CARGO_FEATURE_HEIF").is_some()
-    {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         println!("cargo:rerun-if-changed=native/heif_metadata.c");
         let mut library = Native::find(
             "libheif",
             "libheif",
             "1.23",
-            "Install libheif >= 1.23 for portable HEIF support (Windows: cargo vcpkg build)",
+            "Install libheif >= 1.23 (Ubuntu: libheif-dev; Windows: cargo vcpkg build)",
         );
         if library.vcpkg {
             // vcpkg builds static libraries; their headers otherwise declare DLL imports.
@@ -130,38 +122,36 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed=native/raw.c");
-    if std::env::var_os("CARGO_FEATURE_RAW").is_some() {
-        let library = Native::find(
-            "libraw",
-            "libraw",
-            "0.21",
-            "Install LibRaw (macOS: brew install libraw; Ubuntu: libraw-dev; Windows: cargo vcpkg build), or build --no-default-features for raster-only support",
-        );
-        let mut build = cc::Build::new();
-        build.file("native/raw.c");
-        library.configure(&mut build);
-        build.compile("photosort_raw");
-        if library.vcpkg {
-            library.link();
-        } else {
-            let library = pkg_config::Config::new()
-                .cargo_metadata(false)
-                .atleast_version("0.21")
-                .probe("libraw")
-                .expect("LibRaw link configuration");
-            for path in library.link_paths {
-                println!("cargo:rustc-link-search=native={}", path.display());
-            }
-            for lib in library.libs {
-                let name = if lib == "stdc++"
-                    && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
-                {
-                    "c++"
-                } else {
-                    &lib
-                };
-                println!("cargo:rustc-link-lib={name}");
-            }
+    let library = Native::find(
+        "libraw",
+        "libraw",
+        "0.21",
+        "Install LibRaw (macOS: brew install libraw; Ubuntu: libraw-dev; Windows: cargo vcpkg build)",
+    );
+    let mut build = cc::Build::new();
+    build.file("native/raw.c");
+    library.configure(&mut build);
+    build.compile("photosort_raw");
+    if library.vcpkg {
+        library.link();
+    } else {
+        let library = pkg_config::Config::new()
+            .cargo_metadata(false)
+            .atleast_version("0.21")
+            .probe("libraw")
+            .expect("LibRaw link configuration");
+        for path in library.link_paths {
+            println!("cargo:rustc-link-search=native={}", path.display());
+        }
+        for lib in library.libs {
+            let name = if lib == "stdc++"
+                && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
+            {
+                "c++"
+            } else {
+                &lib
+            };
+            println!("cargo:rustc-link-lib={name}");
         }
     }
 }

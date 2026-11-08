@@ -92,10 +92,7 @@ impl PhotoSortApp {
                 self.failures.remove(&id);
             }
         }
-        if media.kind == MediaKind::Video
-            && crate::core::playback::supported()
-            && ui.button("Watch here").clicked()
-        {
+        if media.kind == MediaKind::Video && ui.button("Watch here").clicked() {
             self.review = true;
             self.runtime.playback.select(Some(&media));
             self.video_context = Some((self.step, media.id));

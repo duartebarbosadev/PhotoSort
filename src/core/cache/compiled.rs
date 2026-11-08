@@ -98,9 +98,9 @@ pub(super) fn remove(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(test, all(feature = "onnx", target_os = "macos")))]
+#[cfg(any(test, target_os = "macos"))]
 mod writer;
-#[cfg(all(feature = "onnx", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 pub(crate) use writer::{Format, Lease, key};
 
 #[cfg(test)]

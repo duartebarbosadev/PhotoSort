@@ -33,9 +33,9 @@ pub(super) struct Film {
     texture: Option<(u64, TextureHandle)>,
 }
 impl Intro {
-    /// Due on first launch only, where this build can play the bundled film.
+    /// Due on first launch only.
     pub(super) fn at_startup(preferences: &Preferences, autoplay: bool) -> Self {
-        if !autoplay || preferences.intro_shown || !playback::supported() {
+        if !autoplay || preferences.intro_shown {
             return Self::Off;
         }
         film_path().map_or(Self::Off, Self::Due)
@@ -78,12 +78,12 @@ fn card_size(window: Vec2, aspect: f32) -> Vec2 {
 }
 fn player(ctx: &egui::Context) -> playback::Player {
     // Unit tests script playback; a real decoder makes them timing-dependent.
-    #[cfg(all(test, any(target_os = "macos", feature = "portable-video")))]
+    #[cfg(test)]
     {
         let _ = ctx;
         playback::test_player()
     }
-    #[cfg(not(all(test, any(target_os = "macos", feature = "portable-video"))))]
+    #[cfg(not(test))]
     {
         let ctx = ctx.clone();
         playback::Player::new(Arc::new(move || ctx.request_repaint()))
@@ -339,14 +339,11 @@ mod tests {
         };
         assert!(matches!(Intro::at_startup(&seen, true), Intro::Off));
         // The checkout's film is found from the crate root, where tests run.
-        assert_eq!(
-            matches!(Intro::at_startup(&fresh, true), Intro::Due(_)),
-            playback::supported()
-        );
+        assert!(matches!(Intro::at_startup(&fresh, true), Intro::Due(_)));
     }
 }
 
-#[cfg(all(test, any(target_os = "macos", feature = "portable-video")))]
+#[cfg(test)]
 mod playback_tests {
     use super::*;
     use crate::test_support::worker_patience;

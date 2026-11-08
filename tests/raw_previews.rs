@@ -1,5 +1,4 @@
 //! Native RAW preview/detail contracts. Only independent copies receive sidecars or corruptions.
-#![cfg(feature = "raw")]
 use photosort::core::{
     catalog::Catalog,
     inspection::{Region, Request},

@@ -249,7 +249,7 @@ impl PhotoSortApp {
                     self.help = true;
                     ui.close();
                 }
-                if crate::core::playback::supported() && ui.button("Watch the intro").clicked() {
+                if ui.button("Watch the intro").clicked() {
                     self.watch_intro();
                     ui.close();
                 }
@@ -424,7 +424,7 @@ impl PhotoSortApp {
                         ),
                         (
                             "Metadata",
-                            if cfg!(feature = "metadata-native") { "Exiv2" } else { "kamadak-exif" }.to_owned(),
+                            "Exiv2".to_owned(),
                         ),
                         ("Typeface", "Inter".to_owned()),
                     ] {

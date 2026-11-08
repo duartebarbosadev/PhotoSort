@@ -231,7 +231,6 @@ fn rotation_cache_obeys_persistence_budget_and_active_working_set_ownership() {
 }
 
 #[test]
-#[cfg(feature = "onnx")]
 #[ignore = "requires all seven reference photos and installed native orientation model"]
 fn native_rotation_cache_reuses_seven_samples_across_runs_restart_and_invalidation() {
     use photosort::core::{

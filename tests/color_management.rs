@@ -122,7 +122,7 @@ fn untagged_images_remain_byte_exact_and_cancellation_cannot_cache_a_conversion(
     assert_eq!(pipeline.stats.color_transforms, 1);
 }
 
-#[cfg(all(target_os = "macos", feature = "heif"))]
+#[cfg(target_os = "macos")]
 #[test]
 fn tagged_opaque_pixels_agree_with_independent_apple_colorsync_conversion() {
     let temp = tempfile::tempdir().unwrap();
@@ -182,7 +182,6 @@ fn tagged_opaque_pixels_agree_with_independent_apple_colorsync_conversion() {
         );
     }
 }
-#[cfg(feature = "raw")]
 #[test]
 #[ignore = "Uses the seven original PhotoSort samples through the shared native pipeline"]
 fn original_samples_keep_shared_display_analysis_and_restart_usable() {
@@ -214,7 +213,7 @@ fn original_samples_keep_shared_display_analysis_and_restart_usable() {
     );
 }
 
-#[cfg(all(target_os = "macos", feature = "heif"))]
+#[cfg(target_os = "macos")]
 #[test]
 fn cmyk_and_ycck_profiles_preserve_ink_channels_and_share_corrected_results() {
     let temp = tempfile::tempdir().unwrap();

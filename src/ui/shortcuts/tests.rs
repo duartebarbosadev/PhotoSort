@@ -586,7 +586,7 @@ fn analysis_shortcut_uses_workflow_owner_and_preserves_active_work() {
                 },
             );
             if step == Step::Rotation {
-                // Minimal builds have no model; the same action opens setup.
+                // Without an installed model, the same action opens setup.
                 assert!(app.model_dialog || app.rotation_run.is_some());
                 assert_eq!(app.analysis_run, app.rotation_run);
             } else {

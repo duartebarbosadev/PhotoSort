@@ -269,7 +269,6 @@ fn a_running_grouping_shows_progress_instead_of_a_result() {
         assert!(!shows(&nodes, claim), "{claim} shown while grouping");
     }
     // Model preparation is named while it runs.
-    #[cfg(feature = "onnx")]
     {
         app.runtime
             .processing

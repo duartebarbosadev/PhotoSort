@@ -202,13 +202,11 @@ pub struct Control {
 /// Step durations from earlier preparations, kept in a small file so the
 /// next launch can say how long a step usually takes.
 #[derive(Default)]
-#[cfg_attr(not(feature = "onnx"), allow(dead_code))]
 struct Timings {
     path: Option<std::path::PathBuf>,
     millis: BTreeMap<String, u64>,
 }
 impl Timings {
-    #[cfg(feature = "onnx")]
     fn key(model: &str, backend: Backend, step: PrepStep) -> String {
         format!("{model}:{backend:?}:{step:?}")
     }
@@ -259,13 +257,11 @@ impl Control {
             millis,
         };
     }
-    #[cfg(feature = "onnx")]
     fn usual(&self, model: &str, backend: Backend, step: PrepStep) -> Option<std::time::Duration> {
         let timings = self.timings.lock().unwrap();
         let millis = timings.millis.get(&Timings::key(model, backend, step))?;
         Some(std::time::Duration::from_millis(*millis))
     }
-    #[cfg(feature = "onnx")]
     /// Logs how long the finished step took and keeps that time for next launch.
     fn finish_step(&self, model: &'static str, backend: Backend, prep: Prep) {
         let millis = prep.step_started.elapsed().as_millis() as u64;
@@ -280,7 +276,6 @@ impl Control {
             let _ = std::fs::write(path, bytes);
         }
     }
-    #[cfg(feature = "onnx")]
     pub(crate) fn preparing(&self, model: &'static str, backend: Backend) {
         tracing::info!(model, ?backend, "model preparation started");
         self.status.lock().unwrap().insert(
@@ -294,7 +289,6 @@ impl Control {
             },
         );
     }
-    #[cfg(feature = "onnx")]
     /// Moves a preparing model to its next step, closing the previous one.
     pub(crate) fn step(&self, model: &'static str, backend: Backend, step: PrepStep) {
         let now = std::time::Instant::now();
@@ -319,7 +313,6 @@ impl Control {
             self.finish_step(model, backend, prep);
         }
     }
-    #[cfg(feature = "onnx")]
     pub(crate) fn report(&self, model: &'static str, backend: Backend, detail: String) {
         let finished = self
             .status
@@ -345,7 +338,6 @@ impl Control {
             },
         );
     }
-    #[cfg(feature = "onnx")]
     pub(crate) fn clear_model_status(&self, kind: &str) {
         self.status.lock().unwrap().remove(kind);
     }

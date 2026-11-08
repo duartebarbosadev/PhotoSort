@@ -13,7 +13,6 @@ use std::{
 
 mod fallback;
 mod movie;
-#[cfg(feature = "metadata-native")]
 mod native;
 
 const XMP: &[u8] = b"http://ns.adobe.com/xap/1.0/";
@@ -86,26 +85,23 @@ pub fn read_cancellable(path: &Path, cancelled: &impl Fn() -> bool) -> Result<Me
         orientation: 1,
         ..Default::default()
     };
-    #[cfg(feature = "metadata-native")]
     let native_loaded = if let Some(snapshot) = native::read(path) {
         snapshot.apply(&mut result, &mut dates);
         true
     } else {
         false
     };
-    #[cfg(not(feature = "metadata-native"))]
-    let native_loaded = false;
     if !native_loaded {
         fallback::read(path, &mut result, &mut dates);
     }
-    #[cfg(all(feature = "heif", target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     if path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("heic") || e.eq_ignore_ascii_case("heif"))
     {
         result.orientation = super::apple_image::orientation(path);
     }
-    #[cfg(all(feature = "heif", not(target_os = "macos")))]
+    #[cfg(not(target_os = "macos"))]
     if path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("heic") || e.eq_ignore_ascii_case("heif"))
@@ -437,12 +433,6 @@ pub fn write_embedded(
         rating.is_none_or(|r| r <= 5) && orientation.is_none_or(|o| (1..=8).contains(&o)),
         "Invalid metadata values"
     );
-    #[cfg(not(feature = "metadata-native"))]
-    {
-        let _ = (path, expected);
-        anyhow::bail!("Embedded metadata needs a full native build");
-    }
-    #[cfg(feature = "metadata-native")]
     replace_verified(path, expected, |staged| {
         native::write_copy(staged, rating, orientation)
     })

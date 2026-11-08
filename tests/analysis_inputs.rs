@@ -166,7 +166,6 @@ fn palette_analysis_filters_colors_instead_of_aliasing_palette_indices() {
     }
 }
 
-#[cfg(feature = "raw")]
 #[test]
 #[ignore = "requires PHOTOSORT_SAMPLE_DIR and PHOTOSORT_ANALYSIS_REFERENCE captured by scripts/capture_analysis_reference.py"]
 fn seven_samples_use_neutral_inputs_and_raw_embedded_or_fallback_paths() -> anyhow::Result<()> {

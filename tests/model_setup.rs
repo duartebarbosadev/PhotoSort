@@ -93,21 +93,18 @@ fn prepared_bundle_verifies_once_and_import_reuses_the_streamed_checksum() {
     worker.shutdown();
 }
 #[test]
-#[cfg(feature = "model-downloads")]
 #[ignore = "Downloads the pinned 38.7 MB SFace model into a disposable directory"]
 fn pinned_native_model_download_verifies_and_never_changes_bundled_assets() {
     pinned_download(Id::People);
 }
 
 #[test]
-#[cfg(feature = "model-downloads")]
 #[ignore = "Downloads the pinned 80.6 MB orientation model into a disposable directory"]
 fn pinned_orientation_download_installs_without_a_bundle_and_reuses_verification() {
     pinned_download(Id::Rotation);
 }
 
 #[test]
-#[cfg(feature = "model-downloads")]
 #[ignore = "Downloads the three pinned MediaPipe models (7.3 MB) from the models-2 release"]
 fn pinned_converted_face_model_downloads_install_without_a_bundle() {
     for id in [Id::Detector, Id::Landmarks, Id::Blendshapes] {
@@ -116,13 +113,11 @@ fn pinned_converted_face_model_downloads_install_without_a_bundle() {
 }
 
 #[test]
-#[cfg(feature = "model-downloads")]
 #[ignore = "Downloads the pinned 534.5 MB aesthetic model from the models-2 release"]
 fn pinned_aesthetic_download_installs_without_a_bundle() {
     pinned_download(Id::Aesthetic);
 }
 
-#[cfg(feature = "model-downloads")]
 fn pinned_download(id: Id) {
     let dir = tempfile::tempdir().unwrap();
     let mut worker = Worker::new(vec![dir.path().into()], Arc::new(|| {}));

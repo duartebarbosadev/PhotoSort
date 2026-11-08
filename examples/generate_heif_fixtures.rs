@@ -1,5 +1,5 @@
 //! Generate tiny codec fixtures into a new directory; requires a HEVC encoder.
-#[cfg(all(feature = "heif", not(target_os = "macos")))]
+#[cfg(not(target_os = "macos"))]
 fn main() -> anyhow::Result<()> {
     use libheif_rs::*;
     use std::path::PathBuf;
@@ -122,7 +122,7 @@ fn main() -> anyhow::Result<()> {
     }
     Ok(())
 }
-#[cfg(not(all(feature = "heif", not(target_os = "macos"))))]
+#[cfg(target_os = "macos")]
 fn main() {
     eprintln!("Generate these fixtures on a portable HEIF build with a HEVC encoder.");
 }

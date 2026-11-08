@@ -10,27 +10,6 @@ mod runtime_check;
 pub use runtime_check::{RuntimeReport, check_runtime, check_runtime_with_backend};
 
 #[derive(Serialize)]
-pub struct Capabilities {
-    pub raw: bool,
-    pub heif: bool,
-    pub embedded_metadata: bool,
-    pub neural_inference: bool,
-    pub model_downloads: bool,
-    pub native_video: bool,
-}
-impl Default for Capabilities {
-    fn default() -> Self {
-        Self {
-            raw: cfg!(feature = "raw"),
-            heif: cfg!(feature = "heif"),
-            embedded_metadata: cfg!(feature = "metadata-native"),
-            neural_inference: cfg!(feature = "onnx"),
-            model_downloads: cfg!(feature = "model-downloads"),
-            native_video: super::playback::supported(),
-        }
-    }
-}
-#[derive(Serialize)]
 pub struct Model {
     pub name: &'static str,
     pub selected: bool,
@@ -59,7 +38,6 @@ pub struct Report {
     pub version: &'static str,
     pub platform: &'static str,
     pub architecture: &'static str,
-    pub capabilities: Capabilities,
     #[serde(serialize_with = "display_path")]
     pub data_directory: PathBuf,
     #[serde(serialize_with = "display_path")]
@@ -75,9 +53,9 @@ pub fn collect() -> Result<Report> {
 }
 fn collect_cancellable(cancelled: &impl Fn() -> bool) -> Result<Report> {
     let snapshot = Inspector::default().inspect(&models::resource_roots(), cancelled)?;
-    Ok(from_snapshot(snapshot, Capabilities::default()))
+    Ok(from_snapshot(snapshot))
 }
-fn from_snapshot(snapshot: Snapshot, capabilities: Capabilities) -> Report {
+fn from_snapshot(snapshot: Snapshot) -> Report {
     let has_override = snapshot.orientation_override.is_some();
     let models: Vec<_> = snapshot
         .rows
@@ -97,21 +75,18 @@ fn from_snapshot(snapshot: Snapshot, capabilities: Capabilities) -> Report {
             }
         })
         .collect();
-    let files_ready = !capabilities.neural_inference
-        || (snapshot.runtime.is_some()
-            && models.len() == super::model_assets::ALL.len()
-            && models
-                .iter()
-                .filter(|model| model.selected)
-                .all(|model| model.status == "verified")
-            && snapshot
-                .orientation_override
-                .as_ref()
-                .is_none_or(|(_, present)| *present));
+    let files_ready = snapshot.runtime.is_some()
+        && models.len() == super::model_assets::ALL.len()
+        && models
+            .iter()
+            .filter(|model| model.selected)
+            .all(|model| model.status == "verified")
+        && snapshot
+            .orientation_override
+            .as_ref()
+            .is_none_or(|(_, present)| *present);
     let runtime = Runtime {
-        status: if !capabilities.neural_inference {
-            "not_enabled"
-        } else if snapshot.runtime.is_some() {
+        status: if snapshot.runtime.is_some() {
             "present_unverified"
         } else {
             "missing"
@@ -120,11 +95,11 @@ fn from_snapshot(snapshot: Snapshot, capabilities: Capabilities) -> Report {
         load_verified: false,
     };
     Report {
-        schema_version: 1,
+        // Version 1 also listed the optional features a build had.
+        schema_version: 2,
         version: env!("CARGO_PKG_VERSION"),
         platform: std::env::consts::OS,
         architecture: std::env::consts::ARCH,
-        capabilities,
         data_directory: session::data_dir(),
         cache_directory: session::cache_dir(),
         models,
@@ -176,13 +151,7 @@ mod tests {
     fn file_readiness_never_claims_runtime_or_custom_model_load_verification() {
         let mut snapshot = snapshot();
         snapshot.orientation_override = Some(("custom.onnx".into(), true));
-        let report = from_snapshot(
-            snapshot,
-            Capabilities {
-                neural_inference: true,
-                ..Default::default()
-            },
-        );
+        let report = from_snapshot(snapshot);
         assert!(report.files_ready);
         assert!(!report.runtime.load_verified);
         assert_eq!(report.runtime.status, "present_unverified");
@@ -193,7 +162,7 @@ mod tests {
                 .unwrap()
                 .model_compatibility_verified
         );
-        assert_eq!(serde_json::to_value(report).unwrap()["schema_version"], 1);
+        assert_eq!(serde_json::to_value(report).unwrap()["schema_version"], 2);
     }
     #[test]
     fn enabled_ai_requires_complete_verified_inventory_and_a_runtime_file() {
@@ -205,37 +174,8 @@ mod tests {
                 2 => snapshot.rows[0].health = Health::Invalid("bad".into(), "checksum".into()),
                 _ => snapshot.orientation_override = Some(("missing".into(), false)),
             }
-            assert!(
-                !from_snapshot(
-                    snapshot,
-                    Capabilities {
-                        neural_inference: true,
-                        ..Default::default()
-                    }
-                )
-                .files_ready
-            );
+            assert!(!from_snapshot(snapshot).files_ready);
         }
-    }
-    #[test]
-    fn minimal_build_reports_unavailable_ai_without_requiring_model_files() {
-        let snapshot = Snapshot {
-            rows: Vec::new(),
-            runtime: None,
-            cuda: None,
-            orientation_override: None,
-            hash_reads: 0,
-        };
-        let report = from_snapshot(
-            snapshot,
-            Capabilities {
-                neural_inference: false,
-                ..Default::default()
-            },
-        );
-        assert!(report.files_ready);
-        assert_eq!(report.runtime.status, "not_enabled");
-        assert!(!report.capabilities.neural_inference);
     }
 }
 
@@ -252,13 +192,7 @@ mod path_tests {
             .unwrap()
             .health = Health::Missing;
         snapshot.orientation_override = Some(("custom.onnx".into(), true));
-        let report = from_snapshot(
-            snapshot,
-            Capabilities {
-                neural_inference: true,
-                ..Default::default()
-            },
-        );
+        let report = from_snapshot(snapshot);
         assert!(report.files_ready);
         assert!(
             !report
@@ -278,7 +212,7 @@ mod path_tests {
         snapshot.rows[0].health = Health::Verified(path.clone());
         snapshot.runtime = Some(path.clone());
         snapshot.orientation_override = Some((path.clone(), true));
-        let report = from_snapshot(snapshot, Capabilities::default());
+        let report = from_snapshot(snapshot);
         assert_eq!(report.runtime.path.as_ref(), Some(&path));
         let json = serde_json::to_value(&report).unwrap();
         assert!(

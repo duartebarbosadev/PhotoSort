@@ -167,14 +167,13 @@ const EYE_BLINK_RIGHT: usize = 10;
 /// Whether faces can be analyzed: the native runtime is built in and the
 /// three face models are installed.
 pub fn installed() -> bool {
-    cfg!(feature = "onnx")
-        && [
-            "face_detector.onnx",
-            "face_landmarks_detector.onnx",
-            "face_blendshapes.onnx",
-        ]
-        .iter()
-        .all(|name| model_path(name).is_some())
+    [
+        "face_detector.onnx",
+        "face_landmarks_detector.onnx",
+        "face_blendshapes.onnx",
+    ]
+    .iter()
+    .all(|name| model_path(name).is_some())
 }
 pub fn analyze(models: &mut super::models::Models, asset: &Asset) -> Result<Faces> {
     analyze_cancellable(models, asset, || false)

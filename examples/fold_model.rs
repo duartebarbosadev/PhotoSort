@@ -3,15 +3,9 @@
 //! Folding the BeIT aesthetic export offline removes a ~3.5 GiB constant-folding
 //! peak from the first analysis on every machine.
 //! Usage: fold_model <source.onnx> <new-output.onnx> [input-edge, default 384]
-#[cfg(feature = "onnx")]
 fn main() -> anyhow::Result<()> {
     fold::run()
 }
-#[cfg(not(feature = "onnx"))]
-fn main() -> anyhow::Result<()> {
-    anyhow::bail!("Build this tool with the onnx feature")
-}
-#[cfg(feature = "onnx")]
 mod fold {
     use anyhow::{Context, Result, ensure};
     use ort::{

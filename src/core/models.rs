@@ -1,12 +1,10 @@
 //! One lazy native model registry, shared by every workflow.
-#[cfg(feature = "onnx")]
 use super::model::Fingerprint;
 use super::pipeline::Asset;
 use super::processing::{Backend, Control, RunConfig};
 use anyhow::{Context, Result};
 use image::{DynamicImage, imageops::FilterType};
 use std::path::{Path, PathBuf};
-#[cfg(feature = "onnx")]
 mod execution;
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -35,7 +33,6 @@ pub struct Models {
     backend: Backend,
     processing: Control,
     cancellation: Option<std::sync::Arc<dyn Fn() -> bool + Send + Sync>>,
-    #[cfg(feature = "onnx")]
     sessions: std::collections::HashMap<
         &'static str,
         (PathBuf, Fingerprint, execution::NativeSession, Backend),
@@ -52,7 +49,6 @@ impl Default for Models {
             backend: Backend::default(),
             processing: Control::default(),
             cancellation: None,
-            #[cfg(feature = "onnx")]
             sessions: Default::default(),
             initializations: 0,
             inferences: 0,
@@ -71,7 +67,6 @@ impl Models {
     pub(crate) fn configure_compiled_cache(&mut self, root: PathBuf, clear: bool) {
         let release = clear || self.compiled_cache.as_ref().is_some_and(|old| old != &root);
         if release {
-            #[cfg(feature = "onnx")]
             self.sessions.retain(|kind, (_, _, session, _)| {
                 if session.cached() {
                     self.processing.clear_model_status(kind);
@@ -95,7 +90,6 @@ impl Models {
         self.cancellation = None;
         let changed = self.backend != config.backend;
         if changed {
-            #[cfg(feature = "onnx")]
             self.sessions.clear();
             self.processing.clear_status();
             self.backend = config.backend;
@@ -114,7 +108,6 @@ impl Models {
         if threads == self.cpu_threads {
             return false;
         }
-        #[cfg(feature = "onnx")]
         self.sessions.clear();
         self.processing.clear_status();
         self.cpu_threads = threads;
@@ -130,7 +123,6 @@ impl Models {
     ) -> Result<Vec<Vec<f32>>> {
         self.infer_batch_all(kind, path, size, 1, input, &|| false)
     }
-    #[cfg(feature = "onnx")]
     fn infer_batch_all(
         &mut self,
         kind: &'static str,
@@ -186,7 +178,6 @@ impl Models {
             ort::value::Tensor::from_array(([batch, 3, size, size], input.into_boxed_slice()))?;
         self.run_with_fallback(kind, path, fingerprint, tensor, batch, &cancelled)
     }
-    #[cfg(feature = "onnx")]
     /// Points input `[1, count, 2]`, such as Face Mesh landmarks for blendshapes.
     pub(crate) fn infer_points(
         &mut self,
@@ -206,7 +197,6 @@ impl Models {
             ort::value::Tensor::from_array(([1, points.len() / 2, 2], points.into_boxed_slice()))?;
         self.run_with_fallback(kind, path, fingerprint, tensor, 1, &cancelled)
     }
-    #[cfg(feature = "onnx")]
     fn ensure_session(
         &mut self,
         kind: &'static str,
@@ -261,7 +251,6 @@ impl Models {
         }
         Ok(fingerprint)
     }
-    #[cfg(feature = "onnx")]
     /// One attempt on the configured provider, then a single CPU retry.
     fn run_with_fallback(
         &mut self,
@@ -312,27 +301,6 @@ impl Models {
             .insert(kind, (path.to_owned(), fingerprint, session, Backend::Cpu));
         anyhow::ensure!(!cancelled(), "Inference cancelled");
         result
-    }
-    #[cfg(not(feature = "onnx"))]
-    pub(crate) fn infer_points(
-        &mut self,
-        _kind: &'static str,
-        _path: &Path,
-        _points: Vec<f32>,
-    ) -> Result<Vec<Vec<f32>>> {
-        anyhow::bail!("This build has no ONNX support")
-    }
-    #[cfg(not(feature = "onnx"))]
-    fn infer_batch_all(
-        &mut self,
-        _kind: &'static str,
-        _path: &Path,
-        _size: usize,
-        _batch: usize,
-        _input: Vec<f32>,
-        _cancelled: &dyn Fn() -> bool,
-    ) -> Result<Vec<Vec<f32>>> {
-        anyhow::bail!("This build has no ONNX support")
     }
     fn infer(
         &mut self,
@@ -666,7 +634,7 @@ pub fn runtime_path() -> Option<PathBuf> {
 /// are loaded by name, and Windows looks for those beside the executable and on
 /// PATH, not beside the provider. Put the runtime's folder first on this
 /// process's PATH once, so NVIDIA libraries installed with it are found.
-#[cfg(all(target_os = "windows", feature = "onnx"))]
+#[cfg(target_os = "windows")]
 fn search_runtime_directory(runtime: &std::path::Path) {
     static ADDED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     let Some(directory) = runtime.parent() else {
@@ -742,7 +710,7 @@ fn model_signature(names: &[&str]) -> String {
     hash.finalize().to_hex().to_string()
 }
 
-#[cfg(all(test, feature = "onnx"))]
+#[cfg(test)]
 mod batch_probe {
     use super::*;
     #[test]
@@ -838,7 +806,7 @@ mod batch_probe {
     }
 }
 
-#[cfg(all(test, feature = "onnx"))]
+#[cfg(test)]
 mod regional_batch_tests {
     use super::*;
     #[test]
@@ -1111,6 +1079,6 @@ mod orientation_tests {
     }
 }
 
-#[cfg(all(test, feature = "onnx"))]
+#[cfg(test)]
 #[path = "models/orientation_audit.rs"]
 mod orientation_audit;

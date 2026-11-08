@@ -67,7 +67,6 @@ fn folder_trash_discard_preserves_unrelated_organization_intent() {
         "Trash recovery checkpoints include kept Organize intent"
     );
 }
-#[cfg(feature = "metadata-native")]
 #[test]
 fn staged_rotation_and_rating_apply_together_and_keep_the_reviewed_destination() {
     let (dir, mut app) = fixture();

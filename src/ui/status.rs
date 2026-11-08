@@ -94,7 +94,6 @@ mod tests {
         assert!(app.analysis_failures.is_empty());
         app.runtime.shutdown();
     }
-    #[cfg(feature = "onnx")]
     #[test]
     fn model_preparation_is_visible_only_while_the_shared_run_is_active() {
         let temp = tempfile::tempdir().unwrap();

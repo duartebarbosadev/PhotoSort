@@ -1,5 +1,5 @@
 pub mod analysis;
-#[cfg(all(feature = "heif", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 pub mod apple_image;
 pub mod cache;
 mod cache_record;
@@ -72,5 +72,5 @@ pub mod diagnostics;
 
 pub mod desktop;
 
-#[cfg(all(feature = "heif", not(target_os = "macos")))]
+#[cfg(not(target_os = "macos"))]
 mod heif;

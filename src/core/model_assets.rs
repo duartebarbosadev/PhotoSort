@@ -10,7 +10,6 @@ use std::{
 };
 mod worker;
 pub use worker::{Progress, State, Work, Worker};
-#[cfg(feature = "model-downloads")]
 mod download;
 pub mod runtime;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -172,11 +171,10 @@ impl Asset {
 pub struct Issue {
     pub missing: Vec<Id>,
     pub runtime_missing: bool,
-    pub unsupported: bool,
 }
 impl Issue {
     pub fn is_empty(&self) -> bool {
-        self.missing.is_empty() && !self.runtime_missing && !self.unsupported
+        self.missing.is_empty() && !self.runtime_missing
     }
 }
 pub fn required(profile: super::jobs::AnalysisProfile) -> &'static [Id] {
@@ -208,7 +206,6 @@ pub fn preflight(ids: &[Id]) -> Issue {
         return Issue::default();
     }
     Issue {
-        unsupported: !cfg!(feature = "onnx"),
         runtime_missing: runtime_file().is_none(),
         missing: ids
             .iter()

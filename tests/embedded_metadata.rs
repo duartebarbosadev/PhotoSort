@@ -196,7 +196,6 @@ fn unsupported_formats_and_minimal_builds_retain_reviewed_sidecar_fallback() {
     let updated = metadata::read(&source.path);
     assert_eq!((updated.rating, updated.orientation), (3, 6));
 }
-#[cfg(feature = "metadata-native")]
 fn jpeg_scan(bytes: &[u8]) -> &[u8] {
     assert_eq!(&bytes[..2], &[0xff, 0xd8]);
     let mut p = 2;
@@ -210,7 +209,6 @@ fn jpeg_scan(bytes: &[u8]) -> &[u8] {
         p += 2 + n;
     }
 }
-#[cfg(feature = "metadata-native")]
 #[test]
 fn embedded_edits_preserve_jpeg_pixels_unrelated_metadata_and_hardlinked_sources() {
     let temp = tempfile::tempdir().unwrap();
@@ -242,7 +240,6 @@ fn embedded_edits_preserve_jpeg_pixels_unrelated_metadata_and_hardlinked_sources
     metadata::write_embedded(&path, Fingerprint::read(&path).unwrap(), Some(0), None).unwrap();
     assert_eq!(metadata::read(&path).rating, 0);
 }
-#[cfg(feature = "metadata-native")]
 #[test]
 fn failed_or_stale_embedded_writes_preserve_sources_and_retry_plan() {
     let temp = tempfile::tempdir().unwrap();
@@ -300,7 +297,6 @@ fn failed_or_stale_embedded_writes_preserve_sources_and_retry_plan() {
             .starts_with(".photosort-metadata-")
     }));
 }
-#[cfg(feature = "metadata-native")]
 #[test]
 fn image_actor_reuses_indexed_metadata_while_planning_embedded_edits() {
     use photosort::core::jobs::{Event, ImageWork, Runtime};
@@ -376,7 +372,6 @@ fn image_actor_reuses_indexed_metadata_while_planning_embedded_edits() {
     }
     rt.shutdown();
 }
-#[cfg(feature = "metadata-native")]
 #[test]
 #[ignore = "copies the seven reference samples and verifies native metadata edits and pixel preservation"]
 fn seven_sample_copies_embed_ratings_and_rotations_without_changing_pixels() {
@@ -443,7 +438,6 @@ fn seven_sample_copies_embed_ratings_and_rotations_without_changing_pixels() {
     }
 }
 
-#[cfg(feature = "metadata-native")]
 #[test]
 fn embedded_rotation_preserves_unapplied_ratings_and_saved_focus_across_reload() {
     use photosort::core::{
@@ -518,7 +512,7 @@ fn embedded_rotation_preserves_unapplied_ratings_and_saved_focus_across_reload()
     assert_eq!(metadata::read(&m.path).orientation, 3);
 }
 
-#[cfg(all(feature = "metadata-native", unix))]
+#[cfg(unix)]
 #[test]
 fn embedded_updates_preserve_permissions_and_refuse_symlink_sources() {
     use std::os::unix::fs::{PermissionsExt, symlink};

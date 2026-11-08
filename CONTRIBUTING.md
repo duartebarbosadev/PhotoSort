@@ -7,7 +7,7 @@ runs, the opt-in reference tests and the developer tools in `examples/`.
 
 ## Building
 
-You need Rust 1.95 or later, a C/C++ compiler and pkg-config. Default builds also need
+You need Rust 1.95 or later, a C/C++ compiler and pkg-config. Every build also needs
 LibRaw 0.21+ and Exiv2 0.28+, and on Linux and Windows libheif 1.23+ with an HEVC decoder
 plugin and GStreamer 1.20+. On macOS, HEIF and video use system frameworks.
 
@@ -315,33 +315,12 @@ The hardened runtime enables library validation, so a Developer ID build loads o
 signed by the same team: its bundled ONNX Runtime works, but `ORT_DYLIB_PATH` or a Homebrew
 copy of the library is refused. Ad-hoc builds are unaffected.
 
-## Minimal build
-
-`--no-default-features` builds PhotoSort without its optional native dependencies: LibRaw,
-libheif, ONNX Runtime, Exiv2, GStreamer and the network features. It opens JPEG, PNG, TIFF,
-GIF, WebP and BMP, keeps every step's manual review, and writes ratings and rotation to XMP
-sidecars only. It is not a release configuration. It exists so that:
-
-- CI can build and test on Windows, where the full native stack is not set up yet;
-- you can work on the UI and core logic with only Rust installed, and compile faster;
-- a binary without GPL code (Exiv2) can be built if one is ever needed.
-
-```sh
-cargo run --release --no-default-features
-```
-
-On Linux and Windows, `portable-video` adds in-app video playback to it; without it, video
-posters need `ffmpeg` on the PATH. macOS always uses AVFoundation.
-
-```sh
-cargo run --release --no-default-features --features portable-video
-```
-
 ## Checks
 
-CI ([`.github/workflows/check.yml`](.github/workflows/check.yml)) runs the minimal build on
-Ubuntu and Windows, the full build on macOS (with and without libvips) and on Windows, and
-the full libvips build in a Debian container. The Windows job installs GStreamer and builds
+CI ([`.github/workflows/check.yml`](.github/workflows/check.yml)) builds and tests
+PhotoSort on macOS (with and without libvips) and on Windows, and with libvips in a Debian
+container. Every build has every capability: RAW (LibRaw), HEIF, Exiv2 metadata, ONNX
+Runtime, model and update downloads, and video playback. The Windows job installs GStreamer and builds
 the vcpkg libraries as in [Building](#building); the vcpkg build is cached until its pinned
 revision or ports change. Formatting is checked once. Changes that only touch Markdown
 files skip CI, and Rust build caches are saved from `main`, so pull requests reuse them.
@@ -356,10 +335,7 @@ a pull request:
 ```sh
 cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
-cargo clippy --locked --no-default-features --all-targets -- -D warnings
 cargo test --locked
-cargo test --locked --no-default-features
-cargo check --locked --no-default-features --features onnx --all-targets
 ```
 
 The packager and libvips build script have their own tests, which need no Rust build:

@@ -94,13 +94,12 @@ pub fn check_runtime_with_backend(
         fixture: include_str!("../../../tests/fixtures/recognition/SOURCE.md"),
         note: "Two native inference passes using one decoded fixture and shared production services. Passing validates inference and session reuse, including CPU fallback. Model providers report session configuration, not per-operator hardware placement. Does not validate graphics, video/audio, all photo formats or photographic accuracy. PhotoSort does not persist prepared-model caches here; native runtimes may use OS temporary caches.",
     };
-    if !report.diagnostics.capabilities.neural_inference || !report.diagnostics.files_ready {
+    if !report.diagnostics.files_ready {
         report.steps.push(Step {
             name: "prerequisites",
             pass: 0,
             passed: false,
-            detail: "Enable ONNX support and resolve the file diagnostics before running inference"
-                .into(),
+            detail: "Resolve the file diagnostics before running inference".into(),
             elapsed_ms: 0,
         });
         return Ok(report);
@@ -285,13 +284,7 @@ mod tests {
     use super::*;
     pub(super) fn report() -> RuntimeReport {
         RuntimeReport {
-            diagnostics: super::super::from_snapshot(
-                super::super::tests::snapshot(),
-                super::super::Capabilities {
-                    neural_inference: true,
-                    ..Default::default()
-                },
-            ),
+            diagnostics: super::super::from_snapshot(super::super::tests::snapshot()),
             passed: false,
             cancelled: false,
             sessions_reused: false,
@@ -390,7 +383,7 @@ mod completion_tests {
     }
 }
 
-#[cfg(all(test, feature = "onnx", target_os = "macos"))]
+#[cfg(all(test, target_os = "macos"))]
 mod acceleration_probe {
     use super::*;
     #[test]

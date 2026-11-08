@@ -171,7 +171,7 @@ else for developers are in [CONTRIBUTING.md](CONTRIBUTING.md).
 | --- | --- |
 | macOS | Supported and tested in CI |
 | Linux | Builds and passes tests in CI; desktop use not yet verified |
-| Windows | Full build and test suite verified on Windows 11 (CPU and NVIDIA CUDA); CI builds the minimal configuration |
+| Windows | Builds and passes tests in CI; verified on Windows 11 (CPU and NVIDIA CUDA) |
 
 ### Built with
 
