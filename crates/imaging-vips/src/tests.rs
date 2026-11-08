@@ -589,9 +589,7 @@ fn jpeg_previews_shrink_while_decoding_to_the_requested_edge() {
     let path = temp.path().join("gradient.jpg");
     let (width, height) = (1600u16, 1200u16);
     let source: Vec<u8> = (0..u32::from(height))
-        .flat_map(|y| {
-            (0..u32::from(width)).flat_map(move |x| [(x / 8) as u8, (y / 6) as u8, 128])
-        })
+        .flat_map(|y| (0..u32::from(width)).flat_map(move |x| [(x / 8) as u8, (y / 6) as u8, 128]))
         .collect();
     jpeg_encoder::Encoder::new(File::create(&path).unwrap(), 95)
         .encode(&source, width, height, jpeg_encoder::ColorType::Rgb)
@@ -603,7 +601,7 @@ fn jpeg_previews_shrink_while_decoding_to_the_requested_edge() {
                 edge: Some(edge),
                 ..Default::default()
             },
-            &|| false,
+            || false,
         )
         .unwrap();
         assert_eq!((image.width, image.height), expected);
@@ -612,11 +610,7 @@ fn jpeg_previews_shrink_while_decoding_to_the_requested_edge() {
         let pixels = rgba(image);
         for (x, y) in [(w / 4, h / 4), (w / 2, h / 2), (w * 3 / 4, h * 3 / 4)] {
             let at = ((y * w + x) * 4) as usize;
-            let want = [
-                (x * 1600 / w / 8) as i16,
-                (y * 1200 / h / 6) as i16,
-                128,
-            ];
+            let want = [(x * 1600 / w / 8) as i16, (y * 1200 / h / 6) as i16, 128];
             for c in 0..3 {
                 let got = i16::from(pixels[at + c]);
                 assert!(

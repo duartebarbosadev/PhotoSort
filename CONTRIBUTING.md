@@ -8,17 +8,18 @@ runs, the opt-in reference tests and the developer tools in `examples/`.
 ## Building
 
 You need Rust 1.95 or later, a C/C++ compiler and pkg-config. Every build also needs
-LibRaw 0.21+ and Exiv2 0.28+, and on Linux and Windows libheif 1.23+ with an HEVC decoder
-plugin and GStreamer 1.20+. On macOS, HEIF and video use system frameworks.
+LibRaw 0.21+, Exiv2 0.28+ and libvips 8.18+ (the image engine; see [libvips](#libvips)),
+and on Linux and Windows libheif 1.23+ with an HEVC decoder plugin and GStreamer 1.20+. On
+macOS, HEIF and video use system frameworks.
 
-**macOS** (with the Xcode command line tools):
+**macOS** (with the Xcode command line tools), then build libvips as in [libvips](#libvips):
 
 ```sh
-brew install libraw exiv2 pkg-config
+brew install libraw exiv2 pkg-config glib jpeg-turbo libpng libtiff little-cms2 highway
 ```
 
 **Linux** (Debian 13 "trixie", as in CI; other distributions may ship older libheif or
-Exiv2 versions):
+Exiv2 versions), then build libvips as in [libvips](#libvips):
 
 ```sh
 sudo apt-get install build-essential pkg-config \
@@ -38,8 +39,7 @@ winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --quiet
 winget install gstreamerproject.gstreamer
 ```
 
-Then build Exiv2, LibRaw, libheif and libvips (for the optional
-[libvips backend](#libvips-backend)). Their versions are pinned in `Cargo.toml`
+Then build Exiv2, LibRaw, libheif and libvips. Their versions are pinned in `Cargo.toml`
 (`[package.metadata.vcpkg]`), and `cargo vcpkg build` builds them into `target\vcpkg`,
 where the build finds them by itself. The first run takes about 25 minutes; later runs
 reuse the result:
@@ -189,9 +189,10 @@ source, pass options after `--`, for example `cargo run --release -- --diagnosti
 (including any models and ONNX Runtime there) and the linked native libraries with their
 license notices into a relocatable `target/PhotoSort.app`, renders `AppIcon.icns` from
 `resources/icons/app_icon.png` with `sips` and `iconutil`, then verifies its signature and
-resource manifest. `--output /path/to/PhotoSort.app` chooses another destination,
-`--native-imaging` bundles the libvips backend (see [libvips backend](#libvips-backend)), and
-`CARGO_TARGET_DIR` is honored (see [Build storage](#build-storage)).
+resource manifest. It bundles the private libvips build from `.tools/vips` (see
+[libvips](#libvips); `--native-prefix` selects another). `--output /path/to/PhotoSort.app`
+chooses another destination, and `CARGO_TARGET_DIR` is honored (see
+[Build storage](#build-storage)).
 
 Bundles are ad-hoc signed and not notarized by default, so macOS may ask again for folder
 access after a rebuild. `--sign-identity` takes an existing codesign identity name or SHA-1
@@ -226,7 +227,7 @@ the private libvips copy, downloads ONNX Runtime 1.29.0 from the official releas
 fetches DINOv2, SFace and the orientation model from their pinned upstream URLs and the
 four converted models from the `models-2` prerelease (see
 [Converted models](#converted-models)), checks every file against `resources/SHA256SUMS`,
-and packages the app with `--native-imaging` and
+and packages the app with
 `PHOTOSORT_RELEASE_REPOSITORY=duartebarbosadev/PhotoSort`. It then runs `photosort --check-runtime` from the finished bundle and uploads
 `PhotoSort-<version>-macos-arm64.zip`. Bundled Homebrew libraries require the macOS version
 they were built for, so the runner image sets the app's minimum macOS; the packager writes it
@@ -235,15 +236,14 @@ to `Info.plist` and the notes repeat it.
 The Windows job runs on a pinned `windows-2025` runner. It installs GStreamer and builds
 Exiv2, LibRaw, libheif and libvips as in [Building](#building) (both cached), downloads ONNX
 Runtime's Windows archive and the same models, and runs
-[`scripts/package_windows.py`](scripts/package_windows.py), which builds the release with
-the default image backend and writes `PhotoSort-<version>-windows-x64.zip` (`--native-imaging`
-builds with libvips instead and adds its `photosort_vips.dll`; see
-[libvips backend](#libvips-backend)). The zip holds one `PhotoSort` folder:
+[`scripts/package_windows.py`](scripts/package_windows.py), which builds the release and
+writes `PhotoSort-<version>-windows-x64.zip`. The zip holds one `PhotoSort` folder:
 
 | Path | Contents |
 | --- | --- |
 | `photosort.exe` | The app |
 | `*.dll` beside it | The Visual C++ and OpenMP runtimes the build links, so no redistributable is needed |
+| `photosort_vips.dll` | libvips and its codecs (see [libvips](#libvips)) |
 | `resources\` | Models, ONNX Runtime (`runtime\`), licenses and `DependencyNotices\`; found beside the executable |
 | `gstreamer\bin`, `gstreamer\lib\gstreamer-1.0` | GStreamer and the plugins the video player uses (`PLUGINS` in the script) |
 
@@ -252,8 +252,8 @@ the executable, the plugins and ONNX Runtime to copy every library they load; on
 neither found nor part of Windows fails the build. To play a new format, add its plugin
 there. The job then unpacks the zip outside the checkout, moves the installed GStreamer
 away, and checks that `photosort --check-runtime` loads the runtime and models from the
-folder and that `examples/verify_media.rs`, run from inside it, decodes a RAW, a HEIC and
-one video per supported container.
+folder and that `examples/verify_media.rs`, run from inside it, decodes a RAW, a JPEG, a
+PNG, a HEIC and one video per supported container.
 
 A last job writes `PhotoSort-<version>-SHA256SUMS.txt` for both zips and the notes, filled
 in from [`.github/release-notes.md`](.github/release-notes.md). The app's update dialog shows
@@ -321,8 +321,7 @@ copy of the library is refused. Ad-hoc builds are unaffected.
 ## Checks
 
 CI ([`.github/workflows/check.yml`](.github/workflows/check.yml)) builds and tests
-PhotoSort on macOS (with and without libvips) and on Windows, and with libvips in a Debian
-container. Every build has every capability: RAW (LibRaw), HEIF, Exiv2 metadata, ONNX
+PhotoSort on macOS, on Windows and in a Debian container. Every build has every capability: RAW (LibRaw), HEIF, Exiv2 metadata, ONNX
 Runtime, model and update downloads, and video playback. The Windows job installs GStreamer and builds
 the vcpkg libraries as in [Building](#building); the vcpkg build is cached until its pinned
 revision or ports change. Formatting is checked once. Changes that only touch Markdown
@@ -347,27 +346,25 @@ The packager and libvips build script have their own tests, which need no Rust b
 python3 -B -m unittest discover -s scripts -p 'test_*.py'
 ```
 
-### libvips backend
+### libvips
 
-The optional `native-imaging` feature decodes JPEG, PNG, TIFF and GIF through libvips and
-Little CMS instead of the default Rust decoders. It is faster for large JPEG, PNG and TIFF
-files and supports ICC-profiled CMYK TIFF. See
-[crates/imaging-vips/README.md](crates/imaging-vips/README.md) for details.
+PhotoSort decodes JPEG, PNG, TIFF and GIF through libvips and Little CMS
+([crates/imaging-vips](crates/imaging-vips/README.md)). RAW (LibRaw), HEIF and video keep
+their own services, and WebP and BMP use the Rust `image` crate. libvips shrinks JPEGs
+while decoding, and it supports ICC-profiled CMYK TIFF.
 
-Changes to the image pipeline should also pass with `native-imaging`. Build the private
-libvips copy once (delete `.tools/vips` to rebuild it), then point pkg-config at it:
+On macOS and Linux, build the private libvips copy once (delete `.tools/vips` to rebuild
+it), then point pkg-config at it before building PhotoSort:
 
 ```sh
-brew install glib jpeg-turbo libpng libtiff little-cms2 highway
 python3 -B scripts/build_vips.py
 export PKG_CONFIG_PATH="$PWD/.tools/vips/lib/pkgconfig"
-cargo test --locked --features native-imaging
-cargo clippy --locked --features native-imaging --all-targets -- -D warnings
+cargo test --locked
 cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
 ```
 
-On Debian, install the libvips build dependencies instead of the Homebrew packages, and
-also set `LD_LIBRARY_PATH` before running tests:
+On Debian, install the libvips build dependencies too, and also set `LD_LIBRARY_PATH`
+before running tests or the app:
 
 ```sh
 sudo apt-get install python3 python3-venv cmake ninja-build libglib2.0-dev \
@@ -377,14 +374,10 @@ export LD_LIBRARY_PATH="$PWD/.tools/vips/lib"
 
 On Windows, `cargo vcpkg build` (see [Building](#building)) builds libvips 8.18 with the
 same codecs and Highway SIMD, in a vcpkg triplet of its own (`native/vcpkg-triplets`), and
-the adapter's build links it into `photosort_vips.dll`, so only the feature is needed. The
-Windows zip does not use it: on a Ryzen 7 7800X3D it opens 24 MP JPEGs at full size about
-nine times faster, but makes their 2048 px previews and analysis images slower than the
-default backend (see [crates/imaging-vips/README.md](crates/imaging-vips/README.md)). The
+the adapter's build links it into `photosort_vips.dll`; nothing else is needed. The
 adapter's own tests build outside the main `target` folder, so point them at the vcpkg tree:
 
 ```powershell
-cargo test --locked --features native-imaging
 $env:VCPKG_ROOT = "$PWD\target\vcpkg"
 cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
 ```
@@ -501,7 +494,7 @@ To package the macOS app from a temporary build directory that is removed afterw
 ```text
 src/core/             catalog, image pipeline, metadata, models, file operations
 src/ui/               egui interface and the five steps
-crates/imaging-vips/  optional libvips adapter (native-imaging feature)
+crates/imaging-vips/  libvips adapter: JPEG, PNG, TIFF and GIF decoding
 native/               ImageIO, AVFoundation, LibRaw, Exiv2 and libheif bindings
 resources/            fonts, location data, license notices, model checksums
 scripts/              macOS packager, libvips build, model export, test oracles

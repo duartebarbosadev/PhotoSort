@@ -1,13 +1,15 @@
 # PhotoSort native image engine
 
-`photosort-imaging-vips` is an optional image backend for PhotoSort, enabled with the
-`native-imaging` feature. It hands JPEG, PNG, TIFF and GIF decoding, color conversion,
-thumbnail shrinking and region reads to libvips 8.18+ and Little CMS 2.16+, behind the same
-shared image pipeline (`core::pipeline`) as the default Rust backend. RAW, HEIF and video
-keep their own services. No workflow calls this crate directly.
+`photosort-imaging-vips` is PhotoSort's image engine for JPEG, PNG, TIFF and GIF. It hands
+their decoding, color conversion, preview shrinking and region reads to libvips 8.18+ and
+Little CMS 2.16+, behind the shared image pipeline (`core::pipeline`). RAW, HEIF and video
+keep their own services, and WebP and BMP use the Rust `image` crate. No workflow calls
+this crate directly.
 
-Compared with the default backend it is faster on large JPEG/PNG/TIFF files (libvips can
-shrink while decoding) and it supports ICC-profiled CMYK TIFF.
+JPEG previews shrink while decoding: the adapter opens a JPEG with libjpeg-turbo's scaled
+IDCT at the largest 1/2, 1/4 or 1/8 that still covers the requested edge, then reduces once
+(`vips_thumbnail` alone keeps at least 2x for its final reduce, so a 24 MP JPEG would decode
+at full size for a 2048 px preview). It also supports ICC-profiled CMYK TIFF.
 
 ## What the adapter owns
 
@@ -91,34 +93,26 @@ On Linux, also set `LD_LIBRARY_PATH` to the prefix's `lib` directory before runn
 or the application. On Windows, set `VCPKG_ROOT` to the vcpkg tree instead of
 `PKG_CONFIG_PATH` (by default `target\vcpkg` in the repository root).
 
-## Using it in the app
+## Packaging
 
-```sh
-export PKG_CONFIG_PATH="$PWD/.tools/vips/lib/pkgconfig"
-cargo run --release --features native-imaging -- --folder /path/to/photos
-```
+On macOS, `python3 scripts/package_macos.py` bundles the private build (`--native-prefix`
+selects another prefix). The packager resolves transitive native libraries, keeps their
+licence notices, audits the resulting dependency graph and verifies the code signature. On
+Windows, `python scripts/package_windows.py` bundles `photosort_vips.dll` and the vcpkg
+licence notices.
 
-On macOS, `python3 scripts/package_macos.py --native-imaging` bundles the private build
-(`--native-prefix` selects another prefix). The packager resolves transitive native
-libraries, keeps their licence notices, audits the resulting dependency graph and verifies
-the code signature. On Windows, `python scripts/package_windows.py --native-imaging`
-bundles `photosort_vips.dll` and the vcpkg licence notices.
+CI builds and tests the adapter on macOS, Linux and Windows.
 
-CI builds and tests this backend on macOS, Linux and Windows, and the macOS release ships
-it. Desktop use on Linux has not been verified, so the default backend remains the default.
+## Timings
 
-### Windows timings
+`cargo run --release --example bench_pipeline` on 188 24 MP JPEGs (Windows 11, Ryzen 7
+7800X3D, idle, two runs each, seconds). The earlier Rust decoders are shown for comparison:
 
-The Windows zip keeps the default backend. `cargo run --release --example bench_pipeline`
-on 188 24 MP JPEGs (Ryzen 7 7800X3D, warm OS cache, mean of two runs, seconds):
+| Stage | Rust `image` | libvips, `vips_thumbnail` only | libvips, shrink while decoding |
+| --- | ---: | ---: | ---: |
+| Cold 2048 px previews | 38.2 | 64.0 | 33.3 |
+| Technical analysis (1024 px, from the 2048 px render) | 27.2 | 50.7 | 21.8 |
+| Original detail and revisit | 21.7 | 2.35 | 1.9 |
 
-| Stage | Default | libvips |
-| --- | --- | --- |
-| Cold 2048 px previews | 37.7 | 64.6 |
-| Technical analysis (1024 px, from the 2048 px render) | 28.4 | 50.8 |
-| Original detail and revisit | 20.9 | 2.3 |
-
-For a 2048 px preview of a 6000×4000 JPEG, `vips_thumbnail` keeps at least a factor of two
-for its final Lanczos3 reduce, so it decodes the whole source (about 80 ms) and then reduces
-it (about 170 ms, with AVX2). The default backend decodes at full size too, but resizes with
-a triangle filter on every core. Full-size and region renders are where libvips wins.
+Without the forced shrink, a 2048 px preview of a 6000×4000 JPEG decoded the whole source
+(about 80 ms) and then ran a 19-tap Lanczos3 reduce over 24 MP (about 170 ms, with AVX2).

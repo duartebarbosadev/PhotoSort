@@ -433,10 +433,12 @@ jobs:
           outside = [path for path in paths if not os.path.normcase(os.path.realpath(path)).startswith(resources)]
           sys.exit(f"Loaded from outside the zip: {outside}" if outside else None)
           EOF
-          # RAW (LibRaw), HEIC (libheif) and video (the bundled GStreamer).
+          # RAW (LibRaw), JPEG and PNG (the bundled libvips), HEIC (libheif) and video
+          # (the bundled GStreamer).
           cp "$GITHUB_WORKSPACE/target/release/examples/verify_media.exe" "$app/"
           "$app/verify_media.exe" \
             "$GITHUB_WORKSPACE/tests/samples/arw_sample.ARW" \
+            "$GITHUB_WORKSPACE/tests/samples/jpg_sample.jpg" \
             "$GITHUB_WORKSPACE/tests/samples/GAB02000-min.png" \
             "$GITHUB_WORKSPACE/tests/fixtures/heif/portable/orientation-6.heic" \
             "$GITHUB_WORKSPACE/resources/intro/intro.mp4" \
