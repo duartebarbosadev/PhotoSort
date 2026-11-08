@@ -20,7 +20,7 @@ A fresh clone gets them in one of four ways:
   check them with `shasum -a 256 -c --ignore-missing SHA256SUMS` from `resources/`.
 - **Recreate.** The aesthetic and MediaPipe exports can be rebuilt with the recipes below.
 
-ONNX Runtime itself is never downloaded by the app; see [ONNX Runtime](#onnx-runtime).
+ONNX Runtime is a separate download; see [ONNX Runtime](#onnx-runtime).
 
 | File | Source / conversion | Terms |
 | --- | --- | --- |
@@ -58,7 +58,7 @@ out; Pick Best then ranks without aesthetic scores. The same terms cover the cop
 app downloads from the `models-2` prerelease, whose notes name the licence; the model panel
 states it beside the download.
 
-Default builds link Exiv2, which is GPL-2.0-or-later (see
+PhotoSort links Exiv2, which is GPL-2.0-or-later (see
 [Native metadata library](#native-metadata-library)). Distributors should review the
 obligations of every bundled native library, not only the application's Apache-2.0 source
 license.
@@ -114,13 +114,10 @@ The resulting ONNX graphs are NCHW. Detector inputs use [-1, 1]; Face Mesh input
 
 ## ONNX Runtime
 
-Inference uses ONNX Runtime 1.29.0, loaded at runtime. The app looks for the library in
-this order: `ORT_DYLIB_PATH`, the bundled `resources/runtime/` copy, then the system
-locations `/opt/homebrew/lib/libonnxruntime.dylib` (macOS) and
-`/usr/local/lib/libonnxruntime.so` (Linux). On Windows, place `onnxruntime.dll` in
-`resources/runtime/` or point `ORT_DYLIB_PATH` at it. Official builds are published at
-https://github.com/microsoft/onnxruntime/releases/tag/v1.29.0. Builds without the `onnx`
-feature need no runtime and keep manual review only.
+Inference uses ONNX Runtime 1.29.0, loaded at run time. Official builds are published at
+https://github.com/microsoft/onnxruntime/releases/tag/v1.29.0. The download pins are in
+[src/core/model_assets/runtime.rs](../src/core/model_assets/runtime.rs), and the search order
+is `runtime_path` in [src/core/models.rs](../src/core/models.rs).
 
 The pinned macOS library is `lib/libonnxruntime.dylib` from the official
 `onnxruntime-osx-arm64-1.29.0.tgz` (41,578,864 bytes, SHA-256
@@ -130,7 +127,7 @@ both hashes; locally, extract the same file into `resources/runtime/`.
 
 ## Native metadata library
 
-Default builds link Exiv2 0.28+ for embedded metadata. The macOS packager copies the
+PhotoSort links Exiv2 0.28+ for embedded metadata. The macOS packager copies the
 linked library and its dependencies into the app; no Exiv2 command-line tool runs at
 runtime. Exiv2 is GPL-2.0-or-later; its COPYING and notice are kept as
 `licenses/EXIV2-GPL-2.0.txt` and `licenses/EXIV2-NOTICE.txt`. Source and upstream terms:

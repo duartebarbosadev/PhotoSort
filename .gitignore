@@ -18,13 +18,6 @@ __pycache__/
 .coverage.*
 coverage.xml
 
-# Local photo libraries, models and build output from the previous Python app
-/sample*/
-/models/
-/build/
-/dist/
-/temp/
-
 # Environment and OS files
 .env
 .DS_Store

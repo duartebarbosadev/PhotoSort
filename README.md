@@ -7,9 +7,7 @@
 <p align="center">
   <a href="https://github.com/duartebarbosadev/PhotoSort/actions/workflows/check.yml"><img src="https://github.com/duartebarbosadev/PhotoSort/actions/workflows/check.yml/badge.svg" alt="Rust checks"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
-  <a href="#build-from-source"><img src="https://img.shields.io/badge/rust-1.95%2B-orange.svg" alt="Rust 1.95 or later"></a>
   <a href="#build-from-source"><img src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="Platforms: macOS, Windows, Linux"></a>
-  <a href="#built-with"><img src="https://img.shields.io/badge/ONNX%20Runtime-1.29.0-informational.svg" alt="ONNX Runtime 1.29.0"></a>
 </p>
 
 PhotoSort helps you go from a folder full of new photos to the ones worth keeping. It finds
@@ -25,35 +23,23 @@ uploaded.
 
 [![PhotoSort reviewing a photo in Cull](assets/screenshots/cull.webp)](assets/screenshots/cull.webp)
 
-<p align="center">
-  <a href="#download">Download</a> ·
-  <a href="#five-steps">Five steps</a> ·
-  <a href="#keep-your-photos-safe">Keep your photos safe</a> ·
-  <a href="#useful-shortcuts">Shortcuts</a> ·
-  <a href="#local-ai">Local AI</a> ·
-  <a href="#build-from-source">Build from source</a>
-</p>
-
-> PhotoSort 3 is a native rewrite. The previous Python version stays available at the
-> [`python-final`](https://github.com/duartebarbosadev/PhotoSort/tree/python-final) tag and in
-> [releases](https://github.com/duartebarbosadev/PhotoSort/releases) up to v2.1.0.
+PhotoSort 3 is a native rewrite; the Python version is at the
+[`python-final`](https://github.com/duartebarbosadev/PhotoSort/tree/python-final) tag.
 
 ## Download
 
-Download PhotoSort for Apple Silicon Macs from the
-[Releases page](https://github.com/duartebarbosadev/PhotoSort/releases); each release's notes
-state the minimum macOS version. The first native release (3.0) is on its way; until then,
-[build from source](#build-from-source).
+PhotoSort 3 has no release yet, so [build it from source](#build-from-source). Its releases
+will include an app for Apple Silicon Macs and a zip for Windows x64.
 
-PhotoSort opens JPEG, PNG, TIFF, WebP, HEIC and the RAW formats of most cameras, and plays
-common video formats. Star ratings and rotations are saved into the photo's own metadata, or
-into XMP sidecars, so they carry over to Lightroom and other editors.
+PhotoSort opens JPEG, PNG, TIFF, WebP, HEIC and most camera RAW formats, and plays common
+video formats. Ratings and rotations go into the photo's metadata or an XMP sidecar, so
+Lightroom and other editors see them.
 
 ## Five steps
 
 The steps sit along the bottom of the window. Use only the ones you need, in any order.
-PhotoSort remembers where you left off in each folder. The first launch plays a 30-second
-intro to the steps; **Menu → Watch the intro** plays it again.
+PhotoSort remembers where you left off in each folder. **Menu → Watch the intro** shows a
+30-second tour.
 
 | Step | What it's for |
 | --- | --- |
@@ -65,73 +51,67 @@ intro to the steps; **Menu → Watch the intro** plays it again.
 
 ### Organize
 
-Turn a camera dump into folders by date, place, camera, people or similar scenes. Drag
-photos between folders, rename folders in place, and check where every file will go before
-anything moves. RAW + JPEG pairs and their sidecars always move together.
+Sort photos into folders by date, place, camera, people or similar scenes. Drag photos
+between folders and rename folders in place. RAW + JPEG pairs and their sidecars move
+together.
 
 [![Organize sorting photos into folders](assets/screenshots/organize.webp)](assets/screenshots/organize.webp)
 
 ### Easy Delete
 
-Get rid of the obvious rejects first. PhotoSort finds exact and near duplicates, the JPEG
-and HEIC a phone saves of the same shot, blurry shots and photos that are too dark or too
-bright, and shows each one next to its better match. Its suggestions are staged as your
-choices: change only the ones you disagree with, with one key or one click per group.
+PhotoSort finds exact and near duplicates, JPEG and HEIC copies of the same shot, blurry
+shots and bad exposures, and shows each next to its better match. Its suggestions start as
+your choices: change only the ones you disagree with.
 
 [![Easy Delete comparing a photo with a near duplicate](assets/screenshots/easy-delete.webp)](assets/screenshots/easy-delete.webp)
 
 ### Fix Rotation
 
-Find photos that are sideways or upside down. Compare the original with the suggested
-correction, confirm it or turn the photo yourself. Rotations are saved without
-re-compressing the photo.
+Compare each sideways or upside-down photo with the suggested correction, then confirm it or
+turn the photo yourself. Rotations are saved without re-compressing the photo.
 
 [![Fix Rotation showing the original and the suggested correction](assets/screenshots/fix-rotation.webp)](assets/screenshots/fix-rotation.webp)
 
 ### Pick Best
 
-Took ten shots of the same moment? PhotoSort shows them two at a time, suggests the one
-that is sharper, better composed and has everyone's eyes open, and keeps going until one
-winner is left. You make every final call, and you can keep more than one.
+PhotoSort shows a burst two shots at a time and suggests the sharper, better composed one
+with everyone's eyes open, until one winner is left. You make every final call, and you can
+keep more than one.
 
 [![Pick Best comparing two similar shots](assets/screenshots/pick-best.webp)](assets/screenshots/pick-best.webp)
 
 ### Cull
 
-Go through your photos at your own pace. Scan the whole folder as a grid to see what you
-have, open a photo full screen to judge it, or put up to nine similar shots side by side and
-zoom into all of them at once to compare focus and expressions. Give your favorites stars,
-mark the rest for Trash, and filter by rating or by group of similar shots to work through
-one moment at a time.
+Scan the folder as a grid, open a photo full screen, or compare up to nine similar shots side
+by side with shared zoom. Rate your favorites, mark the rest for Trash, and filter by rating
+or by group of similar shots.
 
 [![Cull comparing three similar shots side by side](assets/screenshots/cull-compare.webp)](assets/screenshots/cull-compare.webp)
 
 ### Nothing changes until you say so
 
-Marks, ratings and folder plans stay staged while you work. **Review changes**
-(Shift+Enter) lists every move, rename, rating and file sent to Trash before anything
-happens. If PhotoSort is interrupted halfway, reopen the folder to finish or retry the rest;
-finished changes are never repeated.
+Marks, ratings and folder plans stay staged while you work. **Review changes** (Shift+Enter)
+lists every move, rename, rating and file sent to Trash before anything happens. If PhotoSort
+stops halfway, reopen the folder to finish the rest.
 
 ## Keep your photos safe
 
-PhotoSort changes the files in the folder you open, so treat it like any tool that edits your
+PhotoSort changes the files in the folder you open. Treat it like any tool that edits your
 library:
 
-- **Back up first.** Copy the folder to another drive, or make sure your backup (Time
-  Machine, File History, a NAS or cloud backup) has a current copy before you apply changes.
-- **Work on a copy of new imports.** Leave the photos on the memory card, or copy them, until
-  you have finished sorting and backed up the result.
-- **Read the review list.** Check every move and deletion in **Review changes** before you
-  apply it.
-- **Empty the Trash later.** Deleted photos go to the system Trash (Recycle Bin on Windows),
-  not straight off the disk. Keep them there until you are sure.
-- **Leave originals untouched if you prefer.** **Settings → Save changes to → Sidecars
-  only** writes ratings and rotations to XMP sidecars instead of into the photo files.
+- **Back up first.** Copy the folder to another drive, or check that your backup (Time
+  Machine, File History, a NAS or cloud backup) is current before you apply changes.
+- **Work on a copy of new imports.** Keep the photos on the memory card until you have sorted
+  them and backed up the result.
+- **Read the review list.** Check every move and deletion in **Review changes** first.
+- **Empty the Trash later.** Deleted photos go to the system Trash (Recycle Bin on Windows).
+  Keep them there until you are sure.
+- **Leave originals untouched.** **Settings → Save changes to → Sidecars only** writes
+  ratings and rotations to XMP sidecars instead of the photo files.
 
 ## Useful shortcuts
 
-Each step shows its keys in the status bar, and **Menu → Keyboard guide** has the full list.
+Each step shows its keys in the status bar. **Menu → Keyboard guide** has the full list.
 
 | What you want to do | Shortcut |
 | --- | --- |
@@ -147,53 +127,29 @@ Each step shows its keys in the status bar, and **Menu → Keyboard guide** has 
 
 ## Local AI
 
-All analysis runs **on your computer**. No photos or data are sent anywhere, and no account
-is needed. You can also use every step by hand, without AI.
+All analysis runs on your computer, with no account. Every step also works by hand.
 
-- **Similar shots** (Organize, Easy Delete, Pick Best, Cull): Meta's DINOv2 groups photos of
-  the same scene or subject.
-- **Faces and closed eyes** (Organize, Easy Delete, Pick Best): MediaPipe face models, plus
+- **Similar shots** (Organize, Easy Delete, Pick Best, Cull): Meta's DINOv2.
+- **Faces and closed eyes** (Organize, Easy Delete, Pick Best): MediaPipe face models, and
   OpenCV's SFace to recognize the same person across photos.
-- **Best shot** (Pick Best): an aesthetic model scores composition and lighting, combined
-  with sharpness and open eyes.
-- **Rotation** (Fix Rotation): [deep-image-orientation-detection](https://github.com/duartebarbosadev/deep-image-orientation-detection)
-  spots sideways and upside-down photos.
-- Blur, exposure and exact-duplicate checks use plain image measurements, not AI.
+- **Best shot** (Pick Best): an aesthetic model, combined with sharpness and open eyes.
+- **Rotation** (Fix Rotation): [deep-image-orientation-detection](https://github.com/duartebarbosadev/deep-image-orientation-detection).
+- Blur, exposure and exact duplicates use plain image measurements, not AI.
 
-**Menu → AI models** shows which models are installed and downloads any that are missing,
-verifying every file. Nothing is downloaded automatically. On a Mac, models run with
-Apple's Core ML acceleration and fall back to the CPU for any model that cannot use it; the
-first analysis takes a few extra minutes while the models are prepared. On Windows and Linux
-they run on the CPU by default, and **Settings → AI execution → Automatic** tries NVIDIA CUDA
-(and DirectML on Windows) instead. You can also pick a backend directly.
+**Menu → AI models** downloads and verifies the models; nothing downloads on its own. Macs
+use Apple Core ML. Windows and Linux use the CPU unless you change **Settings → Performance →
+Run AI on**.
 
 ## Build from source
 
-You need [Rust](https://rustup.rs) 1.95 or later. On macOS, install the native libraries
-with Homebrew, then build and open a folder:
-
-```sh
-brew install libraw exiv2 pkg-config
-```
+You need [Rust](https://rustup.rs) 1.95 or later and the native libraries listed in
+[CONTRIBUTING.md](CONTRIBUTING.md#building) for macOS, Windows and Linux. Then run:
 
 ```sh
 cargo run --release -- --folder /path/to/photos
 ```
 
-To build a standalone `PhotoSort.app`:
-
-```sh
-python3 scripts/package_macos.py
-```
-
-Linux and Windows instructions, the AI runtime setup, command-line options and everything
-else for developers are in [CONTRIBUTING.md](CONTRIBUTING.md).
-
-| Platform | Status |
-| --- | --- |
-| macOS | Supported and tested in CI |
-| Linux | Builds and passes tests in CI; desktop use not yet verified |
-| Windows | Builds and passes tests in CI; verified on Windows 11 (CPU and NVIDIA CUDA) |
+CI builds and tests all three platforms. Desktop use on Linux is not verified.
 
 ### Built with
 
@@ -207,23 +163,14 @@ else for developers are in [CONTRIBUTING.md](CONTRIBUTING.md).
 | [libheif](https://github.com/strukturag/libheif) | HEIC photos on Windows and Linux (macOS uses its own) | 1.23+ |
 | [GStreamer](https://gstreamer.freedesktop.org) | Video on Windows and Linux (macOS uses AVFoundation) | 1.20+ |
 
-Versions are minimums: macOS and Linux use what Homebrew or the distribution ships (libvips
-is a private build, `scripts/build_vips.py`), and the Windows build pins exact versions in
-`Cargo.toml`. ONNX Runtime is pinned on every platform.
-
 ## Questions or feedback?
 
-[Open an issue](https://github.com/duartebarbosadev/PhotoSort/issues) if something isn't
-working, a step is confusing, or you'd like a feature. For bugs, include your PhotoSort
-version, operating system, the file formats involved and what you did before the problem
-happened.
+[Open an issue](https://github.com/duartebarbosadev/PhotoSort/issues). For bugs, include your
+PhotoSort version, operating system, the file formats involved and the steps that led there.
 
 ## License
 
-PhotoSort's source code is licensed under the Apache License 2.0 ([LICENSE](LICENSE)).
-Because PhotoSort links Exiv2 (GPL-2.0-or-later), released app binaries are distributed under
-the terms of the GNU General Public License, version 3. Third-party components keep their own
-terms: LibRaw (LGPL-2.1 or CDDL-1.0), the aesthetic model (AGPL-3.0), ONNX Runtime (MIT),
-GeoNames location data (CC BY 4.0) and the Inter font (SIL OFL 1.1). See
-[resources/ASSETS.md](resources/ASSETS.md) for provenance and
-[resources/licenses/](resources/licenses/) for license texts.
+The source code is licensed under the [Apache License 2.0](LICENSE). Released app binaries
+link Exiv2 (GPL-2.0-or-later), so they are distributed under the GNU GPL, version 3.
+Third-party components keep their own terms: see [resources/ASSETS.md](resources/ASSETS.md)
+and [resources/licenses/](resources/licenses/).
