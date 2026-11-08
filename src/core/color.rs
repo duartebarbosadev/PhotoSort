@@ -46,10 +46,14 @@ impl Manager {
     ) -> Result<DynamicImage> {
         ensure!(!cancelled(), "Image preparation cancelled");
         reader.limits(decode_limits(self.allowance()));
-        // Embedded RAW previews are the JPEGs that come here. image-rs decodes
-        // them faster than libvips, with or without its shrink-on-load, and
-        // CMYK ones decode faster through jpeg-decoder and moxcms than through
-        // libvips and Little CMS.
+        // Embedded RAW previews are the JPEGs that come here, and they decode
+        // faster with image-rs than with libvips, whose fixed per-call cost
+        // dominates on small images. Median times on Windows: a 1616x1080
+        // preview 7.8 ms against 11.4 ms, a 160x120 thumbnail 0.17 ms against
+        // 1.9 ms. ICC-tagged CMYK previews take about 20 ms through
+        // jpeg-decoder and moxcms against 45-50 ms through libvips and Little
+        // CMS. Original photos go to libvips instead; see
+        // `pipeline::native_raster`.
         if reader.format() == Some(image::ImageFormat::Jpeg) {
             let mut input = reader.into_inner();
             let start = input.stream_position()?;

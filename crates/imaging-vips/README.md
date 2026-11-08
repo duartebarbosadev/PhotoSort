@@ -5,6 +5,11 @@ color conversion, preview shrinking and region reads to libvips 8.18+ and Little
 behind the shared image pipeline (`core::pipeline`). RAW, HEIF and video have their own
 services, and WebP and BMP use the Rust `image` crate. No workflow calls this crate directly.
 
+Embedded RAW previews and the preview cache's JPEGs also decode with `image`: they are
+small, and libvips' fixed per-call cost makes it slower on them. Original photos are the
+case libvips wins. The comment on `native_raster` in `src/core/pipeline.rs` has the
+benchmark.
+
 JPEG previews shrink while decoding: the adapter opens a JPEG with libjpeg-turbo's scaled
 IDCT at the largest 1/2, 1/4 or 1/8 that still covers the requested edge, then reduces once.
 `vips_thumbnail` alone keeps at least 2x for its final reduce, so a 24 MP JPEG would decode

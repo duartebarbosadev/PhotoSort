@@ -40,7 +40,8 @@ photosort-imaging-vips = { path = "crates/imaging-vips" }
 moxcms = "0.8.1"
 # One bounded metadata cache owned by the shared imaging actor.
 lru = { version = "0.18.5", default-features = false }
-# Preserve original ink channels only for ICC-tagged CMYK JPEGs.
+# Preserve original ink channels only for ICC-tagged CMYK JPEGs. Faster than
+# libvips for embedded RAW previews (see color::Manager::decode).
 jpeg-decoder = { version = "0.3.2", default-features = false }
 opener = { version = "0.9", features = ["reveal"] }
 anyhow = "1.0"

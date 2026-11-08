@@ -1368,9 +1368,11 @@ fn native_pixels(
 /// fifth of a PNG, so the same disk limit keeps several times more photos.
 const PREVIEW_QUALITY: u8 = 92;
 /// A cache image (see `encode_cached` for which are JPEG), marked as used.
-/// image-rs decodes it: its JPEG decoder reads a 2048 px preview about a fifth
-/// faster than libvips and a grid thumbnail about five times faster, and it
-/// needs none of libvips' one render lock, which the screen waits on.
+/// image-rs decodes it, not libvips: each libvips call has a fixed cost that
+/// dominates on small images, and image-rs needs none of libvips' one render
+/// lock, which the screen waits on. Median decode times on Windows: a 2048 px
+/// preview 13–16 ms against 17–19 ms, a 320 px thumbnail 0.3–0.5 ms against
+/// 2.0–2.6 ms. Original photos are the opposite case; see `native_raster`.
 fn read_cached_image(disk: &Path, key: &str) -> Option<DynamicImage> {
     ["jpg", "png"].iter().find_map(|ext| {
         let path = disk.join(format!("{key}.{ext}"));
@@ -1715,6 +1717,25 @@ fn vips_failure(error: photosort_imaging_vips::Error, meta: &Metadata) -> anyhow
     }
 }
 
+/// Original JPEG, PNG, TIFF and GIF photos decode through libvips, not image-rs.
+///
+/// Decoding one JPEG on its own, image-rs is about as fast as libvips or faster,
+/// so a single-decode benchmark points the wrong way. The pipeline is where
+/// libvips wins: JPEG shrink-on-load, analysis reusing the preview's decode,
+/// and zoomed views reading only the visible region. `bench_pipeline` on 188
+/// 24 MP camera JPEGs (Windows, Ryzen 7 7800X3D, release build):
+///
+/// | Stage | image-rs | libvips |
+/// | --- | --- | --- |
+/// | Cold 2048 px previews | 41.8–42.2 s | 38.5–38.9 s |
+/// | Technical analysis | 28.7–29.5 s | 24.9–25.1 s |
+/// | Original detail and revisit | 22.1–24.2 s | 2.5 s |
+///
+/// On 6–29 MB JPEGs previews take the same time, and analysis and original
+/// detail are about 8× faster. Smaller JPEGs (embedded RAW previews, cache
+/// images) stay on image-rs; see `color::Manager::decode` and
+/// `read_cached_image`. Re-measure with
+/// `cargo run --release --example bench_pipeline -- <folder>`.
 fn native_raster(media: &Media) -> bool {
     media.kind == MediaKind::Photo
         && media.path.extension().is_some_and(|e| {
