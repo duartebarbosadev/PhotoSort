@@ -211,7 +211,7 @@ impl PhotoSortApp {
                             .unwrap_or_default();
                         // Group by what depends on the model: what the paused
                         // analysis needs first, then the shared analysis,
-                        // then optional features.
+                        // then People folders and Fix Rotation.
                         let group = |row: &model_assets::Row| {
                             if needed.contains(&row.id) {
                                 0
@@ -232,7 +232,7 @@ impl PhotoSortApp {
                         let titles = [
                             "Needed for the paused analysis",
                             "Used by Easy Delete, Pick Best, Cull and Organize",
-                            "Optional features",
+                            "Used by People folders and Fix Rotation",
                         ];
                         for (index, title) in titles.iter().enumerate() {
                             let rows: Vec<_> =

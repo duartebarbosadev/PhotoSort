@@ -7,9 +7,8 @@
 //! same f32 arithmetic in the same order one output row at a time, so their
 //! pixels are bit-identical while only one row of column sums is live per
 //! thread. Every output row depends only on the source, so rows are shared
-//! out to threads without changing a single sum. Proxies cached by earlier
-//! builds therefore stay valid; any change to the arithmetic here must bump
-//! the render version in `Pipeline::key`.
+//! out to threads without changing a single sum. Any change to the arithmetic
+//! here must bump the render version in `Pipeline::key`.
 use image::{DynamicImage, GenericImageView, ImageBuffer, Pixel, imageops::FilterType};
 
 /// A filter of `image::imageops::FilterType` with its kernel and support.

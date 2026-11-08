@@ -1,8 +1,8 @@
-"""Build PhotoSort's minimal native image engine without a global installation.
+"""Build libvips with only the codecs PhotoSort uses, without a global installation.
 
 Requires C/C++ build tools, pkg-config, and development libraries for GLib/GIO,
 libjpeg, libpng, libtiff, Little CMS, zlib and Highway (pkg-config name libhwy).
-Use --no-simd for a scalar comparison build. Python is a build tool only.
+Python is a build tool only.
 
 On Windows (MSVC) libvips is a static library that PhotoSort links into its
 executable: GLib comes from the GStreamer installation the app already uses for
@@ -84,14 +84,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prefix", type=Path, default=ROOT / ".tools/vips")
     parser.add_argument("--archive", type=Path, help="Use a previously downloaded, checksum-verified source archive")
-    parser.add_argument("--simd", action=argparse.BooleanOptionalAction, default=True, help="Use Highway SIMD (default); --no-simd builds the scalar comparison")
     parser.add_argument("--cache-key", action="store_true", help="Print a key for caching the built prefix and exit")
     args = parser.parse_args()
     env = build_environment()
     dependencies = {
         name: subprocess.check_output([env.get("PKG_CONFIG", "pkg-config"), "--modversion", name],
                                       env=env, text=True).strip()
-        for name in DEPENDENCIES + (["libhwy"] if args.simd else [])
+        for name in DEPENDENCIES + ["libhwy"]
     }
     if args.cache_key:
         print(cache_key(dependencies))
@@ -132,9 +131,8 @@ def main():
         options = ["--buildtype=release", "--libdir=lib", "--auto-features=disabled",
                    "-Djpeg=enabled", "-Dpng=enabled", "-Dtiff=enabled", "-Dlcms=enabled", "-Dzlib=enabled",
                    "-Ddeprecated=false", "-Dexamples=false", "-Dcplusplus=false", "-Dmodules=disabled",
-                   "-Dnsgif=true", "-Dppm=false", "-Danalyze=false", "-Dradiance=false"]
-        if args.simd:
-            options.append("-Dhighway=enabled")
+                   "-Dnsgif=true", "-Dppm=false", "-Danalyze=false", "-Dradiance=false",
+                   "-Dhighway=enabled"]
         if WINDOWS:
             # Linked into photosort.exe with the dynamic CRT, like the vcpkg libraries.
             options += ["--vsenv", "--default-library=static", "-Db_vscrt=md"]

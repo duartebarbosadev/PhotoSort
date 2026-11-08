@@ -9,9 +9,8 @@
 //! Helpers only ever do what the image worker would have done itself, with
 //! the same recipe and decode allowance. Whatever they skip (cached
 //! measurements, a photo too large to decode next to others, memory
-//! pressure, libvips formats) or fail at is done by the image worker the way
-//! it always was, so a result never depends on whether a photo was prepared
-//! ahead.
+//! pressure, libvips formats) or fail at is done by the image worker, so a
+//! result never depends on whether a photo was prepared ahead.
 use crate::core::{
     analysis::{self, Measurements, Thresholds},
     cache::{Limits, Writes},

@@ -3,8 +3,8 @@
 //! libmalloc keeps recently freed large blocks resident for reuse, and on
 //! Macs with plenty of RAM that cache is deep. Preparing one photo frees
 //! several decode, resize and encode buffers of a few to a few dozen MiB, so
-//! a browsing session filled the cache with them and peak memory roughly
-//! doubled. Mapping those buffers directly hands them back to the kernel as
+//! browsing fills the cache with them and can double peak memory. Mapping
+//! those buffers directly hands them back to the kernel as
 //! soon as they are dropped. Smaller allocations still use the system
 //! allocator unchanged.
 use std::alloc::{GlobalAlloc, Layout, System};

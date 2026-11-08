@@ -77,7 +77,7 @@ extern "C" int photosort_metadata_read(const char *path, size_t length, void *co
                                           (image->checkMode(Exiv2::mdXmp) & Exiv2::amWrite))};
         return 1;
     } catch (...) {
-        // A malformed/unsupported file uses the existing Rust fallback. No C++
+        // A malformed or unsupported file has no embedded metadata. No C++
         // exception may cross the C boundary and no partial snapshot is published.
         return 0;
     }

@@ -1,65 +1,47 @@
 # PhotoSort native image engine
 
-`photosort-imaging-vips` is PhotoSort's image engine for JPEG, PNG, TIFF and GIF. It hands
-their decoding, color conversion, preview shrinking and region reads to libvips 8.18+ and
-Little CMS 2.16+, behind the shared image pipeline (`core::pipeline`). RAW, HEIF and video
-keep their own services, and WebP and BMP use the Rust `image` crate. No workflow calls
-this crate directly.
+`photosort-imaging-vips` decodes JPEG, PNG, TIFF and GIF for PhotoSort. It hands decoding,
+color conversion, preview shrinking and region reads to libvips 8.18+ and Little CMS 2.16+,
+behind the shared image pipeline (`core::pipeline`). RAW, HEIF and video have their own
+services, and WebP and BMP use the Rust `image` crate. No workflow calls this crate directly.
 
 JPEG previews shrink while decoding: the adapter opens a JPEG with libjpeg-turbo's scaled
-IDCT at the largest 1/2, 1/4 or 1/8 that still covers the requested edge, then reduces once
-(`vips_thumbnail` alone keeps at least 2x for its final reduce, so a 24 MP JPEG would decode
-at full size for a 2048 px preview). It also supports ICC-profiled CMYK TIFF.
+IDCT at the largest 1/2, 1/4 or 1/8 that still covers the requested edge, then reduces once.
+`vips_thumbnail` alone keeps at least 2x for its final reduce, so a 24 MP JPEG would decode
+at full size for a 2048 px preview. The adapter also reads ICC-profiled CMYK TIFF.
 
-## What the adapter owns
+## What the adapter guarantees
 
-- One process-wide initialization, four native evaluation threads, no global operation
-  cache and no per-owner global shutdown. Native calls are serialized to protect libvips'
-  process-global error buffer; waiting for admission stays cancellable.
-- Literal filesystem paths (including libvips option-like brackets).
-- Native errors, null pointers, buffer lengths and cleanup are checked before Rust builds
-  slices; native allocations are always released by their own allocator.
-- Borrowed, synchronous cancellation callbacks requiring `Sync`, with panics contained at
-  the Rust boundary. Failed or cancelled renders never return pixels.
-- Limits: 32768 maximum dimension and 512 MiB source/output bytes for full-size and
-  region renders, 4 MiB ICC profiles, and preview edges from 1 to 4096. A downsized
-  preview is bounded by its output instead, since loaders shrink on load or stream the
-  source; its source may be up to 65535 px on an edge and 2^30 pixels. These bound
-  allocations, not total process memory.
-- Invalid, mismatched or relative-intent-incompatible ICC profiles return a visible error
-  instead of an unreported fallback. If a loader discards metadata first (for example
-  libpng rejecting iCCP), its warning is returned separately with the pixels. Warning
-  capture is scoped to the calling thread.
-- Output is straight-alpha sRGB RGBA, keeping 16-bit precision at full resolution. EXIF
-  and sidecar orientation stay the shared pipeline's responsibility.
-
-Original inspection requests oriented source regions through the shared image actor and
-detail cache. Source-resolution requests expand to 512-pixel grid bounds so nearby pans
-can reuse one prepared neighborhood; cropping happens before rotation. Cache identities
-include the libvips version, target architecture and private build recipe, so a custom
-rebuild of the same version needs a cache clear.
+- libvips initializes once per process, with four evaluation threads and no operation
+  cache. Native calls are serialized; waiting for one stays cancellable.
+- Native errors, null pointers and buffer lengths are checked before Rust builds slices,
+  and a failed or cancelled render never returns pixels.
+- Full-size and region renders are limited to 32768 px on an edge and 512 MiB; previews
+  are bounded by their output size.
+- A bad ICC profile is an error, not a silent fallback.
+- Output is straight-alpha sRGB RGBA, 16-bit at full resolution. Orientation is the shared
+  pipeline's job.
+- Cache keys include the libvips version and build recipe, so a custom rebuild of the same
+  version needs a cache clear.
 
 ## Building the private dependency
 
-`scripts/build_vips.py` builds a pinned libvips into `.tools/vips` (or `--prefix`). It
-verifies the upstream source checksum, builds in temporary directories, keeps licence
-notices and provenance, and never overwrites an existing prefix. Highway SIMD is on by
-default (`--no-simd` builds the scalar variant). The script does not install system
-packages (see CONTRIBUTING.md for the macOS and Debian lists).
+[scripts/build_vips.py](../../scripts/build_vips.py) builds a pinned libvips into
+`.tools/vips` (or `--prefix`). It verifies the source checksum, builds in temporary
+directories, keeps license notices and provenance, and never overwrites an existing prefix.
+It always builds with Highway SIMD. The script does not install system packages (see [CONTRIBUTING.md](../../CONTRIBUTING.md#building)).
 
-`build.rs` runs the script itself when it finds no libvips: it uses `PHOTOSORT_VIPS_PREFIX`
-if set, else one pkg-config finds (on macOS and Linux), else `.tools/vips`, building that
-prefix on first use. A lock file beside the prefix keeps concurrent builds from building it
-twice, and a failed attempt removes its partial prefix.
+`build.rs` uses `PHOTOSORT_VIPS_PREFIX` if set, else a libvips pkg-config finds (macOS and
+Linux), else `.tools/vips`, which it builds on first use. A lock file beside the prefix
+keeps concurrent builds from building it twice, and a failed attempt removes its partial
+prefix.
 
-On Windows (MSVC) the same script builds a static libvips, after `cargo vcpkg build` in
-the repository root: GLib comes from the installed GStreamer (PhotoSort's video player),
-and libjpeg-turbo, libpng, libtiff, Little CMS, expat, zlib and Highway are vcpkg's static
-libraries. `build.rs` finds the prefix (`.tools/vips`, or `PHOTOSORT_VIPS_PREFIX`), reads
-the pkg-config files of that prefix, vcpkg and GStreamer, and links libvips and the codecs
-into the application statically (under names of their own, so GStreamer's `jpeg.lib` or
-`tiff.lib` cannot stand in for them) and GLib through GStreamer's import libraries. The
-process has one GLib, shared with video, and no extra DLL.
+On Windows (MSVC) the script builds a static libvips after `cargo vcpkg build`. GLib comes
+from the installed GStreamer, and libjpeg-turbo, libpng, libtiff, Little CMS, expat, zlib
+and Highway are vcpkg's static libraries. `build.rs` links libvips and the codecs into the
+application statically, under names of their own so GStreamer's `jpeg.lib` or `tiff.lib`
+cannot stand in for them. GLib links through GStreamer's import libraries, so the process
+has one GLib, shared with video, and no extra DLL.
 
 PhotoSort delay-loads GStreamer's DLLs so that it starts without them, and points Windows
 at them (`core::playback::locate_runtime`) before the first image is decoded. A delay-loaded
@@ -69,48 +51,34 @@ their import slots, linked whole, and fills them from GLib before `vips_init`.
 
 ## Testing
 
-From the repository root:
+The crate is part of the workspace, so `cargo clippy --workspace` checks it and this runs
+its tests:
 
 ```sh
-cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
-cargo clippy --locked --manifest-path crates/imaging-vips/Cargo.toml --all-targets -- -D warnings
+cargo test --locked -p photosort-imaging-vips
 ```
 
 The tests cover transparency, ICC correction, 16-bit low bits, CMYK/YCCK JPEG, packed,
 planar and LZW CMYK TIFF, malformed inputs and profiles, crop bounds, orientation,
-concurrent initialization and cancellation/panic recovery. TIFF fixtures are generated by
-`src/tiff_fixture.rs`. An opt-in test decodes the repository's sample photos:
+concurrent initialization and cancellation/panic recovery. `src/tiff_fixture.rs` generates
+the TIFF fixtures. An opt-in test decodes the repository's sample photos:
 
 ```sh
-PHOTOSORT_SAMPLE_DIR="$PWD/tests/samples" cargo test --locked \
-  --manifest-path crates/imaging-vips/Cargo.toml original_jpeg_png_samples -- --ignored
+PHOTOSORT_SAMPLE_DIR="$PWD/tests/samples" cargo test --locked -p photosort-imaging-vips \
+  original_jpeg_png_samples -- --ignored
 ```
 
-On Linux, also set `LD_LIBRARY_PATH` to the prefix's `lib` directory before running tests
-or the application. On Windows, set `VCPKG_ROOT` to the vcpkg tree (by default
-`target\vcpkg` in the repository root), and put GStreamer's `bin` folder on `PATH`: the
-adapter's tests link GLib directly.
+On Linux, set `LD_LIBRARY_PATH` to the prefix's `lib` directory first. On Windows, the
+tests link GStreamer's GLib directly, so put it on `PATH`:
+
+```powershell
+$env:PATH = "C:\Program Files\gstreamer\1.0\msvc_x86_64\bin;$env:PATH"
+cargo test --locked -p photosort-imaging-vips
+```
 
 ## Packaging
 
-On macOS, `python3 scripts/package_macos.py` bundles the private build (`--native-prefix`
-selects another prefix). The packager resolves transitive native libraries, keeps their
-licence notices, audits the resulting dependency graph and verifies the code signature. On
-Windows, libvips is part of `photosort.exe`, and `python scripts/package_windows.py` bundles
-its licence notices and build provenance with the vcpkg and GStreamer ones.
-
-CI builds and tests the adapter on macOS, Linux and Windows.
-
-## Timings
-
-`cargo run --release --example bench_pipeline` on 188 24 MP JPEGs (Windows 11, Ryzen 7
-7800X3D, idle, two runs each, seconds). The earlier Rust decoders are shown for comparison:
-
-| Stage | Rust `image` | libvips, `vips_thumbnail` only | libvips, shrink while decoding |
-| --- | ---: | ---: | ---: |
-| Cold 2048 px previews | 38.2 | 64.0 | 33.3 |
-| Technical analysis (1024 px, from the 2048 px render) | 27.2 | 50.7 | 21.8 |
-| Original detail and revisit | 21.7 | 2.35 | 1.9 |
-
-Without the forced shrink, a 2048 px preview of a 6000×4000 JPEG decoded the whole source
-(about 80 ms) and then ran a 19-tap Lanczos3 reduce over 24 MP (about 170 ms, with AVX2).
+On macOS, `python3 scripts/package_macos.py` bundles the private build and its license
+notices, audits the dependency graph and verifies the code signature. On Windows, libvips
+is part of `photosort.exe`, and `python scripts/package_windows.py` bundles its license
+notices and build provenance.

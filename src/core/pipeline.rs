@@ -388,8 +388,8 @@ impl Pipeline {
             decoder_warning: saved.warning,
         })
     }
-    /// A display preview an earlier version stored as PNG, made the JPEG a
-    /// fresh render makes now, without decoding the photo again: it shows,
+    /// Converts a PNG display preview from an older cache to the JPEG a fresh
+    /// render makes, without decoding the photo again: it shows,
     /// and gives the rotation model, the same pixels as a fresh render. The
     /// JPEG replaces the PNG on disk.
     fn upgrade_preview(
@@ -497,9 +497,6 @@ impl Pipeline {
             key.to_owned()
         }
     }
-    /// Makes the display preview and grid thumbnail on disk unless both are
-    /// there already, and keeps nothing in memory. True when it made them.
-    /// Videos are left to the image worker, which owns playback.
     /// Adds this pipeline's disk cache writes to the runtime's shared count.
     pub fn share_writes(&mut self, writes: Arc<super::cache::Writes>) {
         self.writes = Some(writes);
@@ -511,6 +508,9 @@ impl Pipeline {
         self.quiet_cap = Some(bytes);
         self.colors.set_allowance(self.quiet_cap);
     }
+    /// Makes the display preview and grid thumbnail on disk unless both are
+    /// there already, and keeps nothing in memory. True when it made them.
+    /// Videos are left to the image worker, which owns playback.
     pub fn build_preview(
         &mut self,
         media: &Media,
@@ -1393,8 +1393,8 @@ fn native_pixels(
 /// Display previews and grid thumbnails are JPEG at this quality: about a
 /// fifth of a PNG, so the same disk limit keeps several times more photos.
 const PREVIEW_QUALITY: u8 = 92;
-/// A cache image, marked as used, and whether it is a JPEG (or the PNG
-/// older versions wrote for every preview).
+/// A cache image, marked as used, and whether it is a JPEG (or a PNG from
+/// an older cache).
 fn read_cached_image(disk: &Path, key: &str) -> Option<(DynamicImage, bool)> {
     ["jpg", "png"].iter().find_map(|ext| {
         let path = disk.join(format!("{key}.{ext}"));

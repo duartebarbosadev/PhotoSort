@@ -310,7 +310,7 @@ fn a_jpeg_and_heic_of_one_shot_pair_as_two_formats_before_near_review() {
     // Paired before the near pass: no face work, and never a Near pair.
     assert_eq!(source.faces, 0);
 }
-/// A HEIC that cannot be decoded (a build without HEIF) skips only its pair.
+/// A HEIC that cannot be decoded skips only its pair.
 #[test]
 fn undecodable_photos_skip_their_pairs_without_failing_the_review() {
     struct Failing;

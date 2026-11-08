@@ -95,7 +95,6 @@ fn from_snapshot(snapshot: Snapshot) -> Report {
         load_verified: false,
     };
     Report {
-        // Version 1 also listed the optional features a build had.
         schema_version: 2,
         version: env!("CARGO_PKG_VERSION"),
         platform: std::env::consts::OS,

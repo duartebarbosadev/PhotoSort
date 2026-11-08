@@ -3468,7 +3468,12 @@ name = "photosort-imaging-vips"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "image",
+ "jpeg-encoder",
+ "moxcms",
  "pkg-config",
+ "tempfile",
+ "tiff",
  "vcpkg",
 ]
 

@@ -162,7 +162,7 @@ fn shared_sidecars_are_resolved_before_any_companion_edit_is_accepted() {
     );
 }
 #[test]
-fn unsupported_formats_and_minimal_builds_retain_reviewed_sidecar_fallback() {
+fn unsupported_formats_retain_reviewed_sidecar_fallback() {
     let temp = tempfile::tempdir().unwrap();
     image::RgbImage::new(12, 8)
         .save(temp.path().join("photo.bmp"))

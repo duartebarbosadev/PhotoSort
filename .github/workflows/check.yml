@@ -32,9 +32,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          workspaces: |
-            . -> target
-            crates/imaging-vips -> target
+          workspaces: . -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
@@ -60,8 +58,8 @@ jobs:
           echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/.tools/vips/lib/pkgconfig" >> "$GITHUB_ENV"
       - run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
       - run: cargo nextest run --locked --lib --bins --tests --no-fail-fast
-      - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked -p photosort-imaging-vips
   # The full build with the native stack from CONTRIBUTING.md: GStreamer from its
   # official installer, and Exiv2, LibRaw, libheif and libvips from vcpkg (about 25
   # minutes without the cache).
@@ -80,9 +78,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: full
-          workspaces: |
-            . -> target
-            crates/imaging-vips -> target
+          workspaces: . -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
@@ -94,11 +90,11 @@ jobs:
       # The other packaging scripts are for macOS and Linux, whose jobs test them.
       - run: python -B -m unittest discover -s scripts -p 'test_package_windows.py'
       - run: cargo nextest run --locked --lib --bins --tests --no-fail-fast
-      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # The adapter's own tests link GStreamer's GLib directly, without the app's delay-load.
       - run: |
           $env:PATH = "C:\Program Files\gstreamer\1.0\msvc_x86_64\bin;$env:PATH"
-          cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
+          cargo test --locked -p photosort-imaging-vips
           if ($LASTEXITCODE -ne 0) { throw 'adapter tests failed' }
   linux:
     name: Linux
@@ -120,9 +116,7 @@ jobs:
       # build user can reuse and extend it.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          workspaces: |
-            . -> target
-            crates/imaging-vips -> target
+          workspaces: . -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install native development dependencies
         run: |
@@ -153,7 +147,7 @@ jobs:
         if: steps.vips-cache.outputs.cache-hit != 'true'
         run: runuser -u photosort -- python3 -B scripts/build_vips.py --prefix /tmp/photosort-vips
       - run: runuser -u photosort -- cargo nextest run --locked --lib --bins --tests --no-fail-fast
-      - run: runuser -u photosort -- cargo test --locked --manifest-path crates/imaging-vips/Cargo.toml
+      - run: runuser -u photosort -- cargo test --locked -p photosort-imaging-vips
       # Formatting does not depend on the platform; check it once.
       - run: runuser -u photosort -- cargo fmt --all --check
-      - run: runuser -u photosort -- cargo clippy --locked --all-targets -- -D warnings
+      - run: runuser -u photosort -- cargo clippy --locked --workspace --all-targets -- -D warnings
