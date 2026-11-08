@@ -1,7 +1,7 @@
 # Releasing PhotoSort
 
-This guide is for maintainers. It covers the macOS app bundle, the release workflow, the
-converted models and macOS signing. For building and testing, see
+This guide is for maintainers. It covers the macOS app bundle, the Windows zip, the release
+workflow, the converted models and macOS signing. For building and testing, see
 [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## macOS app bundle
@@ -24,6 +24,25 @@ and their license notices. The script then verifies the signature and the resour
 Without `--sign-identity` the bundle is ad-hoc signed and not notarized, so macOS may ask
 again for folder access after a rebuild. The bundle's minimum macOS is the highest any of its
 binaries needs. Homebrew libraries need the macOS version they were built for.
+
+## Windows zip
+
+```powershell
+python scripts/package_windows.py --zip dist\PhotoSort-windows-x64.zip
+```
+
+[scripts/package_windows.py](../scripts/package_windows.py) builds a release binary and writes
+a portable `target\PhotoSort` folder: `photosort.exe`, the Visual C++ runtime, `resources\`
+and the GStreamer libraries and plugins it plays video with. It needs the GStreamer MSVC
+x86_64 runtime installed, the vcpkg tree from `cargo vcpkg build`, and ONNX Runtime's
+`onnxruntime.dll` and `onnxruntime_providers_shared.dll` in `resources\runtime\`.
+
+| Option | Effect |
+| --- | --- |
+| `--output PATH` | Writes the folder elsewhere. |
+| `--zip PATH` | Also writes a zip of the folder. |
+| `--no-build` | Packages the existing release binary without running Cargo. |
+| `--gstreamer PATH`, `--vc-redist PATH`, `--vcpkg-root PATH`, `--native-prefix PATH` | Uses another GStreamer, Visual C++ runtime, vcpkg tree or libvips prefix. |
 
 ## Update checks
 

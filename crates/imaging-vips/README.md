@@ -10,41 +10,26 @@ IDCT at the largest 1/2, 1/4 or 1/8 that still covers the requested edge, then r
 `vips_thumbnail` alone keeps at least 2x for its final reduce, so a 24 MP JPEG would decode
 at full size for a 2048 px preview. The adapter also reads ICC-profiled CMYK TIFF.
 
-## What the adapter owns
+## What the adapter guarantees
 
-- One process-wide initialization, four native evaluation threads, no global operation
-  cache and no per-owner global shutdown. Native calls are serialized to protect libvips'
-  process-global error buffer; waiting for admission stays cancellable.
-- Literal filesystem paths (including libvips option-like brackets).
-- Native errors, null pointers, buffer lengths and cleanup are checked before Rust builds
-  slices; native allocations are always released by their own allocator.
-- Borrowed, synchronous cancellation callbacks requiring `Sync`, with panics contained at
-  the Rust boundary. Failed or cancelled renders never return pixels.
-- Limits: 32768 maximum dimension and 512 MiB source/output bytes for full-size and
-  region renders, 4 MiB ICC profiles, and preview edges from 1 to 4096. A downsized
-  preview is bounded by its output instead, since loaders shrink on load or stream the
-  source; its source may be up to 65535 px on an edge and 2^30 pixels. These bound
-  allocations, not total process memory.
-- Invalid, mismatched or relative-intent-incompatible ICC profiles return a visible error
-  instead of an unreported fallback. If a loader discards metadata first (for example
-  libpng rejecting iCCP), its warning is returned separately with the pixels. Warning
-  capture is scoped to the calling thread.
-- Output is straight-alpha sRGB RGBA, keeping 16-bit precision at full resolution. EXIF
-  and sidecar orientation stay the shared pipeline's responsibility.
-
-Original inspection requests oriented source regions through the shared image actor and
-detail cache. Source-resolution requests expand to 512-pixel grid bounds so nearby pans
-can reuse one prepared neighborhood; cropping happens before rotation. Cache identities
-include the libvips version, target architecture and private build recipe, so a custom
-rebuild of the same version needs a cache clear.
+- libvips initializes once per process, with four evaluation threads and no operation
+  cache. Native calls are serialized; waiting for one stays cancellable.
+- Native errors, null pointers and buffer lengths are checked before Rust builds slices,
+  and a failed or cancelled render never returns pixels.
+- Full-size and region renders are limited to 32768 px on an edge and 512 MiB; previews
+  are bounded by their output size.
+- A bad ICC profile is an error, not a silent fallback.
+- Output is straight-alpha sRGB RGBA, 16-bit at full resolution. Orientation is the shared
+  pipeline's job.
+- Cache keys include the libvips version and build recipe, so a custom rebuild of the same
+  version needs a cache clear.
 
 ## Building the private dependency
 
 [scripts/build_vips.py](../../scripts/build_vips.py) builds a pinned libvips into
 `.tools/vips` (or `--prefix`). It verifies the source checksum, builds in temporary
 directories, keeps license notices and provenance, and never overwrites an existing prefix.
-Highway SIMD is on by default; `--no-simd` builds the scalar variant. The script does not
-install system packages (see [CONTRIBUTING.md](../../CONTRIBUTING.md#building)).
+It always builds with Highway SIMD. The script does not install system packages (see [CONTRIBUTING.md](../../CONTRIBUTING.md#building)).
 
 `build.rs` uses `PHOTOSORT_VIPS_PREFIX` if set, else a libvips pkg-config finds (macOS and
 Linux), else `.tools/vips`, which it builds on first use. A lock file beside the prefix

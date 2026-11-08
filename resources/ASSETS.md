@@ -2,7 +2,7 @@
 
 This file records where every bundled model, runtime and data file comes from, how it was
 prepared, and the terms it is distributed under. `SHA256SUMS` pins the exact content of
-each file; the app and the macOS packager verify against it.
+each file, and the app verifies against it.
 
 Large ONNX weights and native runtime libraries are not stored in Git (see `.gitignore`).
 A fresh clone gets them in one of four ways:
@@ -31,6 +31,7 @@ ONNX Runtime is a separate download; see [ONNX Runtime](#onnx-runtime).
 | `models/face_blendshapes.onnx` | MediaPipe `face_blendshapes.tflite` from the same `face_landmarker.task` (52 expression scores from 146 Face Mesh points); `scripts/convert_blendshapes.py` with TensorFlow 2.16.2 and tf2onnx 1.16.1, opset 17, explicit convolution pads; verified against TFLite within 3e-6 | Apache-2.0 (MediaPipe) |
 | `models/face_recognition_sface.onnx` | OpenCV Zoo `face_recognition_sface_2021dec.onnx`, unmodified (see below) | Apache-2.0; `licenses/APACHE-2.0.txt` |
 | `runtime/libonnxruntime.dylib` | ONNX Runtime 1.29.0 shared library, unmodified from the official macOS arm64 release archive (see below) | MIT; `licenses/ONNXRUNTIME-MIT.txt` |
+| `runtime/onnxruntime.dll`, `runtime/onnxruntime_providers_shared.dll` | ONNX Runtime 1.29.0, unmodified from the official Windows x64 release archive (see below) | MIT; `licenses/ONNXRUNTIME-MIT.txt` |
 | `locations.tsv` | 155,210 latitude/longitude/country/region/city records converted from reverse_geocode 1.6.6's GeoNames dataset | GeoNames CC BY 4.0, `licenses/GEONAMES-CC-BY-4.0.txt`; reverse_geocode package LGPL |
 | `fonts/Inter-*.ttf` | Inter 4.001 (Regular, Medium, SemiBold) | SIL OFL 1.1; `licenses/INTER-OFL-1.1.txt` |
 | `icons/app_icon.png` | PhotoSort's app icon, 1024×1024 RGBA; unchanged from the Python app's `assets/app_icon.png` (tag `python-final`). The app sets it as the window and Dock icon, and the macOS packager derives `AppIcon.icns` from it with `sips` and `iconutil` | Project artwork, Apache-2.0 with the source |
@@ -49,11 +50,12 @@ The application source license does not replace these assets' terms.
 
 ## Licensing notes for distributors
 
-`scripts/package_macos.py` copies all of `resources/` into the app, so a full bundle ships
-the aesthetic model. AGPL-3.0 then applies to that model file: ship its licence and model
-card (both in `licenses/`) and offer the corresponding source of the shipped file, which
-is the pinned upstream revision plus `scripts/export_aesthetic.py` and
-`examples/fold_model.rs`. A release that cannot meet those terms should leave the model
+`scripts/package_macos.py` and `scripts/package_windows.py` copy all of `resources/` into
+the app, so a full build ships the aesthetic model. AGPL-3.0 then applies to that model
+file: ship its licence and model card (both in `licenses/`) and offer the corresponding
+source of the shipped file, which is the pinned upstream revision plus
+`scripts/export_aesthetic.py`, `examples/fold_model.rs` and
+`scripts/transpose_gemm_weights.py`. A release that cannot meet those terms should leave the model
 out; Pick Best then ranks without aesthetic scores. The same terms cover the copy that the
 app downloads from the `models-2` prerelease, whose notes name the licence; the model panel
 states it beside the download.
@@ -84,11 +86,10 @@ python scripts/convert_blendshapes.py /path/to/face_landmarker.task resources/mo
 ```
 
 `transpose_gemm_weights.py` stores the folded model's Gemm weights pre-transposed
-(`transB=1`). ONNX Runtime's Core ML converter otherwise transposes each one and writes it
-inline into the Core ML program, which Core ML then expands to about 1.2 GB of text: on an
-M-series Mac that took about 2 minutes to compile, 22 s to load from the prepared copy and
-1.8 GB on disk, against 3 s, 1 s and 1.0 GB after. Like `fold_model`, it only writes its
-output after ONNX Runtime returns bit-identical results (needs `onnx`, `onnxruntime`).
+(`transB=1`), so ONNX Runtime's Core ML converter does not inline a transposed copy of each
+one; the Core ML model then compiles in seconds instead of minutes. Like `fold_model`, it
+only writes its output after ONNX Runtime returns bit-identical results (needs `onnx`,
+`onnxruntime`).
 
 `explicit_pads.py` gives pooling and convolution layers without padding explicit zero
 pads, which Core ML requires, and only writes its output after ONNX Runtime returns
@@ -98,10 +99,9 @@ ONNX file against TFLite before writing it. tf2onnx names and orders generated n
 differently on each run, so a rebuilt blendshape file behaves the same but has a different
 checksum, which must then be re-pinned in `SHA256SUMS`.
 
-Folding pre-computes the aesthetic export's constant subgraphs once. Without it, ONNX
-Runtime does this at every first load and briefly needs about 3.5 GiB; with it the first
-load peaks under 1 GiB and is about 7× faster. `fold_model` refuses to finish unless the
-folded graph gives bit-identical outputs. The pinned checksum was produced with ONNX
+Folding pre-computes the aesthetic export's constant subgraphs, so the first load peaks
+under 1 GiB instead of about 3.5 GiB. `fold_model` refuses to finish unless the folded
+graph gives bit-identical outputs. The pinned checksum was produced with ONNX
 Runtime 1.29.0 (export `6e6aa39e…`, 378,039,625 bytes → folded `862b59e3…`,
 534,515,358 bytes → transposed `0574cd73…`, 534,515,718 bytes, with onnx 1.23.2 and
 onnxruntime 1.23.2 for the check); another runtime version may serialize different bytes,
@@ -125,14 +125,20 @@ The pinned macOS library is `lib/libonnxruntime.dylib` from the official
 GitHub publishes for the asset). The release workflow downloads that archive and checks
 both hashes; locally, extract the same file into `resources/runtime/`.
 
+On Windows, the release ships `lib/onnxruntime.dll` and `lib/onnxruntime_providers_shared.dll`
+from the official `onnxruntime-win-x64-1.29.0.zip` (SHA-256
+`c9b4b7086b529ad814f428c1bad028e20a25d7dc0699836775faace4ab5b78b2`). The release workflow
+checks the archive; `SHA256SUMS` pins only the macOS library. Locally, extract the two DLLs
+into `resources/runtime/`, or install them from Menu → AI models.
+
 ## Native metadata library
 
-PhotoSort links Exiv2 0.28+ for embedded metadata. The macOS packager copies the
-linked library and its dependencies into the app; no Exiv2 command-line tool runs at
-runtime. Exiv2 is GPL-2.0-or-later; its COPYING and notice are kept as
+PhotoSort links Exiv2 0.28+ for embedded metadata: the macOS packager copies Homebrew's
+library into the app, and the Windows build links vcpkg's static library. No Exiv2
+command-line tool runs. Exiv2 is GPL-2.0-or-later; its COPYING and notice are kept as
 `licenses/EXIV2-GPL-2.0.txt` and `licenses/EXIV2-NOTICE.txt`. Source and upstream terms:
-https://exiv2.org/download.html. LibRaw and the other Homebrew libraries that the packager
-bundles have their licence files collected into the app at packaging time.
+https://exiv2.org/download.html. Both packagers collect the licence files of LibRaw and the
+other native libraries they bundle into `DependencyNotices/`.
 
 ## Person recognition model
 

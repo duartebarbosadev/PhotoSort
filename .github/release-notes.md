@@ -69,6 +69,7 @@ Windows folder also includes GStreamer's official 1.28.8 build with its FFmpeg p
 runtime. The aesthetic model
 `aesthetic.onnx` is distributed under AGPL-3.0 per its model card. Its corresponding source
 is the pinned upstream revision with
-[`scripts/export_aesthetic.py`](https://github.com/${repository}/blob/v${version}/scripts/export_aesthetic.py)
-and [`examples/fold_model.rs`](https://github.com/${repository}/blob/v${version}/examples/fold_model.rs),
+[`scripts/export_aesthetic.py`](https://github.com/${repository}/blob/v${version}/scripts/export_aesthetic.py),
+[`examples/fold_model.rs`](https://github.com/${repository}/blob/v${version}/examples/fold_model.rs)
+and [`scripts/transpose_gemm_weights.py`](https://github.com/${repository}/blob/v${version}/scripts/transpose_gemm_weights.py),
 as described in [resources/ASSETS.md](https://github.com/${repository}/blob/v${version}/resources/ASSETS.md).

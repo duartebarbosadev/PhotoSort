@@ -31,7 +31,7 @@ PhotoSort 3 is a native rewrite; the Python version is at the
 PhotoSort 3 has no release yet, so [build it from source](#build-from-source). Its releases
 will include an app for Apple Silicon Macs and a zip for Windows x64.
 
-PhotoSort opens JPEG, PNG, TIFF, WebP, HEIC and most camera RAW formats, and plays common
+PhotoSort opens JPEG, PNG, TIFF, WebP, HEIC, GIF, BMP and most camera RAW formats, and plays common
 video formats. Ratings and rotations go into the photo's metadata or an XMP sidecar, so
 Lightroom and other editors see them.
 

@@ -75,7 +75,8 @@ cargo run --release -- --folder $HOME\photosort-scratch
 ```
 
 Tests and examples use a temporary data and cache folder, so they never touch your settings.
-They find models in `resources/models/` unless `PHOTOSORT_DATA_ROOT` points elsewhere.
+PhotoSort looks for models in its data folder first (`PHOTOSORT_DATA_ROOT` when set), then
+in `resources/models/`.
 
 | Variable | Purpose |
 | --- | --- |
