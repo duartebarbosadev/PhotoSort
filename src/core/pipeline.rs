@@ -1368,6 +1368,9 @@ fn native_pixels(
 /// fifth of a PNG, so the same disk limit keeps several times more photos.
 const PREVIEW_QUALITY: u8 = 92;
 /// A cache image (see `encode_cached` for which are JPEG), marked as used.
+/// image-rs decodes it: its JPEG decoder reads a 2048 px preview about a fifth
+/// faster than libvips and a grid thumbnail about five times faster, and it
+/// needs none of libvips' one render lock, which the screen waits on.
 fn read_cached_image(disk: &Path, key: &str) -> Option<DynamicImage> {
     ["jpg", "png"].iter().find_map(|ext| {
         let path = disk.join(format!("{key}.{ext}"));

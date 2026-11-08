@@ -46,6 +46,10 @@ impl Manager {
     ) -> Result<DynamicImage> {
         ensure!(!cancelled(), "Image preparation cancelled");
         reader.limits(decode_limits(self.allowance()));
+        // Embedded RAW previews are the JPEGs that come here. image-rs decodes
+        // them faster than libvips, with or without its shrink-on-load, and
+        // CMYK ones decode faster through jpeg-decoder and moxcms than through
+        // libvips and Little CMS.
         if reader.format() == Some(image::ImageFormat::Jpeg) {
             let mut input = reader.into_inner();
             let start = input.stream_position()?;
