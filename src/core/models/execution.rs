@@ -181,11 +181,7 @@ fn build(
         }
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         Backend::Cuda => {
-            let provider = ep::CUDA::default()
-                .with_conv_algorithm_search(ep::cuda::ConvAlgorithmSearch::Heuristic)
-                .with_conv_max_workspace(false)
-                .with_arena_extend_strategy(ep::ArenaExtendStrategy::SameAsRequested)
-                .with_tf32(false);
+            let provider = cuda();
             ensure!(
                 provider.is_available()?,
                 "CUDA is not included in this runtime"
@@ -263,6 +259,151 @@ fn build(
         cache_detail,
     })
 }
+/// Whether `backend` starts here: its provider is in the runtime, and a
+/// session on [`probe_model`] registers it and runs once, which loads the
+/// same driver and libraries a real model's convolutions need.
+pub(super) fn probe(backend: Backend) -> crate::core::processing::Probe {
+    use crate::core::processing::Probe;
+    match try_probe(backend) {
+        Ok(true) => Probe::Works,
+        Ok(false) => Probe::NotInRuntime,
+        Err(error) => Probe::Fails(error.to_string()),
+    }
+}
+fn try_probe(backend: Backend) -> Result<bool> {
+    let mut builder = Session::builder()?
+        .with_intra_threads(1)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?
+        .with_parallel_execution(false)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let provider = match backend {
+        #[cfg(target_os = "macos")]
+        Backend::CoreMl => {
+            let provider = ep::CoreML::default()
+                .with_model_format(ep::coreml::ModelFormat::MLProgram)
+                .with_compute_units(ep::coreml::ComputeUnits::All);
+            if !provider.is_available()? {
+                return Ok(false);
+            }
+            provider.build().error_on_failure()
+        }
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        Backend::Cuda => {
+            let provider = cuda();
+            if !provider.is_available()? {
+                return Ok(false);
+            }
+            provider.build().error_on_failure()
+        }
+        #[cfg(target_os = "windows")]
+        Backend::DirectMl => {
+            let provider = ep::DirectML::default();
+            if !provider.is_available()? {
+                return Ok(false);
+            }
+            provider.build().error_on_failure()
+        }
+        _ => anyhow::bail!("{} is not supported on this platform", backend.label()),
+    };
+    // DirectML requires sequential execution and disabled memory patterns.
+    if backend == Backend::DirectMl {
+        builder = builder
+            .with_memory_pattern(false)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    }
+    let mut session = builder
+        .with_execution_providers([provider])
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?
+        .commit_from_memory(&probe_model())?;
+    let input = Tensor::from_array(([1, 1, 1, 1], vec![1.0f32].into_boxed_slice()))?;
+    session.run(ort::inputs![input])?;
+    Ok(true)
+}
+/// A one-convolution ONNX model, Y = Conv(X, W) on 1×1×1×1 float tensors
+/// with W = 1, encoded here so the probe needs no model file. Convolution is
+/// what every PhotoSort model relies on, and on CUDA it needs cuDNN.
+/// Field numbers are those of onnx.proto.
+fn probe_model() -> Vec<u8> {
+    fn varint(out: &mut Vec<u8>, mut value: u64) {
+        while value >= 0x80 {
+            out.push(value as u8 | 0x80);
+            value >>= 7;
+        }
+        out.push(value as u8);
+    }
+    fn int(out: &mut Vec<u8>, field: u64, value: u64) {
+        varint(out, field << 3);
+        varint(out, value);
+    }
+    fn bytes(out: &mut Vec<u8>, field: u64, value: &[u8]) {
+        varint(out, field << 3 | 2);
+        varint(out, value.len() as u64);
+        out.extend_from_slice(value);
+    }
+    fn message(build: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
+        let mut out = Vec::new();
+        build(&mut out);
+        out
+    }
+    const FLOAT: u64 = 1;
+    // ValueInfoProto { name: 1, type: 2 } with TypeProto { tensor_type: 1 },
+    // Tensor { elem_type: 1, shape: 2 }, TensorShapeProto { dim: 1 } and
+    // Dimension { dim_value: 1 }.
+    let value = |name: &str| {
+        let shape = message(|s| {
+            for _ in 0..4 {
+                bytes(s, 1, &message(|d| int(d, 1, 1)));
+            }
+        });
+        let tensor = message(|t| {
+            int(t, 1, FLOAT);
+            bytes(t, 2, &shape);
+        });
+        message(|v| {
+            bytes(v, 1, name.as_bytes());
+            bytes(v, 2, &message(|t| bytes(t, 1, &tensor)));
+        })
+    };
+    // TensorProto { dims: 1, data_type: 2, name: 8, raw_data: 9 }.
+    let weight = message(|t| {
+        for _ in 0..4 {
+            int(t, 1, 1);
+        }
+        int(t, 2, FLOAT);
+        bytes(t, 8, b"W");
+        bytes(t, 9, &1f32.to_le_bytes());
+    });
+    // NodeProto { input: 1, output: 2, op_type: 4 }.
+    let node = message(|n| {
+        bytes(n, 1, b"X");
+        bytes(n, 1, b"W");
+        bytes(n, 2, b"Y");
+        bytes(n, 4, b"Conv");
+    });
+    // GraphProto { node: 1, name: 2, initializer: 5, input: 11, output: 12 }.
+    let graph = message(|g| {
+        bytes(g, 1, &node);
+        bytes(g, 2, b"probe");
+        bytes(g, 5, &weight);
+        bytes(g, 11, &value("X"));
+        bytes(g, 12, &value("Y"));
+    });
+    // ModelProto { ir_version: 1, graph: 7, opset_import: 8 } with
+    // OperatorSetIdProto { version: 2 } for the default domain.
+    message(|m| {
+        int(m, 1, 8);
+        bytes(m, 7, &graph);
+        bytes(m, 8, &message(|o| int(o, 2, 13)));
+    })
+}
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn cuda() -> ep::CUDA {
+    ep::CUDA::default()
+        .with_conv_algorithm_search(ep::cuda::ConvAlgorithmSearch::Heuristic)
+        .with_conv_max_workspace(false)
+        .with_arena_extend_strategy(ep::ArenaExtendStrategy::SameAsRequested)
+        .with_tf32(false)
+}
 /// Attempts are per model, with one CPU fallback; cancellation never starts
 /// another provider. Native compilation itself is not interruptible via ORT.
 fn choose<T>(
@@ -336,6 +477,26 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "Runs local native runtime to check the accelerator probe model and report"]
+    fn probe_model_runs_on_the_cpu_and_the_check_reports_each_accelerator() -> Result<()> {
+        let found = crate::core::models::check_accelerators().map_err(anyhow::Error::msg)?;
+        let mut session = Session::builder()?.commit_from_memory(&probe_model())?;
+        let input = Tensor::from_array(([1, 1, 1, 1], vec![2.0f32].into_boxed_slice()))?;
+        let outputs = session.run(ort::inputs![input])?;
+        let (shape, values) = outputs["Y"].try_extract_tensor::<f32>()?;
+        assert_eq!((&shape[..], values), (&[1, 1, 1, 1][..], &[2.0][..]));
+        let offered: Vec<_> = Backend::ALL
+            .into_iter()
+            .filter(|b| b.on_this_platform() && !matches!(b, Backend::Cpu | Backend::Auto))
+            .collect();
+        assert_eq!(
+            found.probes.iter().map(|(b, _)| *b).collect::<Vec<_>>(),
+            offered
+        );
+        eprintln!("{found:?}");
+        Ok(())
+    }
     #[test]
     fn a_run_records_the_backend_its_models_are_prepared_under() {
         use crate::core::{

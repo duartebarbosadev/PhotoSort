@@ -814,29 +814,66 @@ fn settings_buttons_apply_keep_the_dialog_open_and_save_closes_it() {
     );
 }
 #[test]
-fn run_ai_on_shows_where_models_run_and_when_a_new_setting_takes_over() {
-    use crate::core::processing::Backend;
+fn run_ai_on_says_where_ai_will_run_then_where_it_runs() {
+    use crate::core::processing::{Accelerators, Backend, Probe};
     let (_dir, mut app) = fixture();
     assert_eq!(app.preferences.processing.backend, Backend::Auto);
     app.runtime.processing.configure(app.preferences.processing);
-    assert!(app.running_on_note().contains("once an analysis starts"));
+    assert_eq!(
+        app.running_on_note(Backend::Auto),
+        "Checking this computer's accelerators…"
+    );
+    // Before any model loads, the check names the backend for any choice
+    // in the dialog, applied or not.
+    app.runtime.processing.record_accelerators(Ok(Accelerators {
+        probes: vec![
+            (Backend::Cuda, Probe::Works),
+            (Backend::DirectMl, Probe::NotInRuntime),
+        ],
+        nvidia_driver: true,
+    }));
+    if cfg!(any(target_os = "windows", target_os = "linux")) {
+        assert_eq!(
+            app.running_on_note(Backend::Auto),
+            "Will run on NVIDIA CUDA"
+        );
+    }
+    assert_eq!(app.running_on_note(Backend::Cpu), "Will run on CPU");
+    assert_eq!(
+        app.running_on_note(Backend::DirectMl),
+        "Will run on CPU · Windows DirectML unavailable"
+    );
+    // Once models have loaded, the line says where they actually run.
     app.runtime
         .processing
         .report("dinov2", Backend::Cuda, "Provider enabled".into());
-    assert_eq!(app.running_on_note(), "Running on NVIDIA CUDA");
+    app.runtime.processing.set_prepared_for(Backend::Auto);
+    assert_eq!(app.running_on_note(Backend::Auto), "Running on NVIDIA CUDA");
     // Not part of a running analysis: the progress line stays hidden.
     assert_eq!(app.running_on(), None);
     app.analysis_run = Some(3);
     assert_eq!(app.running_on().as_deref(), Some("Running on NVIDIA CUDA"));
-    // The models were prepared under Automatic; CPU applies from the next run.
-    app.runtime.processing.set_prepared_for(Backend::Auto);
+    // Choosing CPU, applied or not, tells what the next analysis uses.
+    assert_eq!(
+        app.running_on_note(Backend::Cpu),
+        "Running on NVIDIA CUDA · next analysis on CPU"
+    );
     let mut draft = app.preferences.clone();
     draft.processing.backend = Backend::Cpu;
     app.apply_settings(draft);
     assert_eq!(
-        app.running_on_note(),
-        "Running on NVIDIA CUDA · CPU takes over at the next analysis"
+        app.running_on_note(Backend::Cpu),
+        "Running on NVIDIA CUDA · next analysis on CPU"
     );
     assert_eq!(app.running_on().as_deref(), Some("Running on NVIDIA CUDA"));
+    // ONNX Runtime missing: the line says the check could not run.
+    app.runtime
+        .processing
+        .record_accelerators(Err("ONNX Runtime library is missing".into()));
+    app.runtime.processing.clear_status();
+    assert_eq!(
+        app.running_on_note(Backend::Cpu),
+        "Could not check this computer: ONNX Runtime library is missing"
+    );
     app.runtime.shutdown();
 }

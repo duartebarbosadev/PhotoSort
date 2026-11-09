@@ -188,6 +188,106 @@ impl Placement {
         }
     }
 }
+/// Whether one accelerator starts on this computer, found by a quick check
+/// that loads ONNX Runtime and runs a tiny model on it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Probe {
+    Works,
+    /// This ONNX Runtime build does not include the provider.
+    NotInRuntime,
+    /// The provider is included but did not start, with the reason.
+    Fails(String),
+}
+/// What the accelerator check found, for each accelerator this platform offers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Accelerators {
+    pub probes: Vec<(Backend, Probe)>,
+    /// An NVIDIA driver is installed, so NVIDIA GPU support has a GPU to use.
+    pub nvidia_driver: bool,
+}
+/// The accelerator check, started the first time Settings asks.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Check {
+    #[default]
+    NotStarted,
+    Running,
+    /// The accelerators, or why ONNX Runtime could not be loaded to check.
+    Done(Result<Accelerators, String>),
+}
+/// Where models would run under a setting, from the accelerator check and
+/// the same order Automatic tries providers in, before any model loads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Prediction {
+    pub requested: Backend,
+    /// The backend the models would run on.
+    pub backend: Backend,
+    /// Each accelerator tried before it, and why it would not start.
+    pub skipped: Vec<(Backend, Probe)>,
+    nvidia_driver: bool,
+}
+impl Prediction {
+    pub fn of(requested: Backend, accelerators: &Accelerators) -> Self {
+        let mut skipped = Vec::new();
+        let mut backend = Backend::Cpu;
+        for candidate in requested.candidates() {
+            match accelerators.probes.iter().find(|(b, _)| *b == candidate) {
+                Some((_, Probe::Works)) => {
+                    backend = candidate;
+                    break;
+                }
+                Some((_, probe)) => skipped.push((candidate, probe.clone())),
+                None => skipped.push((candidate, Probe::NotInRuntime)),
+            }
+        }
+        Self {
+            requested,
+            backend,
+            skipped,
+            nvidia_driver: accelerators.nvidia_driver,
+        }
+    }
+    /// "Will run on NVIDIA CUDA", or on the CPU and why.
+    pub fn label(&self) -> String {
+        format!("Will run on {}", self.target())
+    }
+    /// The backend, and why it is the CPU when an accelerator was asked for:
+    /// "CPU · NVIDIA CUDA unavailable".
+    pub fn target(&self) -> String {
+        match self.backend {
+            Backend::Cpu if self.requested == Backend::Cpu => "CPU".into(),
+            Backend::Cpu if self.requested == Backend::Auto => {
+                "CPU · no accelerator available".into()
+            }
+            Backend::Cpu => format!("CPU · {} unavailable", self.requested.label()),
+            backend => backend.label().into(),
+        }
+    }
+    /// Why each skipped accelerator would not start, and what would add a
+    /// missing one: "NVIDIA CUDA isn't in this ONNX Runtime; Menu → AI models
+    /// → NVIDIA GPU support adds it."
+    pub fn reasons(&self) -> Option<String> {
+        let reasons: Vec<_> = self
+            .skipped
+            .iter()
+            .map(|(backend, probe)| match probe {
+                Probe::NotInRuntime
+                    if *backend == Backend::Cuda
+                        && self.nvidia_driver
+                        && cfg!(target_os = "windows") =>
+                {
+                    format!(
+                        "{} isn't in this ONNX Runtime; Menu → AI models → NVIDIA GPU support adds it",
+                        backend.label()
+                    )
+                }
+                Probe::NotInRuntime => format!("{} isn't in this ONNX Runtime", backend.label()),
+                Probe::Fails(reason) => format!("{} didn't start: {reason}", backend.label()),
+                Probe::Works => format!("{} works", backend.label()),
+            })
+            .collect();
+        (!reasons.is_empty()).then(|| format!("{}.", reasons.join(". ")))
+    }
+}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mode {
     #[default]
@@ -239,6 +339,8 @@ pub struct Control {
     /// The backend the models in `status` were prepared under, which stays
     /// the previous setting until the next analysis starts.
     prepared_for: Arc<Mutex<Option<Backend>>>,
+    /// Which accelerators start here, checked once per launch on request.
+    accelerators: Arc<Mutex<Check>>,
     status: Arc<Mutex<BTreeMap<&'static str, ModelStatus>>>,
     /// Last finished duration of each slow step, keyed by model, backend and step.
     timings: Arc<Mutex<Timings>>,
@@ -266,6 +368,7 @@ impl Default for Control {
                 backend: preferences.backend,
             })),
             prepared_for: Default::default(),
+            accelerators: Default::default(),
             status: Default::default(),
             timings: Default::default(),
             available,
@@ -303,6 +406,35 @@ impl Control {
     /// Where the ready models run now; `None` before any model is ready.
     pub fn placement(&self) -> Option<Placement> {
         Placement::of(self.prepared_for(), &self.status())
+    }
+    /// Starts the accelerator check on its own thread, once per launch. It
+    /// loads ONNX Runtime and may take a few seconds on a GPU. Tests record a
+    /// result instead.
+    pub fn check_accelerators(&self) {
+        {
+            let mut check = self.accelerators.lock().unwrap();
+            if *check != Check::NotStarted || cfg!(any(test, feature = "test-isolation")) {
+                return;
+            }
+            *check = Check::Running;
+        }
+        let control = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("accelerator-check".into())
+            .spawn(move || {
+                let found = super::models::check_accelerators();
+                tracing::info!(?found, "accelerator check finished");
+                control.record_accelerators(found);
+            });
+        if let Err(error) = spawned {
+            self.record_accelerators(Err(format!("The check could not start: {error}")));
+        }
+    }
+    pub fn accelerators(&self) -> Check {
+        self.accelerators.lock().unwrap().clone()
+    }
+    pub(crate) fn record_accelerators(&self, found: Result<Accelerators, String>) {
+        *self.accelerators.lock().unwrap() = Check::Done(found);
     }
     /// Shows a status as given, without a model; for screenshots.
     pub fn show_status(&self, status: ModelStatus) {
@@ -549,5 +681,90 @@ mod placement_tests {
             control.placement().unwrap().label(),
             "Running on CPU · no accelerator available"
         );
+    }
+}
+
+#[cfg(test)]
+mod prediction_tests {
+    use super::*;
+    fn found(probes: Vec<(Backend, Probe)>, nvidia_driver: bool) -> Accelerators {
+        Accelerators {
+            probes,
+            nvidia_driver,
+        }
+    }
+    #[test]
+    fn prediction_follows_the_order_automatic_tries_and_says_why_not() {
+        let candidates = Backend::Auto.candidates();
+        // Every accelerator works: Automatic takes the first it tries.
+        let all = found(
+            candidates.iter().map(|b| (*b, Probe::Works)).collect(),
+            true,
+        );
+        let auto = Prediction::of(Backend::Auto, &all);
+        match candidates.first() {
+            Some(first) => {
+                assert_eq!(auto.backend, *first);
+                assert_eq!(auto.label(), format!("Will run on {}", first.label()));
+            }
+            None => assert_eq!(auto.label(), "Will run on CPU · no accelerator available"),
+        }
+        assert_eq!(auto.reasons(), None);
+        assert_eq!(
+            Prediction::of(Backend::Cpu, &all).label(),
+            "Will run on CPU"
+        );
+        // Nothing starts: Automatic says so, with each reason.
+        let none = found(
+            candidates
+                .iter()
+                .map(|b| (*b, Probe::Fails("driver too old".into())))
+                .collect(),
+            false,
+        );
+        let auto = Prediction::of(Backend::Auto, &none);
+        assert_eq!(auto.backend, Backend::Cpu);
+        assert_eq!(auto.label(), "Will run on CPU · no accelerator available");
+        for candidate in &candidates {
+            assert!(auto.reasons().unwrap().contains(&format!(
+                "{} didn't start: driver too old",
+                candidate.label()
+            )));
+        }
+    }
+    #[test]
+    fn a_chosen_accelerator_that_will_not_start_says_what_would_add_it() {
+        let missing = found(vec![(Backend::Cuda, Probe::NotInRuntime)], true);
+        let cuda = Prediction::of(Backend::Cuda, &missing);
+        assert_eq!(cuda.label(), "Will run on CPU · NVIDIA CUDA unavailable");
+        assert_eq!(cuda.target(), "CPU · NVIDIA CUDA unavailable");
+        let reasons = cuda.reasons().unwrap();
+        assert!(reasons.starts_with("NVIDIA CUDA isn't in this ONNX Runtime"));
+        // The GPU support download is offered only on Windows with an NVIDIA driver.
+        assert_eq!(
+            reasons.contains("NVIDIA GPU support adds it"),
+            cfg!(target_os = "windows")
+        );
+        let no_driver = Prediction::of(Backend::Cuda, &found(missing.probes.clone(), false));
+        assert!(!no_driver.reasons().unwrap().contains("NVIDIA GPU support"));
+        // An accelerator the check did not try counts as not in the runtime.
+        let unchecked = Prediction::of(Backend::Cuda, &found(vec![], false));
+        assert_eq!(unchecked.backend, Backend::Cpu);
+        let works = Prediction::of(
+            Backend::Cuda,
+            &found(vec![(Backend::Cuda, Probe::Works)], true),
+        );
+        assert_eq!(works.label(), "Will run on NVIDIA CUDA");
+    }
+    #[test]
+    fn the_check_runs_once_and_never_natively_in_tests() {
+        let control = Control::default();
+        assert_eq!(control.accelerators(), Check::NotStarted);
+        control.check_accelerators();
+        assert_eq!(control.accelerators(), Check::NotStarted);
+        let result = Ok(found(vec![(Backend::Cuda, Probe::Works)], true));
+        control.record_accelerators(result.clone());
+        // Clones share the result, as the UI and the worker do.
+        assert_eq!(control.clone().accelerators(), Check::Done(result));
     }
 }

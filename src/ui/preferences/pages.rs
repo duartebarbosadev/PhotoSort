@@ -2,6 +2,7 @@
 //! cards whose rows put the setting on the left and its control on the right.
 use super::*;
 use crate::core::preferences::Preferences;
+use crate::core::processing::{Backend, Check, Prediction};
 use egui_phosphor::regular as icon;
 
 /// Below this row width a control moves under its label.
@@ -502,7 +503,7 @@ fn danger_button(text: &str) -> egui::Button<'static> {
 }
 
 /// Settings > Performance, Run AI on. Automatic is the default everywhere.
-const AI_PROCESSING_HELP: &str = "Applies to the next analysis in every workflow. Automatic, the default, tries this computer's accelerators first and falls back to CPU per model when one is missing or fails. The line under this setting shows where the models actually run.
+const AI_PROCESSING_HELP: &str = "Applies to the next analysis in every workflow. Automatic, the default, tries this computer's accelerators first and falls back to CPU per model when one is missing or fails. The line under this setting says where AI will run, from a quick check of this computer when this page opens, and where it runs once models have loaded.
 
 Acceleration requires a compatible ONNX Runtime and driver. First model preparation can take minutes and extra memory. Native compilation finishes before cancellation can release it; cached photo results remain reusable.
 
@@ -560,25 +561,42 @@ impl PhotoSortApp {
         ui.add_space(S4);
     }
 
-    /// Where AI runs, resolved per model, for the line under Run AI on. A
-    /// setting applied since the models were prepared takes over at the next
-    /// analysis, and the line says so.
-    pub(super) fn running_on_note(&self) -> String {
+    /// The line under Run AI on for the backend chosen in the dialog. Once
+    /// models have loaded under the setting in effect, it says where they
+    /// run; otherwise it says where they will run, from the accelerator check,
+    /// so a choice is explained before it is applied or used.
+    pub(super) fn running_on_note(&self, choice: Backend) -> String {
         let processing = &self.runtime.processing;
         let applied = self.preferences.processing.backend;
-        match processing.placement() {
-            Some(placement) if processing.prepared_for() == applied => placement.label(),
-            Some(placement) => format!(
-                "{} · {} takes over at the next analysis",
-                placement.label(),
-                applied.label()
-            ),
-            None => "Where AI runs shows here once an analysis starts.".into(),
+        let prediction = self.prediction(choice);
+        match (processing.placement(), prediction) {
+            (Some(placement), _) if choice == applied && processing.prepared_for() == applied => {
+                placement.label()
+            }
+            (Some(placement), Ok(next)) => {
+                format!("{} · next analysis on {}", placement.label(), next.target())
+            }
+            (Some(placement), Err(note)) => format!("{} · {note}", placement.label()),
+            (None, Ok(next)) => next.label(),
+            (None, Err(note)) => note,
+        }
+    }
+
+    /// Where `choice` would run, or what stands in while the accelerator
+    /// check runs or when it could not load ONNX Runtime.
+    fn prediction(&self, choice: Backend) -> Result<Prediction, String> {
+        match self.runtime.processing.accelerators() {
+            Check::Done(Ok(accelerators)) => Ok(Prediction::of(choice, &accelerators)),
+            Check::Done(Err(error)) => Err(format!("Could not check this computer: {error}")),
+            Check::NotStarted | Check::Running => {
+                Err("Checking this computer's accelerators…".into())
+            }
         }
     }
 
     fn performance_page(&mut self, ui: &mut egui::Ui, draft: &mut Preferences) {
-        use crate::core::processing::{Backend, Mode};
+        use crate::core::processing::Mode;
+        let ui_ctx = ui.ctx().clone();
         card(ui, icon::CPU, "AI processing", None, false, |rows| {
             rows.row(
                 "Run AI on",
@@ -603,7 +621,20 @@ impl PhotoSortApp {
                         });
                 },
             );
-            rows.note(&self.running_on_note());
+            // The check loads ONNX Runtime once per launch, in the background.
+            self.runtime.processing.check_accelerators();
+            if self.runtime.processing.accelerators() == Check::Running {
+                ui_ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
+            let chosen = draft.processing.backend;
+            rows.note(&self.running_on_note(chosen));
+            let placed = self.runtime.processing.placement().is_some()
+                && chosen == self.preferences.processing.backend
+                && self.runtime.processing.prepared_for() == chosen;
+            if !placed && let Some(reasons) = self.prediction(chosen).ok().and_then(|p| p.reasons())
+            {
+                rows.note(&reasons);
+            }
             for status in self.runtime.processing.status() {
                 rows.note(&format!(
                     "{} · {} · {}",
