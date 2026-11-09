@@ -1,5 +1,5 @@
 //! The board's header and Organize's top-bar controls: the folder shown,
-//! search, filter, Show original and Reset changes.
+//! search, filter, and the menu with Show original and Reset changes.
 use super::*;
 
 impl PhotoSortApp {
@@ -127,32 +127,44 @@ impl PhotoSortApp {
                 self.filter_choices(ui);
             });
     }
-    /// Held down, shows the folders as they are on disk now; released, the
-    /// plan again. Backslash does the same. Only the icon in a narrow bar.
-    pub(in crate::ui::workspace) fn original_button(&mut self, ui: &mut egui::Ui, compact: bool) {
-        use egui_phosphor::regular as icon;
-        let on = self.board.original;
-        let text = if compact {
-            icon::CLOCK_COUNTER_CLOCKWISE.to_owned()
-        } else {
-            format!("{}  Show original", icon::CLOCK_COUNTER_CLOCKWISE)
-        };
-        let button = egui::Button::new(RichText::new(text).color(if on { ACCENT } else { INK }))
-            .selected(on)
-            .sense(Sense::drag());
-        // With nothing planned, the plan is the folders on disk.
-        let response = named(
-            ui.add_enabled(self.organize_planned(), button),
-            egui::WidgetType::Button,
-            "Show original",
+    /// Show original and Reset changes, in a "⋯" menu at the right of the
+    /// bar. Lit while the folders on disk are shown.
+    pub(in crate::ui::workspace) fn organize_menu(&mut self, ui: &mut egui::Ui) {
+        let name = "Planned changes";
+        let button = top_bar::bar_icon(
+            ui,
+            self.organize_planned(),
+            self.board.original,
+            egui_phosphor::regular::DOTS_THREE,
+            name,
         )
-        .on_hover_text("Hold to see the folders on disk now · or hold \\")
+        .on_hover_text(name)
         .on_disabled_hover_text("Nothing planned yet");
-        let held = response.is_pointer_button_down_on();
-        if held != self.board.original_button {
-            self.board.original_button = held;
-            ui.ctx().request_repaint();
-        }
+        egui::Popup::menu(&button).show(|ui| {
+            ui.set_min_width(200.0);
+            // Stays on until chosen again; holding backslash shows it only
+            // while held.
+            if ui
+                .add(egui::Button::selectable(
+                    self.board.original_on,
+                    "Show original · hold \\",
+                ))
+                .clicked()
+            {
+                self.board.original_on ^= true;
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    self.organize_resettable(),
+                    egui::Button::new("Reset changes…"),
+                )
+                .clicked()
+            {
+                self.board.confirm_reset = true;
+                ui.close();
+            }
+        });
     }
     /// Whether the plan differs from the folders on disk: photos that move
     /// or are renamed, whether by hand or by the grouping, new folders, and
@@ -171,26 +183,6 @@ impl PhotoSortApp {
     /// Whether there are planned changes to reset.
     pub(in crate::ui::workspace) fn organize_resettable(&self) -> bool {
         self.organize_planned() && self.retry_plan.is_none()
-    }
-    /// Asks before dropping every planned Organize change. Only the icon in
-    /// a narrow bar.
-    pub(in crate::ui::workspace) fn reset_button(&mut self, ui: &mut egui::Ui, compact: bool) {
-        use egui_phosphor::regular as icon;
-        let text = if compact {
-            icon::ARROW_U_UP_LEFT.to_owned()
-        } else {
-            format!("{}  Reset changes", icon::ARROW_U_UP_LEFT)
-        };
-        let response = named(
-            ui.add_enabled(self.organize_resettable(), egui::Button::new(text)),
-            egui::WidgetType::Button,
-            "Reset changes",
-        )
-        .on_hover_text("Discard every planned move, rename and new folder")
-        .on_disabled_hover_text("Nothing planned yet");
-        if response.clicked() {
-            self.board.confirm_reset = true;
-        }
     }
     /// Drops every planned Organize change and shows the folders as they are
     /// on disk. Trash marks, ratings and rotations stay.
