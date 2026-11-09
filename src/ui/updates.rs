@@ -230,7 +230,7 @@ mod tests {
             app.step = step;
             app.runtime
                 .updates
-                .unavailable("No Rust release source configured.".into());
+                .unavailable("Update checks aren't available in this build.".into());
             app.update_dialog = true;
             assert!(app.modal_active());
             let before = app.stats;

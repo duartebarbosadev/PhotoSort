@@ -226,21 +226,24 @@ impl PhotoSortApp {
                     }
                     ui.separator();
                 }
-                if ui
-                    .button(if available {
-                        "Update available…"
-                    } else {
-                        "Check for updates…"
-                    })
-                    .clicked()
-                {
-                    self.update_dialog = true;
-                    if !available {
-                        self.start_update_check();
+                // A build without a release source has no updates to check.
+                if crate::core::updates::Source::configured().is_ok() {
+                    if ui
+                        .button(if available {
+                            "Update available…"
+                        } else {
+                            "Check for updates…"
+                        })
+                        .clicked()
+                    {
+                        self.update_dialog = true;
+                        if !available {
+                            self.start_update_check();
+                        }
+                        ui.close();
                     }
-                    ui.close();
+                    ui.separator();
                 }
-                ui.separator();
                 self.clear_trash_menu_item(ui);
                 ui.separator();
                 if ui.button("Settings…").clicked() {
@@ -302,14 +305,18 @@ impl PhotoSortApp {
             let screen = ctx.content_rect();
             let width = (screen.width() - 88.0).clamp(280.0, 840.0);
             let compact = width < pages::COMPACT_WIDTH;
+            // With nothing unsaved, closing loses nothing.
+            let close = if pages::has_pending(&draft, &self.preferences) {
+                "Close without saving"
+            } else {
+                "Close"
+            };
             let response = modal(egui::Id::new("preferences")).show(ctx, |ui| {
                 ui.set_width(width);
                 ui.horizontal(|ui| {
                     ui.heading("Settings");
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        if icon_button(ui, egui_phosphor::regular::X, "Close without saving")
-                            .clicked()
-                        {
+                        if icon_button(ui, egui_phosphor::regular::X, close).clicked() {
                             action = 1;
                         }
                     });
@@ -369,11 +376,6 @@ impl PhotoSortApp {
                             ui.label(RichText::new("Unsaved changes").color(ACCENT));
                         }
                         pages::trailing(ui, egui::Id::new("settings_footer"), |ui| {
-                            // With nothing unsaved there is nothing to cancel.
-                            let label = if pending { "Cancel" } else { "Close" };
-                            if ui.button(label).clicked() {
-                                action = 1;
-                            }
                             if ui
                                 .add_enabled(pending, egui::Button::new("Apply"))
                                 .on_hover_text("Save and keep Settings open")

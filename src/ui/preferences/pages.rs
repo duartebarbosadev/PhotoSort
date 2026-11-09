@@ -866,14 +866,14 @@ impl PhotoSortApp {
 
 fn general_page(ui: &mut egui::Ui, draft: &mut Preferences) {
     use crate::core::metadata::WritePolicy;
-    card(ui, icon::DOWNLOAD_SIMPLE, "Updates", None, false, |rows| {
-        rows.row("Check for updates daily", "", None, |ui| {
-            switch(ui, &mut draft.updates.automatic, "Check for updates daily")
+    // A build without a release source has no updates to check.
+    if crate::core::updates::Source::configured().is_ok() {
+        card(ui, icon::DOWNLOAD_SIMPLE, "Updates", None, false, |rows| {
+            rows.row("Check for updates daily", "", None, |ui| {
+                switch(ui, &mut draft.updates.automatic, "Check for updates daily")
+            });
         });
-        if let Err(reason) = crate::core::updates::Source::configured() {
-            rows.note(&reason);
-        }
-    });
+    }
     card(
         ui,
         icon::FLOPPY_DISK,

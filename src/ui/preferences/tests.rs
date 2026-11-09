@@ -45,7 +45,7 @@ fn settings_errors_are_bounded_and_dismissible_without_hiding_footer_or_losing_d
             "Dismiss error",
             "General",
             "Storage",
-            "Cancel",
+            "Close without saving",
             "Apply",
             "Save",
         ] {
@@ -540,7 +540,7 @@ fn settings_access_cache_and_general_anchors_keep_footer_visible_at_small_sizes(
         let mut time = 0.;
         for (section, label) in [
             (Section::Storage, "Disk cache limit"),
-            (Section::General, "Check for updates daily"),
+            (Section::General, "Save changes to"),
             (Section::Storage, "Disk cache limit"),
         ] {
             app.open_settings(section);
@@ -762,11 +762,11 @@ fn apply_saves_and_keeps_settings_open_cancel_drops_only_what_is_unsaved_and_sav
     assert!(find(&output, "Unsaved changes").is_none());
     assert!(find(&output, "Apply").unwrap().is_disabled());
     assert!(find(&output, "Save").unwrap().is_disabled());
-    // Nothing unsaved: the way out reads Close.
-    assert!(find(&output, "Close").is_some() && find(&output, "Cancel").is_none());
-    // Cancel drops the edit made since Apply and keeps what Apply saved.
+    // Nothing unsaved: the × reads Close.
+    assert!(find(&output, "Close").is_some() && find(&output, "Close without saving").is_none());
+    // Closing drops the edit made since Apply and keeps what Apply saved.
     app.preferences_draft.as_mut().unwrap().show_shortcuts = false;
-    click(&mut app, "Cancel");
+    click(&mut app, "Close without saving");
     assert!(app.preferences_draft.is_none());
     assert!(app.preferences.show_shortcuts);
     assert_eq!(app.runtime.processing.snapshot_run().backend, Backend::Cpu);
