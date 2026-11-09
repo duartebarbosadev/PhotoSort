@@ -686,6 +686,12 @@ impl ImageWorker {
             },
             Ok,
         );
+        // Cancellation can stop a decode midway (libvips then reports
+        // "killed"). The UI drops superseded results anyway, so publish
+        // nothing: a cancelled load is not logged as a failed one.
+        if self.publisher.cancelled(epoch) {
+            return;
+        }
         match loaded {
             Ok(asset) => self.publisher.send(
                 epoch,
