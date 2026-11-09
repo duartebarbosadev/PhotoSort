@@ -228,9 +228,7 @@ mod tests {
         theme_install(&ctx);
         for step in Step::ALL {
             app.step = step;
-            app.runtime
-                .updates
-                .unavailable("Update checks aren't available in this build.".into());
+            app.runtime.updates.unavailable("No update found.".into());
             app.update_dialog = true;
             assert!(app.modal_active());
             let before = app.stats;

@@ -226,24 +226,21 @@ impl PhotoSortApp {
                     }
                     ui.separator();
                 }
-                // A build without a release source has no updates to check.
-                if crate::core::updates::Source::configured().is_ok() {
-                    if ui
-                        .button(if available {
-                            "Update available…"
-                        } else {
-                            "Check for updates…"
-                        })
-                        .clicked()
-                    {
-                        self.update_dialog = true;
-                        if !available {
-                            self.start_update_check();
-                        }
-                        ui.close();
+                if ui
+                    .button(if available {
+                        "Update available…"
+                    } else {
+                        "Check for updates…"
+                    })
+                    .clicked()
+                {
+                    self.update_dialog = true;
+                    if !available {
+                        self.start_update_check();
                     }
-                    ui.separator();
+                    ui.close();
                 }
+                ui.separator();
                 self.clear_trash_menu_item(ui);
                 ui.separator();
                 if ui.button("Settings…").clicked() {

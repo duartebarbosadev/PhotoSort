@@ -74,7 +74,7 @@ impl Source {
     }
     pub fn configured() -> std::result::Result<Self, String> {
         let repo = option_env!("PHOTOSORT_RELEASE_REPOSITORY")
-            .ok_or_else(|| "Update checks aren't available in this build.".to_string())?;
+            .ok_or_else(|| "No update found.".to_string())?;
         Self::new(repo).map_err(|e| format!("Invalid release configuration: {e}"))
     }
     pub fn api_url(&self) -> String {
