@@ -14,8 +14,6 @@ mod dialogs;
 mod events;
 #[path = "grouping.rs"]
 mod grouping;
-#[path = "hints.rs"]
-mod hints;
 #[path = "inspector.rs"]
 mod inspector;
 #[path = "intro.rs"]
@@ -576,7 +574,7 @@ impl PhotoSortApp {
             analysis_failures: HashMap::new(),
             analysis_successes: 0,
             review: false,
-            inspector: true,
+            inspector: false,
             was_wide: true,
             bar_fit: Default::default(),
             bar_needs: Default::default(),
@@ -599,7 +597,7 @@ impl PhotoSortApp {
             apply_planned: false,
             file_names: HashMap::new(),
             status_scope: None,
-            status: "Ready when you are".into(),
+            status: String::new(),
             error: None,
             scanning: false,
             busy: false,
@@ -827,7 +825,7 @@ impl PhotoSortApp {
         self.scanning = true;
         self.root = Some(folder.clone());
         self.output = folder.display().to_string();
-        self.set_status("Discovering photos…".into());
+        self.clear_status();
         if let Err(e) = self.runtime.io(IoWork::Scan(folder)) {
             self.error = Some(e);
             self.scanning = false;
@@ -1171,7 +1169,7 @@ impl PhotoSortApp {
         self.organize_preview_requested = false;
         self.analysis_run = None;
         self.progress = None;
-        self.set_status("Analysis cancelled · completed results retained".into());
+        self.clear_status();
     }
     pub(super) fn can_start_analysis(&self) -> bool {
         !self.media.is_empty() && !self.scanning && !self.busy && self.analysis_run.is_none()
@@ -1244,7 +1242,7 @@ impl PhotoSortApp {
                 self.analysis_failures.clear();
                 self.analysis_successes = 0;
                 self.progress = Some((0, self.media.len()));
-                self.set_status("Analyzing locally · previews stay available".into());
+                self.clear_status();
             }
             Err(e) => self.error = Some(e),
         }
@@ -1526,8 +1524,7 @@ impl PhotoSortApp {
                 || self.browse_run.is_some()
                 || (self.navigation_index.is_some() && self.filter_dirty))
         {
-            self.navigation_notice =
-                Some("Updating library view… Navigation will resume when ready.".into());
+            self.navigation_notice = Some("Updating library view…".into());
             return;
         }
         if self.step == Step::PickBest {
@@ -1817,7 +1814,9 @@ impl PhotoSortApp {
                         ui.spacing_mut().button_padding = egui::vec2(8.0, 4.0);
                         ui.spacing_mut().item_spacing = egui::vec2(8.0, 5.0);
                     }
-                    if self.busy { ui.disable(); }
+                    if self.busy {
+                        ui.disable();
+                    }
                     // The step's controls live in the top bar.
                     let margin: i8 = if compact { 8 } else { 12 };
                     // Organize's panels sit as far below the bar as they are
@@ -1828,7 +1827,12 @@ impl PhotoSortApp {
                         margin
                     };
                     egui::Frame::new()
-                        .inner_margin(egui::Margin { left: margin, right: margin, top, bottom: margin })
+                        .inner_margin(egui::Margin {
+                            left: margin,
+                            right: margin,
+                            top,
+                            bottom: margin,
+                        })
                         .show(ui, |ui| {
                             ui.set_min_size(ui.available_size());
                             // Cull says when a filter hides some photos.
@@ -1837,15 +1841,26 @@ impl PhotoSortApp {
                             }
                             self.navigator_panel(ui);
                             if self.step == Step::PickBest && self.pick_run.is_some() {
-                                self.working_state(ui, "Finding similar photos", "Grouping bursts and near-identical frames, then scoring each photo.");
+                                self.working_state(ui, "Finding similar photos", "");
                             } else if self.step == Step::EasyDelete && self.delete_run.is_some() {
-                                self.working_state(ui, "Looking for photos to clean up", "Checking for duplicates, near-duplicates, and blurry or badly exposed shots.");
+                                self.working_state(ui, "Looking for photos to clean up", "");
                             } else if self.step == Step::Rotation && self.rotation_run.is_some() {
-                                self.working_state(ui, "Checking orientation", "Looking at each photo to find the ones that are sideways or upside down.");
+                                self.working_state(ui, "Checking orientation", "");
                             } else if self.media.is_empty() && self.scanning {
-                                self.working_state(ui, "Finding your photos", "Reading the folder and its subfolders.");
-                            } else if self.filtered.is_empty() && self.browse_run.is_some() && self.step == Step::Cull {
-                                self.working_state(ui, "Updating the view", "Applying the search and filters.");
+                                self.working_state(
+                                    ui,
+                                    "Finding your photos",
+                                    "Reading the folder and its subfolders.",
+                                );
+                            } else if self.filtered.is_empty()
+                                && self.browse_run.is_some()
+                                && self.step == Step::Cull
+                            {
+                                self.working_state(
+                                    ui,
+                                    "Updating the view",
+                                    "Applying the search and filters.",
+                                );
                             } else if self.media.is_empty() || self.filtered.is_empty() {
                                 self.empty_state(ui);
                             } else {
@@ -2149,7 +2164,7 @@ impl PhotoSortApp {
         self.analysis_run = Some(run);
         self.progress = Some((total / 3, total));
         self.progress_started = Instant::now().checked_sub(Duration::from_secs(40));
-        self.set_status("Analyzing locally · previews stay available".into());
+        self.clear_status();
         self.filter_dirty = true;
     }
     /// Shows Pick Best's analysis while the aesthetic model compiles, 72 s

@@ -196,9 +196,6 @@ pub(super) fn can_nest(source: &str, target: &str) -> bool {
         && source.rsplit_once('/').map_or("", |(p, _)| p) != target
 }
 
-/// The end of every notice about an edit to the plan.
-pub(super) const STAGED: &str = " · nothing changes on disk until you review the changes";
-
 /// A folder being dragged in the sidebar onto another folder.
 pub(in crate::ui::workspace) struct FolderDrag(pub(in crate::ui::workspace) String);
 

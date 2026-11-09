@@ -67,8 +67,7 @@ impl PhotoSortApp {
         {
             Ok(()) => {
                 self.views_forgotten = true;
-                self.forget_message =
-                    Some("Remembered folders forgotten. Each one opens fresh next time.".into());
+                self.forget_message = Some("Remembered folders forgotten.".into());
             }
             Err(error) => self.error = Some(error),
         }
@@ -252,7 +251,7 @@ impl PhotoSortApp {
                     self.open_model_setup();
                     ui.close();
                 }
-                if ui.button("Keyboard guide").clicked() {
+                if ui.button("Keyboard Shortcuts").clicked() {
                     self.help = true;
                     ui.close();
                 }
@@ -303,14 +302,18 @@ impl PhotoSortApp {
             let screen = ctx.content_rect();
             let width = (screen.width() - 88.0).clamp(280.0, 840.0);
             let compact = width < pages::COMPACT_WIDTH;
+            // With nothing unsaved, closing loses nothing.
+            let close = if pages::has_pending(&draft, &self.preferences) {
+                "Close without saving"
+            } else {
+                "Close"
+            };
             let response = modal(egui::Id::new("preferences")).show(ctx, |ui| {
                 ui.set_width(width);
                 ui.horizontal(|ui| {
                     ui.heading("Settings");
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        if icon_button(ui, egui_phosphor::regular::X, "Close without saving")
-                            .clicked()
-                        {
+                        if icon_button(ui, egui_phosphor::regular::X, close).clicked() {
                             action = 1;
                         }
                     });
@@ -368,31 +371,16 @@ impl PhotoSortApp {
                                 ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
                             ui.painter().circle_filled(dot.center(), 3.5, ACCENT);
                             ui.label(RichText::new("Unsaved changes").color(ACCENT));
-                        } else {
-                            ui.label(RichText::new("All changes saved.").color(FAINT));
                         }
                         pages::trailing(ui, egui::Id::new("settings_footer"), |ui| {
-                            // With nothing unsaved there is nothing to cancel.
-                            let (label, hover) = if pending {
-                                ("Cancel", "Close without saving")
-                            } else {
-                                ("Close", "Close Settings")
-                            };
-                            if ui.button(label).on_hover_text(hover).clicked() {
-                                action = 1;
-                            }
                             if ui
                                 .add_enabled(pending, egui::Button::new("Apply"))
-                                .on_hover_text("Save these settings and keep Settings open")
+                                .on_hover_text("Save and keep Settings open")
                                 .clicked()
                             {
                                 action = 3;
                             }
-                            if ui
-                                .add_enabled(pending, primary("Save"))
-                                .on_hover_text("Save these settings and close")
-                                .clicked()
-                            {
+                            if ui.add_enabled(pending, primary("Save")).clicked() {
                                 action = 2;
                             }
                         });
@@ -433,8 +421,6 @@ impl PhotoSortApp {
                             );
                         });
                     });
-                    ui.add_space(S2);
-                    ui.label("Sort, clean up and pick the keepers from your photos. Everything runs on this computer.");
                     ui.add_space(S3);
                     ui.label(RichText::new("Built with").font(medium(12.5)));
                     let backend = self
@@ -446,14 +432,8 @@ impl PhotoSortApp {
                     for (label, value) in [
                         ("Interface", "egui and wgpu".to_owned()),
                         ("AI models", format!("ONNX Runtime · {backend}")),
-                        (
-                            "Images",
-                            "libvips".to_owned(),
-                        ),
-                        (
-                            "Metadata",
-                            "Exiv2".to_owned(),
-                        ),
+                        ("Images", "libvips".to_owned()),
+                        ("Metadata", "Exiv2".to_owned()),
                         ("Typeface", "Inter".to_owned()),
                     ] {
                         ui.horizontal(|ui| {
@@ -480,7 +460,7 @@ impl PhotoSortApp {
                         {
                             folder = models;
                         }
-                        if ui.button("Crash reports").on_hover_text("Reports stay on this computer").clicked() {
+                        if ui.button("Crash reports").clicked() {
                             let path = crate::core::crash::directory();
                             let _ = std::fs::create_dir_all(&path);
                             folder = Some(path);
@@ -494,7 +474,11 @@ impl PhotoSortApp {
                         }
                     });
                     ui.add_space(S2);
-                    ui.label(RichText::new("Apache-2.0 license. Fonts: SIL Open Font License 1.1.").small().color(FAINT));
+                    ui.label(
+                        RichText::new("Apache-2.0 license. Fonts: SIL Open Font License 1.1.")
+                            .small()
+                            .color(FAINT),
+                    );
                 });
             self.about = open;
             if let Some(path) = folder

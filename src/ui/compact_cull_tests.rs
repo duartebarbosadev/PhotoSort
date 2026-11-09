@@ -325,7 +325,7 @@ fn compact_filter_panel_keeps_nested_rating_folder_choices_and_keyboard_ownershi
     );
     assert_eq!(app.filtered.len(), 1);
     app.browse_filters_open = true;
-    click_label(&mut app, &ctx, size, "Clear browse filters");
+    click_label(&mut app, &ctx, size, "Clear filters");
     assert_eq!(app.filtered.len(), 9);
     assert!(Arc::ptr_eq(&catalog, app.catalog.as_ref().unwrap()));
     assert_eq!(app.metadata.len(), 9);
@@ -346,10 +346,7 @@ fn compact_filter_panel_keeps_nested_rating_folder_choices_and_keyboard_ownershi
     app.browse_filters_open = true;
     let nodes = rendered(&mut app, &ctx, egui::vec2(1440., 900.));
     assert!(
-        !app.browse_filters_open
-            || nodes
-                .iter()
-                .any(|(label, _)| label == "Clear browse filters"),
+        !app.browse_filters_open || nodes.iter().any(|(label, _)| label == "Clear filters"),
         "Resizing left an invisible keyboard blocker"
     );
     app.browse_filters_open = true;
@@ -647,9 +644,7 @@ fn a_restored_filter_says_how_many_items_are_hidden_and_clears_in_one_click() {
     assert_eq!(app.filtered.len(), 5);
     let nodes = rendered(&mut app, &ctx, size);
     assert!(
-        nodes
-            .iter()
-            .any(|(label, _)| label == "Showing 5 of 9 items"),
+        nodes.iter().any(|(label, _)| label == "5 of 9 photos"),
         "{:?}",
         nodes.iter().map(|(l, _)| l).collect::<Vec<_>>()
     );

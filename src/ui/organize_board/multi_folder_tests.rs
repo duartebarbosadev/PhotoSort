@@ -141,15 +141,8 @@ fn sidebar_clicks_choose_one_or_several_folders_to_show() {
     let nodes = rendered(&mut app, &ctx, SIZE);
     let root = app.board_root_name();
     assert!(
-        nodes
-            .iter()
-            .any(|(label, _)| *label == format!("{root} / 2 folders")),
+        nodes.iter().any(|(label, _)| label == "2 folders"),
         "{nodes:?}"
-    );
-    assert!(
-        nodes
-            .iter()
-            .any(|(label, _)| label == "2 folders · 5 items")
     );
     // A plain click on a folder shown keeps them; on one they leave out,
     // every folder shows again.
@@ -174,7 +167,7 @@ fn sidebar_clicks_choose_one_or_several_folders_to_show() {
     assert!(
         rendered(&mut app, &ctx, SIZE)
             .iter()
-            .any(|(label, _)| *label == format!("{root} / 3 folders"))
+            .any(|(label, _)| label == "3 folders")
     );
     // And again from the same folder, the other way, replacing them.
     click(&mut app, &ctx, b, egui::Modifiers::SHIFT);

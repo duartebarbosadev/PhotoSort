@@ -124,7 +124,7 @@ impl PhotoSortApp {
                     record_undo,
                 });
                 self.busy = true;
-                self.set_status("Updating photo groups…".into());
+                self.clear_status();
             }
             Err(error) => self.error = Some(error),
         }
@@ -137,7 +137,7 @@ impl PhotoSortApp {
             if task.source.is_some() {
                 self.cancel_analysis();
             }
-            self.set_status("Group update cancelled · previous groups retained".into());
+            self.clear_status();
         }
     }
     fn edit_groups(&mut self, edit: Edit, record_undo: bool) {
@@ -175,7 +175,7 @@ impl PhotoSortApp {
             if result.changed {
                 self.save_session();
             }
-            self.set_organize_status(GroupMode::Visual, format!("Scenes updated · {} photos manually grouped · used by the next Easy Delete analysis", self.scene_groups.len()));
+            self.set_organize_status(GroupMode::Visual, String::new());
             return;
         }
         if task.record_undo && result.changed {
@@ -196,10 +196,7 @@ impl PhotoSortApp {
             if changed && self.manual_groups.is_empty() && self.automatic_groups.is_empty() {
                 "Manual groups removed · Analyze to build automatic groups".into()
             } else {
-                format!(
-                    "Groups ready · {} photos manually grouped",
-                    self.manual_groups.len()
-                )
+                String::new()
             },
         );
         if task.source.is_some() && self.pick_run == task.source && self.analysis_run.is_none() {
@@ -353,31 +350,38 @@ impl PhotoSortApp {
             ui.menu_button(if scene { "Scenes" } else { "Groups" }, |ui| {
                 let selected = self.selected_group_members();
                 ui.set_max_width(300.);
-                ui.label(if scene { "Scene corrections survive reanalysis and guide the next Easy Delete analysis. Mixed date grouping is independent." } else { "Manual groups stay together after reanalysis. They also guide new Pick Best reviews." });
-                ui.label(format!("{} selected", selected.len()));
-                ui.label("Photos only. Folder locations are unchanged.");
-                ui.separator();
                 ui.add_enabled_ui(!selected.is_empty(), |ui| {
                     if ui.button("Move selected to new group").clicked() {
-                        self.move_selected_group(None); ui.close();
+                        self.move_selected_group(None);
+                        ui.close();
                     }
                     ui.menu_button("Move selected to existing group", |ui| {
-                        ui.label("The target’s current members stay together.");
-                        self.group_targets(ui);
-
+                        self.group_targets(ui)
                     });
-                    if ui.button("Restore automatic grouping for selected").clicked() {
+                    if ui
+                        .button("Restore automatic grouping for selected")
+                        .clicked()
+                    {
                         let selected = selected.clone();
-                        self.edit_groups(Edit::Restore(selected),true); ui.close();
+                        self.edit_groups(Edit::Restore(selected), true);
+                        ui.close();
                     }
                 });
                 ui.separator();
-                if ui.add_enabled(undo.is_some(),egui::Button::new("Undo last group edit")).clicked()
-                    && let Some(previous) = undo.clone() {
-                        self.edit_groups(Edit::Replace(previous),false); ui.close();
-                    }
-                if ui.add_enabled(!empty,egui::Button::new("Restore all automatic groups")).clicked() {
-                    self.edit_groups(Edit::RestoreAll,true); ui.close();
+                if ui
+                    .add_enabled(undo.is_some(), egui::Button::new("Undo last group edit"))
+                    .clicked()
+                    && let Some(previous) = undo.clone()
+                {
+                    self.edit_groups(Edit::Replace(previous), false);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(!empty, egui::Button::new("Restore all automatic groups"))
+                    .clicked()
+                {
+                    self.edit_groups(Edit::RestoreAll, true);
+                    ui.close();
                 }
             });
         });

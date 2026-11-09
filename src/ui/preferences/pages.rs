@@ -44,15 +44,6 @@ impl Section {
             Section::Storage => icon::HARD_DRIVES,
         }
     }
-    fn subtitle(self) -> &'static str {
-        match self {
-            Section::General => "Updates, and where ratings and rotation are saved.",
-            Section::Appearance => "How photos and the interface look.",
-            Section::Steps => "Which steps you use, and how each one suggests changes.",
-            Section::Performance => "How much of this computer PhotoSort uses.",
-            Section::Storage => "Space used on disk, and clean-up.",
-        }
-    }
     /// Whether `draft` changes anything this page saves.
     pub(super) fn pending(self, draft: &Preferences, saved: &Preferences) -> bool {
         let (d, s) = (draft, saved);
@@ -502,20 +493,6 @@ fn danger_button(text: &str) -> egui::Button<'static> {
         .stroke(Stroke::new(1.0, RED.gamma_multiply(0.45)))
 }
 
-/// Settings > Performance, Run AI on. Automatic is the default everywhere.
-const AI_PROCESSING_HELP: &str = "Applies to the next analysis in every workflow. Automatic, the default, tries this computer's accelerators first and falls back to CPU per model when one is missing or fails. The line under this setting says where AI will run, from a quick check of this computer when this page opens, and where it runs once models have loaded.
-
-Acceleration requires a compatible ONNX Runtime and driver. First model preparation can take minutes and extra memory. Native compilation finishes before cancellation can release it; cached photo results remain reusable.
-
-Session providers can still use CPU for unsupported operations; they do not prove that every operation ran on a GPU.";
-/// Settings > Storage, Disk cache limit. Only macOS prepares AI models for
-/// the computer (Core ML), which the limit leaves alone.
-const DISK_CACHE_HELP: &str = if cfg!(target_os = "macos") {
-    "Limits apply when settings are applied or saved. The default follows the free space on this disk. Zero disables persistent previews and AI evidence. AI models prepared for this Mac are kept separately, whatever this limit. A model, runtime or macOS update replaces them, and clearing caches removes them. Displayed images and models use additional memory."
-} else {
-    "Limits apply when settings are applied or saved. The default follows the free space on this disk. Zero disables persistent previews and AI evidence. Displayed images and models use additional memory."
-};
-
 /// A size in MiB in plain words.
 fn size_text(mib: f64) -> String {
     if mib >= 1024.0 {
@@ -540,7 +517,6 @@ fn page_heading(ui: &mut egui::Ui, section: Section) {
             .font(semibold(18.0))
             .color(INK),
     );
-    ui.add(egui::Label::new(RichText::new(section.subtitle()).color(MUTED)).wrap());
 }
 
 impl PhotoSortApp {
@@ -600,8 +576,8 @@ impl PhotoSortApp {
         card(ui, icon::CPU, "AI processing", None, false, |rows| {
             rows.row(
                 "Run AI on",
-                "Automatic picks the fastest option for this computer.",
-                Some(AI_PROCESSING_HELP),
+                "",
+                Some("The first run on an accelerator can take minutes while models are prepared."),
                 |ui| {
                     egui::ComboBox::from_id_salt("inference-backend")
                         .width(COMBO_WIDTH)
@@ -635,7 +611,14 @@ impl PhotoSortApp {
             {
                 rows.note(&reasons);
             }
-            for status in self.runtime.processing.status() {
+            // Models still preparing, or stopped; the line above covers the rest.
+            for status in self
+                .runtime
+                .processing
+                .status()
+                .into_iter()
+                .filter(|s| s.preparing || s.detail.starts_with("Initialization stopped"))
+            {
                 rows.note(&format!(
                     "{} · {} · {}",
                     status.model,
@@ -649,28 +632,21 @@ impl PhotoSortApp {
                 draft.processing.threads(available),
                 available
             );
-            rows.row(
-                "AI CPU use",
-                &hint,
-                Some(
-                    "Balanced uses 85% of the available thread count for AI. Applies to the next analysis, including rotation. Cached results stay available.\n\nThis controls AI calculations, not a limit on total app CPU use. Browsing and file tasks remain in the background.",
-                ),
-                |ui| {
-                    choice(
-                        ui,
-                        "cpu-mode",
-                        &mut draft.processing.mode,
-                        &[
-                            (Mode::Balanced, "Balanced", None),
-                            (Mode::Maximum, "Maximum", None),
-                            (Mode::Custom, "Custom", None),
-                        ],
-                    );
-                },
-            );
+            rows.row("AI CPU use", &hint, None, |ui| {
+                choice(
+                    ui,
+                    "cpu-mode",
+                    &mut draft.processing.mode,
+                    &[
+                        (Mode::Balanced, "Balanced", None),
+                        (Mode::Maximum, "Maximum", None),
+                        (Mode::Custom, "Custom", None),
+                    ],
+                );
+            });
             if draft.processing.mode == Mode::Custom {
                 let threads = draft.processing.custom_threads;
-                rows.row("AI threads", "How many threads AI may use.", None, |ui| {
+                rows.row("AI threads", "", None, |ui| {
                     scale(
                         ui,
                         egui::Slider::new(&mut draft.processing.custom_threads, 1..=available),
@@ -684,76 +660,52 @@ impl PhotoSortApp {
             }
         });
         let defaults = crate::core::cache::Limits::default();
-        card(
-            ui,
-            icon::MEMORY,
-            "Memory",
-            Some(
-                "More memory keeps photos ready to show. Defaults follow this computer's memory. Displayed images and AI models use extra memory.",
-            ),
-            false,
-            |rows| {
-                let previews = draft.cache.previews_mib;
-                rows.row(
+        card(ui, icon::MEMORY, "Memory", None, false, |rows| {
+            let previews = draft.cache.previews_mib;
+            rows.row("Preview memory", "", None, |ui| {
+                if scale(
+                    ui,
+                    egui::Slider::new(
+                        &mut draft.cache.previews_mib,
+                        crate::core::cache::PREVIEWS_MIB,
+                    )
+                    .logarithmic(true),
                     "Preview memory",
-                    "Recent previews kept ready.",
-                    None,
-                    |ui| {
-                        if scale(
-                            ui,
-                            egui::Slider::new(
-                                &mut draft.cache.previews_mib,
-                                crate::core::cache::PREVIEWS_MIB,
-                            )
-                            .logarithmic(true),
-                            "Preview memory",
-                            f64::from(previews),
-                            ("Less", "More"),
-                            &size_text(f64::from(previews)),
-                            Some(previews != defaults.previews_mib),
-                        ) {
-                            draft.cache.previews_mib = defaults.previews_mib;
-                        }
-                    },
-                );
-                let originals = draft.cache.originals_mib;
-                rows.row(
-                    "Full-size detail memory",
-                    "Originals kept ready for zooming in.",
-                    Some("A photo too large for this still opens at full size, but it is decoded again after you look at another one, which is slow. PhotoSort offers more when that happens."),
-                    |ui| {
-                        if scale(
-                            ui,
-                            egui::Slider::new(
-                                &mut draft.cache.originals_mib,
-                                crate::core::cache::Limits::originals_range(),
-                            )
-                            .logarithmic(true),
-                            "Original detail memory",
-                            f64::from(originals),
-                            ("Less", "More"),
-                            &size_text(f64::from(originals)),
-                            Some(originals != defaults.originals_mib),
-                        ) {
-                            draft.cache.originals_mib = defaults.originals_mib;
-                        }
-                    },
-                );
-                rows.row(
-                    "Limit prompts",
-                    "Offers to raise a limit when it slows photos down.",
-                    Some("Brings back the prompts you turned off with Don't ask again, and asks again before opening very large photos."),
-                    |ui| {
-                        if ui
-                            .add_enabled(draft.limit_prompts.any(), egui::Button::new("Show again"))
-                            .clicked()
-                        {
-                            draft.limit_prompts = Default::default();
-                        }
-                    },
-                );
-            },
-        );
+                    f64::from(previews),
+                    ("Less", "More"),
+                    &size_text(f64::from(previews)),
+                    Some(previews != defaults.previews_mib),
+                ) {
+                    draft.cache.previews_mib = defaults.previews_mib;
+                }
+            });
+            let originals = draft.cache.originals_mib;
+            rows.row("Full-size detail memory", "", None, |ui| {
+                if scale(
+                    ui,
+                    egui::Slider::new(
+                        &mut draft.cache.originals_mib,
+                        crate::core::cache::Limits::originals_range(),
+                    )
+                    .logarithmic(true),
+                    "Original detail memory",
+                    f64::from(originals),
+                    ("Less", "More"),
+                    &size_text(f64::from(originals)),
+                    Some(originals != defaults.originals_mib),
+                ) {
+                    draft.cache.originals_mib = defaults.originals_mib;
+                }
+            });
+            rows.row("Prompts you turned off", "", None, |ui| {
+                if ui
+                    .add_enabled(draft.limit_prompts.any(), egui::Button::new("Show again"))
+                    .clicked()
+                {
+                    draft.limit_prompts = Default::default();
+                }
+            });
+        });
     }
 
     fn storage_page(&mut self, ui: &mut egui::Ui, draft: &mut Preferences) {
@@ -763,7 +715,7 @@ impl PhotoSortApp {
             rows.row(
                 "Disk cache limit",
                 "Previews and AI results kept between sessions.",
-                Some(DISK_CACHE_HELP),
+                None,
                 |ui| {
                     if scale(
                         ui,
@@ -803,7 +755,7 @@ impl PhotoSortApp {
                     );
                     let cached = usage.disk_bytes.saturating_sub(usage.model_bytes);
                     let hint = if limit == 0 {
-                        "Off: nothing is kept between sessions.".to_owned()
+                        "Off".to_owned()
                     } else {
                         format!(
                             "{} of the {} limit.",
@@ -830,24 +782,10 @@ impl PhotoSortApp {
             // Only Core ML prepares models; elsewhere there is nothing to show.
             if let Some(usage) = models.filter(|usage| usage.model_bytes > 0) {
                 let hint = format!(
-                    "{}, kept outside the limit.",
+                    "{}, not counted in the limit. Clear caches removes them.",
                     size_text(usage.model_bytes as f64 / 1048576.0)
                 );
-                let (computer, system) = if cfg!(target_os = "macos") {
-                    ("this Mac", "macOS")
-                } else {
-                    ("this computer", "system")
-                };
-                let mut details = format!(
-                    "AI models prepared for {computer} are slow to prepare again, so the disk cache limit never removes them. A model, runtime or {system} update replaces them, and Clear caches removes them."
-                );
-                if usage.pinned_disk_bytes > 0 {
-                    details.push_str(&format!(
-                        "\n{:.1} MiB held by active model sessions",
-                        usage.pinned_disk_bytes as f64 / 1048576.0
-                    ));
-                }
-                rows.row("AI models space used", &hint, Some(&details), |_| {});
+                rows.row("Prepared AI models", &hint, None, |_| {});
             }
             if let Some(message) = &cache.message {
                 rows.note(message);
@@ -858,13 +796,13 @@ impl PhotoSortApp {
             ui,
             icon::WARNING,
             "Clean up",
-            Some("These happen right away. Cancel does not undo them."),
+            Some("These happen right away. Cancel doesn't undo them."),
             true,
             |rows| {
                 rows.row(
                     "Clear reusable caches",
                     "Reviews, staged choices and downloaded models are kept.",
-                    Some("Clear runs immediately in the background. Current reviews, staged choices, saved positions and downloaded models are kept."),
+                    None,
                     |ui| {
                         if ui
                             .add_enabled(
@@ -877,12 +815,11 @@ impl PhotoSortApp {
                         }
                     },
                 );
-                let info = "Every folder opens fresh in Organize. Staged changes and preferences are kept. The open folder keeps its views until you open it again.";
                 if self.forget_confirm {
                     rows.row(
                         "Forget remembered folders",
                         "Forget the step and views saved for every folder?",
-                        Some(info),
+                        None,
                         |ui| {
                             if ui.button("Keep them").clicked() {
                                 self.forget_confirm = false;
@@ -895,8 +832,8 @@ impl PhotoSortApp {
                 } else {
                     rows.row(
                         "Forget remembered folders",
-                        "Every folder opens fresh in Organize.",
-                        Some(info),
+                        "Every folder opens fresh in Organize. Staged changes are kept.",
+                        None,
                         |ui| {
                             if ui.add_enabled(idle, danger_button("Forget all")).clicked() {
                                 self.forget_confirm = true;
@@ -908,7 +845,7 @@ impl PhotoSortApp {
                 let any_recent = !self.preferences.recent_folders.is_empty();
                 rows.row(
                     "Clear recent folders",
-                    "Empties the Recent folders list. The folders are not touched.",
+                    "The folders themselves are not touched.",
                     None,
                     |ui| {
                         if ui
@@ -930,15 +867,9 @@ impl PhotoSortApp {
 fn general_page(ui: &mut egui::Ui, draft: &mut Preferences) {
     use crate::core::metadata::WritePolicy;
     card(ui, icon::DOWNLOAD_SIMPLE, "Updates", None, false, |rows| {
-        rows.row(
-            "Check for updates daily",
-            "Looks for a new version of PhotoSort once a day.",
-            None,
-            |ui| switch(ui, &mut draft.updates.automatic, "Check for updates daily"),
-        );
-        if let Err(reason) = crate::core::updates::Source::configured() {
-            rows.note(&reason);
-        }
+        rows.row("Check for updates daily", "", None, |ui| {
+            switch(ui, &mut draft.updates.automatic, "Check for updates daily")
+        });
     });
     card(
         ui,
@@ -947,21 +878,16 @@ fn general_page(ui: &mut egui::Ui, draft: &mut Preferences) {
         None,
         false,
         |rows| {
-            let (hint, info) = match draft.metadata_writes {
-                WritePolicy::EmbedWhenSupported => (
-                    "Inside the photo when its format allows, otherwise in a sidecar.",
-                    "Existing XMP sidecars remain authoritative. Unsupported formats use a sidecar. Review shows the destination before applying; photo pixels are not re-encoded.",
-                ),
-                WritePolicy::SidecarOnly => (
-                    "Always in an XMP sidecar next to the photo.",
-                    "Existing XMP sidecars remain authoritative. Unsupported formats use a sidecar. Review shows the destination before applying; photo pixels are not re-encoded.",
-                ),
-                WritePolicy::EmbedOrRotatePixels => (
-                    "Like embedding, but turns the pixels of files that can't store rotation.",
-                    "Like Embed where supported, but rotating a file that cannot store orientation (such as BMP) rewrites its pixels instead of using a sidecar. Pixels and colour profile are kept exactly; other data stored inside those files is not. Review lists each one before applying.",
-                ),
+            let hint = match draft.metadata_writes {
+                WritePolicy::EmbedWhenSupported => {
+                    "In an XMP sidecar when the format can't hold it or one already exists."
+                }
+                WritePolicy::SidecarOnly => "",
+                WritePolicy::EmbedOrRotatePixels => {
+                    "Files that can't store rotation, such as BMP, are re-saved turned; other data inside them is lost."
+                }
             };
-            rows.row("Save changes to", hint, Some(info), |ui| {
+            rows.row("Save changes to", hint, None, |ui| {
                 let label = |p: WritePolicy| match p {
                     WritePolicy::EmbedWhenSupported => "Embed where supported",
                     WritePolicy::SidecarOnly => "Sidecars only",
@@ -988,51 +914,36 @@ fn appearance_page(ui: &mut egui::Ui, draft: &mut Preferences) {
     use crate::core::preferences::StripPosition;
     use crate::core::raw_look::RawLook;
     card(ui, icon::IMAGE, "Photos", None, false, |rows| {
-        rows.row(
-            "Photo strip in Review",
-            "Where the filmstrip sits while you review.",
-            None,
-            |ui| {
-                choice(
-                    ui,
-                    "strip-position",
-                    &mut draft.strip_position,
-                    &[
-                        (StripPosition::Bottom, "Bottom", None),
-                        (StripPosition::Left, "Left", None),
-                    ],
-                );
-            },
-        );
-        rows.row(
-            "Left strip",
-            "Compact rows fit many more photos beside the photo.",
-            Some("Rows show a small thumbnail with its name beside it; without file names they become a grid of small thumbnails. The strip's own button switches too."),
-            |ui| {
-                choice(
-                    ui,
-                    "strip-style",
-                    &mut draft.compact_strip,
-                    &[(true, "Rows", None), (false, "Thumbnails", None)],
-                );
-            },
-        );
-        rows.row(
-            "File names under thumbnails",
-            "In every step's grid, photo strip and Review.",
-            Some("Cull's View options change the same settings."),
-            |ui| {
-                switch(
-                    ui,
-                    &mut draft.show_filenames,
-                    "Show file names under thumbnails",
-                )
-            },
-        );
+        rows.row("Photo strip in Review", "", None, |ui| {
+            choice(
+                ui,
+                "strip-position",
+                &mut draft.strip_position,
+                &[
+                    (StripPosition::Bottom, "Bottom", None),
+                    (StripPosition::Left, "Left", None),
+                ],
+            );
+        });
+        rows.row("Left strip", "", None, |ui| {
+            choice(
+                ui,
+                "strip-style",
+                &mut draft.compact_strip,
+                &[(true, "Rows", None), (false, "Thumbnails", None)],
+            );
+        });
+        rows.row("File names under thumbnails", "", None, |ui| {
+            switch(
+                ui,
+                &mut draft.show_filenames,
+                "Show file names under thumbnails",
+            )
+        });
         rows.row(
             "RAW previews",
-            "Enhanced looks more like a camera's JPEG.",
-            Some("Enhanced stretches contrast and adds a little colour to RAW previews, like a camera's JPEG. It only changes how photos look here: files, scores and suggestions are unchanged."),
+            "Enhanced looks more like a camera's JPEG. Files are not changed.",
+            None,
             |ui| {
                 choice(
                     ui,
@@ -1047,24 +958,16 @@ fn appearance_page(ui: &mut egui::Ui, draft: &mut Preferences) {
         );
     });
     card(ui, icon::APP_WINDOW, "Interface", None, false, |rows| {
-        rows.row(
-            "Keyboard shortcut hints",
-            "Shows the current step's keys at the bottom of the window.",
-            None,
-            |ui| {
-                switch(
-                    ui,
-                    &mut draft.show_shortcuts,
-                    "Show workflow shortcut hints",
-                )
-            },
-        );
-        rows.row(
-            "Reduce motion",
-            "Panels, tabs and photos appear instantly instead of sliding and fading.",
-            None,
-            |ui| switch(ui, &mut draft.reduce_motion, "Reduce motion"),
-        );
+        rows.row("Keyboard shortcut hints", "", None, |ui| {
+            switch(
+                ui,
+                &mut draft.show_shortcuts,
+                "Show workflow shortcut hints",
+            )
+        });
+        rows.row("Reduce motion", "", None, |ui| {
+            switch(ui, &mut draft.reduce_motion, "Reduce motion")
+        });
     });
 }
 
@@ -1074,21 +977,13 @@ fn steps_page(ui: &mut egui::Ui, draft: &mut Preferences) {
         ui,
         icon::LIST_CHECKS,
         "Steps in your workflow",
-        Some("Nothing changes on disk until you apply Review changes."),
+        None,
         false,
         |rows| {
             for step in Step::ALL {
-                let hint = match step {
-                    Step::Organize => "Sort photos into folders by date, place or people.",
-                    Step::EasyDelete => "Find blurry, dark and duplicate shots.",
-                    Step::Rotation => "Turn photos that are on their side.",
-                    Step::PickBest => "Keep the best photo of each similar group.",
-                    Step::Cull => "Rate, mark and review every photo.",
-                };
-                rows.row_with(Some(step.icon()), step.title(), hint, None, |ui| {
+                rows.row_with(Some(step.icon()), step.title(), "", None, |ui| {
                     if matches!(step, Step::Organize | Step::Cull) {
-                        ui.label(RichText::new("Always on").small().color(FAINT))
-                            .on_hover_text("Organize and Cull always remain available.");
+                        ui.label(RichText::new("Always on").small().color(FAINT));
                     } else {
                         let mut visible = draft.visible(step);
                         ui.add(
@@ -1114,14 +1009,19 @@ fn steps_page(ui: &mut egui::Ui, draft: &mut Preferences) {
         false,
         |rows| {
             rows.row(
-            "Apply suggestions automatically",
-            "Suggested photos start marked for Trash.",
-            Some("On: what Easy Delete suggests is staged as your choice, and you change only the ones you disagree with. Off: every photo stays kept until you accept suggestions. Nothing changes on disk until you apply Review changes."),
-            |ui| switch(ui, &mut draft.easy_delete_auto, "Easy Delete: apply suggestions automatically"),
-        );
-            let info = "Applies to future Easy Delete analyses. Current reviews stay unchanged.";
+                "Apply suggestions automatically",
+                "Suggested photos start marked for Trash.",
+                None,
+                |ui| {
+                    switch(
+                        ui,
+                        &mut draft.easy_delete_auto,
+                        "Easy Delete: apply suggestions automatically",
+                    )
+                },
+            );
             let blur = draft.easy_delete.blur;
-            rows.row("Blurry photos", "Soft or shaky shots.", Some(info), |ui| {
+            rows.row("Blurry photos", "", None, |ui| {
                 if scale(
                     ui,
                     egui::Slider::new(&mut draft.easy_delete.blur, 10.0..=1000.0),
@@ -1135,11 +1035,7 @@ fn steps_page(ui: &mut egui::Ui, draft: &mut Preferences) {
                 }
             });
             let dark = draft.easy_delete.dark;
-            rows.row(
-            "Dark photos",
-            "Shots that are almost entirely black.",
-            Some("Near-black suggestions still require an almost entirely black preview. Applies to future Easy Delete analyses."),
-            |ui| {
+            rows.row("Dark photos", "", None, |ui| {
                 if scale(
                     ui,
                     egui::Slider::new(&mut draft.easy_delete.dark, 0.0..=128.0),
@@ -1151,28 +1047,23 @@ fn steps_page(ui: &mut egui::Ui, draft: &mut Preferences) {
                 ) {
                     draft.easy_delete.dark = defaults.dark;
                 }
-            },
-        );
+            });
             let bright = draft.easy_delete.bright;
-            rows.row(
-                "Bright photos",
-                "Blown-out, overexposed shots.",
-                Some(info),
-                |ui| {
-                    // A lower threshold flags more photos, so this slider runs high to low.
-                    if scale(
-                        ui,
-                        egui::Slider::new(&mut draft.easy_delete.bright, 255.0..=128.0),
-                        "Overexposed threshold",
-                        bright,
-                        ("Fewer", "More"),
-                        &format!("{bright:.0}"),
-                        Some(bright != defaults.bright),
-                    ) {
-                        draft.easy_delete.bright = defaults.bright;
-                    }
-                },
-            );
+            rows.row("Bright photos", "", None, |ui| {
+                // A lower threshold flags more photos, so this slider runs high to low.
+                if scale(
+                    ui,
+                    egui::Slider::new(&mut draft.easy_delete.bright, 255.0..=128.0),
+                    "Overexposed threshold",
+                    bright,
+                    ("Fewer", "More"),
+                    &format!("{bright:.0}"),
+                    Some(bright != defaults.bright),
+                ) {
+                    draft.easy_delete.bright = defaults.bright;
+                }
+            });
+            rows.note("Thresholds apply from the next analysis.");
         },
     );
     card(
@@ -1183,11 +1074,17 @@ fn steps_page(ui: &mut egui::Ui, draft: &mut Preferences) {
         false,
         |rows| {
             rows.row(
-            "Apply suggestions automatically",
-            "Photos it is sure about start turned.",
-            Some("On: photos Fix Rotation is sure about are staged turned, and you change only the ones you disagree with. Off: every photo stays as it is until you use a suggestion. Nothing changes on disk until you apply Review changes."),
-            |ui| switch(ui, &mut draft.rotation_auto, "Fix Rotation: apply suggestions automatically"),
-        );
+                "Apply suggestions automatically",
+                "Photos it is sure about start turned.",
+                None,
+                |ui| {
+                    switch(
+                        ui,
+                        &mut draft.rotation_auto,
+                        "Fix Rotation: apply suggestions automatically",
+                    )
+                },
+            );
         },
     );
     card(
@@ -1198,11 +1095,17 @@ fn steps_page(ui: &mut egui::Ui, draft: &mut Preferences) {
         false,
         |rows| {
             rows.row(
-            "Apply suggestions automatically",
-            "The best of each group is kept, the rest start marked for Trash.",
-            Some("On: the best photo of each group is kept and the others are staged for Trash, and you change only the groups you disagree with. Off: every photo stays kept until you accept suggestions."),
-            |ui| switch(ui, &mut draft.pick_best_auto, "Pick Best: apply suggestions automatically"),
-        );
+                "Apply suggestions automatically",
+                "All but the best of each group start marked for Trash.",
+                None,
+                |ui| {
+                    switch(
+                        ui,
+                        &mut draft.pick_best_auto,
+                        "Pick Best: apply suggestions automatically",
+                    )
+                },
+            );
         },
     );
     card(
@@ -1215,91 +1118,71 @@ fn steps_page(ui: &mut egui::Ui, draft: &mut Preferences) {
             let distance = draft.similarity_distance;
             let default = crate::core::regional::DEFAULT_EPS;
             rows.row(
-            "Look-alike groups",
-            "Used by Organize and Easy Delete.",
-            Some("Lower values make smaller, stricter groups. Used by the next Organize or Easy Delete analysis; current reviews stay unchanged."),
-            |ui| {
-                if scale(
-                    ui,
-                    egui::Slider::new(&mut draft.similarity_distance, 0.02..=0.20),
-                    "Similarity distance",
-                    f64::from(distance),
-                    ("Stricter", "Looser"),
-                    &format!("{distance:.3}"),
-                    Some(distance != default),
-                ) {
-                    draft.similarity_distance = default;
-                }
-            },
-        );
-            rows.row(
-            "Same-subject groups",
-            "Used by Cull and Pick Best.",
-            Some("Used by the next Cull or Pick Best analysis. Conservative keeps uncertain matches apart; Broad accepts more matches."),
-            |ui| {
+                "Look-alike groups",
+                "Organize and Easy Delete.",
+                None,
+                |ui| {
+                    if scale(
+                        ui,
+                        egui::Slider::new(&mut draft.similarity_distance, 0.02..=0.20),
+                        "Similarity distance",
+                        f64::from(distance),
+                        ("Stricter", "Looser"),
+                        &format!("{distance:.3}"),
+                        Some(distance != default),
+                    ) {
+                        draft.similarity_distance = default;
+                    }
+                },
+            );
+            rows.row("Same-subject groups", "Cull and Pick Best.", None, |ui| {
                 choice(
                     ui,
                     "subject-strictness",
                     &mut draft.subject_strictness,
                     &[
-                        (Strictness::Conservative, "Conservative", Some("Keeps uncertain matches apart")),
+                        (
+                            Strictness::Conservative,
+                            "Conservative",
+                            Some("Keeps uncertain matches apart"),
+                        ),
                         (Strictness::Standard, "Standard", None),
                         (Strictness::Broad, "Broad", Some("Accepts more matches")),
                     ],
                 );
-            },
-        );
+            });
+            rows.note("Applies from the next analysis.");
         },
     );
     card(ui, Step::Cull.icon(), "Cull", None, false, |rows| {
-        rows.row(
-            "Up/Down stops at",
-            "Jump only to photos with this rating.",
-            Some("Rating jumps take priority. Ctrl/Cmd bypasses movement filters and includes Trash marks. Group options use Cull analysis results; photos remain visible."),
-            |ui| {
-                egui::ComboBox::from_id_salt("navigation-rating")
-                    .width(COMBO_WIDTH)
-                    .selected_text(rating_text(draft.navigation.rating))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut draft.navigation.rating, None, rating_text(None));
-                        for rating in 0..=5 {
-                            ui.selectable_value(
-                                &mut draft.navigation.rating,
-                                Some(rating),
-                                rating_text(Some(rating)),
-                            )
-                            .on_hover_text(if rating == 0 {
-                                "Jump to unrated photos".into()
-                            } else {
-                                format!("Jump to photos rated exactly {rating} stars")
-                            });
-                        }
-                    });
-            },
-        );
-        rows.row(
-            "Skip single-photo groups",
-            "Up/Down passes over groups of one.",
-            None,
-            |ui| {
-                switch(
-                    ui,
-                    &mut draft.navigation.skip_singletons,
-                    "Skip single-photo groups with Up/Down",
-                )
-            },
-        );
-        rows.row(
-            "Stay inside similar groups",
-            "Left/Right cycles within the current group.",
-            None,
-            |ui| {
-                switch(
-                    ui,
-                    &mut draft.navigation.cycle_similarity,
-                    "Cycle Left/Right within similarity groups",
-                )
-            },
-        );
+        rows.row("Up/Down stops at", "", None, |ui| {
+            egui::ComboBox::from_id_salt("navigation-rating")
+                .width(COMBO_WIDTH)
+                .selected_text(rating_text(draft.navigation.rating))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut draft.navigation.rating, None, rating_text(None));
+                    for rating in 0..=5 {
+                        ui.selectable_value(
+                            &mut draft.navigation.rating,
+                            Some(rating),
+                            rating_text(Some(rating)),
+                        );
+                    }
+                });
+        });
+        rows.row("Up/Down skips groups of one", "", None, |ui| {
+            switch(
+                ui,
+                &mut draft.navigation.skip_singletons,
+                "Up/Down skips groups of one",
+            )
+        });
+        rows.row("Left/Right stays in a similar group", "", None, |ui| {
+            switch(
+                ui,
+                &mut draft.navigation.cycle_similarity,
+                "Left/Right stays in a similar group",
+            )
+        });
     });
 }

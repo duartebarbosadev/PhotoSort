@@ -424,7 +424,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             if name.contains("shortcuts") {
-                // The Shortcuts button in the bottom bar opens its sheet.
+                // The Shortcuts button in the bottom bar opens the shortcuts window.
                 use egui_kittest::kittest::Queryable;
                 harness.get_by_label("Keyboard shortcuts").click();
                 for _ in 0..5 {
@@ -489,6 +489,7 @@ fn main() -> anyhow::Result<()> {
             [1440.0, 900.0],
         ),
         ("15-about", Dialog::About, [1440.0, 900.0]),
+        ("15b-keyboard-shortcuts", Dialog::Shortcuts, [1440.0, 900.0]),
         (
             "16-organize-new-folder",
             Dialog::OrganizeNewFolder,
@@ -515,6 +516,7 @@ fn main() -> anyhow::Result<()> {
             }
             Dialog::PlanReview => harness.state_mut().gallery_plan_review(3),
             Dialog::About => harness.state_mut().gallery_about(),
+            Dialog::Shortcuts => harness.state_mut().gallery_shortcuts(),
             Dialog::Compare => harness.state_mut().gallery_compare(3),
             Dialog::Models => harness.state_mut().gallery_models(),
             Dialog::OrganizeNewFolder => {
@@ -656,11 +658,12 @@ fn main() -> anyhow::Result<()> {
         "examples/ui_gallery.rs",
         "",
     )?;
-    let folder = root.clone();
+    // Over the welcome screen: a reopened folder's paused analysis would
+    // open the models dialog on top of it.
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
         .with_pixels_per_point(2.0)
-        .build_eframe(|cc| PhotoSortApp::new(cc, Some(folder)));
+        .build_eframe(|cc| PhotoSortApp::new(cc, None));
     settle(&mut harness);
     harness
         .render()
@@ -675,6 +678,7 @@ enum Dialog {
     SettingsEdited(usize),
     PlanReview,
     About,
+    Shortcuts,
     OrganizeNewFolder,
     Compare,
     Models,

@@ -254,18 +254,12 @@ fn a_running_grouping_shows_progress_instead_of_a_result() {
     app.progress = Some((27, 502));
     assert_eq!(app.organize_pending(), Some(Pending::Running));
     assert_eq!(unplaced_title(app.organize_pending()), "Grouping…");
-    assert_eq!(app.board_counts(0, 9, true), "9 items · grouping…");
-    assert_eq!(
-        app.board_note().as_deref(),
-        Some("Folders appear when grouping finishes")
-    );
     let nodes = labels(&mut app, 1440.0);
     assert!(shows(&nodes, "Grouping by visual similarity"));
     assert!(shows(&nodes, "27 of 502 photos"));
     assert!(nodes.iter().any(|(label, _)| label == "Cancel"));
     assert!(shows(&nodes, "Photos not grouped yet"));
-    let sentence = app.unplaced_sentence();
-    for claim in ["Not moving", "9 not moving", sentence.as_str()] {
+    for claim in ["Not moving", "stay in their current folders"] {
         assert!(!shows(&nodes, claim), "{claim} shown while grouping");
     }
     // Model preparation is named while it runs.
@@ -299,11 +293,7 @@ fn a_running_grouping_shows_progress_instead_of_a_result() {
     assert!(shows(&nodes, "Grouping cancelled"));
     assert!(nodes.iter().any(|(label, _)| label == "Group again"));
     assert!(!shows(&nodes, "27 of 502"));
-    assert!(!shows(&nodes, &app.unplaced_sentence()));
-    assert_eq!(
-        app.board_note().as_deref(),
-        Some("Grouping cancelled · no folders proposed")
-    );
+    assert!(!shows(&nodes, "Not moving"));
     // A failed run reads differently from a cancelled one.
     app.analysis_run = Some(8);
     app.organize_run = Some((8, GroupMode::Visual));
@@ -320,13 +310,10 @@ fn a_running_grouping_shows_progress_instead_of_a_result() {
     app.refilter();
     assert_eq!(app.organize_pending(), None);
     let nodes = labels(&mut app, 1440.0);
-    assert!(shows(&nodes, "Not moving · "));
-    let sentence = app.unplaced_sentence();
-    assert!(
-        sentence.ends_with("stay in their current folders"),
-        "{sentence}"
-    );
-    assert!(shows(&nodes, &sentence));
+    assert!(shows(
+        &nodes,
+        "Not moving · 9 photos without similar photos"
+    ));
     assert!(!shows(&nodes, "Grouping by visual similarity"));
     app.runtime.shutdown();
 }
@@ -343,7 +330,7 @@ fn another_steps_analysis_shows_its_own_card_and_the_grouping_waits() {
     assert!(shows(&nodes, "Looking for photos to clean up"));
     assert!(shows(&nodes, "4 of 9 photos"));
     assert!(shows(&nodes, "Grouping is next"));
-    assert!(!shows(&nodes, &app.unplaced_sentence()));
+    assert!(!shows(&nodes, "Not moving"));
     // Cull keeps its grid and gets the same card above it.
     app.delete_run = None;
     app.cull_group_run = Some(3);
@@ -357,15 +344,11 @@ fn another_steps_analysis_shows_its_own_card_and_the_grouping_waits() {
 }
 
 #[test]
-fn board_counts_never_run_under_the_thumbnail_slider() {
+fn the_shown_folder_never_runs_under_the_thumbnail_slider() {
     let (_temp, mut app) = organize();
-    app.group_mode = GroupMode::Visual;
-    app.visual_groups = Some(HashMap::new());
-    app.filter_dirty = true;
-    app.refilter();
-    let summary = app.board_counts(0, 9, true);
-    assert_eq!(summary, "0 folders · 9 items · 9 not moving");
+    let summary = "A / Day1";
     for width in [900.0, 1000.0, 1100.0, 1200.0, 1440.0, 1800.0] {
+        app.board.focus = vec!["A/Day1".into()];
         let nodes = labels(&mut app, width);
         let rect = |name: &str| {
             nodes
@@ -374,7 +357,7 @@ fn board_counts_never_run_under_the_thumbnail_slider() {
                 .unwrap_or_else(|| panic!("{name} missing at {width}"))
                 .1
         };
-        let (counts, slider) = (rect(&summary), rect("Photo size"));
+        let (counts, slider) = (rect(summary), rect("Photo size"));
         assert!(
             counts.right() <= slider.left(),
             "counts {counts:?} overlap the slider {slider:?} at {width}"
@@ -1070,12 +1053,6 @@ fn f2_renames_the_current_photo_in_place_and_counts_as_a_change() {
     rendered(&mut app, &ctx, size);
     assert_eq!(app.board.changes, 3);
     assert_eq!(app.staged_change_count(), 3);
-    assert!(
-        app.board_note()
-            .is_some_and(|n| n.starts_with("3 planned changes")),
-        "{:?}",
-        app.board_note()
-    );
     // Escape keeps the name it had.
     frame(&mut app, &ctx, size, key(egui::Key::F2, Default::default()));
     rendered(&mut app, &ctx, size);

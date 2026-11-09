@@ -22,13 +22,9 @@ impl Step {
 const STEP_HEIGHT: f32 = 28.0;
 /// Inset between the step control's container and its segments.
 const STEP_INSET: f32 = 3.0;
-/// A step's label in the bottom bar: "1. Organize", or just "1" when narrow.
-fn step_label(step: Step, compact: bool) -> String {
-    if compact {
-        (step.index() + 1).to_string()
-    } else {
-        format!("{}. {}", step.index() + 1, step.title())
-    }
+/// A step's label in the bottom bar: its name, or its icon when narrow.
+fn step_label(step: Step, compact: bool) -> &'static str {
+    if compact { step.icon() } else { step.title() }
 }
 /// Widths of the step control's segments.
 fn step_tab_widths(ui: &egui::Ui, steps: &[Step], compact: bool) -> Vec<f32> {
@@ -37,7 +33,7 @@ fn step_tab_widths(ui: &egui::Ui, steps: &[Step], compact: bool) -> Vec<f32> {
         .map(|step| {
             let text = ui
                 .painter()
-                .layout_no_wrap(step_label(*step, compact), semibold(11.5), INK)
+                .layout_no_wrap(step_label(*step, compact).into(), semibold(11.5), INK)
                 .size()
                 .x;
             text + 2.0 * if compact { S2 + 2.0 } else { S3 + 2.0 }
@@ -51,7 +47,7 @@ fn step_bar_width(ui: &egui::Ui, steps: &[Step], compact: bool) -> f32 {
 
 impl PhotoSortApp {
     /// The workflow steps as a segmented control in the bottom bar: one
-    /// rounded container, numbered labels, and an accent pill on the current
+    /// rounded container, one label per step, and an accent pill on the current
     /// step that slides to the next one when the step changes.
     fn step_tabs(&mut self, ui: &mut egui::Ui, area: egui::Rect, compact: bool) {
         let steps = self.navigation_steps();
@@ -75,13 +71,7 @@ impl PhotoSortApp {
             let active = *step == self.step;
             let enabled = active || !self.busy;
             let tip = if enabled {
-                format!(
-                    "{} · {}\nStep {} · Ctrl/Cmd+Alt+{}",
-                    step.title(),
-                    step.subtitle(),
-                    step.index() + 1,
-                    step.index() + 1
-                )
+                format!("{} · Ctrl/Cmd+Alt+{}", step.title(), step.index() + 1)
             } else {
                 format!(
                     "{} · available when the current task finishes",
@@ -91,9 +81,9 @@ impl PhotoSortApp {
             let response = ui
                 .interact(rect, egui::Id::new(("step-tab", *step)), Sense::click())
                 .on_hover_text(tip);
-            let name = step_label(*step, false);
+            let name = step.title();
             response.widget_info(|| {
-                egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, &name)
+                egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, name)
             });
             let ctx = ui.ctx();
             let hover = ctx.animate_bool_with_time(
@@ -161,7 +151,7 @@ impl PhotoSortApp {
             } else {
                 medium(11.5)
             };
-            let text = painter.layout_no_wrap(step_label(step, compact), font, color);
+            let text = painter.layout_no_wrap(step_label(step, compact).into(), font, color);
             painter.galley(rect.center() - text.size() / 2.0, text, color);
         }
     }
@@ -318,7 +308,7 @@ impl PhotoSortApp {
                 }
             });
     }
-    /// The status line: what is happening, then keyboard hints when room is left.
+    /// The status line: what is happening, then the Shortcuts button.
     fn footer_status(&mut self, ui: &mut egui::Ui) {
         let recovery_status = self.model_recovery_status(&self.runtime.model_assets.state());
         let scoped_status = self.workflow_status();
@@ -334,12 +324,6 @@ impl PhotoSortApp {
             || self.browse_run.is_some()
         {
             ui.add(egui::Spinner::new().size(12.0));
-        } else {
-            ui.label(
-                RichText::new(egui_phosphor::regular::CHECK_CIRCLE)
-                    .color(GREEN)
-                    .small(),
-            );
         }
         let font = egui::TextStyle::Small.resolve(ui.style());
         let status_width = ui
@@ -347,42 +331,41 @@ impl PhotoSortApp {
             .layout_no_wrap(status.clone(), font, MUTED)
             .size()
             .x;
-        // The status message has priority, then the Shortcuts button; hints
-        // use only what is left, dropping the least useful whole hints first
-        // instead of cutting one off.
-        let mut room = ui.available_width() - status_width - S3;
-        let sheet = self.root.is_some()
-            && room >= hints::shortcuts_button_width(ui, false) + ui.spacing().item_spacing.x;
-        let labelled = sheet && room > 260.0;
-        if sheet {
-            room -= hints::shortcuts_button_width(ui, labelled) + ui.spacing().item_spacing.x;
+        // The status message has priority; the Shortcuts button drops its
+        // label, then itself, when the bar runs out of room.
+        let room = ui.available_width() - status_width - S3;
+        let gap = ui.spacing().item_spacing.x;
+        let shortcuts = self.root.is_some() && room >= shortcuts_button_width(ui, false) + gap;
+        let labelled = shortcuts && room > 260.0;
+        if !status.is_empty() {
+            ui.add(egui::Label::new(RichText::new(&status).small().color(MUTED)).truncate())
+                .on_hover_text(&status);
         }
-        let mut shown = Vec::new();
-        if sheet && self.preferences.show_shortcuts {
-            room -= S3;
-            for hint in hints::step_hints(self.step) {
-                let width = hints::hint_width(ui, hint) + hints::HINT_GAP;
-                if width > room {
-                    break;
-                }
-                room -= width;
-                shown.push(hint);
-            }
-        }
-        ui.add(egui::Label::new(RichText::new(&status).small().color(MUTED)).truncate())
-            .on_hover_text(&status);
-        if !shown.is_empty() {
-            ui.add_space(S1);
-            divider(ui);
-            ui.add_space(S1);
-            let spacing = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, hints::HINT_GAP);
-            for hint in shown {
-                hints::hint_row(ui, hint, MUTED);
-            }
-            ui.spacing_mut().item_spacing.x = spacing;
-        }
-        if sheet {
+        if shortcuts {
             self.shortcuts_button(ui, labelled);
+        }
+    }
+    /// The Shortcuts button: opens the keyboard shortcuts window.
+    fn shortcuts_button(&mut self, ui: &mut egui::Ui, labelled: bool) {
+        let button = ui.add(
+            egui::Button::new(
+                RichText::new(shortcuts_label(labelled))
+                    .size(11.5)
+                    .color(MUTED),
+            )
+            .fill(PANEL)
+            .stroke(Stroke::new(1.0, LINE))
+            .corner_radius(R_CONTROL)
+            .min_size(egui::vec2(26.0, 22.0)),
+        );
+        // The icon alone needs its name on hover; the labelled button shows it.
+        let button = if labelled {
+            button
+        } else {
+            button.on_hover_text("Keyboard shortcuts")
+        };
+        if named(button, egui::WidgetType::Button, "Keyboard shortcuts").clicked() {
+            self.help = true;
         }
     }
     /// Stop and cancel controls, progress and the photo count, added right
@@ -437,221 +420,27 @@ impl PhotoSortApp {
             // A refreshing view is reported here, in the fixed-height bar: a
             // row above the photos would push the grid and navigator under
             // the pointer whenever a query starts.
-            let count = if self.browse_run.is_some() && !self.scanning {
-                format!("Updating library view · {} photos", self.filtered.len())
+            // Only work in progress: the photos are counted where they are.
+            let work = if self.browse_run.is_some() && !self.scanning {
+                "Updating library view".to_owned()
             } else if loading > 0 && !self.scanning {
                 format!(
-                    "Loading {loading} {} · {} photos",
-                    if loading == 1 { "preview" } else { "previews" },
-                    self.filtered.len()
+                    "Loading {loading} {}",
+                    if loading == 1 { "preview" } else { "previews" }
                 )
             } else {
-                format!("{} photos", self.filtered.len())
+                String::new()
             };
-            ui.label(RichText::new(count).small().color(MUTED))
-                .on_hover_text(format!(
-                    "{:.0} MB of previews in memory",
-                    self.stats.resident_bytes as f64 / 1048576.0
-                ));
-        }
-    }
-
-    /// Organize's own controls, inline in the context bar: how photos are
-    /// grouped and where they go. Folders are edited on the board itself and
-    /// every change is reviewed with Review changes.
-    pub(super) fn organize_controls(&mut self, ui: &mut egui::Ui) {
-        use egui_phosphor::regular as icon;
-        let fit = self.bar_fit;
-        if fit < top_bar::Fit::Tight {
-            ui.label(RichText::new("Group by").color(MUTED));
-        }
-        wrap_before(ui, ui.spacing().combo_width + 2.0 * S3);
-        egui::ComboBox::from_id_salt("grouping")
-            .selected_text(self.group_mode.title())
-            .show_ui(ui, |ui| {
-                for mode in GroupMode::ALL {
-                    if ui
-                        .selectable_label(self.group_mode == mode, mode.title())
-                        .clicked()
-                    {
-                        self.set_group_mode(mode);
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .on_hover_text("Group by");
-        if let Some(hint) = self.organize_hint() {
-            named(
-                ui.label(RichText::new(icon::INFO).color(MUTED)),
-                egui::WidgetType::Label,
-                hint,
-            )
-            .on_hover_text(hint);
-        }
-        let more = (self.automatic_organize_mode() && self.model_issue.is_some())
-            || matches!(self.group_mode, GroupMode::Location | GroupMode::Faces)
-            || self.scene_editing();
-        if fit == top_bar::Fit::Overflow && more {
-            top_bar::overflow_popover(
-                ui,
-                egui::Id::new("organize-more"),
-                "More grouping options",
-                |ui| self.organize_more_controls(ui),
-            );
-        } else {
-            self.organize_more_controls(ui);
-        }
-        self.destination_chip(ui);
-    }
-    /// The grouping's own options: AI models when missing, location levels,
-    /// photos without people, and scene corrections.
-    fn organize_more_controls(&mut self, ui: &mut egui::Ui) {
-        if self.automatic_organize_mode()
-            && self.model_issue.is_some()
-            && ui
-                .button("AI models…")
-                .on_hover_text("Download or import the models this grouping needs")
-                .clicked()
-        {
-            self.open_model_setup();
-        }
-        if self.group_mode == GroupMode::Location {
-            self.location_layout_controls(ui);
-        }
-        if self.group_mode == GroupMode::Faces {
-            self.faceless_controls(ui);
-        }
-        if self.scene_editing() {
-            self.group_controls(ui);
-            if ui
-                .add_enabled(
-                    (2..=9).contains(&self.selection.len()) && !self.busy,
-                    egui::Button::new("Compare selected"),
-                )
-                .clicked()
-            {
-                self.compare_selection();
+            if !work.is_empty() {
+                ui.label(RichText::new(work).small().color(MUTED))
+                    .on_hover_text(format!(
+                        "{:.0} MB of previews in memory",
+                        self.stats.resident_bytes as f64 / 1048576.0
+                    ));
             }
         }
     }
-    /// Where the organized folders are made, and whether a photo's RAW, JPEG
-    /// and edit files move together, in one popover chip.
-    fn destination_chip(&mut self, ui: &mut egui::Ui) {
-        use egui_phosphor::regular as icon;
-        let output = PathBuf::from(&self.output);
-        let here = self.root.as_deref().is_some_and(|root| root == output);
-        let name = output
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Choose a folder".into());
-        let label = format!("Organize into {name}");
-        // A tight bar keeps only the folder icon; the name is in the tooltip.
-        let shown = if self.bar_fit >= top_bar::Fit::Tight {
-            format!("{}  {}", icon::FOLDER_SIMPLE, icon::CARET_DOWN)
-        } else {
-            format!("{}  {label}  {}", icon::FOLDER_SIMPLE, icon::CARET_DOWN)
-        };
-        let chip = ui.add(egui::Button::new(shown)).on_hover_text(format!(
-            "Organize into {name}\nNew folders are made inside {}",
-            super::inspector::readable_path(&output)
-        ));
-        chip.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
-        egui::Popup::menu(&chip)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .width(400.0)
-            .show(|ui| {
-                ui.set_width(400.0);
-                ui.label(RichText::new("Organize into").font(medium(13.0)));
-                ui.label(
-                    RichText::new(
-                        "The folder where the new folders are made. Nothing moves until you review the changes and apply them.",
-                    )
-                    .small()
-                    .color(MUTED),
-                );
-                ui.add_space(S2);
-                if let Some(root) = self.root.clone() {
-                    let root_name = root
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| root.display().to_string());
-                    if ui
-                        .radio(here, format!("This folder · {root_name}"))
-                        .on_hover_text(super::inspector::readable_path(&root))
-                        .clicked()
-                    {
-                        self.output = root.display().to_string();
-                    }
-                }
-                ui.horizontal(|ui| {
-                    let other = ui.radio(!here, "Another folder…");
-                    let change = !here
-                        && ui
-                            .small_button("Change…")
-                            .on_hover_text("Choose another folder")
-                            .clicked();
-                    if (other.clicked() || change)
-                        && let Some(path) = rfd::FileDialog::new().pick_folder()
-                    {
-                        self.output = path.display().to_string();
-                    }
-                });
-                if !here {
-                    // The folder's name stands out; where it is, quietly.
-                    let parent = output
-                        .parent()
-                        .map(|p| format!("{}/", super::inspector::readable_path(p)))
-                        .unwrap_or_default();
-                    ui.horizontal_wrapped(|ui| {
-                        ui.add_space(S6);
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        ui.label(RichText::new(parent).small().color(MUTED));
-                        ui.label(RichText::new(&name).small().color(INK));
-                    });
-                }
-                ui.add_space(S2);
-                ui.separator();
-                ui.add_space(S1);
-                if ui
-                    .add(Switch::new(
-                        &mut self.companions,
-                        "Move RAW, JPEG and edit files of the same photo together",
-                    ))
-                    .changed()
-                {
-                    self.preferences.keep_companions = self.companions;
-                    self.save_preferences();
-                }
-                ui.label(
-                    RichText::new(
-                        "IMG_0042.ARW, IMG_0042.JPG and IMG_0042.xmp always land in the same folder, under the same name.",
-                    )
-                    .small()
-                    .color(MUTED),
-                );
-            });
-    }
-    /// One-line explanation of the current Organize mode, shown on hover.
-    fn organize_hint(&self) -> Option<&'static str> {
-        match self.group_mode {
-            GroupMode::Mixed => Some(if self.mixed_labels.is_some() {
-                "Dates contain similar-photo groups; single photos stay in the date folder."
-            } else {
-                "Dates and similarity are analyzed when you choose this grouping. Your files stay unchanged until Apply."
-            }),
-            GroupMode::Faces => Some(
-                "Groups photos by the main people; finding faces starts when you choose Faces. Group portraits get one shared folder, such as People 001 + 003. Photos without a recognized person stay in their folders, or go to a “No people” folder if you choose. Videos stay in their folders. Apply moves the files.",
-            ),
-            GroupMode::Visual => Some(
-                "Select photos with Cmd/Ctrl-click or Shift-click, then use Scenes to correct groups. Analysis starts when you choose this grouping. Photos without similar photos, and videos, stay in their current folders.",
-            ),
-            _ if self.metadata_organize_mode() => Some(
-                "Folder proposals use photo metadata. Location names are resolved offline; AI analysis is not needed.",
-            ),
-            _ => None,
-        }
-    }
+
     /// The library search field; Ctrl/Cmd+F focuses it.
     pub(super) fn search_field(&mut self, ui: &mut egui::Ui) {
         let width = if self.bar_fit >= top_bar::Fit::Tight {
@@ -715,109 +504,93 @@ impl PhotoSortApp {
         use egui_phosphor::regular as icon;
         let width = ui.available_width();
         let column = (width - 2.0 * S6).clamp(280.0, 520.0);
-        egui::ScrollArea::vertical().id_salt("welcome").show(ui, |ui| {
-            ui.add_space((ui.available_height() * 0.12).max(S6));
-            ui.vertical_centered(|ui| {
-                crate::ui::brand::app_logo(ui, 64.0);
-                ui.add_space(S4);
-                ui.label(
-                    RichText::new("Make room for your best work.")
-                        .font(semibold(if width > 750.0 { 34.0 } else { 26.0 })),
-                );
-                ui.add_space(S2);
-                ui.label(
-                    RichText::new("Sort, clean up and pick the keepers from a folder of photos. Nothing changes on disk until you review it.")
-                        .size(14.5)
-                        .color(MUTED),
-                );
-                ui.add_space(S6);
-                let open = ui.add(
-                    primary(format!("{}  Open a photo folder", icon::FOLDER_OPEN))
-                        .min_size(egui::vec2(220.0, 42.0)),
-                );
-                let enabled = open.enabled();
-                open.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "Open a photo folder")
-                });
-                if open.clicked() {
-                    self.select_folder();
-                }
-                ui.add_space(S2);
-                ui.label(
-                    RichText::new("or drop a folder anywhere in this window")
-                        .small()
-                        .color(FAINT),
-                );
-                let recent: Vec<PathBuf> = self
-                    .preferences
-                    .recent_folders
-                    .iter()
-                    .filter(|p| !self.missing_recent.contains(*p))
-                    .take(5)
-                    .cloned()
-                    .collect();
-                if !recent.is_empty() {
+        egui::ScrollArea::vertical()
+            .id_salt("welcome")
+            .show(ui, |ui| {
+                ui.add_space((ui.available_height() * 0.12).max(S6));
+                ui.vertical_centered(|ui| {
+                    crate::ui::brand::app_logo(ui, 64.0);
+                    ui.add_space(S4);
+                    ui.label(RichText::new("PhotoSort").font(semibold(if width > 750.0 {
+                        34.0
+                    } else {
+                        26.0
+                    })));
                     ui.add_space(S6);
-                    welcome_section(ui, column, "Recent folders", |ui| {
-                        let labels = crate::core::preferences::folder_labels(&recent);
-                        for (path, name) in recent.into_iter().zip(labels) {
-                            let row = ui
-                                .add_enabled(
-                                    !self.busy,
-                                    egui::Button::new(format!("{}  {name}", icon::FOLDER))
-                                        .frame(false)
-                                        .min_size(egui::vec2(column - 2.0 * S3, 30.0)),
-                                )
-                                .on_hover_text(path.display().to_string());
-                            let enabled = row.enabled();
-                            row.widget_info(|| {
-                                egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name)
-                            });
-                            if row.clicked() {
-                                self.open(path);
-                            }
-                        }
+                    let open = ui.add(
+                        primary(format!("{}  Open a photo folder", icon::FOLDER_OPEN))
+                            .min_size(egui::vec2(220.0, 42.0)),
+                    );
+                    let enabled = open.enabled();
+                    open.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            enabled,
+                            "Open a photo folder",
+                        )
                     });
-                }
-                ui.add_space(S6);
-                let steps = self.navigation_steps();
-                welcome_section(ui, column, "Steps, in any order", |ui| {
-                    for step in steps {
-                        ui.horizontal_top(|ui| {
-                            ui.label(
-                                RichText::new(format!("{}", step.index() + 1))
-                                    .font(semibold(13.0))
-                                    .color(ACCENT),
-                            );
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 2.0;
-                                ui.label(RichText::new(step.title()).font(medium(13.5)));
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(step_summary(step)).small().color(MUTED),
-                                    )
-                                    .wrap(),
-                                );
-                            });
-                        });
-                        ui.add_space(S1);
+                    if open.clicked() {
+                        self.select_folder();
                     }
+                    ui.add_space(S2);
+                    ui.label(RichText::new("or drop a folder here").small().color(FAINT));
+                    let recent: Vec<PathBuf> = self
+                        .preferences
+                        .recent_folders
+                        .iter()
+                        .filter(|p| !self.missing_recent.contains(*p))
+                        .take(5)
+                        .cloned()
+                        .collect();
+                    if !recent.is_empty() {
+                        ui.add_space(S6);
+                        welcome_section(ui, column, "Recent folders", |ui| {
+                            let labels = crate::core::preferences::folder_labels(&recent);
+                            for (path, name) in recent.into_iter().zip(labels) {
+                                let row = ui
+                                    .add_enabled(
+                                        !self.busy,
+                                        egui::Button::new(format!("{}  {name}", icon::FOLDER))
+                                            .frame(false)
+                                            .min_size(egui::vec2(column - 2.0 * S3, 30.0)),
+                                    )
+                                    .on_hover_text(path.display().to_string());
+                                let enabled = row.enabled();
+                                row.widget_info(|| {
+                                    egui::WidgetInfo::labeled(
+                                        egui::WidgetType::Button,
+                                        enabled,
+                                        &name,
+                                    )
+                                });
+                                if row.clicked() {
+                                    self.open(path);
+                                }
+                            }
+                        });
+                    }
+                    ui.add_space(S6);
                 });
-                ui.add_space(S6);
             });
-        });
     }
 }
 
-/// A plain-language line for each step on the welcome screen.
-fn step_summary(step: Step) -> &'static str {
-    match step {
-        Step::Organize => "Sort photos into folders by date, place, camera or people.",
-        Step::EasyDelete => "Find duplicates, blurry and badly exposed shots to clear out.",
-        Step::Rotation => "Spot sideways photos and turn them upright.",
-        Step::PickBest => "Keep the best frame from each run of similar shots.",
-        Step::Cull => "Rate, mark and compare every photo yourself.",
+fn shortcuts_label(labelled: bool) -> String {
+    use egui_phosphor::regular as icon;
+    if labelled {
+        format!("{}  Shortcuts", icon::KEYBOARD)
+    } else {
+        icon::KEYBOARD.to_owned()
     }
+}
+/// Width of the Shortcuts button, so the status line knows its room.
+fn shortcuts_button_width(ui: &egui::Ui, labelled: bool) -> f32 {
+    let text = ui
+        .painter()
+        .layout_no_wrap(shortcuts_label(labelled), FontId::proportional(11.5), MUTED)
+        .size()
+        .x;
+    (text + 2.0 * ui.spacing().button_padding.x).max(26.0)
 }
 
 /// A left-aligned card centred in the welcome column.
@@ -1119,14 +892,14 @@ mod step_bar_tests {
         // Staged rotations would ask to resolve them before leaving.
         app.decisions.clear();
         app.busy = true;
-        click_label(&mut app, &ctx, size, "4. Pick Best");
+        click_label(&mut app, &ctx, size, "Pick Best");
         assert_eq!(app.step, Step::Cull, "a busy app keeps its step");
         app.busy = false;
         // A photo clicked in Cull's comparison is not what Copy or Trash act
         // on in the next step, or in the next folder.
         app.comparison_focus = Some(ids[0]);
         assert!(app.active.is_some());
-        click_label(&mut app, &ctx, size, "4. Pick Best");
+        click_label(&mut app, &ctx, size, "Pick Best");
         assert_eq!(app.step, Step::PickBest);
         assert_eq!(app.comparison_focus, None);
         // Cull's photo is not shown here, so Copy or Alt+R must not act on it.
@@ -1137,47 +910,21 @@ mod step_bar_tests {
         app.runtime.shutdown();
     }
     #[test]
-    fn shortcut_hints_follow_the_preference_and_never_cut_a_hint() {
+    fn step_tabs_show_names_and_the_shortcuts_button_opens_the_keyboard_window() {
         let (_temp, mut app, _) = app();
         let ctx = egui::Context::default();
         theme_install(&ctx);
         ctx.enable_accesskit();
-        let hints: Vec<String> = hints::step_hints(Step::Cull)
-            .iter()
-            .map(hints::Hint::text)
-            .collect();
-        let shown = |nodes: &[(String, egui::Rect)]| {
-            hints
-                .iter()
-                .filter(|h| !found(nodes, h).is_empty())
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        let nodes = rendered(&mut app, &ctx, egui::vec2(1800.0, 900.0));
-        let wide = shown(&nodes);
-        assert!(wide.len() >= 2, "{wide:?}");
-        // The most useful hints come first; a narrower bar drops from the end.
-        assert_eq!(wide, hints[..wide.len()]);
-        let steps = found(&nodes, "1. Organize")[0].left();
-        for hint in &wide {
-            assert!(
-                found(&nodes, hint)[0].right() < steps,
-                "{hint} overlaps the steps"
-            );
+        let size = egui::vec2(1800.0, 900.0);
+        let nodes = rendered(&mut app, &ctx, size);
+        for step in Step::ALL {
+            assert_eq!(found(&nodes, step.title()).len(), 1, "{step:?}");
         }
-        let narrow = shown(&rendered(&mut app, &ctx, egui::vec2(1200.0, 900.0)));
-        assert!(
-            narrow.len() < wide.len() && wide.starts_with(&narrow),
-            "{narrow:?}"
-        );
-        app.preferences.show_shortcuts = false;
-        let nodes = rendered(&mut app, &ctx, egui::vec2(1800.0, 900.0));
-        assert!(shown(&nodes).is_empty());
-        assert_eq!(
-            found(&nodes, "Keyboard shortcuts").len(),
-            1,
-            "the sheet stays reachable"
-        );
+        let steps = found(&nodes, "Organize")[0].left();
+        assert!(found(&nodes, "Keyboard shortcuts")[0].right() < steps);
+        assert!(!app.help);
+        click_label(&mut app, &ctx, size, "Keyboard shortcuts");
+        assert!(app.help);
         app.runtime.shutdown();
     }
     #[test]
@@ -1197,7 +944,7 @@ mod step_bar_tests {
             app.set_step(Step::Rotation);
             time += 1.0 / 60.0;
             let nodes = frame_at(&mut app, &ctx, time, Vec::new());
-            let target = *found(&nodes, "3. Fix Rotation")[0];
+            let target = *found(&nodes, "Fix Rotation")[0];
             let moving = indicator(&ctx);
             if reduce {
                 assert!(

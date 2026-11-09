@@ -21,8 +21,9 @@ impl PhotoSortApp {
         let had_recovery = self.model_issue.is_some() || self.model_retry.is_some();
         self.model_issue = None;
         self.model_retry = None;
+        // The recovery message has nothing left to say.
         if had_recovery && self.analysis_run.is_none() && !self.busy && !self.scanning {
-            self.set_status(format!("{} items · library ready", self.media.len()));
+            self.set_status(String::new());
         }
     }
     pub(super) fn discard_stale_model_retry(&mut self) {
@@ -43,19 +44,19 @@ impl PhotoSortApp {
             return None;
         }
         Some(if state.running {
-            "Checking model setup · your current reviews are preserved"
+            "Checking AI models…"
         } else if self.model_retry_ready(state) {
-            "Models ready · open AI models to retry the paused analysis"
+            "AI models ready · retry the analysis in AI models"
         } else if self.step == Step::Organize && self.group_mode == GroupMode::Faces {
-            "Grouping by faces needs the face models · open AI models to download them"
+            "Grouping by faces needs the face models · open AI models"
         } else {
-            "Local AI needs model setup · your current reviews are preserved"
+            "AI models needed · open AI models"
         })
     }
     pub(super) fn model_install_ready(&mut self) -> bool {
         let state = self.runtime.model_assets.state();
         if state.running && state.mutating {
-            self.set_status("Model files are being changed · browsing remains available".into());
+            self.set_status("Model files are being changed · try again when done".into());
             false
         } else {
             true
@@ -92,9 +93,7 @@ impl PhotoSortApp {
                     mode.title().to_lowercase()
                 ),
             ),
-            None => self.set_status(
-                "Local AI needs model setup · your current reviews are preserved".into(),
-            ),
+            None => self.set_status("AI models needed · open AI models".into()),
         }
         self.open_model_setup();
     }
@@ -165,32 +164,10 @@ impl PhotoSortApp {
         let mut close = false;
         modal(egui::Id::new("model_setup")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 64.).clamp(260., 640.));
-            // Header: what this is, how much is installed, and privacy.
-            ui.heading("Local AI models");
-            if let Some(snapshot) = &state.snapshot {
-                let installed = snapshot
-                    .rows
-                    .iter()
-                    .filter(|row| matches!(row.health, Health::Verified(_)))
-                    .count();
-                let managed: u64 = snapshot
-                    .rows
-                    .iter()
-                    .filter_map(|row| row.managed.as_ref())
-                    .map(|copy| copy.bytes())
-                    .sum();
-                ui.label(
-                    RichText::new(format!(
-                        "{installed} of {} models installed · {:.1} MB downloaded or imported",
-                        snapshot.rows.len(),
-                        managed as f64 / 1e6
-                    ))
-                    .color(INK),
-                );
-            }
+            ui.heading("AI models");
             ui.label(
                 RichText::new(format!(
-                    "{}  Models run on this computer. Photo files are never uploaded.",
+                    "{}  Models run on this computer. Photos are never uploaded.",
                     icon::LOCK_SIMPLE
                 ))
                 .small()
@@ -267,23 +244,14 @@ impl PhotoSortApp {
                                 .color(if *valid { MUTED } else { RED }),
                             );
                         }
-                    } else {
-                        ui.label(if state.running {
-                            "Checking installed model files…"
-                        } else {
-                            "Click Check again to check the current model files."
-                        });
+                    } else if !state.running {
+                        // While checking, the footer's spinner says so.
+                        ui.label("Not checked yet.");
                     }
                     if let Some(error) = &state.error {
                         ui.add_space(S1);
                         ui.colored_label(RED, error);
                     }
-                    ui.add_space(S1);
-                    ui.label(
-                        RichText::new("Imports and downloads are verified (size and SHA-256) before they replace an installed model. Nothing downloads unless you ask. Closing this panel leaves a transfer running; Cancel stops it.")
-                            .small()
-                            .color(FAINT),
-                    );
                 });
             // Footer: progress or the last result on the left, actions right.
             ui.add_space(S2);
@@ -318,7 +286,6 @@ impl PhotoSortApp {
                     if retry {
                         if ui
                             .add(primary("Retry analysis"))
-                            .on_hover_text("Continue the analysis that was paused for these models")
                             .clicked()
                         {
                             self.retry_models();
@@ -330,7 +297,7 @@ impl PhotoSortApp {
                         close = true;
                     }
                     if state.running {
-                        if ui.button("Cancel").on_hover_text("Cancel model operation").clicked() {
+                        if ui.button("Cancel").clicked() {
                             self.runtime.model_assets.cancel();
                         }
                     } else if ui
@@ -349,45 +316,15 @@ impl PhotoSortApp {
             self.model_removal = None;
         }
     }
-    /// Messages that apply to the whole panel: the paused analysis and the
-    /// runtime, each said once.
+    /// Messages that apply to the whole panel. A missing runtime is said
+    /// once, in the Runtime section, with its download.
     fn model_notices(&mut self, ui: &mut egui::Ui, state: &model_assets::State) {
         if self.model_retry_ready(state) {
             notice(
                 ui,
                 ACCENT,
-                "The models this analysis needs are ready. Retry analysis to continue where it paused.",
+                "The models are ready. Retry analysis to continue.",
             );
-        } else if let Some(issue) = self
-            .model_issue
-            .as_ref()
-            .filter(|_| self.model_retry_valid())
-        {
-            if !issue.missing.is_empty() {
-                let needed = issue
-                    .missing
-                    .iter()
-                    .map(|id| id.asset().title)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                notice(
-                    ui,
-                    ACCENT,
-                    &format!("Needed for this analysis: {needed}. Install them below, then retry."),
-                );
-            }
-            if issue.runtime_missing && state.snapshot.as_ref().is_none_or(|s| s.runtime.is_none())
-            {
-                notice(
-                    ui,
-                    RED,
-                    if model_assets::runtime::info(model_assets::runtime::Package::Cpu).is_some() {
-                        "The AI runtime is missing. Download it below, or install it yourself, then check again."
-                    } else {
-                        "The native AI runtime is missing. Restore the full app bundle, then check again. Model downloads do not install runtime libraries."
-                    },
-                );
-            }
         }
         if self.analysis_run.is_some() {
             ui.horizontal_wrapped(|ui| {
@@ -398,7 +335,7 @@ impl PhotoSortApp {
             });
         }
     }
-    /// One model: name, plain-language purpose, status and the one action
+    /// One model: name, what it does, status and the one action
     /// that fixes it; size, licence, source and file details underneath.
     fn model_card(
         &mut self,
@@ -483,8 +420,7 @@ impl PhotoSortApp {
                 ui.add(
                     egui::Label::new(
                         RichText::new(format!(
-                            "{} · {:.1} MB · {}",
-                            asset.purpose,
+                            "{:.1} MB · {}",
                             asset.bytes as f64 / 1e6,
                             asset.license
                         ))
@@ -522,11 +458,6 @@ impl PhotoSortApp {
         line(ui, "Origin", asset.origin);
         line(ui, "File", asset.name);
         line(ui, "SHA-256", asset.checksum());
-        line(
-            ui,
-            "Download",
-            "Public pinned file, verified after download",
-        );
         if let Health::Invalid(_, why) = &row.health {
             line(ui, "Problem", why);
         }
@@ -557,7 +488,11 @@ impl PhotoSortApp {
                 ),
             );
             let editable = !state.running && !self.busy && self.analysis_run.is_none();
-            if self.model_removal.as_ref().is_some_and(|pending| pending.id() == row.id) {
+            if self
+                .model_removal
+                .as_ref()
+                .is_some_and(|pending| pending.id() == row.id)
+            {
                 ui.label(RichText::new("Remove this managed copy?").color(INK));
                 ui.label(
                     RichText::new(if row.bundled.is_some() {
@@ -569,7 +504,9 @@ impl PhotoSortApp {
                     .color(MUTED),
                 );
                 ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(editable, egui::Button::new("Remove reviewed copy")).clicked()
+                    if ui
+                        .add_enabled(editable, egui::Button::new("Remove reviewed copy"))
+                        .clicked()
                         && let Some(pending) = self.model_removal.take()
                     {
                         self.start_model_operation(Work::Remove(pending));
@@ -580,7 +517,6 @@ impl PhotoSortApp {
                 });
             } else if ui
                 .add_enabled(editable, egui::Button::new("Remove managed copy…").small())
-                .on_hover_text("Removal affects only this installed copy. Bundled models and custom model files are kept.")
                 .clicked()
             {
                 self.model_removal = Some(copy.clone());
@@ -643,7 +579,7 @@ impl PhotoSortApp {
                         ui,
                         ACCENT,
                         &format!(
-                            "The AI steps need {} from {} ({:.0} MB download, checked against a pinned SHA-256). It installs into PhotoSort's data folder.",
+                            "The AI steps need {} from {} ({:.0} MB).",
                             info.title,
                             info.publisher,
                             info.download_bytes() as f64 / 1e6
@@ -707,10 +643,8 @@ impl PhotoSortApp {
             ui.label(RichText::new("NVIDIA GPU").font(semibold(13.0)));
             ui.label(
                 RichText::new(format!(
-                    "An NVIDIA driver is installed. {} runs the AI steps on the graphics card. It is a {:.1} GB download from {}, checked against pinned SHA-256 hashes. Without it, analysis runs on the CPU.",
-                    cuda.title,
-                    cuda.download_bytes() as f64 / 1e9,
-                    cuda.publisher
+                    "{} from {} runs the AI steps on the graphics card.",
+                    cuda.title, cuda.publisher
                 ))
                 .small()
                 .color(MUTED),

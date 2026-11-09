@@ -57,25 +57,7 @@ impl PhotoSortApp {
         self.pick_review.replace(clusters);
         self.pick_run = None;
         self.stage_pick_suggestions();
-        let groups = self.pick_review.clusters().len();
-        let trash = self
-            .pick_review
-            .clusters()
-            .iter()
-            .flat_map(|c| c.ordered.iter())
-            .filter(|id| self.decision(**id).rejected)
-            .count();
-        self.set_workflow_status(
-            Step::PickBest,
-            match groups {
-                0 => "No similar photos found · every photo is one of a kind".to_owned(),
-                n => format!(
-                    "{} · {} marked for Trash · nothing changes on disk until you apply Review changes",
-                    count(n, "group of similar photos", "groups of similar photos"),
-                    count(trash, "photo", "photos")
-                ),
-            } + &self.failure_note(),
-        );
+        self.finish_step_status(Step::PickBest);
         self.filter_dirty = true;
         self.review_changed();
     }
@@ -188,7 +170,7 @@ impl PhotoSortApp {
                     changed && self.pick_enabled(),
                     egui::Button::new(self.pick_undo_label()),
                 )
-                .on_hover_text("Back to PhotoSort's suggestion · R")
+                .on_hover_text("R")
                 .clicked()
             {
                 self.undo_pick();
@@ -277,17 +259,6 @@ impl PhotoSortApp {
             .sum();
         let groups: Vec<usize> = (0..self.pick_review.clusters().len()).collect();
         let changed = self.pick_review.changed_count(&groups, &self.decisions);
-        let note = match changed {
-            0 => " · nothing changes on disk until you apply Review changes".to_owned(),
-            n if self.preferences.pick_best_auto => format!(
-                " · {} changed by you · nothing changes on disk until you apply Review changes",
-                count(n, "group", "groups")
-            ),
-            n => format!(
-                " · {} not following the suggestion · nothing changes on disk until you apply Review changes",
-                count(n, "group", "groups")
-            ),
-        };
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 if ui
@@ -295,11 +266,7 @@ impl PhotoSortApp {
                         changed > 0 && self.pick_enabled(),
                         egui::Button::new("Accept all suggestions"),
                     )
-                    .on_hover_text(if changed > 0 {
-                        "Puts every group back to PhotoSort's suggestion: keep the best photo, move the rest to Trash · A"
-                    } else {
-                        "Every group already follows PhotoSort's suggestion"
-                    })
+                    .on_hover_text("A")
                     .clicked()
                 {
                     self.accept_pick_defaults();
@@ -308,22 +275,14 @@ impl PhotoSortApp {
                 self.size_slider(ui);
                 ui.add_space(S3);
                 ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
-                    let mut job = egui::text::LayoutJob::default();
-                    let body = egui::TextStyle::Body.resolve(ui.style());
-                    job.append(
+                    super::review_card::summary_label(
+                        ui,
                         &format!(
-                            "{} · {} going to Trash · frees {} · {} kept",
-                            count(groups.len(), "group", "groups"),
+                            "{} going to Trash · frees {}",
                             count(trash.len(), "photo", "photos"),
                             super::review_card::size_text(freed),
-                            members.len() - trash.len()
                         ),
-                        0.0,
-                        egui::TextFormat::simple(body.clone(), INK),
                     );
-                    job.append(&note, 0.0, egui::TextFormat::simple(body, MUTED));
-                    let full = job.text.clone();
-                    ui.add(egui::Label::new(job).truncate()).on_hover_text(full);
                 });
             });
         });
@@ -333,15 +292,12 @@ impl PhotoSortApp {
     /// Keep/Trash and Undo. The grid is its strip.
     fn pick_compare_panel(&mut self, ui: &mut egui::Ui) {
         use egui_phosphor::regular as icon;
-        let Some(group) = self.pick_group() else {
+        if self.pick_group().is_none() {
             self.pick_panel = false;
             return;
-        };
-        let title = self.pick_title(group);
-        let n = self.pick_review.clusters()[group].ordered.len();
+        }
+        // No title: the selected card beside the panel has it.
         ui.horizontal(|ui| {
-            ui.label(RichText::new(title).font(semibold(13.0)).color(INK));
-            ui.label(RichText::new(count(n, "photo", "photos")).color(MUTED));
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 if icon_button(ui, icon::X, "Close · Esc").clicked() {
                     self.pick_panel = false;
@@ -383,30 +339,20 @@ impl PhotoSortApp {
         let best = cluster.best();
         let next = cluster.ordered[1];
         let why = match cluster.reason {
-            Reason::Sharper => {
-                let soft = cluster.soft.len();
-                format!(
-                    "It is sharp, and {} noticeably softer.",
-                    if soft == 1 {
-                        "1 other photo is".to_owned()
-                    } else {
-                        format!("{soft} others are")
-                    }
-                )
-            }
+            Reason::Sharper => match cluster.soft.len() {
+                1 => "Sharp; 1 other photo is softer.".to_owned(),
+                n => format!("Sharp; {n} others are softer."),
+            },
             Reason::EyesOpen => match cluster.blinks(next) {
-                1 => "Eyes are open here. In the next best photo, someone's eyes are closed."
-                    .to_owned(),
-                n => format!(
-                    "Eyes are open here. In the next best photo, {n} people's eyes are closed."
-                ),
+                1 => "Eyes open; closed for someone in the next best.".to_owned(),
+                n => format!("Eyes open; closed for {n} people in the next best."),
             },
             Reason::Score => format!(
-                "It has the best overall score ({:.0} against {:.0} for the next best), from how the photo looks to the aesthetic model, its sharpness and closed eyes.",
+                "Best overall score: {:.0}, next best {:.0}.",
                 cluster.scores[&best], cluster.scores[&next]
             ),
         };
-        format!("Suggested to keep. {why}")
+        format!("{} {why}", super::delete_review::SUGGESTED)
     }
 
     /// The facts that tell a group's photos apart, for the photos given:
@@ -514,19 +460,6 @@ impl PhotoSortApp {
             .collect()
     }
 
-    /// One photo's facts in one line, for the panel beside the grid.
-    pub(super) fn pick_photo_facts(&self, id: MediaId) -> Option<String> {
-        let cluster = self.pick_review.cluster_of(id)?;
-        let facts = self.pick_facts(cluster, &[id]).swap_remove(0);
-        (!facts.is_empty()).then(|| {
-            facts
-                .iter()
-                .map(|f| f.text.as_str())
-                .collect::<Vec<_>>()
-                .join(" · ")
-        })
-    }
-
     /// The card for one group: its best photos with a Keep/Trash pill each
     /// and their deciding facts, the suggested one marked, and Undo once it
     /// differs from the suggestion.
@@ -570,42 +503,30 @@ impl PhotoSortApp {
                 }
             })
             .collect();
-        let n = cluster.ordered.len();
+        // Only the photos the card leaves out, and any of them kept.
         let hidden = &cluster.ordered[shown.len()..];
-        let state_text = if hidden.is_empty() {
-            count(n, "photo", "photos")
-        } else {
+        let state_text = (!hidden.is_empty()).then(|| {
             let kept = hidden
                 .iter()
                 .filter(|id| Review::keeps(&self.decisions, **id))
                 .count();
-            format!(
-                "{} · {} more{}",
-                count(n, "photo", "photos"),
-                hidden.len(),
-                if kept > 0 {
-                    format!(", {kept} kept")
-                } else {
-                    String::new()
-                }
-            )
-        };
+            if kept > 0 {
+                format!("+{} more, {kept} kept", hidden.len())
+            } else {
+                format!("+{} more", hidden.len())
+            }
+        });
         ReviewCard {
             title: self.pick_title(group),
-            state_text: Some(state_text),
+            state_text,
             photos,
             buttons: Vec::new(),
             // The selected group shows in the panel beside the grid, which
             // is enough: no outline that could be read as Keep or Trash.
             shown: self.pick_panel && self.pick_group() == Some(group),
-            title_hover: (!hidden.is_empty())
-                .then(|| "Click the card to see every photo of the group".to_owned()),
-            undo: (enabled && self.pick_review.changed(group, &self.decisions)).then(|| {
-                (
-                    self.pick_undo_label().to_owned(),
-                    "Back to PhotoSort's suggestion · R on the selected group".to_owned(),
-                )
-            }),
+            title_hover: None,
+            undo: (enabled && self.pick_review.changed(group, &self.decisions))
+                .then(|| (self.pick_undo_label().to_owned(), String::new())),
         }
     }
 
@@ -802,9 +723,7 @@ mod tests {
         for text in [
             "Group 1",
             "Group 2",
-            "3 photos",
-            "2 photos",
-            "Suggested",
+            egui_phosphor::regular::STAR,
             "Accept all suggestions",
         ] {
             assert!(shown.contains(text), "{text} missing from:\n{shown}");
@@ -869,7 +788,7 @@ mod tests {
                 better: false
             }
         );
-        assert!(app.pick_keep_why(cluster).contains("eyes are closed"));
+        assert!(app.pick_keep_why(cluster).contains("closed for someone"));
         let shown = super::super::review_card::render_grid(&mut app);
         assert!(
             shown.contains("Eyes closed") && shown.contains("Eyes open"),

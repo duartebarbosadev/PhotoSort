@@ -68,18 +68,27 @@ impl PhotoSortApp {
             .find(|(layout, _)| *layout == self.preferences.location_layout)
             .unwrap()
             .1;
-        ui.add_enabled_ui(!self.modal_active() && !self.scanning && self.analysis_run.is_none()
-            && self.retry_plan.is_none(), |ui| {
-            egui::ComboBox::from_id_salt("location_layout").selected_text(selected)
-                .show_ui(ui, |ui| {
-                    for (layout, title) in choices {
-                        if ui.selectable_label(self.preferences.location_layout == layout, title).clicked() {
-                            self.change_location_layout(layout);
-                            ui.close();
+        ui.add_enabled_ui(
+            !self.modal_active()
+                && !self.scanning
+                && self.analysis_run.is_none()
+                && self.retry_plan.is_none(),
+            |ui| {
+                egui::ComboBox::from_id_salt("location_layout")
+                    .selected_text(selected)
+                    .show_ui(ui, |ui| {
+                        for (layout, title) in choices {
+                            if ui
+                                .selectable_label(self.preferences.location_layout == layout, title)
+                                .clicked()
+                            {
+                                self.change_location_layout(layout);
+                                ui.close();
+                            }
                         }
-                    }
-                }).response.on_hover_text("Choose location folder levels. Reuses cached metadata; no AI analysis needed to change levels.");
-        });
+                    });
+            },
+        );
     }
     /// Faces only: whether photos without a recognized person stay in their
     /// folders or go to one "No people" folder.
@@ -114,11 +123,7 @@ impl PhotoSortApp {
                                 ui.close();
                             }
                         }
-                    })
-                    .response
-                    .on_hover_text(
-                        "Photos where no person is recognized. Nothing moves until you review the changes and apply them.",
-                    );
+                    });
             },
         );
     }
@@ -154,13 +159,7 @@ impl PhotoSortApp {
         modal(egui::Id::new("replace_faceless")).show(ctx, |ui| {
             ui.set_max_width(400.0_f32.min((ctx.content_rect().width() - 60.0).max(180.0)));
             ui.heading("Replace your people folder edits?");
-            ui.label(match choice {
-                crate::core::preferences::Faceless::Folder => format!(
-                    "Photos without a recognized person will go to a “{}” folder. The people folders are proposed again, replacing the folder edits you made while grouping by faces. File names and other groupings keep their edits. Nothing changes on disk until you apply.",
-                    crate::core::preferences::NO_PEOPLE
-                ),
-                crate::core::preferences::Faceless::Stay => "Photos without a recognized person will stay in their current folders. The people folders are proposed again, replacing the folder edits you made while grouping by faces. File names and other groupings keep their edits. Nothing changes on disk until you apply.".into(),
-            });
+            ui.label("The people folders are proposed again. Your other edits stay.");
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Keep my edits").clicked() {
                     action = Some(false);
@@ -185,10 +184,14 @@ impl PhotoSortApp {
         modal(egui::Id::new("replace_location_layout")).show(ctx, |ui| {
             ui.set_max_width(400.0_f32.min((ctx.content_rect().width() - 60.0).max(180.0)));
             ui.heading("Replace location folder edits?");
-            ui.label("The new levels will regenerate location folders and replace their custom folder edits. File names, ratings and other grouping modes keep their edits. Your photos stay unchanged until Apply.");
+            ui.label("The location folders are proposed again. Your other edits stay.");
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Keep current layout").clicked() { action = Some(false); }
-                if ui.button("Replace location layout").clicked() { action = Some(true); }
+                if ui.button("Keep my edits").clicked() {
+                    action = Some(false);
+                }
+                if ui.button("Replace folder edits").clicked() {
+                    action = Some(true);
+                }
             });
         });
         if let Some(replace) = action {
@@ -361,49 +364,28 @@ impl PhotoSortApp {
             Pending::Waiting
         })
     }
-    /// Choosing an analysis-based grouping starts it, or says why it waits.
+    /// Choosing an analysis-based grouping starts it; when it waits, the
+    /// board's notice says why.
     pub(super) fn start_organize_grouping(&mut self) {
         self.organize_halted = None;
         if self.step != Step::Organize || !self.organize_grouping_wanted() {
             return;
         }
         self.start_ready_analysis();
-        let mode = self.group_mode;
-        if self
-            .analysis_run
-            .is_some_and(|run| self.organize_run == Some((run, mode)))
-            || self.scanning
-            || self.media.is_empty()
-        {
-            return; // Started, or starts once the folder has been read.
-        }
-        let what = mode.title().to_lowercase();
-        let message = if self.model_issue.is_some() || self.model_dialog {
-            format!("Grouping by {what} needs AI models · open AI models to set them up")
-        } else if self.analysis_run.is_some() || self.rotation_run.is_some() {
-            format!("Grouping by {what} starts when the current analysis finishes")
-        } else if self.busy || self.plan_open || self.retry_plan.is_some() {
-            format!("Grouping by {what} waits for the current task · then press Review changes")
-        } else {
-            return; // `analyze` already reported why it could not start.
-        };
-        self.set_organize_status(mode, message);
     }
-    /// What a finished people grouping found; `None` before it has run.
+    /// Why a finished people grouping proposes no folders; `None` before it
+    /// has run, and when its folders are on the board.
     pub(super) fn face_group_status(&self) -> Option<String> {
         let summary = crate::core::face_groups::summarize(self.face_groups.as_ref()?);
-        Some(match summary {
+        match summary {
             crate::core::face_groups::Summary { photos: 0, .. } => {
-                "No faces found in these photos".into()
+                Some("No faces found in these photos".into())
             }
             crate::core::face_groups::Summary { repeated: 0, .. } => {
-                "Faces found, but no person appears in more than one photo".into()
+                Some("No person appears in more than one photo".into())
             }
-            crate::core::face_groups::Summary { repeated, .. } => format!(
-                "People groups ready · {repeated} {} in more than one photo",
-                if repeated == 1 { "person" } else { "people" }
-            ),
-        })
+            _ => None,
+        }
     }
     pub(super) fn organize_grouping_ready(&self) -> bool {
         match self.group_mode {
@@ -424,6 +406,184 @@ impl PhotoSortApp {
             && self.catalog.is_some()
             && (self.organize_grouping_ready()
                 || self.organize_drafts.contains_key(&self.group_mode))
+    }
+    /// Organize's own controls, inline in the context bar: how photos are
+    /// grouped and where they go. Folders are edited on the board itself and
+    /// every change is reviewed with Review changes.
+    pub(super) fn organize_controls(&mut self, ui: &mut egui::Ui) {
+        use egui_phosphor::regular as icon;
+        let fit = self.bar_fit;
+        // A tight bar drops the label; the tooltip names the menu instead.
+        let labelled = fit < top_bar::Fit::Tight;
+        if labelled {
+            ui.label(RichText::new("Group by").color(MUTED));
+        }
+        wrap_before(ui, ui.spacing().combo_width + 2.0 * S3);
+        let combo = egui::ComboBox::from_id_salt("grouping")
+            .selected_text(self.group_mode.title())
+            .show_ui(ui, |ui| {
+                for mode in GroupMode::ALL {
+                    if ui
+                        .selectable_label(self.group_mode == mode, mode.title())
+                        .clicked()
+                    {
+                        self.set_group_mode(mode);
+                        ui.close();
+                    }
+                }
+            })
+            .response;
+        if !labelled {
+            combo.on_hover_text("Group by");
+        }
+        if let Some(hint) = self.organize_hint() {
+            named(
+                ui.label(RichText::new(icon::INFO).color(MUTED)),
+                egui::WidgetType::Label,
+                hint,
+            )
+            .on_hover_text(hint);
+        }
+        let more = (self.automatic_organize_mode() && self.model_issue.is_some())
+            || matches!(self.group_mode, GroupMode::Location | GroupMode::Faces)
+            || self.scene_editing();
+        if fit == top_bar::Fit::Overflow && more {
+            top_bar::overflow_popover(
+                ui,
+                egui::Id::new("organize-more"),
+                "More grouping options",
+                |ui| self.organize_more_controls(ui),
+            );
+        } else {
+            self.organize_more_controls(ui);
+        }
+        self.destination_chip(ui);
+    }
+    /// The grouping's own options: AI models when missing, location levels,
+    /// photos without people, and scene corrections.
+    fn organize_more_controls(&mut self, ui: &mut egui::Ui) {
+        if self.automatic_organize_mode()
+            && self.model_issue.is_some()
+            && ui
+                .button("AI models…")
+                .on_hover_text("Download or import the models this grouping needs")
+                .clicked()
+        {
+            self.open_model_setup();
+        }
+        if self.group_mode == GroupMode::Location {
+            self.location_layout_controls(ui);
+        }
+        if self.group_mode == GroupMode::Faces {
+            self.faceless_controls(ui);
+        }
+        if self.scene_editing() {
+            self.group_controls(ui);
+            if ui
+                .add_enabled(
+                    (2..=9).contains(&self.selection.len()) && !self.busy,
+                    egui::Button::new("Compare selected"),
+                )
+                .clicked()
+            {
+                self.compare_selection();
+            }
+        }
+    }
+    /// Where the organized folders are made, and whether a photo's RAW, JPEG
+    /// and edit files move together, in one popover chip.
+    fn destination_chip(&mut self, ui: &mut egui::Ui) {
+        use egui_phosphor::regular as icon;
+        let output = PathBuf::from(&self.output);
+        let here = self.root.as_deref().is_some_and(|root| root == output);
+        let name = output
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Choose a folder".into());
+        // The library folder is already named in the top bar.
+        let label = if here {
+            "Organize into this folder".to_owned()
+        } else {
+            format!("Organize into {name}")
+        };
+        // A tight bar keeps only the folder icon; the name is in the tooltip.
+        let shown = if self.bar_fit >= top_bar::Fit::Tight {
+            format!("{}  {}", icon::FOLDER_SIMPLE, icon::CARET_DOWN)
+        } else {
+            format!("{}  {label}  {}", icon::FOLDER_SIMPLE, icon::CARET_DOWN)
+        };
+        let chip = ui
+            .add(egui::Button::new(shown))
+            .on_hover_text(super::inspector::readable_path(&output));
+        chip.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+        egui::Popup::menu(&chip)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .width(400.0)
+            .show(|ui| {
+                ui.set_width(400.0);
+                if let Some(root) = self.root.clone()
+                    && ui
+                        .radio(here, "This folder")
+                        .on_hover_text(super::inspector::readable_path(&root))
+                        .clicked()
+                {
+                    self.output = root.display().to_string();
+                }
+                ui.horizontal(|ui| {
+                    let other = ui.radio(!here, "Another folder…");
+                    let change = !here && ui.small_button("Change…").clicked();
+                    if (other.clicked() || change)
+                        && let Some(path) = rfd::FileDialog::new().pick_folder()
+                    {
+                        self.output = path.display().to_string();
+                    }
+                });
+                if !here {
+                    // The folder's name stands out; where it is, quietly.
+                    let parent = output
+                        .parent()
+                        .map(|p| format!("{}/", super::inspector::readable_path(p)))
+                        .unwrap_or_default();
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add_space(S6);
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        ui.label(RichText::new(parent).small().color(MUTED));
+                        ui.label(RichText::new(&name).small().color(INK));
+                    });
+                }
+                ui.add_space(S2);
+                ui.separator();
+                ui.add_space(S1);
+                if ui
+                    .add(Switch::new(
+                        &mut self.companions,
+                        "Keep RAW, JPEG and edit files together",
+                    ))
+                    .on_hover_text(
+                        "IMG_0042.ARW, .JPG and .xmp go to the same folder, under the same name",
+                    )
+                    .changed()
+                {
+                    self.preferences.keep_companions = self.companions;
+                    self.save_preferences();
+                }
+            });
+    }
+    /// One-line explanation of the current Organize mode, shown on hover.
+    fn organize_hint(&self) -> Option<&'static str> {
+        match self.group_mode {
+            GroupMode::Mixed => Some(
+                "Similar photos get a folder inside their date; single photos stay in the date folder.",
+            ),
+            GroupMode::Faces => Some(
+                "Group portraits share one folder, such as People 001 + 003. Videos stay in their folders.",
+            ),
+            GroupMode::Visual => Some(
+                "Photos without similar photos, and videos, stay in their folders. Select photos, then use Scenes to correct groups.",
+            ),
+            GroupMode::Location => Some("Place names are found offline."),
+            _ => None,
+        }
     }
 }
 

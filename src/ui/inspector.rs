@@ -5,7 +5,7 @@ impl PhotoSortApp {
     pub(super) fn inspector(&mut self, ui: &mut egui::Ui) {
         ui.add_space(S2);
         let Some(id) = self.active else {
-            ui.label(RichText::new("Select a photo to see its details.").color(MUTED));
+            ui.label(RichText::new("No photo selected").color(MUTED));
             return;
         };
         let Some(&index) = self.index.get(&id) else {
@@ -14,15 +14,6 @@ impl PhotoSortApp {
         let media = self.media[index].clone();
         ui.add(egui::Label::new(RichText::new(media.name()).font(semibold(15.0))).truncate())
             .on_hover_text(media.path.display().to_string());
-        ui.label(
-            RichText::new(format!(
-                "{:.1} MB · {:?}",
-                media.fingerprint.bytes as f64 / 1048576.0,
-                media.kind
-            ))
-            .small()
-            .color(MUTED),
-        );
         self.reveal_button(ui, id);
         ui.add_space(10.0);
         ui.separator();
@@ -47,15 +38,6 @@ impl PhotoSortApp {
             for issue in &analysis.issues {
                 ui.colored_label(RED, issue);
             }
-            ui.label(
-                RichText::new(if analysis.aesthetic.is_some() {
-                    "Aesthetic quality, sharpness and open-eye suggestions."
-                } else {
-                    "Sharpness and exposure. Run Pick Best for aesthetic scoring."
-                })
-                .small()
-                .color(MUTED),
-            );
         }
         if let Some(original) = self.duplicates.get(&id)
             && let Some(&index) = self.index.get(original)
@@ -80,7 +62,7 @@ impl PhotoSortApp {
             ui.colored_label(RED, "This photo could not be analyzed");
             ui.add(egui::Label::new(RichText::new(error).small().color(MUTED)).wrap());
             ui.label(
-                RichText::new("It gets no suggestions and is never marked for Trash automatically. Analyze again to retry.")
+                RichText::new("Analyze again to retry.")
                     .small()
                     .color(MUTED),
             );
@@ -108,13 +90,6 @@ impl PhotoSortApp {
         {
             self.open_desktop(id, crate::core::desktop::Action::OpenVideo);
         }
-        ui.add_space(15.0);
-        ui.separator();
-        ui.label(
-            RichText::new("Changes stay staged until you review and apply them.")
-                .small()
-                .color(MUTED),
-        );
     }
 }
 

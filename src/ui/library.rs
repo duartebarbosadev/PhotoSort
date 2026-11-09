@@ -1,26 +1,6 @@
 use super::*;
 
 impl PhotoSortApp {
-    fn browse_group_label(&self, id: MediaId) -> Option<String> {
-        (self.step == Step::Cull
-            && self.browse.group_sort != crate::core::browsing::GroupSort::Flat)
-            .then(|| {
-                self.cull_groups.get(&id).map_or_else(
-                    || "Ungrouped".into(),
-                    |g| {
-                        format!(
-                            "Group {g}{}",
-                            if self.manual_groups.contains(id) {
-                                " · manual"
-                            } else {
-                                ""
-                            }
-                        )
-                    },
-                )
-            })
-    }
-
     pub(super) fn library(&mut self, ui: &mut egui::Ui) {
         if self.step == Step::Organize {
             self.organize_board(ui);
@@ -128,12 +108,7 @@ impl PhotoSortApp {
             runs.push((group, start, end));
             start = end;
         }
-        let sets = runs
-            .iter()
-            .filter_map(|(group, ..)| *group)
-            .collect::<HashSet<_>>()
-            .len();
-        let sets = Arc::new(PhotoSets { runs, sets });
+        let sets = Arc::new(PhotoSets { runs });
         ctx.data_mut(|d| {
             d.insert_temp(
                 id,
@@ -281,7 +256,6 @@ impl PhotoSortApp {
         start: usize,
         shown: usize,
     ) {
-        use egui_phosphor::regular as icon;
         let response = ui.interact(
             rect,
             ui.id().with(("set-header", group, start)),
@@ -295,7 +269,7 @@ impl PhotoSortApp {
             painter.text(
                 egui::pos2(rect.left() + 2.0, y),
                 Align2::LEFT_CENTER,
-                format!("Not in a similar set · {shown}"),
+                format!("Not in a set · {shown}"),
                 medium(10.5),
                 FAINT,
             );
@@ -307,22 +281,12 @@ impl PhotoSortApp {
             .index
             .get(&best)
             .map_or_else(String::new, |i| self.media[*i].name());
-        let mut job = egui::text::LayoutJob::default();
-        job.append(
-            &format!("Similar set · {size} photos"),
-            0.0,
-            egui::TextFormat::simple(medium(11.0), INK),
-        );
-        job.append(
-            &format!("   {} Best: {best_name}", icon::CROWN_SIMPLE),
-            0.0,
-            egui::TextFormat::simple(FontId::proportional(10.5), MUTED),
-        );
-        job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 18.0);
-        let galley = painter.layout_job(job);
-        painter.galley(
-            egui::pos2(rect.left() + 16.0, y - galley.size().y / 2.0),
-            galley,
+        // The best photo carries its own badge in the set.
+        painter.text(
+            egui::pos2(rect.left() + 16.0, y),
+            Align2::LEFT_CENTER,
+            format!("{size} similar photos"),
+            medium(11.0),
             INK,
         );
         let name = format!("Similar set of {size} · best {best_name}");
@@ -343,7 +307,7 @@ impl PhotoSortApp {
         }
         response
             .on_hover_text(
-                "Drop photos here to move them into this set. Right-click to compare it.",
+                "Drop photos here to move them into this set · right-click to compare it",
             )
             .context_menu(|ui| {
                 let count = self.group_members(group).len();
@@ -522,22 +486,10 @@ impl PhotoSortApp {
                 (a.issues.join(" · "), RED)
             } else {
                 (
-                    format!(
-                        "{} · {:.1} MB",
-                        media
-                            .path
-                            .extension()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_uppercase(),
-                        media.fingerprint.bytes as f64 / 1048576.0
-                    ),
+                    format!("{:.1} MB", media.fingerprint.bytes as f64 / 1048576.0),
                     MUTED,
                 )
             };
-            let detail = self
-                .browse_group_label(id)
-                .map_or(detail.clone(), |g| format!("{g} · {detail}"));
             painter.with_clip_rect(text_rect).text(
                 egui::pos2(left, image_rect.bottom() + 25.0),
                 Align2::LEFT_CENTER,
@@ -647,18 +599,9 @@ impl PhotoSortApp {
             add(&mut job, &"★".repeat(rating as usize), ACCENT);
         }
         if job.text.is_empty() {
-            let kind = media
-                .path
-                .extension()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_uppercase();
             add(
                 &mut job,
-                &format!(
-                    "{kind} · {:.1} MB",
-                    media.fingerprint.bytes as f64 / 1048576.0
-                ),
+                &format!("{:.1} MB", media.fingerprint.bytes as f64 / 1048576.0),
                 FAINT,
             );
         }
@@ -1176,7 +1119,8 @@ mod tests {
         .collect();
         let ctx = egui::Context::default();
         let sets = app.photo_sets(&ctx);
-        assert_eq!(sets.sets, 3);
+        let groups: HashSet<_> = sets.runs.iter().filter_map(|(group, ..)| *group).collect();
+        assert_eq!(groups.len(), 3);
         assert!(
             Arc::ptr_eq(&sets, &app.photo_sets(&ctx)),
             "kept between frames"
@@ -1360,8 +1304,6 @@ pub(super) struct PhotoSets {
     /// Each run of shown photos in one set, or in none: its set and its
     /// first and past-the-end positions.
     runs: Vec<(Option<usize>, usize, usize)>,
-    /// How many similar sets the photos shown cover.
-    pub(super) sets: usize,
 }
 /// [`PhotoSets`] kept in the context between frames, with what they were
 /// worked out from.

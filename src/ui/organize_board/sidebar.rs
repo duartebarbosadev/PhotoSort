@@ -223,21 +223,11 @@ impl PhotoSortApp {
         let mut select: Option<(String, egui::Modifiers)> = None;
         let mut drop: Option<(Vec<MediaId>, String)> = None;
         let mut finish = false;
-        // What stays where it is, under the folders; the folders get the rest.
-        let note = self.board_note().map(|note| {
-            ui.painter().layout(
-                note,
-                egui::TextStyle::Small.resolve(ui.style()),
-                MUTED,
-                ui.available_width(),
-            )
-        });
-        let reserve = note.as_ref().map_or(0.0, |g| g.size().y + S3);
         let highlighted = self.board_highlight();
         let mut scroll = egui::ScrollArea::vertical()
             .id_salt("organize_folders")
             .auto_shrink([false, false])
-            .max_height((ui.available_height() - reserve).max(row_height));
+            .max_height(ui.available_height().max(row_height));
         // Scroll a folder into view once: the one being renamed (a new
         // folder can be anywhere in a long tree), else the highlighted one.
         let editing = self.board.editing.as_ref().map(|(path, _)| path.clone());
@@ -279,12 +269,13 @@ impl PhotoSortApp {
                             .show(ui);
                         if std::mem::take(&mut self.board.edit_focus) {
                             field.response.request_focus();
-                            field.state.cursor.set_char_range(Some(
-                                egui::text::CCursorRange::two(
+                            field
+                                .state
+                                .cursor
+                                .set_char_range(Some(egui::text::CCursorRange::two(
                                     egui::text::CCursor::new(0),
                                     egui::text::CCursor::new(name.chars().count()),
-                                ),
-                            ));
+                                )));
                             field.state.store(ui.ctx(), field.response.id);
                         }
                         finish |= field.response.lost_focus();
@@ -302,7 +293,8 @@ impl PhotoSortApp {
                 // item, those staying in place included.
                 let top = path.is_empty();
                 let selected = self.board_highlighted(&path, highlighted.as_deref());
-                let faces = faces_mode.then(|| self.folder_faces(&path, ui.ctx().pixels_per_point()));
+                let faces =
+                    faces_mode.then(|| self.folder_faces(&path, ui.ctx().pixels_per_point()));
                 let unnamed = editable && self.unnamed_person(&path);
                 let response = folder_row(
                     ui,
@@ -329,15 +321,15 @@ impl PhotoSortApp {
                     Vec::new()
                 };
                 let tip = if top {
-                    format!("{root} · every item · {direct} directly in it, {total} in its folders")
+                    format!("{direct} directly in {root}")
                 } else if unnamed {
+                    "Double-click to add a name; every folder with this person takes it".into()
+                } else if path.contains('/') {
                     format!(
-                        "{path} · {total} photos · double-click to add a name; it is used for every folder with this person"
+                        "{path}\nCtrl/Cmd-click to show several · drag onto a folder to move it"
                     )
                 } else {
-                    format!(
-                        "{path} · {direct} here, {total} including subfolders · click to scroll to it · Ctrl/Cmd-click to show only the folders you choose · drag onto another folder to move it"
-                    )
+                    "Ctrl/Cmd-click to show several · drag onto a folder to move it".into()
                 };
                 // Any other folder previews what is inside it.
                 let preview = (card.is_empty() && response.hovered())
@@ -366,9 +358,12 @@ impl PhotoSortApp {
                         .zip(app.folder_person(&path))
                         .is_some_and(|(a, b)| a != b)
                 };
-                let folder_here = response
-                    .dnd_hover_payload::<FolderDrag>()
-                    .is_some_and(|source| can_nest(&source.0, &path) || same_person(self, &source.0));
+                let folder_here =
+                    response
+                        .dnd_hover_payload::<FolderDrag>()
+                        .is_some_and(|source| {
+                            can_nest(&source.0, &path) || same_person(self, &source.0)
+                        });
                 if editable && (photos || folder_here) {
                     ui.painter().rect_stroke(
                         response.rect,
@@ -380,8 +375,7 @@ impl PhotoSortApp {
                 // Taking a payload of the other type would drop it.
                 if editable
                     && photos
-                    && let Some(payload) =
-                        response.dnd_release_payload::<grouping::PhotoDrag>()
+                    && let Some(payload) = response.dnd_release_payload::<grouping::PhotoDrag>()
                 {
                     drop = Some((payload.0.clone(), path.clone()));
                 }
@@ -412,10 +406,6 @@ impl PhotoSortApp {
             }
         });
         self.board.tree_view = (output.state.offset.y, output.inner_rect.height());
-        if let Some(note) = note {
-            ui.add_space(S2);
-            ui.add(egui::Label::new(RichText::new(note.text()).small().color(MUTED)).wrap());
-        }
         if let Some((path, modifiers)) = select {
             self.board_choose_folder(&path, modifiers);
         }
@@ -572,9 +562,7 @@ impl PhotoSortApp {
                         format!("Mark {count} for Trash")
                     }),
                 )
-                .on_hover_text(
-                    "Marks every photo and video in this folder and its subfolders. Nothing goes to Trash until you review the changes.",
-                )
+                .on_hover_text("Includes its subfolders")
                 .clicked()
             {
                 action = Some(FolderAction::Trash(path.to_owned()));
@@ -587,9 +575,7 @@ impl PhotoSortApp {
                     !self.busy && !self.scanning,
                     egui::Button::new("Move folder to Trash…"),
                 )
-                .on_hover_text(
-                    "Shows the whole folder, every file and empty folder in it, for review before anything goes to Trash",
-                )
+                .on_hover_text("Every file and empty folder in it")
                 .clicked()
         {
             action = Some(FolderAction::TrashFolder(folder));
@@ -682,7 +668,7 @@ impl PhotoSortApp {
             egui::WidgetType::Button,
             "Folders",
         )
-        .on_hover_text("Folders · drag photos onto one to move them");
+        .on_hover_text("Folders");
         let mut open = self.board.folders_open;
         if response.clicked() {
             open = !open;

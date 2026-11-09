@@ -234,7 +234,7 @@ fn pending_recovery(app: &mut PhotoSortApp) {
         missing: vec![model_assets::Id::Scene],
         runtime_missing: true,
     });
-    app.status = "Local AI needs model setup · your current reviews are preserved".into();
+    app.status = "AI models needed · open AI models".into();
 }
 fn verified_setup() -> model_assets::State {
     model_assets::State {
@@ -330,7 +330,7 @@ fn repaired_models_update_footer_and_dialog_without_restarting_analysis() {
     assert!(
         app.model_recovery_status(&model_assets::State::default())
             .unwrap()
-            .contains("needs model setup")
+            .contains("AI models needed")
     );
     let mut state = verified_setup();
     state.running = true;
@@ -341,7 +341,7 @@ fn repaired_models_update_footer_and_dialog_without_restarting_analysis() {
     );
     state.running = false;
     let message = app.model_recovery_status(&state).unwrap();
-    assert!(message.contains("Models ready"));
+    assert!(message.contains("AI models ready"));
     let ctx = egui::Context::default();
     theme_install(&ctx);
     ctx.enable_accesskit();
@@ -369,14 +369,15 @@ fn repaired_models_update_footer_and_dialog_without_restarting_analysis() {
             .filter_map(|(_, n)| n.label().or_else(|| n.value()).map(str::to_owned))
             .collect();
     }
-    assert!(!labels.iter().any(
-        |label| label.starts_with("The native AI runtime is missing")
-            || label.starts_with("The AI runtime is missing")
-    ));
+    assert!(
+        !labels
+            .iter()
+            .any(|label| label.starts_with("The AI runtime is missing"))
+    );
     assert!(
         labels
             .iter()
-            .any(|label| label.starts_with("The models this analysis needs are ready."))
+            .any(|label| label.starts_with("The models are ready."))
     );
     assert!(
         !labels
@@ -402,13 +403,13 @@ fn repaired_models_update_footer_and_dialog_without_restarting_analysis() {
         !labels
             .iter()
             .any(|label| label.starts_with("Needed for this analysis")
-                || label.starts_with("The models this analysis needs are ready."))
+                || label.starts_with("The models are ready."))
     );
     assert!(app.analysis_run.is_none());
     assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
 }
 #[test]
-fn model_panel_summarises_groups_and_links_every_model_source() {
+fn model_panel_groups_models_and_links_every_source() {
     let (_dir, mut app) = app();
     app.step = Step::Cull;
     pending_recovery(&mut app);
@@ -452,11 +453,6 @@ fn model_panel_summarises_groups_and_links_every_model_source() {
         .filter(|(role, _)| *role != egui::accesskit::Role::TextRun)
         .filter_map(|(_, l)| l.clone())
         .collect();
-    assert!(
-        labels
-            .iter()
-            .any(|l| l == "0 of 7 models installed · 0.0 MB downloaded or imported")
-    );
     // What the paused analysis needs comes first, then the shared and
     // single-step groups; nothing is said twice.
     for group in [

@@ -64,8 +64,8 @@ fn section_header(
             icon::FOLDER_SIMPLE,
             leaf(path).to_owned(),
             path.rsplit_once('/')
-                .map(|(parent, _)| format!("{root} / {}", parent.replace('/', " / ")))
-                .unwrap_or_else(|| root.to_owned()),
+                .map(|(parent, _)| parent.replace('/', " / "))
+                .unwrap_or_default(),
         ),
     };
     let color = if hovered { INK } else { ACCENT };
@@ -261,9 +261,9 @@ impl PhotoSortApp {
             ui.centered_and_justified(|ui| {
                 ui.label(
                     RichText::new(if focus.len() > 1 {
-                        "These folders are empty. Drag photos here from another folder."
+                        "These folders are empty. Drag photos here."
                     } else {
-                        "This folder is empty. Drag photos here from another folder."
+                        "This folder is empty. Drag photos here."
                     })
                     .color(MUTED),
                 );
@@ -366,7 +366,6 @@ impl PhotoSortApp {
         let mut keep: Option<Vec<MediaId>> = None;
         let mut drop: Option<(Vec<MediaId>, String)> = None;
         let mut select_section: Option<(usize, egui::Modifiers)> = None;
-        let mut faceless = false;
         let active_position = self
             .active
             .and_then(|id| self.index.get(&id))
@@ -391,7 +390,8 @@ impl PhotoSortApp {
             if background.drag_started()
                 && let Some(start) = ui.input(|i| i.pointer.press_origin())
             {
-                let keep = ui.input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl);
+                let keep =
+                    ui.input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl);
                 let base = if keep {
                     self.selection.ordered(&self.media, &self.filtered)
                 } else {
@@ -442,14 +442,17 @@ impl PhotoSortApp {
             let section = |row: &Row| match row {
                 Row::Header(index) | Row::Tiles(index, _) => *index,
             };
-            let on_screen =
-                |i: usize| tops[i] + heights[i] > viewport.min.y + 8.0 && tops[i] < viewport.max.y - 8.0;
+            let on_screen = |i: usize| {
+                tops[i] + heights[i] > viewport.min.y + 8.0 && tops[i] < viewport.max.y - 8.0
+            };
             let looking = (
                 active_position
                     .and_then(|position| (0..rows.len()).find(|i| holds(&rows[*i], position)))
                     .filter(|i| on_screen(*i))
                     .map(|i| section(&rows[i])),
-                (0..rows.len()).find(|i| on_screen(*i)).map(|i| section(&rows[i])),
+                (0..rows.len())
+                    .find(|i| on_screen(*i))
+                    .map(|i| section(&rows[i])),
             );
             let first = bottoms.partition_point(|bottom| bottom + spacing < viewport.min.y);
             for ((row, top), height) in rows.iter().zip(tops).zip(heights).skip(first) {
@@ -478,8 +481,9 @@ impl PhotoSortApp {
                         let count = section.range.len();
                         let photos = count - section.videos;
                         let counts = match (photos, section.videos) {
-                            _ if section.path.is_none() && pending.is_none() => self
-                                .unplaced_phrase(photos, section.videos),
+                            _ if section.path.is_none() && pending.is_none() => {
+                                self.unplaced_phrase(photos, section.videos)
+                            }
                             (p, 0) => format!("{p} {}", if p == 1 { "photo" } else { "photos" }),
                             (0, v) => format!("{v} {}", if v == 1 { "video" } else { "videos" }),
                             (p, v) => format!(
@@ -488,25 +492,9 @@ impl PhotoSortApp {
                                 if v == 1 { "video" } else { "videos" }
                             ),
                         };
-                        // Faces offers its other choice right where those
-                        // photos are: one "No people" folder.
-                        let offer = section.path.is_none()
-                            && pending.is_none()
-                            && editable
-                            && self.group_mode == GroupMode::Faces
-                            && self.preferences.faceless
-                                == crate::core::preferences::Faceless::Stay
-                            && photos > 0
-                            // In a narrow board the toolbar's choice is enough.
-                            && rect.width() >= 480.0;
-                        // The text stops short of the offer at the right.
-                        let reserve = if offer { 210.0 } else { 0.0 };
                         section_header(
                             ui,
-                            egui::Rect::from_min_max(
-                                rect.min,
-                                egui::pos2(rect.right() - reserve, rect.bottom()),
-                            ),
+                            rect,
                             section.path.as_deref(),
                             &root,
                             &counts,
@@ -537,24 +525,6 @@ impl PhotoSortApp {
                                 }
                             }
                         }
-                        if offer {
-                            let label = format!(
-                                "Put them in a “{}” folder",
-                                crate::core::preferences::NO_PEOPLE
-                            );
-                            let size = egui::vec2(200.0, 24.0);
-                            let at = egui::Rect::from_min_size(
-                                egui::pos2(rect.right() - size.x, rect.bottom() - 16.0 - size.y / 2.0),
-                                size,
-                            );
-                            if ui
-                                .put(at, egui::Button::new(RichText::new(&label).small()))
-                                .on_hover_text("Photos without a recognized person go to one folder. You can switch back in the toolbar.")
-                                .clicked()
-                            {
-                                faceless = true;
-                            }
-                        }
                         let name = match section.path.as_deref() {
                             None if pending.is_some() => "Photos not grouped yet".to_owned(),
                             None => format!("Not moving · {counts}"),
@@ -564,7 +534,7 @@ impl PhotoSortApp {
                         response.widget_info(|| {
                             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name)
                         });
-                        let tip = "Click to select every item in this folder\nCtrl/Cmd-click adds it to the selection, or removes it\nShift-click selects everything from the last click through it";
+                        let tip = "Click to select its photos";
                         // A person's folder shows their faces larger on hover.
                         let path = self.board.sections[*index].path.clone();
                         let card = match &path {
@@ -688,9 +658,6 @@ impl PhotoSortApp {
         }
         if let Some(ids) = keep {
             self.board_keep_in_place(&ids);
-        }
-        if faceless {
-            self.change_faceless(crate::core::preferences::Faceless::Folder);
         }
     }
 }
