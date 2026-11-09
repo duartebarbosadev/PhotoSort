@@ -221,11 +221,16 @@ impl PhotoSortApp {
         let show_filmstrip = !side_strip && !beside_grid && ui.available_height() >= 360.0;
         let filmstrip_height = FILMSTRIP + 26.0 + if self.strip_names() { STRIP_NAME } else { 0.0 };
         let short = ui.ctx().content_rect().height() < 760.0;
-        let controls_height = match (compact, short) {
-            (true, true) => 80.0,
-            (true, false) => 100.0,
-            (false, _) => 60.0,
-        };
+        // The floating bar's height as last drawn: in a narrow panel its
+        // controls can wrap to a third row.
+        let bar_key = egui::Id::new(("review_bar_height", compact, self.step));
+        let controls_height =
+            ui.data(|d| d.get_temp::<f32>(bar_key))
+                .unwrap_or(match (compact, short) {
+                    (true, true) => 80.0,
+                    (true, false) => 100.0,
+                    (false, _) => 60.0,
+                });
         let height = (ui.available_height()
             - controls_height
             - if show_filmstrip {
@@ -347,6 +352,7 @@ impl PhotoSortApp {
         if background.is_some_and(|response| response.clicked()) {
             self.comparison_focus = None;
         }
+        let bar_top = ui.cursor().top();
         ui.add_space(S1);
         floating_bar(
             ui,
@@ -440,6 +446,13 @@ impl PhotoSortApp {
                 }
             },
         );
+        // Room for the bar as drawn now, from the next frame; a different
+        // height redraws at once.
+        let used = (ui.cursor().top() - bar_top).ceil();
+        if (used - controls_height).abs() > 0.5 {
+            ui.data_mut(|d| d.insert_temp(bar_key, used));
+            ui.ctx().request_repaint();
+        }
         if show_filmstrip {
             ui.add_space(S1);
             self.photos_header(ui, true);
