@@ -226,15 +226,6 @@ impl Step {
             Self::Cull => "Cull",
         }
     }
-    pub fn subtitle(self) -> &'static str {
-        match self {
-            Self::Organize => "Give every story a home.",
-            Self::EasyDelete => "Less noise. More moments.",
-            Self::Rotation => "A fresh perspective.",
-            Self::PickBest => "Find the frame that feels right.",
-            Self::Cull => "Keep what matters.",
-        }
-    }
 }
 
 /// Publish review marks while preserving independently staged metadata changes.

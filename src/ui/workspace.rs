@@ -14,8 +14,6 @@ mod dialogs;
 mod events;
 #[path = "grouping.rs"]
 mod grouping;
-#[path = "hints.rs"]
-mod hints;
 #[path = "inspector.rs"]
 mod inspector;
 #[path = "intro.rs"]

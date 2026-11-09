@@ -190,13 +190,6 @@ impl PhotoSortApp {
                     }
                     ui.separator();
                     ui.label("Ctrl/Cmd+Alt+1–5 switches to a visible workflow step.");
-                    for step in Step::ALL {
-                        ui.label(format!(
-                            "{}: {}",
-                            step.title(),
-                            hints::workflow_hint(step)
-                        ));
-                    }
                     ui.label("All analysis runs on your computer. Nothing is uploaded.");
                 });
         }

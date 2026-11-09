@@ -22,13 +22,9 @@ impl Step {
 const STEP_HEIGHT: f32 = 28.0;
 /// Inset between the step control's container and its segments.
 const STEP_INSET: f32 = 3.0;
-/// A step's label in the bottom bar: "1. Organize", or just "1" when narrow.
-fn step_label(step: Step, compact: bool) -> String {
-    if compact {
-        (step.index() + 1).to_string()
-    } else {
-        format!("{}. {}", step.index() + 1, step.title())
-    }
+/// A step's label in the bottom bar: its name, or its icon when narrow.
+fn step_label(step: Step, compact: bool) -> &'static str {
+    if compact { step.icon() } else { step.title() }
 }
 /// Widths of the step control's segments.
 fn step_tab_widths(ui: &egui::Ui, steps: &[Step], compact: bool) -> Vec<f32> {
@@ -37,7 +33,7 @@ fn step_tab_widths(ui: &egui::Ui, steps: &[Step], compact: bool) -> Vec<f32> {
         .map(|step| {
             let text = ui
                 .painter()
-                .layout_no_wrap(step_label(*step, compact), semibold(11.5), INK)
+                .layout_no_wrap(step_label(*step, compact).into(), semibold(11.5), INK)
                 .size()
                 .x;
             text + 2.0 * if compact { S2 + 2.0 } else { S3 + 2.0 }
@@ -51,7 +47,7 @@ fn step_bar_width(ui: &egui::Ui, steps: &[Step], compact: bool) -> f32 {
 
 impl PhotoSortApp {
     /// The workflow steps as a segmented control in the bottom bar: one
-    /// rounded container, numbered labels, and an accent pill on the current
+    /// rounded container, one label per step, and an accent pill on the current
     /// step that slides to the next one when the step changes.
     fn step_tabs(&mut self, ui: &mut egui::Ui, area: egui::Rect, compact: bool) {
         let steps = self.navigation_steps();
@@ -75,13 +71,7 @@ impl PhotoSortApp {
             let active = *step == self.step;
             let enabled = active || !self.busy;
             let tip = if enabled {
-                format!(
-                    "{} · {}\nStep {} · Ctrl/Cmd+Alt+{}",
-                    step.title(),
-                    step.subtitle(),
-                    step.index() + 1,
-                    step.index() + 1
-                )
+                format!("{} · Ctrl/Cmd+Alt+{}", step.title(), step.index() + 1)
             } else {
                 format!(
                     "{} · available when the current task finishes",
@@ -91,9 +81,9 @@ impl PhotoSortApp {
             let response = ui
                 .interact(rect, egui::Id::new(("step-tab", *step)), Sense::click())
                 .on_hover_text(tip);
-            let name = step_label(*step, false);
+            let name = step.title();
             response.widget_info(|| {
-                egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, &name)
+                egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, name)
             });
             let ctx = ui.ctx();
             let hover = ctx.animate_bool_with_time(
@@ -161,7 +151,7 @@ impl PhotoSortApp {
             } else {
                 medium(11.5)
             };
-            let text = painter.layout_no_wrap(step_label(step, compact), font, color);
+            let text = painter.layout_no_wrap(step_label(step, compact).into(), font, color);
             painter.galley(rect.center() - text.size() / 2.0, text, color);
         }
     }
@@ -318,7 +308,7 @@ impl PhotoSortApp {
                 }
             });
     }
-    /// The status line: what is happening, then keyboard hints when room is left.
+    /// The status line: what is happening, then the Shortcuts button.
     fn footer_status(&mut self, ui: &mut egui::Ui) {
         let recovery_status = self.model_recovery_status(&self.runtime.model_assets.state());
         let scoped_status = self.workflow_status();
@@ -347,42 +337,39 @@ impl PhotoSortApp {
             .layout_no_wrap(status.clone(), font, MUTED)
             .size()
             .x;
-        // The status message has priority, then the Shortcuts button; hints
-        // use only what is left, dropping the least useful whole hints first
-        // instead of cutting one off.
-        let mut room = ui.available_width() - status_width - S3;
-        let sheet = self.root.is_some()
-            && room >= hints::shortcuts_button_width(ui, false) + ui.spacing().item_spacing.x;
-        let labelled = sheet && room > 260.0;
-        if sheet {
-            room -= hints::shortcuts_button_width(ui, labelled) + ui.spacing().item_spacing.x;
-        }
-        let mut shown = Vec::new();
-        if sheet && self.preferences.show_shortcuts {
-            room -= S3;
-            for hint in hints::step_hints(self.step) {
-                let width = hints::hint_width(ui, hint) + hints::HINT_GAP;
-                if width > room {
-                    break;
-                }
-                room -= width;
-                shown.push(hint);
-            }
-        }
+        // The status message has priority; the Shortcuts button drops its
+        // label, then itself, when the bar runs out of room.
+        let room = ui.available_width() - status_width - S3;
+        let gap = ui.spacing().item_spacing.x;
+        let shortcuts = self.root.is_some() && room >= shortcuts_button_width(ui, false) + gap;
+        let labelled = shortcuts && room > 260.0;
         ui.add(egui::Label::new(RichText::new(&status).small().color(MUTED)).truncate())
             .on_hover_text(&status);
-        if !shown.is_empty() {
-            ui.add_space(S1);
-            divider(ui);
-            ui.add_space(S1);
-            let spacing = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, hints::HINT_GAP);
-            for hint in shown {
-                hints::hint_row(ui, hint, MUTED);
-            }
-            ui.spacing_mut().item_spacing.x = spacing;
-        }
-        if sheet {
+        if shortcuts {
             self.shortcuts_button(ui, labelled);
+        }
+    }
+    /// The Shortcuts button: opens the keyboard shortcuts window.
+    fn shortcuts_button(&mut self, ui: &mut egui::Ui, labelled: bool) {
+        let button = ui.add(
+            egui::Button::new(
+                RichText::new(shortcuts_label(labelled))
+                    .size(11.5)
+                    .color(MUTED),
+            )
+            .fill(PANEL)
+            .stroke(Stroke::new(1.0, LINE))
+            .corner_radius(R_CONTROL)
+            .min_size(egui::vec2(26.0, 22.0)),
+        );
+        // The icon alone needs its name on hover; the labelled button shows it.
+        let button = if labelled {
+            button
+        } else {
+            button.on_hover_text("Keyboard shortcuts")
+        };
+        if named(button, egui::WidgetType::Button, "Keyboard shortcuts").clicked() {
+            self.help = true;
         }
     }
     /// Stop and cancel controls, progress and the photo count, added right
@@ -786,6 +773,24 @@ impl PhotoSortApp {
     }
 }
 
+fn shortcuts_label(labelled: bool) -> String {
+    use egui_phosphor::regular as icon;
+    if labelled {
+        format!("{}  Shortcuts", icon::KEYBOARD)
+    } else {
+        icon::KEYBOARD.to_owned()
+    }
+}
+/// Width of the Shortcuts button, so the status line knows its room.
+fn shortcuts_button_width(ui: &egui::Ui, labelled: bool) -> f32 {
+    let text = ui
+        .painter()
+        .layout_no_wrap(shortcuts_label(labelled), FontId::proportional(11.5), MUTED)
+        .size()
+        .x;
+    (text + 2.0 * ui.spacing().button_padding.x).max(26.0)
+}
+
 /// A left-aligned card centred in the welcome column.
 fn welcome_section(ui: &mut egui::Ui, width: f32, title: &str, body: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
@@ -1085,14 +1090,14 @@ mod step_bar_tests {
         // Staged rotations would ask to resolve them before leaving.
         app.decisions.clear();
         app.busy = true;
-        click_label(&mut app, &ctx, size, "4. Pick Best");
+        click_label(&mut app, &ctx, size, "Pick Best");
         assert_eq!(app.step, Step::Cull, "a busy app keeps its step");
         app.busy = false;
         // A photo clicked in Cull's comparison is not what Copy or Trash act
         // on in the next step, or in the next folder.
         app.comparison_focus = Some(ids[0]);
         assert!(app.active.is_some());
-        click_label(&mut app, &ctx, size, "4. Pick Best");
+        click_label(&mut app, &ctx, size, "Pick Best");
         assert_eq!(app.step, Step::PickBest);
         assert_eq!(app.comparison_focus, None);
         // Cull's photo is not shown here, so Copy or Alt+R must not act on it.
@@ -1103,47 +1108,21 @@ mod step_bar_tests {
         app.runtime.shutdown();
     }
     #[test]
-    fn shortcut_hints_follow_the_preference_and_never_cut_a_hint() {
+    fn step_tabs_show_names_and_the_shortcuts_button_opens_the_keyboard_window() {
         let (_temp, mut app, _) = app();
         let ctx = egui::Context::default();
         theme_install(&ctx);
         ctx.enable_accesskit();
-        let hints: Vec<String> = hints::step_hints(Step::Cull)
-            .iter()
-            .map(hints::Hint::text)
-            .collect();
-        let shown = |nodes: &[(String, egui::Rect)]| {
-            hints
-                .iter()
-                .filter(|h| !found(nodes, h).is_empty())
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        let nodes = rendered(&mut app, &ctx, egui::vec2(1800.0, 900.0));
-        let wide = shown(&nodes);
-        assert!(wide.len() >= 2, "{wide:?}");
-        // The most useful hints come first; a narrower bar drops from the end.
-        assert_eq!(wide, hints[..wide.len()]);
-        let steps = found(&nodes, "1. Organize")[0].left();
-        for hint in &wide {
-            assert!(
-                found(&nodes, hint)[0].right() < steps,
-                "{hint} overlaps the steps"
-            );
+        let size = egui::vec2(1800.0, 900.0);
+        let nodes = rendered(&mut app, &ctx, size);
+        for step in Step::ALL {
+            assert_eq!(found(&nodes, step.title()).len(), 1, "{step:?}");
         }
-        let narrow = shown(&rendered(&mut app, &ctx, egui::vec2(1200.0, 900.0)));
-        assert!(
-            narrow.len() < wide.len() && wide.starts_with(&narrow),
-            "{narrow:?}"
-        );
-        app.preferences.show_shortcuts = false;
-        let nodes = rendered(&mut app, &ctx, egui::vec2(1800.0, 900.0));
-        assert!(shown(&nodes).is_empty());
-        assert_eq!(
-            found(&nodes, "Keyboard shortcuts").len(),
-            1,
-            "the sheet stays reachable"
-        );
+        let steps = found(&nodes, "Organize")[0].left();
+        assert!(found(&nodes, "Keyboard shortcuts")[0].right() < steps);
+        assert!(!app.help);
+        click_label(&mut app, &ctx, size, "Keyboard shortcuts");
+        assert!(app.help);
         app.runtime.shutdown();
     }
     #[test]
@@ -1163,7 +1142,7 @@ mod step_bar_tests {
             app.set_step(Step::Rotation);
             time += 1.0 / 60.0;
             let nodes = frame_at(&mut app, &ctx, time, Vec::new());
-            let target = *found(&nodes, "3. Fix Rotation")[0];
+            let target = *found(&nodes, "Fix Rotation")[0];
             let moving = indicator(&ctx);
             if reduce {
                 assert!(

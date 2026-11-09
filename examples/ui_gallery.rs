@@ -424,7 +424,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             if name.contains("shortcuts") {
-                // The Shortcuts button in the bottom bar opens its sheet.
+                // The Shortcuts button in the bottom bar opens the shortcuts window.
                 use egui_kittest::kittest::Queryable;
                 harness.get_by_label("Keyboard shortcuts").click();
                 for _ in 0..5 {
