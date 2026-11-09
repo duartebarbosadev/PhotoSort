@@ -452,10 +452,10 @@ impl PhotoSortApp {
         }
         if self.analysis_run.is_some() {
             let cancel = if self.bar_fit >= Fit::Icons {
-                bar_icon(ui, true, false, icon::STOP, "Cancel analysis")
+                bar_icon(ui, true, false, icon::X_CIRCLE, "Cancel analysis")
                     .on_hover_text("Cancel analysis")
             } else {
-                icon_text_button(ui, true, false, icon::STOP, "Cancel analysis")
+                icon_text_button(ui, true, false, icon::X_CIRCLE, "Cancel analysis")
             };
             if cancel.clicked() {
                 self.cancel_analysis();

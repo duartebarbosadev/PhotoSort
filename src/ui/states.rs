@@ -445,7 +445,7 @@ fn progress_card(ui: &mut egui::Ui, activity: &Activity, centred: bool) -> bool 
                 // running under it.
                 ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                     if activity.cancellable {
-                        cancel = icon_text_button(ui, true, false, icon::STOP, "Cancel")
+                        cancel = icon_text_button(ui, true, false, icon::X_CIRCLE, "Cancel")
                             .on_hover_text("Cancel analysis · completed results are kept")
                             .clicked();
                     }
