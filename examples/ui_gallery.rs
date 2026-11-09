@@ -5,7 +5,10 @@
 //! temporary too, so nothing outside the output directory is written.
 use eframe::egui;
 use egui_kittest::Harness;
-use photosort::{core::model::Step, ui::PhotoSortApp};
+use photosort::{
+    core::model::Step,
+    ui::{MIN_WINDOW_WIDTH, PhotoSortApp},
+};
 use std::{path::PathBuf, time::Duration};
 
 fn main() -> anyhow::Result<()> {
@@ -241,13 +244,13 @@ fn main() -> anyhow::Result<()> {
             "07b-cull-grid-narrow",
             Some(Step::Cull),
             false,
-            [640.0, 700.0],
+            [MIN_WINDOW_WIDTH, 700.0],
         ),
         (
             "10c-organize-narrow",
             Some(Step::Organize),
             false,
-            [640.0, 700.0],
+            [MIN_WINDOW_WIDTH, 700.0],
         ),
         // Comparing in a compact window: the preview keeps to its column.
         (

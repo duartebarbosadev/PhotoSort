@@ -111,39 +111,91 @@ pub(super) fn overflow_popover(
     ui.ctx().data_mut(|d| d.insert_temp(id, open));
 }
 
+/// Makes `rect` work as the window's title bar: dragging it moves the
+/// window, and a double-click maximises or restores it (on macOS, what
+/// System Settings sets for title bars). Widgets added after it stay usable.
+fn title_bar(ui: &mut egui::Ui, rect: egui::Rect, id: &str) {
+    let title = ui.interact(rect, egui::Id::new(id), Sense::click_and_drag());
+    if title.drag_started() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+    if title.double_clicked() {
+        crate::ui::platform::title_bar_double_click(ui.ctx());
+    }
+}
+
 impl PhotoSortApp {
-    /// The top of a sidebar that runs up beside the bar. On macOS it holds
-    /// the window's buttons and, like the bar, moves and zooms the window;
-    /// elsewhere the sidebar's contents start at the top.
-    pub(super) fn sidebar_title_band(&self, ui: &mut egui::Ui, top_margin: f32) {
-        if !self.window_buttons {
+    /// Whether the bar is the window's title bar: on macOS, with the
+    /// window's buttons in it, and on Windows, which has no native frame.
+    fn is_title_bar(&self) -> bool {
+        self.window_buttons || self.window_frame
+    }
+
+    /// The top of a sidebar that runs up beside the bar, as tall as the bar
+    /// and part of the window's title bar like it. Left: room for the
+    /// window's buttons on macOS, the app icon elsewhere. Right: Open folder
+    /// and Menu. A sidebar below the bar starts with its own contents.
+    pub(super) fn sidebar_title_band(&mut self, ui: &mut egui::Ui, top_margin: f32) {
+        let inner = ui.max_rect();
+        let top = inner.top() - top_margin;
+        if top > ui.ctx().content_rect().top() + 0.5 {
             return;
         }
-        let rect = egui::Rect::from_min_max(
-            egui::pos2(ui.max_rect().left(), ui.max_rect().top() - top_margin),
-            egui::pos2(
-                ui.max_rect().right(),
-                ui.max_rect().top() + HEADER_HEIGHT - top_margin,
-            ),
-        );
-        let title = ui.interact(
-            rect,
-            egui::Id::new("sidebar-title-bar"),
-            Sense::click_and_drag(),
-        );
-        if title.drag_started() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        let band = egui::Rect::from_x_y_ranges(inner.x_range(), top..=top + HEADER_HEIGHT);
+        if self.is_title_bar() {
+            title_bar(ui, band, "sidebar-title-bar");
         }
-        if title.double_clicked() {
-            crate::ui::platform::title_bar_double_click();
+        let mut row = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(band)
+                .layout(egui::Layout::left_to_right(Align::Center)),
+        );
+        row.spacing_mut().button_padding = egui::vec2(S2, 3.0);
+        if !self.window_buttons {
+            row.add_space(S1);
+            self.folder_logo(&mut row);
         }
+        row.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+            self.app_menu(ui, true, false);
+            self.open_folder_button(ui);
+        });
         ui.add_space(HEADER_HEIGHT - top_margin);
     }
-    /// The one bar above the photos. Left: the app icon and the folder, then
-    /// the step's own controls. Right: the step's actions, a divider, then
-    /// Review changes, Open folder and Menu. When the window narrows, labels
-    /// become icons, then captions go, then the step's secondary controls
-    /// move into a popover; nothing is clipped or overlaps.
+
+    /// The app icon. With a folder open, its tooltip names the folder and
+    /// its full path.
+    fn folder_logo(&self, ui: &mut egui::Ui) {
+        let logo = crate::ui::brand::app_logo(ui, 16.0);
+        if let Some(root) = &self.root {
+            let name = root.file_name().unwrap_or_default().to_string_lossy();
+            logo.on_hover_text(format!("{name}\n{}", root.display()));
+        }
+    }
+
+    /// Open folder as a row-high icon, like Menu beside it.
+    fn open_folder_button(&mut self, ui: &mut egui::Ui) {
+        let name = "Open folder… (Ctrl/Cmd+O)";
+        if bar_icon(
+            ui,
+            !self.busy,
+            false,
+            egui_phosphor::regular::FOLDER_OPEN,
+            name,
+        )
+        .on_hover_text(name)
+        .clicked()
+        {
+            self.select_folder();
+        }
+    }
+
+    /// The one bar above the photos. Left: the app icon and the folder,
+    /// Open folder and Menu (unless a sidebar beside the bar holds them),
+    /// then the step's own controls. Right: the step's actions, a divider,
+    /// then Review changes. When the window narrows, labels become icons,
+    /// then captions go and Open folder moves into Menu, then the step's
+    /// secondary controls move into a popover; nothing is clipped or
+    /// overlaps. On Windows the window's buttons follow at the far right.
     pub(super) fn header(&mut self, root: &mut egui::Ui) {
         egui::Panel::top("header")
             .exact_size(HEADER_HEIGHT)
@@ -156,32 +208,25 @@ impl PhotoSortApp {
             .show(root, |ui| {
                 ui.spacing_mut().button_padding = egui::vec2(S2, 3.0);
                 let mut bar = ui.max_rect();
-                ui.painter().hline(
-                    bar.x_range().expand(S3),
-                    bar.bottom() - 0.5,
-                    Stroke::new(1.0, LINE),
-                );
-                // macOS: the bar is the title bar. The window's buttons sit
-                // at its left, and its empty space moves and zooms the window.
+                let whole = bar.expand2(egui::vec2(S3, 0.0));
+                ui.painter()
+                    .hline(whole.x_range(), bar.bottom() - 0.5, Stroke::new(1.0, LINE));
+                // A sidebar that runs up beside the bar holds the app's own
+                // buttons, and on macOS the window's.
+                let beside = whole.left() > ui.ctx().content_rect().left() + 0.5;
+                // macOS: the window's buttons sit at the bar's left.
                 self.window_buttons =
                     crate::ui::platform::place_window_buttons(HEADER_HEIGHT, BUTTONS_INSET);
-                if self.window_buttons {
-                    let title = ui.interact(
-                        bar.expand2(egui::vec2(S3, 0.0)),
-                        egui::Id::new("title-bar"),
-                        Sense::click_and_drag(),
-                    );
-                    if title.drag_started() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                    }
-                    if title.double_clicked() {
-                        crate::ui::platform::title_bar_double_click();
-                    }
-                    // A sidebar beside the bar holds them instead.
-                    let beside = bar.left() - S3 > ui.ctx().content_rect().left() + 0.5;
-                    if !beside {
-                        bar.min.x += BUTTONS_ROOM - S3;
-                    }
+                if self.window_buttons && !beside {
+                    bar.min.x += BUTTONS_ROOM - S3;
+                }
+                // Windows: they sit at its right, drawn over everything.
+                if self.window_frame {
+                    bar.max.x = whole.right() - window_frame::BUTTONS_WIDTH - S2;
+                }
+                // The bar's empty space moves and maximises the window.
+                if self.is_title_bar() {
+                    title_bar(ui, whole, "title-bar");
                 }
                 if self.root.is_none() {
                     let mut ui = ui.new_child(
@@ -192,35 +237,40 @@ impl PhotoSortApp {
                     ui.horizontal_centered(|ui| {
                         crate::ui::brand::app_logo(ui, 16.0);
                         ui.label(RichText::new("PhotoSort").font(semibold(12.5)));
+                        ui.add_space(S1);
+                        self.open_folder_button(ui);
+                        self.app_menu(ui, true, false);
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            self.app_actions(ui, Fit::Full);
+                            self.review_button(ui, Fit::Full);
                         });
                     });
                     return;
                 }
-                self.bar(ui, bar);
+                self.bar(ui, bar, beside);
             });
     }
 
     /// The bar's contents with a folder open, laid out at the roomiest fit
     /// that fits `bar`.
-    fn bar(&mut self, ui: &mut egui::Ui, bar: egui::Rect) {
+    fn bar(&mut self, ui: &mut egui::Ui, bar: egui::Rect, beside: bool) {
         let step = self.step.index();
         let fit = choose(&self.bar_needs[step], self.bar_fit, bar.width());
         self.bar_fit = fit;
         // Only the step's own controls and actions count as changing the
         // view; opening a folder from Menu brings its own saved view.
-        let mut before = None;
+        let mut changed = false;
         let right = ui
             .scope_builder(
                 egui::UiBuilder::new()
                     .max_rect(bar)
                     .layout(egui::Layout::right_to_left(Align::Center)),
                 |ui| {
-                    self.app_actions(ui, fit);
-                    before = Some(self.view_state());
-                    divider(ui);
+                    if self.review_button(ui, fit) {
+                        divider(ui);
+                    }
+                    let before = self.view_state();
                     ui.add_enabled_ui(!self.busy, |ui| self.step_actions(ui, fit));
+                    changed |= self.view_state() != before;
                 },
             )
             .response
@@ -230,7 +280,7 @@ impl PhotoSortApp {
                 egui::UiBuilder::new()
                     .max_rect(bar)
                     .layout(egui::Layout::left_to_right(Align::Center)),
-                |ui| self.identity(ui, fit),
+                |ui| self.identity(ui, fit, beside),
             )
             .response
             .rect;
@@ -248,7 +298,9 @@ impl PhotoSortApp {
                     let clip = room.expand2(egui::vec2(1.0, S1));
                     ui.set_clip_rect(clip.intersect(ui.clip_rect()));
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    let before = self.view_state();
                     ui.add_enabled_ui(!self.busy, |ui| self.step_controls(ui));
+                    changed |= self.view_state() != before;
                 },
             )
             .response
@@ -267,7 +319,7 @@ impl PhotoSortApp {
             self.bar_fit = choose(&self.bar_needs[step], fit, bar.width());
             ui.ctx().request_discard("top bar fit");
         }
-        if before.is_some_and(|before| self.view_state() != before) {
+        if changed {
             self.pending_bookmark = None;
         }
     }
@@ -314,14 +366,16 @@ impl PhotoSortApp {
                     .is_some_and(|drawn| drawn.saturating_add(1) >= frame))
     }
 
-    /// The app icon and, while there is room and no sidebar names it, the
-    /// folder's name. Its full path is in the tooltip either way.
-    fn identity(&mut self, ui: &mut egui::Ui, fit: Fit) {
+    /// The bar's left: the app icon, the folder's name while there is room
+    /// and no sidebar names it, then Open folder and Menu. A sidebar that
+    /// runs up beside the bar holds Open folder and Menu instead, and the
+    /// icon too where no window buttons take its place. The folder's full
+    /// path is in a tooltip either way.
+    fn identity(&mut self, ui: &mut egui::Ui, fit: Fit, beside: bool) {
         let Some(root) = self.root.clone() else {
             return;
         };
         let path = root.display().to_string();
-        let logo = crate::ui::brand::app_logo(ui, 16.0);
         let name = root.file_name().unwrap_or_default().to_string_lossy();
         let widest = match fit {
             _ if self.sidebar_names_folder(ui.ctx()) => 0.0,
@@ -329,9 +383,11 @@ impl PhotoSortApp {
             Fit::Icons => 140.0,
             Fit::Tight | Fit::Overflow => 0.0,
         };
-        if widest == 0.0 {
-            logo.on_hover_text(format!("{name}\n{path}"));
-        } else {
+        let logo = !beside || self.window_buttons;
+        if logo {
+            self.folder_logo(ui);
+        }
+        if widest > 0.0 {
             let text = RichText::new(name.as_ref()).font(semibold(12.5));
             let natural = ui
                 .painter()
@@ -344,54 +400,58 @@ impl PhotoSortApp {
             )
             .on_hover_text(path);
         }
-        ui.add_space(S1);
-        divider(ui);
+        if !beside {
+            ui.add_space(S1);
+            let tight = fit >= Fit::Tight;
+            if !tight {
+                self.open_folder_button(ui);
+            }
+            self.app_menu(ui, true, tight);
+        }
+        if logo || widest > 0.0 || !beside {
+            ui.add_space(S1);
+            divider(ui);
+        }
     }
 
-    /// Review changes, Open folder and Menu, right to left.
-    fn app_actions(&mut self, ui: &mut egui::Ui, fit: Fit) {
-        use egui_phosphor::regular as icon;
-        let tight = fit >= Fit::Tight;
-        self.app_menu(ui, fit >= Fit::Icons, tight);
-        if !tight
-            && icon_button(ui, icon::FOLDER_OPEN, "Open folder… (Ctrl/Cmd+O)").clicked()
-            && !self.busy
-        {
-            self.select_folder();
+    /// Review changes, the bar's primary action, while there is a library
+    /// or a plan to retry. True when it was shown.
+    fn review_button(&mut self, ui: &mut egui::Ui, fit: Fit) -> bool {
+        if self.catalog.is_none() && self.retry_plan.is_none() {
+            return false;
         }
-        if self.catalog.is_some() || self.retry_plan.is_some() {
-            // Accent only when there is something to review, so the bar
-            // doubles as the staged-change indicator.
-            let staged = self.staged_change_count();
-            let name = if staged > 0 {
-                format!(
-                    "Review {staged} {}",
-                    if staged == 1 { "change" } else { "changes" }
-                )
-            } else {
-                "Review changes".into()
-            };
-            let shown = match (tight, staged) {
-                (true, 0) => "Review".into(),
-                (true, _) => format!("Review {staged}"),
-                (false, _) => name.clone(),
-            };
-            let button = if staged > 0 || self.retry_plan.is_some() {
-                primary(shown)
-            } else {
-                egui::Button::new(RichText::new(shown).color(MUTED))
-            };
-            if named(
-                ui.add_enabled(!self.busy, button),
-                egui::WidgetType::Button,
-                &name,
+        // Accent only when there is something to review, so the bar
+        // doubles as the staged-change indicator.
+        let staged = self.staged_change_count();
+        let name = if staged > 0 {
+            format!(
+                "Review {staged} {}",
+                if staged == 1 { "change" } else { "changes" }
             )
-            .on_hover_text("Shift+Enter")
-            .clicked()
-            {
-                self.review_changes();
-            }
+        } else {
+            "Review changes".into()
+        };
+        let shown = match (fit >= Fit::Tight, staged) {
+            (true, 0) => "Review".into(),
+            (true, _) => format!("Review {staged}"),
+            (false, _) => name.clone(),
+        };
+        let button = if staged > 0 || self.retry_plan.is_some() {
+            primary(shown)
+        } else {
+            egui::Button::new(RichText::new(shown).color(MUTED))
+        };
+        if named(
+            ui.add_enabled(!self.busy, button),
+            egui::WidgetType::Button,
+            &name,
+        )
+        .on_hover_text("Shift+Enter")
+        .clicked()
+        {
+            self.review_changes();
         }
+        true
     }
 
     /// The step's actions at the right of the bar, before the divider:

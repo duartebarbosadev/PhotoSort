@@ -64,6 +64,8 @@ mod top_bar;
 mod tree_controls;
 #[path = "video.rs"]
 mod video;
+#[path = "window_frame.rs"]
+mod window_frame;
 #[cfg(test)]
 use super::test_frame::TestFrame;
 use super::theme::*;
@@ -296,6 +298,10 @@ pub struct PhotoSortApp {
     bar_needs: top_bar::BarNeeds,
     /// macOS: the window's own buttons sat in the top bar last frame.
     window_buttons: bool,
+    /// Windows: the window has no native frame. The top bar is its title
+    /// bar, and PhotoSort draws its buttons and resize edges. Off in unit
+    /// tests, which keep the bar as other systems show it.
+    window_frame: bool,
     companions: bool,
     group_mode: GroupMode,
     pending_location_layout: Option<crate::core::geography::Layout>,
@@ -418,6 +424,8 @@ impl PhotoSortApp {
         let ctx = cc.egui_ctx.clone();
         let runtime = Runtime::new(move || ctx.request_repaint());
         let mut app = Self::with_runtime(runtime, None);
+        // The app and the screenshot gallery; see `main`.
+        app.window_frame = cfg!(windows);
         app.load_preferences(crate::core::preferences::Preferences::path());
         app.crash_notice = crate::core::crash::unseen_report(&crate::core::crash::directory())
             .map(|path| (path, true));
@@ -579,6 +587,7 @@ impl PhotoSortApp {
             bar_fit: Default::default(),
             bar_needs: Default::default(),
             window_buttons: false,
+            window_frame: false,
             companions: true,
             group_mode: GroupMode::Current,
             pending_location_layout: None,
@@ -1905,6 +1914,7 @@ impl PhotoSortApp {
         self.handle_close_request(ctx, native_requested || smoke_requested);
         self.dialogs(ctx);
         self.intro_overlay(ctx);
+        self.draw_window_frame(ctx);
         // Include detail requested by the preview canvases drawn this frame,
         // then a few of Organize's sharp face crops.
         self.request_sharp_faces();
