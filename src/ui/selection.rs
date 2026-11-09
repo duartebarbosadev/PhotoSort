@@ -63,7 +63,7 @@ pub(super) fn trash_button_width(ui: &egui::Ui, all: bool) -> f32 {
 impl PhotoSortApp {
     pub(super) fn clear_trash_menu_item(&mut self, ui: &mut egui::Ui) {
         if ui.add_enabled(self.can_clear_trash_marks(), egui::Button::new("Clear all Trash marks · Alt+D"))
-            .on_hover_text("Clears marks across the whole library, including filtered-out and supporting files. Ratings and rotations are kept.")
+            .on_hover_text("Across the whole library, including photos hidden by filters. Ratings and rotations stay.")
             .clicked() {
             self.clear_all_trash_marks();
             ui.close();
@@ -93,9 +93,7 @@ impl PhotoSortApp {
         // A closed preview is a derived snapshot; unfinished recovery stays guarded.
         self.set_review_plan(None);
         self.changed_items(changed);
-        self.set_status(format!(
-            "Cleared {count} Trash marks · ratings and rotations kept"
-        ));
+        self.set_status(format!("Cleared {count} Trash marks"));
     }
     pub(super) fn stage_manual(&mut self, ids: impl IntoIterator<Item = MediaId>, change: Change) {
         if self.busy {
@@ -360,16 +358,18 @@ impl PhotoSortApp {
         // offered directly once it is possible.
         ui.add_enabled_ui(self.selection_ready(), |ui| {
             ui.menu_button(menu, |ui| {
-                if ui.button("Select all visible · Ctrl/Cmd+A").clicked() { self.select_all_visible(); ui.close(); }
-                if ui.button("Clear selection").clicked() { self.clear_library_selection(); ui.close(); }
+                if ui.button("Select all visible · Ctrl/Cmd+A").clicked() {
+                    self.select_all_visible();
+                    ui.close();
+                }
+                if ui.button("Clear selection").clicked() {
+                    self.clear_library_selection();
+                    ui.close();
+                }
                 ui.separator();
                 self.selection_actions(ui);
             });
-            if compare
-                && ui.button("Compare selected")
-                    .on_hover_text("Compare 2–9 selected photos. Larger selections can still be rated, rotated or marked together.")
-                    .clicked()
-            {
+            if compare && ui.button("Compare selected").clicked() {
                 self.compare_selection();
             }
         });

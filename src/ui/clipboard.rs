@@ -1,5 +1,5 @@
 //! Cmd/Ctrl+C copies the selected photos to the system clipboard, with a toast
-//! saying what was copied and where it can be pasted.
+//! saying what was copied.
 use super::*;
 use crate::core::clipboard::Payload;
 
@@ -13,17 +13,7 @@ pub(super) struct Toast {
     since: Option<f64>,
 }
 
-fn file_manager() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "Finder"
-    } else if cfg!(target_os = "windows") {
-        "File Explorer"
-    } else {
-        "your file manager"
-    }
-}
-
-/// "Photo copied - paste it in Finder or any app", "3 photos copied - ...".
+/// "Photo copied", "3 photos copied".
 fn copied_text(media: &[Media]) -> String {
     let videos = media.iter().filter(|m| m.kind == MediaKind::Video).count();
     let noun = match (videos, media.len()) {
@@ -31,16 +21,12 @@ fn copied_text(media: &[Media]) -> String {
         (v, n) if v == n => "video",
         _ => "file",
     };
-    let place = file_manager();
     if let [_] = media {
         let mut noun = noun.to_owned();
         noun[..1].make_ascii_uppercase();
-        format!("{noun} copied - paste it in {place} or any app")
+        format!("{noun} copied")
     } else {
-        format!(
-            "{} {noun}s copied - paste them in {place} or any app",
-            media.len()
-        )
+        format!("{} {noun}s copied", media.len())
     }
 }
 

@@ -41,7 +41,7 @@ fn folder_trash_cancelled_plans_never_open_late_review_or_drop_kept_edits() {
     app.plan_stop = Some(Arc::new(std::sync::atomic::AtomicBool::new(false)));
     deliver(&mut app, vec![Event::Planned(Plan::default())]);
     assert!(!app.busy && app.plan.is_some() && app.plan_open);
-    assert_eq!(app.status, "File plan ready · review your changes");
+    assert!(app.status.is_empty());
 }
 #[test]
 fn regional_results_are_atomic_run_guarded_and_keep_subject_groups_separate() {

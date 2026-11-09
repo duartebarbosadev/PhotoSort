@@ -599,7 +599,7 @@ impl PhotoSortApp {
             apply_planned: false,
             file_names: HashMap::new(),
             status_scope: None,
-            status: "Ready when you are".into(),
+            status: String::new(),
             error: None,
             scanning: false,
             busy: false,
@@ -827,7 +827,7 @@ impl PhotoSortApp {
         self.scanning = true;
         self.root = Some(folder.clone());
         self.output = folder.display().to_string();
-        self.set_status("Discovering photos…".into());
+        self.clear_status();
         if let Err(e) = self.runtime.io(IoWork::Scan(folder)) {
             self.error = Some(e);
             self.scanning = false;
@@ -1171,7 +1171,7 @@ impl PhotoSortApp {
         self.organize_preview_requested = false;
         self.analysis_run = None;
         self.progress = None;
-        self.set_status("Analysis cancelled · completed results retained".into());
+        self.clear_status();
     }
     pub(super) fn can_start_analysis(&self) -> bool {
         !self.media.is_empty() && !self.scanning && !self.busy && self.analysis_run.is_none()
@@ -1244,7 +1244,7 @@ impl PhotoSortApp {
                 self.analysis_failures.clear();
                 self.analysis_successes = 0;
                 self.progress = Some((0, self.media.len()));
-                self.set_status("Analyzing locally · previews stay available".into());
+                self.clear_status();
             }
             Err(e) => self.error = Some(e),
         }
@@ -2149,7 +2149,7 @@ impl PhotoSortApp {
         self.analysis_run = Some(run);
         self.progress = Some((total / 3, total));
         self.progress_started = Instant::now().checked_sub(Duration::from_secs(40));
-        self.set_status("Analyzing locally · previews stay available".into());
+        self.clear_status();
         self.filter_dirty = true;
     }
     /// Shows Pick Best's analysis while the aesthetic model compiles, 72 s

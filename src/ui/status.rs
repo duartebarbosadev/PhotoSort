@@ -8,6 +8,10 @@ impl PhotoSortApp {
         self.status = message;
         self.status_scope = None;
     }
+    /// Nothing to say: what is running or finished is already on screen.
+    pub(super) fn clear_status(&mut self) {
+        self.set_status(String::new());
+    }
     /// The producer names its owner, including when it completes in the background.
     pub(super) fn set_workflow_status(&mut self, step: Step, message: String) {
         self.status = message;
@@ -36,10 +40,11 @@ impl PhotoSortApp {
         }) {
             return Cow::Borrowed(&self.status);
         }
-        Cow::Owned(if self.root.is_some() {
-            format!("{} items · {} ready", self.media.len(), self.step.title())
+        // Another step's message: the count and the step are already on screen.
+        Cow::Borrowed(if self.root.is_some() {
+            ""
         } else {
-            "Open a folder to begin".into()
+            "Open a folder to begin"
         })
     }
 }
@@ -200,11 +205,7 @@ mod tests {
             |ui| app.footer(ui),
         );
         let tree = output.platform_output.accesskit_update.unwrap();
-        assert!(
-            tree.nodes
-                .iter()
-                .any(|(_, n)| n.value() == Some("0 items · Cull ready"))
-        );
+        assert_eq!(app.workflow_status(), "");
         assert!(
             !tree
                 .nodes
@@ -219,19 +220,18 @@ mod tests {
     fn shared_activity_recovery_and_organize_mode_status_keep_their_correct_scope() {
         let temp = tempfile::tempdir().unwrap();
         let mut app = app(&temp);
-        app.set_organize_status(GroupMode::Faces, "People groups ready".into());
+        app.set_organize_status(GroupMode::Faces, "No faces found in these photos".into());
         app.step = Step::Organize;
         app.group_mode = GroupMode::Faces;
-        assert_eq!(app.workflow_status(), "People groups ready");
+        assert_eq!(app.workflow_status(), "No faces found in these photos");
         app.set_group_mode(GroupMode::Current);
-        assert!(!app.workflow_status().contains("People groups"));
+        assert!(!app.workflow_status().contains("No faces"));
         app.set_step(Step::Cull);
-        app.set_organize_status(GroupMode::Mixed, "Date and similarity groups ready".into());
-        assert!(!app.workflow_status().contains("similarity groups"));
+        app.set_organize_status(GroupMode::Mixed, "1 photo could not be analyzed".into());
+        assert!(!app.workflow_status().contains("could not be analyzed"));
         for message in [
-            "Discovering photos…",
-            "Analyzing locally · previews stay available",
-            "Applying reviewed changes…",
+            "Discovered 12 items…",
+            "Checking files and folders for Trash review…",
             "3 unfinished operations · Review changes to resolve",
         ] {
             app.set_status(message.into());

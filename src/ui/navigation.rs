@@ -334,12 +334,6 @@ impl PhotoSortApp {
             || self.browse_run.is_some()
         {
             ui.add(egui::Spinner::new().size(12.0));
-        } else {
-            ui.label(
-                RichText::new(egui_phosphor::regular::CHECK_CIRCLE)
-                    .color(GREEN)
-                    .small(),
-            );
         }
         let font = egui::TextStyle::Small.resolve(ui.style());
         let status_width = ui

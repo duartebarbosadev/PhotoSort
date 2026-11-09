@@ -52,31 +52,19 @@ impl PhotoSortApp {
     }
     /// A line above the photos whenever Cull shows only some of them, so a
     /// filter restored with the folder's saved view is never a surprise.
+    /// How many are shown is in the photos header below it.
     pub(super) fn cull_filter_notice(&mut self, ui: &mut egui::Ui) {
         let active = self.active_cull_filters();
         if active.is_empty() {
             return;
         }
-        let total = self.media.len();
         ui.horizontal(|ui| {
             ui.label(RichText::new(egui_phosphor::regular::FUNNEL).color(ACCENT));
-            ui.label(
-                RichText::new(format!(
-                    "Showing {} of {total} {}",
-                    self.filtered.len(),
-                    if total == 1 { "item" } else { "items" }
-                ))
-                .color(INK),
-            );
-            if ui
-                .small_button("Clear filters")
-                .on_hover_text("Show every photo and video in this folder")
-                .clicked()
-            {
+            let reasons = active.join(" · ");
+            if ui.small_button("Clear filters").clicked() {
                 self.clear_browse_filters();
             }
-            let reasons = active.join(" · ");
-            ui.add(egui::Label::new(RichText::new(&reasons).small().color(MUTED)).truncate())
+            ui.add(egui::Label::new(RichText::new(&reasons).color(INK)).truncate())
                 .on_hover_text(reasons);
         });
     }
@@ -239,14 +227,14 @@ impl PhotoSortApp {
         ui.horizontal(|ui| {
             ui.set_height(22.0);
             let count = self.filtered.len();
-            let mut text = format!("{count} {}", if count == 1 { "photo" } else { "photos" });
-            if self.grouped_view() {
-                let sets = self.photo_sets(ui.ctx()).sets;
-                text.push_str(&format!(
-                    " · {sets} similar {}",
-                    if sets == 1 { "set" } else { "sets" }
-                ));
-            }
+            let total = self.media.len();
+            let noun = if total == 1 { "photo" } else { "photos" };
+            // Similar sets are counted by their own headers.
+            let text = if count < total {
+                format!("{count} of {total} {noun}")
+            } else {
+                format!("{count} {noun}")
+            };
             ui.add(egui::Label::new(RichText::new(text).small().color(MUTED)).truncate());
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
@@ -486,7 +474,7 @@ impl PhotoSortApp {
                 if 3 % columns == 0 {
                     ui.end_row();
                 }
-                if ui.button("Clear browse filters").clicked() {
+                if ui.button("Clear filters").clicked() {
                     self.clear_browse_filters();
                 }
             });
@@ -632,7 +620,9 @@ impl PhotoSortApp {
                 .small()
                 .color(RED),
             )
-            .on_hover_text(format!("{text}. Restore access and retry metadata reading. Folder proposals wait for complete metadata; photos remain browsable."));
+            .on_hover_text(format!(
+                "{text}. Restore access, then read the remaining metadata."
+            ));
         }
     }
     pub(super) fn metadata_status(&mut self, ui: &mut egui::Ui) {
@@ -642,17 +632,29 @@ impl PhotoSortApp {
             return; // An empty row would still take a full line of height.
         }
         ui.horizontal_wrapped(|ui| {
-            if let Some((done, total)) = self.metadata_progress && self.metadata_run.is_some() {
+            if let Some((done, total)) = self.metadata_progress
+                && self.metadata_run.is_some()
+            {
                 ui.spinner();
                 ui.label(format!("Reading photo metadata · {done} / {total}"));
-                if ui.button("Cancel metadata reading").clicked() { self.cancel_metadata_index(); }
-            } else if self.metadata.len() < self.media.len() && ui.button("Read remaining metadata").clicked() {
+                if ui.button("Cancel metadata reading").clicked() {
+                    self.cancel_metadata_index();
+                }
+            } else if self.metadata.len() < self.media.len()
+                && ui.button("Read remaining metadata").clicked()
+            {
                 self.resume_suspended = false;
                 self.start_metadata_index();
             }
             if !self.metadata_failures.is_empty() {
-                ui.colored_label(RED, format!("{} files have unavailable metadata", self.metadata_failures.len()))
-                    .on_hover_text("Restore access and retry metadata reading. Folder proposals wait for complete metadata; photos remain browsable.");
+                ui.colored_label(
+                    RED,
+                    format!(
+                        "{} files have unavailable metadata",
+                        self.metadata_failures.len()
+                    ),
+                )
+                .on_hover_text("Restore access, then read the remaining metadata.");
             }
         });
     }

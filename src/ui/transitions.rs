@@ -104,9 +104,7 @@ impl PhotoSortApp {
                 .unwrap_or_default();
         }
         self.dirty = Some(Instant::now());
-        self.set_status(
-            "Unfinished file plan discarded · completed operations remain applied".into(),
-        );
+        self.clear_status();
         if let Some(destination) = self.after_apply.take() {
             self.continue_departure(destination);
         }
@@ -163,7 +161,7 @@ impl PhotoSortApp {
                     self.busy = true;
                     self.plan_open = false;
                     self.error = None;
-                    self.set_status("Applying reviewed changes…".into());
+                    self.clear_status();
                 }
                 Err(error) => {
                     self.set_review_plan(Some(plan));
@@ -178,9 +176,7 @@ impl PhotoSortApp {
             && self.applying_plan.is_some()
             && let Some(stop) = &self.apply_stop
             && !stop.swap(true, std::sync::atomic::Ordering::AcqRel)
-        {
-            self.set_status("Stopping file changes…".into());
-        }
+        {}
     }
     pub(super) fn has_unsaved_plan_extras(&self) -> bool {
         self.organize_changes_pending()
