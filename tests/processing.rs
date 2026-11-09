@@ -119,7 +119,7 @@ fn accepted_jobs_keep_their_thread_snapshot_and_reuse_measurements_after_a_chang
 fn backend_and_thread_snapshots_are_coherent_and_changes_remain_lazy() {
     use processing::Backend;
     let control = Control::default();
-    assert_eq!(control.snapshot_run().backend, Backend::platform_default());
+    assert_eq!(control.snapshot_run().backend, Backend::Auto);
     control.configure(Preferences {
         backend: Backend::CoreMl,
         mode: Mode::Custom,
@@ -148,15 +148,8 @@ fn backend_and_thread_snapshots_are_coherent_and_changes_remain_lazy() {
 #[test]
 fn backend_choice_persists() {
     use processing::Backend;
-    // New installs use Automatic only where it has been verified.
-    assert_eq!(
-        Preferences::default().backend,
-        if cfg!(target_os = "macos") {
-            Backend::Auto
-        } else {
-            Backend::Cpu
-        }
-    );
+    // New installs use Automatic on every platform.
+    assert_eq!(Preferences::default().backend, Backend::Auto);
     for backend in Backend::ALL {
         let preferences = Preferences {
             backend,

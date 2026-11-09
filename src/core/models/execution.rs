@@ -337,6 +337,32 @@ pub(super) fn run(
 mod tests {
     use super::*;
     #[test]
+    fn a_run_records_the_backend_its_models_are_prepared_under() {
+        use crate::core::{
+            models::Models,
+            processing::{Control, RunConfig},
+        };
+        let control = Control::default();
+        let mut models = Models::with_processing(control.clone());
+        control.report("dinov2", Backend::Cpu, "CPU execution".into());
+        models.begin_run(
+            RunConfig {
+                threads: 1,
+                backend: Backend::Cuda,
+            },
+            || false,
+        );
+        assert_eq!(control.prepared_for(), Backend::Cuda);
+        // A new backend releases the models, so no stale placement remains.
+        assert_eq!(control.placement(), None);
+        // Starting a run that resolves an accelerator names it, not the setting.
+        control.report("dinov2", Backend::Cuda, "Provider enabled".into());
+        assert_eq!(
+            control.placement().unwrap().label(),
+            "Running on NVIDIA CUDA"
+        );
+    }
+    #[test]
     fn accepted_run_cancellation_reaches_plain_inference_before_model_io() {
         use crate::core::{models::Models, processing::RunConfig};
         let mut models = Models::default();

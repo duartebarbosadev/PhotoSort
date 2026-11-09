@@ -501,19 +501,18 @@ fn danger_button(text: &str) -> egui::Button<'static> {
         .stroke(Stroke::new(1.0, RED.gamma_multiply(0.45)))
 }
 
-/// Settings > Performance, Run AI on. macOS starts on Automatic, others on CPU
-/// (`Backend::platform_default`).
-const AI_PROCESSING_HELP: &str = if cfg!(target_os = "macos") {
-    "Applies to the next analysis in every workflow. Automatic chooses a platform provider and is the default on this Mac. Missing or failing providers fall back to CPU per model.\n\nAcceleration requires a compatible ONNX Runtime and driver. First model preparation can take minutes and extra memory. Native compilation finishes before cancellation can release it; cached photo results remain reusable.\n\nSession providers can still use CPU for unsupported operations; they do not prove that every operation ran on a GPU."
-} else {
-    "Applies to the next analysis in every workflow. Automatic chooses a platform provider; CPU is the default on this computer. Missing or failing providers fall back to CPU per model.\n\nAcceleration requires a compatible ONNX Runtime and driver. First model preparation can take minutes and extra memory. Native compilation finishes before cancellation can release it; cached photo results remain reusable.\n\nSession providers can still use CPU for unsupported operations; they do not prove that every operation ran on a GPU."
-};
+/// Settings > Performance, Run AI on. Automatic is the default everywhere.
+const AI_PROCESSING_HELP: &str = "Applies to the next analysis in every workflow. Automatic, the default, tries this computer's accelerators first and falls back to CPU per model when one is missing or fails. The line under this setting shows where the models actually run.
+
+Acceleration requires a compatible ONNX Runtime and driver. First model preparation can take minutes and extra memory. Native compilation finishes before cancellation can release it; cached photo results remain reusable.
+
+Session providers can still use CPU for unsupported operations; they do not prove that every operation ran on a GPU.";
 /// Settings > Storage, Disk cache limit. Only macOS prepares AI models for
 /// the computer (Core ML), which the limit leaves alone.
 const DISK_CACHE_HELP: &str = if cfg!(target_os = "macos") {
-    "Limits apply when settings are saved. The default follows the free space on this disk. Zero disables persistent previews and AI evidence. AI models prepared for this Mac are kept separately, whatever this limit. A model, runtime or macOS update replaces them, and clearing caches removes them. Displayed images and models use additional memory."
+    "Limits apply when settings are applied or saved. The default follows the free space on this disk. Zero disables persistent previews and AI evidence. AI models prepared for this Mac are kept separately, whatever this limit. A model, runtime or macOS update replaces them, and clearing caches removes them. Displayed images and models use additional memory."
 } else {
-    "Limits apply when settings are saved. The default follows the free space on this disk. Zero disables persistent previews and AI evidence. Displayed images and models use additional memory."
+    "Limits apply when settings are applied or saved. The default follows the free space on this disk. Zero disables persistent previews and AI evidence. Displayed images and models use additional memory."
 };
 
 /// A size in MiB in plain words.
@@ -561,6 +560,23 @@ impl PhotoSortApp {
         ui.add_space(S4);
     }
 
+    /// Where AI runs, resolved per model, for the line under Run AI on. A
+    /// setting applied since the models were prepared takes over at the next
+    /// analysis, and the line says so.
+    pub(super) fn running_on_note(&self) -> String {
+        let processing = &self.runtime.processing;
+        let applied = self.preferences.processing.backend;
+        match processing.placement() {
+            Some(placement) if processing.prepared_for() == applied => placement.label(),
+            Some(placement) => format!(
+                "{} · {} takes over at the next analysis",
+                placement.label(),
+                applied.label()
+            ),
+            None => "Where AI runs shows here once an analysis starts.".into(),
+        }
+    }
+
     fn performance_page(&mut self, ui: &mut egui::Ui, draft: &mut Preferences) {
         use crate::core::processing::{Backend, Mode};
         card(ui, icon::CPU, "AI processing", None, false, |rows| {
@@ -587,6 +603,7 @@ impl PhotoSortApp {
                         });
                 },
             );
+            rows.note(&self.running_on_note());
             for status in self.runtime.processing.status() {
                 rows.note(&format!(
                     "{} · {} · {}",

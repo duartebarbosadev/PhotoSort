@@ -46,7 +46,7 @@ impl Default for Models {
             cpu_threads: super::processing::Preferences::default()
                 .threads(super::processing::available()),
             compiled_cache: None,
-            backend: Backend::Cpu,
+            backend: Backend::default(),
             processing: Control::default(),
             cancellation: None,
             sessions: Default::default(),
@@ -89,6 +89,7 @@ impl Models {
     pub fn configure(&mut self, config: RunConfig) -> bool {
         self.cancellation = None;
         let changed = self.backend != config.backend;
+        self.processing.set_prepared_for(config.backend);
         if changed {
             self.sessions.clear();
             self.processing.clear_status();

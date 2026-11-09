@@ -46,7 +46,8 @@ fn settings_errors_are_bounded_and_dismissible_without_hiding_footer_or_losing_d
             "General",
             "Storage",
             "Cancel",
-            "Save settings",
+            "Apply",
+            "Save",
         ] {
             let node = &tree
                 .nodes
@@ -252,7 +253,7 @@ fn an_unreadable_preferences_file_is_kept_until_settings_are_saved() {
     app.load_preferences(path.clone());
     let mut draft = app.preferences.clone();
     draft.show_shortcuts = false;
-    app.apply_preferences(draft);
+    app.save_settings(draft);
     assert!(!app.preferences_unreadable);
     app.runtime.shutdown();
     let saved = Preferences::load(&path).unwrap();
@@ -272,7 +273,7 @@ fn hiding_current_step_uses_departure_guard_and_keeps_it_reachable_until_resolve
     );
     let mut p = Preferences::default();
     p.hidden_steps.extend([Step::Rotation, Step::PickBest]);
-    app.apply_preferences(p);
+    app.save_settings(p);
     assert_eq!(app.step, Step::Rotation);
     assert!(matches!(app.departure, Some(Destination::Step(Step::Cull))));
     assert!(app.navigation_steps().contains(&Step::Rotation));
@@ -349,7 +350,7 @@ fn changing_sensitivity_preserves_current_reviews_decisions_and_cached_results()
     );
     let mut next = app.preferences.clone();
     next.easy_delete.blur = 10.0;
-    app.apply_preferences(next);
+    app.save_settings(next);
     assert_eq!(app.preferences.easy_delete.blur, 10.0);
     assert_eq!(app.analysis[&MediaId(1)].issues, vec!["Possibly soft"]);
     assert_eq!(app.decisions[&MediaId(1)].rating, Some(4));
@@ -374,7 +375,7 @@ fn saving_cpu_allocation_updates_shared_runtime_without_restarting_current_revie
         mode: Mode::Custom,
         custom_threads: 1,
     };
-    app.apply_preferences(next);
+    app.save_settings(next);
     assert_eq!(app.runtime.processing.snapshot(), 1);
     assert_eq!(
         app.runtime.processing.snapshot_run().backend,
@@ -390,7 +391,7 @@ fn settings_preserve_live_history_and_render_compactly_without_image_or_analysis
     let (dir, mut app) = fixture();
     let draft = app.preferences.clone();
     app.preferences.remember(dir.path());
-    app.apply_preferences(draft);
+    app.save_settings(draft);
     assert_eq!(
         app.preferences.recent_folders,
         vec![dir.path().to_path_buf()]
@@ -559,7 +560,7 @@ fn settings_access_cache_and_general_anchors_keep_footer_visible_at_small_sizes(
                 ));
             }
             let tree = output.unwrap().platform_output.accesskit_update.unwrap();
-            for label in [label, "General", "Storage", "Cancel", "Save settings"] {
+            for label in [label, "General", "Storage", "Cancel", "Apply", "Save"] {
                 let node = tree
                     .nodes
                     .iter()
@@ -620,7 +621,7 @@ fn switching_the_raw_look_reloads_only_raw_previews() {
     }
     let mut next = app.preferences.clone();
     next.raw_look = crate::core::raw_look::RawLook::Enhanced;
-    app.apply_preferences(next);
+    app.save_settings(next);
     assert_eq!(
         app.runtime.raw_look.get(),
         crate::core::raw_look::RawLook::Enhanced
@@ -655,7 +656,7 @@ fn first_visit_to_each_settings_page_draws_the_dialog_in_place() {
             let node = &tree
                 .nodes
                 .iter()
-                .find(|(_, n)| n.label() == Some("Save settings"))
+                .find(|(_, n)| n.label() == Some("Save"))
                 .unwrap()
                 .1;
             node.bounds().unwrap()
@@ -672,4 +673,170 @@ fn first_visit_to_each_settings_page_draws_the_dialog_in_place() {
         }
         app.runtime.shutdown();
     }
+}
+#[test]
+fn apply_uses_settings_now_and_only_save_writes_them() {
+    use crate::core::processing::Backend;
+    let (dir, mut app) = fixture();
+    let path = dir.path().join("preferences.json");
+    let mut saved = Preferences::default();
+    saved.processing.backend = Backend::Cpu;
+    saved.save(&path).unwrap();
+    app.load_preferences(path.clone());
+    app.runtime.processing.configure(app.preferences.processing);
+    let mut draft = app.preferences.clone();
+    draft.processing.backend = Backend::Cuda;
+    draft.show_shortcuts = false;
+    // Apply: in effect at once, for the next analysis, without restarting.
+    app.apply_settings(draft.clone());
+    assert_eq!(app.runtime.processing.snapshot_run().backend, Backend::Cuda);
+    assert!(!app.preferences.show_shortcuts);
+    assert!(app.preferences_saved.is_some());
+    assert!(pages::has_pending(&draft, app.saved_settings()));
+    assert!(!pages::has_pending(&draft, &app.preferences));
+    // History recorded meanwhile is written; the applied settings are not.
+    app.preferences.remember(dir.path());
+    app.save_preferences();
+    app.runtime.shutdown();
+    let file = Preferences::load(&path).unwrap();
+    assert_eq!(file.processing.backend, Backend::Cpu);
+    assert!(file.show_shortcuts);
+    assert_eq!(file.recent_folders, vec![dir.path().to_path_buf()]);
+    // Cancel goes back to the saved settings and keeps the history.
+    let (_other, mut app) = fixture();
+    app.load_preferences(path.clone());
+    app.runtime.processing.configure(app.preferences.processing);
+    app.apply_settings(draft.clone());
+    app.cancel_settings();
+    assert_eq!(app.runtime.processing.snapshot_run().backend, Backend::Cpu);
+    assert!(app.preferences.show_shortcuts && app.preferences_saved.is_none());
+    assert_eq!(
+        app.preferences.recent_folders,
+        vec![dir.path().to_path_buf()]
+    );
+    // Applying the saved settings again leaves nothing to save.
+    app.apply_settings(draft.clone());
+    app.apply_settings(app.saved_settings().clone());
+    assert!(app.preferences_saved.is_none());
+    // Save after Apply writes what is in effect and leaves nothing to undo.
+    app.apply_settings(draft.clone());
+    app.save_settings(draft);
+    assert!(app.preferences_saved.is_none());
+    app.cancel_settings();
+    assert_eq!(app.runtime.processing.snapshot_run().backend, Backend::Cuda);
+    app.runtime.shutdown();
+    let file = Preferences::load(&path).unwrap();
+    assert_eq!(file.processing.backend, Backend::Cuda);
+    assert!(!file.show_shortcuts);
+}
+#[test]
+fn settings_buttons_apply_keep_the_dialog_open_and_save_closes_it() {
+    use crate::core::processing::Backend;
+    let (dir, mut app) = fixture();
+    let path = dir.path().join("preferences.json");
+    app.preferences_path = Some(path.clone());
+    app.open_settings(Section::Performance);
+    app.preferences_draft.as_mut().unwrap().processing.backend = Backend::Cpu;
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let mut time = 0.;
+    let mut frame = |app: &mut PhotoSortApp, events: Vec<egui::Event>| {
+        time += 0.1;
+        ctx.run_test(
+            egui::RawInput {
+                time: Some(time),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 700.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.preferences_dialog(ctx)
+            },
+        )
+    };
+    let find = |output: &egui::FullOutput, label: &str| {
+        output
+            .platform_output
+            .accesskit_update
+            .clone()
+            .unwrap()
+            .nodes
+            .into_iter()
+            .find(|(_, n)| n.label() == Some(label) || n.value() == Some(label))
+            .map(|(_, n)| n)
+    };
+    let mut click = |app: &mut PhotoSortApp, label: &str| {
+        let mut output = frame(app, vec![]);
+        for _ in 0..4 {
+            output = frame(app, vec![]);
+        }
+        let node = find(&output, label).unwrap_or_else(|| panic!("no {label}"));
+        assert!(!node.is_disabled(), "{label} is disabled");
+        let rect = node.bounds().unwrap();
+        let pos = egui::pos2(
+            ((rect.x0 + rect.x1) / 2.0) as f32,
+            ((rect.y0 + rect.y1) / 2.0) as f32,
+        );
+        for pressed in [true, false] {
+            frame(
+                app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        frame(app, vec![])
+    };
+    let output = click(&mut app, "Apply");
+    assert!(app.preferences_draft.is_some(), "Apply keeps Settings open");
+    assert_eq!(app.runtime.processing.snapshot_run().backend, Backend::Cpu);
+    assert!(find(&output, "Applied, not saved").is_some());
+    assert!(find(&output, "Apply").unwrap().is_disabled());
+    assert!(!path.exists(), "Apply writes nothing");
+    click(&mut app, "Save");
+    assert!(app.preferences_draft.is_none(), "Save closes Settings");
+    assert!(app.preferences_saved.is_none());
+    app.runtime.shutdown();
+    assert_eq!(
+        Preferences::load(&path).unwrap().processing.backend,
+        Backend::Cpu
+    );
+}
+#[test]
+fn run_ai_on_shows_where_models_run_and_when_a_new_setting_takes_over() {
+    use crate::core::processing::Backend;
+    let (_dir, mut app) = fixture();
+    assert_eq!(app.preferences.processing.backend, Backend::Auto);
+    app.runtime.processing.configure(app.preferences.processing);
+    assert!(app.running_on_note().contains("once an analysis starts"));
+    app.runtime
+        .processing
+        .report("dinov2", Backend::Cuda, "Provider enabled".into());
+    assert_eq!(app.running_on_note(), "Running on NVIDIA CUDA");
+    // Not part of a running analysis: the progress line stays hidden.
+    assert_eq!(app.running_on(), None);
+    app.analysis_run = Some(3);
+    assert_eq!(app.running_on().as_deref(), Some("Running on NVIDIA CUDA"));
+    // The models were prepared under Automatic; CPU applies from the next run.
+    app.runtime.processing.set_prepared_for(Backend::Auto);
+    let mut draft = app.preferences.clone();
+    draft.processing.backend = Backend::Cpu;
+    app.apply_settings(draft);
+    assert_eq!(
+        app.running_on_note(),
+        "Running on NVIDIA CUDA · CPU takes over at the next analysis"
+    );
+    assert_eq!(app.running_on().as_deref(), Some("Running on NVIDIA CUDA"));
+    app.runtime.shutdown();
 }

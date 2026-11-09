@@ -140,8 +140,18 @@ impl PhotoSortApp {
                 }
             }),
             preparing: self.prep_note(),
+            running_on: self.running_on(),
             cancellable: analyzing,
         }
+    }
+
+    /// Where the running analysis's models run, resolved per model: "Running
+    /// on NVIDIA CUDA", or on the CPU when no accelerator could start.
+    pub(super) fn running_on(&self) -> Option<String> {
+        if self.analysis_run.is_none() && self.rotation_run.is_none() {
+            return None;
+        }
+        Some(self.runtime.processing.placement()?.label())
     }
 
     /// Analysis or preparation running for this step, filling the panel.
@@ -350,6 +360,8 @@ struct Activity {
     phase: Option<String>,
     /// The model being prepared and its current step.
     preparing: Option<PrepNote>,
+    /// Where the ready models run: "Running on NVIDIA CUDA".
+    running_on: Option<String>,
     cancellable: bool,
 }
 
@@ -414,6 +426,13 @@ fn progress_card(ui: &mut egui::Ui, activity: &Activity, centred: bool) -> bool 
                 ui.add_space(S1);
                 ui.label(RichText::new(line).small().color(MUTED));
             }
+            if let Some(text) = &activity.running_on {
+                ui.label(
+                    RichText::new(format!("{}  {text}", icon::CPU))
+                        .small()
+                        .color(FAINT),
+                );
+            }
             if let Some(model) = &activity.preparing {
                 ui.add_space(S2);
                 preparing(ui, model);
@@ -465,6 +484,16 @@ fn progress_card(ui: &mut egui::Ui, activity: &Activity, centred: bool) -> bool 
             }
             if let Some(line) = activity.count.as_ref().or(activity.phase.as_ref()) {
                 ui.add(egui::Label::new(RichText::new(line).small().color(MUTED)).wrap());
+            }
+            if let Some(text) = &activity.running_on {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("{}  {text}", icon::CPU))
+                            .small()
+                            .color(FAINT),
+                    )
+                    .wrap(),
+                );
             }
             if let Some(model) = &activity.preparing {
                 preparing(ui, model);
@@ -593,13 +622,13 @@ pub(super) fn prep_note(
     );
     let advice = match (slow, stalled, native) {
         (_, true, true) if status.backend != Backend::Cpu => Some(
-            "Closing waits for this step. If it never ends, force quit and choose CPU in Settings › AI execution.",
+            "Closing waits for this step. If it never ends, force quit and choose CPU in Settings › Performance › Run AI on.",
         ),
         (_, true, true) => {
             Some("Closing waits for this step. If it never ends, force quit PhotoSort.")
         }
         (true, _, true) if status.backend != Backend::Cpu => Some(
-            "This step can't be interrupted; Cancel takes effect when it ends. CPU in Settings › AI execution skips it.",
+            "This step can't be interrupted; Cancel takes effect when it ends. CPU in Settings › Performance › Run AI on skips it.",
         ),
         (true, _, true) => {
             Some("This step can't be interrupted; Cancel takes effect when it ends.")

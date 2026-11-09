@@ -136,9 +136,10 @@ All analysis runs on your computer, with no account. Every step also works by ha
 - **Rotation** (Fix Rotation): [deep-image-orientation-detection](https://github.com/duartebarbosadev/deep-image-orientation-detection).
 - Blur, exposure and exact duplicates use plain image measurements, not AI.
 
-**Menu → AI models** downloads and verifies the models; nothing downloads on its own. Macs
-use Apple Core ML. Windows and Linux use the CPU unless you change **Settings → Performance →
-Run AI on**.
+**Menu → AI models** downloads and verifies the models; nothing downloads on its own. AI runs
+on Apple Core ML on a Mac, and on NVIDIA CUDA or Windows DirectML on a PC, falling back to the
+CPU when none of them can start. **Settings → Performance → Run AI on** changes this and shows
+where the models run.
 
 ## Build from source
 
