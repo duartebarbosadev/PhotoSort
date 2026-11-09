@@ -763,13 +763,29 @@ fn holding_show_original_or_backslash_shows_the_folders_on_disk_until_release() 
     rendered(&mut app, &ctx, size);
     assert!(!app.board.original);
     assert_eq!(sections(&app), plan);
-    // The menu's Show original stays on until it is chosen again.
-    menu_choose(&mut app, &ctx, size, SHOW_ORIGINAL);
+    // The button works the same way: down shows, up returns.
+    let nodes = rendered(&mut app, &ctx, size);
+    let pos = nodes
+        .iter()
+        .find(|(label, _)| label == "Show original")
+        .expect("the Show original button")
+        .1
+        .center();
+    let button = |pressed| {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            },
+        ]
+    };
+    frame(&mut app, &ctx, size, button(true));
     rendered(&mut app, &ctx, size);
     assert_eq!(sections(&app), disk);
-    rendered(&mut app, &ctx, size);
-    assert_eq!(sections(&app), disk);
-    menu_choose(&mut app, &ctx, size, SHOW_ORIGINAL);
+    frame(&mut app, &ctx, size, button(false));
     rendered(&mut app, &ctx, size);
     assert_eq!(sections(&app), plan);
     // A folder chosen in the sidebar is shown again afterwards.
@@ -1083,15 +1099,6 @@ fn click_at(app: &mut PhotoSortApp, ctx: &egui::Context, size: Vec2, pos: egui::
     }
 }
 
-const SHOW_ORIGINAL: &str = "Show original · hold \\";
-
-/// Opens the bar's "⋯" menu and chooses `item` in it.
-fn menu_choose(app: &mut PhotoSortApp, ctx: &egui::Context, size: egui::Vec2, item: &str) {
-    use super::super::compact_cull_tests::click_label;
-    click_label(app, ctx, size, "Planned changes");
-    click_label(app, ctx, size, item);
-}
-
 fn found<'a>(nodes: &'a [(String, egui::Rect)], label: &str) -> Vec<&'a egui::Rect> {
     nodes
         .iter()
@@ -1216,11 +1223,9 @@ fn reset_changes_asks_then_drops_every_planned_change_but_keeps_marks() {
     ctx.enable_accesskit();
     let size = egui::vec2(1400.0, 900.0);
     rendered(&mut app, &ctx, size);
-    // Nothing planned: the menu is there but does not open.
+    // Nothing planned: the button is there but does nothing.
     assert!(!app.organize_resettable());
-    click_label(&mut app, &ctx, size, "Planned changes");
-    let nodes = rendered(&mut app, &ctx, size);
-    assert!(found(&nodes, "Reset changes…").is_empty());
+    click_label(&mut app, &ctx, size, "Reset changes");
     assert!(!app.board.confirm_reset);
     // A move, a new folder, a rename, edits in another grouping, another
     // destination, plus a Trash mark and a rating from the other steps.
@@ -1236,7 +1241,7 @@ fn reset_changes_asks_then_drops_every_planned_change_but_keeps_marks() {
     rendered(&mut app, &ctx, size);
     assert!(app.board.changes > 0 && app.organize_resettable());
     // Keep changes leaves everything as it was.
-    menu_choose(&mut app, &ctx, size, "Reset changes…");
+    click_label(&mut app, &ctx, size, "Reset changes");
     assert!(app.board.confirm_reset && app.modal_active());
     let nodes = rendered(&mut app, &ctx, size);
     assert!(shows(&nodes, "Trash marks, ratings and rotations stay."));
@@ -1245,7 +1250,7 @@ fn reset_changes_asks_then_drops_every_planned_change_but_keeps_marks() {
     assert_eq!(app.organize_drafts.len(), 2);
     assert_eq!(app.group_mode, GroupMode::Camera);
     // So does Escape.
-    menu_choose(&mut app, &ctx, size, "Reset changes…");
+    click_label(&mut app, &ctx, size, "Reset changes");
     frame(
         &mut app,
         &ctx,
@@ -1256,8 +1261,16 @@ fn reset_changes_asks_then_drops_every_planned_change_but_keeps_marks() {
     assert!(!app.board.confirm_reset);
     assert_eq!(app.organize_drafts.len(), 2);
     // Confirming drops every planned change, in every grouping.
-    menu_choose(&mut app, &ctx, size, "Reset changes…");
     click_label(&mut app, &ctx, size, "Reset changes");
+    let nodes = rendered(&mut app, &ctx, size);
+    let buttons = found(&nodes, "Reset changes");
+    assert_eq!(buttons.len(), 2, "the bar's button and the dialog's");
+    let confirm = buttons
+        .into_iter()
+        .max_by(|a, b| a.top().total_cmp(&b.top()))
+        .unwrap()
+        .center();
+    click_at(&mut app, &ctx, size, confirm);
     rendered(&mut app, &ctx, size);
     assert!(!app.board.confirm_reset);
     assert!(app.organize_drafts.is_empty() && app.file_names.is_empty());
@@ -1282,7 +1295,10 @@ fn one_top_bar_holds_every_step_and_fits_every_width() {
     ctx.enable_accesskit();
     let analyze = "Analyze library · Ctrl/Cmd+S";
     let cases: [(Step, &[&str]); 5] = [
-        (Step::Organize, &["Planned changes", analyze, "Details"]),
+        (
+            Step::Organize,
+            &["Show original", "Reset changes", analyze, "Details"],
+        ),
         (Step::EasyDelete, &[analyze, "Details"]),
         (
             Step::Rotation,
@@ -1492,7 +1508,7 @@ fn the_faces_bar_wraps_before_its_buttons_at_every_width() {
     ] {
         app.inspector = inspector;
         let nodes = rendered(&mut app, &ctx, egui::vec2(width, 800.0));
-        let menu = *found(&nodes, "Planned changes")[0];
+        let original = *found(&nodes, "Show original")[0];
         for name in ["Keep in their folders", "Organize into"] {
             let rect = nodes
                 .iter()
@@ -1500,10 +1516,10 @@ fn the_faces_bar_wraps_before_its_buttons_at_every_width() {
                 .unwrap_or_else(|| panic!("{name} at {width}"))
                 .1;
             assert!(
-                rect.right() <= menu.left()
-                    || rect.top() >= menu.bottom()
-                    || rect.bottom() <= menu.top(),
-                "{name} {rect:?} runs under the menu {menu:?} at {width}"
+                rect.right() <= original.left()
+                    || rect.top() >= original.bottom()
+                    || rect.bottom() <= original.top(),
+                "{name} {rect:?} runs under Show original {original:?} at {width}"
             );
         }
     }
@@ -2600,7 +2616,7 @@ fn more_than_nine_selected_show_as_a_contact_sheet_in_the_preview() {
 
 #[test]
 fn show_original_waits_for_a_plan_that_differs_from_disk() {
-    use super::super::compact_cull_tests::{click_label, frame, rendered};
+    use super::super::compact_cull_tests::{frame, rendered};
     let (_temp, mut app) = organize();
     let ids: Vec<MediaId> = app.filtered.iter().map(|i| app.media[*i].id).collect();
     let ctx = egui::Context::default();
@@ -2624,31 +2640,38 @@ fn show_original_waits_for_a_plan_that_differs_from_disk() {
         rendered(app, &ctx, size);
         shown
     };
-    // Shows the original from the menu, if it can, and turns it off again.
-    let from_menu = |app: &mut PhotoSortApp| {
-        click_label(app, &ctx, size, "Planned changes");
+    let held_button = |app: &mut PhotoSortApp| {
         let nodes = rendered(app, &ctx, size);
-        if found(&nodes, SHOW_ORIGINAL).is_empty() {
-            return false;
-        }
-        click_label(app, &ctx, size, SHOW_ORIGINAL);
+        let pos = center(&nodes, "Show original");
+        let press = |pressed| {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ]
+        };
+        frame(app, &ctx, size, press(true));
         rendered(app, &ctx, size);
         let shown = app.board.original;
-        menu_choose(app, &ctx, size, SHOW_ORIGINAL);
+        frame(app, &ctx, size, press(false));
         rendered(app, &ctx, size);
-        shown && !app.board.original
+        shown
     };
     // Current folders, nothing planned: the plan is the disk.
     rendered(&mut app, &ctx, size);
     assert!(!app.organize_planned() && !app.organize_resettable());
     assert!(!hold(&mut app), "the key does nothing");
-    assert!(!from_menu(&mut app), "the menu is disabled");
+    assert!(!held_button(&mut app), "the button is disabled");
     // A move makes a difference, and both work.
     app.board_move(&ids[..1], "B");
     rendered(&mut app, &ctx, size);
     assert!(app.organize_planned() && app.organize_resettable());
     assert!(hold(&mut app));
-    assert!(from_menu(&mut app));
+    assert!(held_button(&mut app));
     // Back to nothing planned after a reset.
     app.reset_organize();
     rendered(&mut app, &ctx, size);

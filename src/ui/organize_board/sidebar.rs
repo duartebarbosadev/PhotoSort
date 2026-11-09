@@ -696,14 +696,12 @@ impl PhotoSortApp {
     /// preview together: when the sidebar does not fit beside a usable board,
     /// the board's header offers the folders in a popover instead.
     pub(in crate::ui::workspace) fn organize_sidebar(&mut self, ui: &mut egui::Ui, room: f32) {
-        // "Show original", or holding backslash, shows the folders on disk now.
+        // Holding "Show original" or backslash shows the folders on disk now.
         let key = ui.input(|i| i.focused && i.key_down(egui::Key::Backslash))
             && !ui.ctx().egui_wants_keyboard_input()
             && !self.modal_active();
         // Nothing to compare with while the plan is the folders on disk.
-        let planned = self.organize_planned();
-        self.board.original_on &= planned;
-        self.show_original((key || self.board.original_on) && planned);
+        self.show_original((key || self.board.original_button) && self.organize_planned());
         self.board.typing = false;
         // A step switch earlier in this frame (the step tabs, a shortcut)
         // leaves `filtered` holding the previous step's photos, and the

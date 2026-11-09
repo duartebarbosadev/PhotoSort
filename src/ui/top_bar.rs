@@ -381,8 +381,8 @@ impl PhotoSortApp {
     }
 
     /// The step's actions at the right of the bar, before the divider:
-    /// Details, Analyze, and the step's own (Organize's menu with Show
-    /// original and Reset changes, Cull's view switch and view options).
+    /// Details, Analyze, and the step's own (Organize's Show original and
+    /// Reset changes, Cull's view switch and view options).
     fn step_actions(&mut self, ui: &mut egui::Ui, fit: Fit) {
         use egui_phosphor::regular as icon;
         let icons = fit >= Fit::Icons;
@@ -398,8 +398,9 @@ impl PhotoSortApp {
         self.analyze_icon_button(ui);
         match self.step {
             Step::Organize => {
-                ui.add_space(S1);
-                self.organize_menu(ui);
+                ui.add_space(S2);
+                self.reset_button(ui, icons);
+                self.original_button(ui, icons);
             }
             // Easy Delete, Fix Rotation and Pick Best show the clicked card
             // beside their grid, so they have no view switch.

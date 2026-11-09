@@ -80,12 +80,11 @@ pub(in crate::ui::workspace) struct Board {
     pub(in crate::ui::workspace) to_top: bool,
     /// The sidebar's scroll offset and height in the last frame.
     pub(in crate::ui::workspace) tree_view: (f32, f32),
-    /// The folders as they are on disk now, shown while "Show original" is
-    /// on or the backslash key is held.
+    /// The folders as they are on disk now, shown while "Show original" or
+    /// the backslash key is held; the planned folders come back on release.
     pub(in crate::ui::workspace) original: bool,
-    /// "Show original" is on in the bar's menu, until chosen again or
-    /// nothing is planned.
-    pub(in crate::ui::workspace) original_on: bool,
+    /// "Show original" was held down in the last frame.
+    pub(in crate::ui::workspace) original_button: bool,
     /// The folders shown before the original layout was, restored after it.
     pub(in crate::ui::workspace) focus_before: Option<Vec<String>>,
     /// A selection rectangle being dragged from empty space in the board:
