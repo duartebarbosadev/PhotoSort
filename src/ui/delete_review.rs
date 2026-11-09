@@ -1306,7 +1306,7 @@ mod tests {
         app.toggle_delete_candidate(0);
         let mut on = app.preferences.clone();
         on.easy_delete_auto = true;
-        app.apply_preferences(on);
+        app.save_settings(on);
         assert!(trashed(&app, 1));
     }
     #[test]

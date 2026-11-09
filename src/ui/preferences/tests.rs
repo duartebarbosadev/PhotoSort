@@ -46,7 +46,8 @@ fn settings_errors_are_bounded_and_dismissible_without_hiding_footer_or_losing_d
             "General",
             "Storage",
             "Cancel",
-            "Save settings",
+            "Apply",
+            "Save",
         ] {
             let node = &tree
                 .nodes
@@ -252,7 +253,7 @@ fn an_unreadable_preferences_file_is_kept_until_settings_are_saved() {
     app.load_preferences(path.clone());
     let mut draft = app.preferences.clone();
     draft.show_shortcuts = false;
-    app.apply_preferences(draft);
+    app.save_settings(draft);
     assert!(!app.preferences_unreadable);
     app.runtime.shutdown();
     let saved = Preferences::load(&path).unwrap();
@@ -272,7 +273,7 @@ fn hiding_current_step_uses_departure_guard_and_keeps_it_reachable_until_resolve
     );
     let mut p = Preferences::default();
     p.hidden_steps.extend([Step::Rotation, Step::PickBest]);
-    app.apply_preferences(p);
+    app.save_settings(p);
     assert_eq!(app.step, Step::Rotation);
     assert!(matches!(app.departure, Some(Destination::Step(Step::Cull))));
     assert!(app.navigation_steps().contains(&Step::Rotation));
@@ -349,7 +350,7 @@ fn changing_sensitivity_preserves_current_reviews_decisions_and_cached_results()
     );
     let mut next = app.preferences.clone();
     next.easy_delete.blur = 10.0;
-    app.apply_preferences(next);
+    app.save_settings(next);
     assert_eq!(app.preferences.easy_delete.blur, 10.0);
     assert_eq!(app.analysis[&MediaId(1)].issues, vec!["Possibly soft"]);
     assert_eq!(app.decisions[&MediaId(1)].rating, Some(4));
@@ -374,7 +375,7 @@ fn saving_cpu_allocation_updates_shared_runtime_without_restarting_current_revie
         mode: Mode::Custom,
         custom_threads: 1,
     };
-    app.apply_preferences(next);
+    app.save_settings(next);
     assert_eq!(app.runtime.processing.snapshot(), 1);
     assert_eq!(
         app.runtime.processing.snapshot_run().backend,
@@ -390,7 +391,7 @@ fn settings_preserve_live_history_and_render_compactly_without_image_or_analysis
     let (dir, mut app) = fixture();
     let draft = app.preferences.clone();
     app.preferences.remember(dir.path());
-    app.apply_preferences(draft);
+    app.save_settings(draft);
     assert_eq!(
         app.preferences.recent_folders,
         vec![dir.path().to_path_buf()]
@@ -559,7 +560,7 @@ fn settings_access_cache_and_general_anchors_keep_footer_visible_at_small_sizes(
                 ));
             }
             let tree = output.unwrap().platform_output.accesskit_update.unwrap();
-            for label in [label, "General", "Storage", "Cancel", "Save settings"] {
+            for label in [label, "General", "Storage", "Close", "Apply", "Save"] {
                 let node = tree
                     .nodes
                     .iter()
@@ -620,7 +621,7 @@ fn switching_the_raw_look_reloads_only_raw_previews() {
     }
     let mut next = app.preferences.clone();
     next.raw_look = crate::core::raw_look::RawLook::Enhanced;
-    app.apply_preferences(next);
+    app.save_settings(next);
     assert_eq!(
         app.runtime.raw_look.get(),
         crate::core::raw_look::RawLook::Enhanced
@@ -655,7 +656,7 @@ fn first_visit_to_each_settings_page_draws_the_dialog_in_place() {
             let node = &tree
                 .nodes
                 .iter()
-                .find(|(_, n)| n.label() == Some("Save settings"))
+                .find(|(_, n)| n.label() == Some("Save"))
                 .unwrap()
                 .1;
             node.bounds().unwrap()
@@ -672,4 +673,177 @@ fn first_visit_to_each_settings_page_draws_the_dialog_in_place() {
         }
         app.runtime.shutdown();
     }
+}
+#[test]
+fn apply_saves_and_keeps_settings_open_cancel_drops_only_what_is_unsaved_and_save_closes() {
+    use crate::core::processing::Backend;
+    let (dir, mut app) = fixture();
+    let path = dir.path().join("preferences.json");
+    app.preferences_path = Some(path.clone());
+    app.open_settings(Section::Performance);
+    app.preferences_draft.as_mut().unwrap().processing.backend = Backend::Cpu;
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let mut time = 0.;
+    let mut frame = |app: &mut PhotoSortApp, events: Vec<egui::Event>| {
+        time += 0.1;
+        ctx.run_test(
+            egui::RawInput {
+                time: Some(time),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 700.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.preferences_dialog(ctx)
+            },
+        )
+    };
+    let find = |output: &egui::FullOutput, label: &str| {
+        output
+            .platform_output
+            .accesskit_update
+            .clone()
+            .unwrap()
+            .nodes
+            .into_iter()
+            .find(|(_, n)| n.label() == Some(label) || n.value() == Some(label))
+            .map(|(_, n)| n)
+    };
+    let mut click = |app: &mut PhotoSortApp, label: &str| {
+        let mut output = frame(app, vec![]);
+        for _ in 0..4 {
+            output = frame(app, vec![]);
+        }
+        let node = find(&output, label).unwrap_or_else(|| panic!("no {label}"));
+        assert!(!node.is_disabled(), "{label} is disabled");
+        let rect = node.bounds().unwrap();
+        let pos = egui::pos2(
+            ((rect.x0 + rect.x1) / 2.0) as f32,
+            ((rect.y0 + rect.y1) / 2.0) as f32,
+        );
+        for pressed in [true, false] {
+            frame(
+                app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        frame(app, vec![])
+    };
+    // The file worker writes in the background.
+    let saved = |check: &dyn Fn(&Preferences) -> bool| {
+        let deadline = Instant::now() + worker_patience();
+        loop {
+            if Preferences::load(&path).is_ok_and(|p| check(&p)) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "preferences were not written");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    // Apply: in effect and written, for the next analysis, with Settings open.
+    let output = click(&mut app, "Apply");
+    assert!(app.preferences_draft.is_some(), "Apply keeps Settings open");
+    assert_eq!(app.runtime.processing.snapshot_run().backend, Backend::Cpu);
+    saved(&|p| p.processing.backend == Backend::Cpu);
+    assert!(find(&output, "All changes saved.").is_some());
+    assert!(find(&output, "Apply").unwrap().is_disabled());
+    assert!(find(&output, "Save").unwrap().is_disabled());
+    // Nothing unsaved: the way out reads Close.
+    assert!(find(&output, "Close").is_some() && find(&output, "Cancel").is_none());
+    // Cancel drops the edit made since Apply and keeps what Apply saved.
+    app.preferences_draft.as_mut().unwrap().show_shortcuts = false;
+    click(&mut app, "Cancel");
+    assert!(app.preferences_draft.is_none());
+    assert!(app.preferences.show_shortcuts);
+    assert_eq!(app.runtime.processing.snapshot_run().backend, Backend::Cpu);
+    saved(&|p| p.show_shortcuts && p.processing.backend == Backend::Cpu);
+    // Save writes and closes.
+    app.open_settings(Section::Performance);
+    app.preferences_draft.as_mut().unwrap().processing.backend = Backend::Auto;
+    click(&mut app, "Save");
+    assert!(app.preferences_draft.is_none(), "Save closes Settings");
+    assert_eq!(app.runtime.processing.snapshot_run().backend, Backend::Auto);
+    app.runtime.shutdown();
+    assert_eq!(
+        Preferences::load(&path).unwrap().processing.backend,
+        Backend::Auto
+    );
+}
+#[test]
+fn run_ai_on_says_where_ai_will_run_then_where_it_runs() {
+    use crate::core::processing::{Accelerators, Backend, Probe};
+    let (_dir, mut app) = fixture();
+    assert_eq!(app.preferences.processing.backend, Backend::Auto);
+    app.runtime.processing.configure(app.preferences.processing);
+    assert_eq!(
+        app.running_on_note(Backend::Auto),
+        "Checking this computer's accelerators…"
+    );
+    // Before any model loads, the check names the backend for any choice
+    // in the dialog, applied or not.
+    app.runtime.processing.record_accelerators(Ok(Accelerators {
+        probes: vec![
+            (Backend::Cuda, Probe::Works),
+            (Backend::DirectMl, Probe::NotInRuntime),
+        ],
+        nvidia_driver: true,
+    }));
+    if cfg!(any(target_os = "windows", target_os = "linux")) {
+        assert_eq!(
+            app.running_on_note(Backend::Auto),
+            "Will run on NVIDIA CUDA"
+        );
+    }
+    assert_eq!(app.running_on_note(Backend::Cpu), "Will run on CPU");
+    assert_eq!(
+        app.running_on_note(Backend::DirectMl),
+        "Will run on CPU · Windows DirectML unavailable"
+    );
+    // Once models have loaded, the line says where they actually run.
+    app.runtime
+        .processing
+        .report("dinov2", Backend::Cuda, "Provider enabled".into());
+    app.runtime.processing.set_prepared_for(Backend::Auto);
+    assert_eq!(app.running_on_note(Backend::Auto), "Running on NVIDIA CUDA");
+    // Not part of a running analysis: the progress line stays hidden.
+    assert_eq!(app.running_on(), None);
+    app.analysis_run = Some(3);
+    assert_eq!(app.running_on().as_deref(), Some("Running on NVIDIA CUDA"));
+    // Choosing CPU, saved or not, tells what the next analysis uses.
+    assert_eq!(
+        app.running_on_note(Backend::Cpu),
+        "Running on NVIDIA CUDA · next analysis on CPU"
+    );
+    let mut draft = app.preferences.clone();
+    draft.processing.backend = Backend::Cpu;
+    app.save_settings(draft);
+    assert_eq!(
+        app.running_on_note(Backend::Cpu),
+        "Running on NVIDIA CUDA · next analysis on CPU"
+    );
+    assert_eq!(app.running_on().as_deref(), Some("Running on NVIDIA CUDA"));
+    // ONNX Runtime missing: the line says the check could not run.
+    app.runtime
+        .processing
+        .record_accelerators(Err("ONNX Runtime library is missing".into()));
+    app.runtime.processing.clear_status();
+    assert_eq!(
+        app.running_on_note(Backend::Cpu),
+        "Could not check this computer: ONNX Runtime library is missing"
+    );
+    app.runtime.shutdown();
 }

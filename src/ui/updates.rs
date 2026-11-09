@@ -262,7 +262,7 @@ mod tests {
         app.preferences
             .updates
             .attempted(&Source::new("example/rust").unwrap(), 12345);
-        app.apply_preferences(draft);
+        app.save_settings(draft);
         assert_eq!(app.preferences.updates.last_attempt, 12345);
         app.runtime.shutdown();
     }

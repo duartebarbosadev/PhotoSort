@@ -2,6 +2,7 @@
 //! cards whose rows put the setting on the left and its control on the right.
 use super::*;
 use crate::core::preferences::Preferences;
+use crate::core::processing::{Backend, Check, Prediction};
 use egui_phosphor::regular as icon;
 
 /// Below this row width a control moves under its label.
@@ -501,19 +502,18 @@ fn danger_button(text: &str) -> egui::Button<'static> {
         .stroke(Stroke::new(1.0, RED.gamma_multiply(0.45)))
 }
 
-/// Settings > Performance, Run AI on. macOS starts on Automatic, others on CPU
-/// (`Backend::platform_default`).
-const AI_PROCESSING_HELP: &str = if cfg!(target_os = "macos") {
-    "Applies to the next analysis in every workflow. Automatic chooses a platform provider and is the default on this Mac. Missing or failing providers fall back to CPU per model.\n\nAcceleration requires a compatible ONNX Runtime and driver. First model preparation can take minutes and extra memory. Native compilation finishes before cancellation can release it; cached photo results remain reusable.\n\nSession providers can still use CPU for unsupported operations; they do not prove that every operation ran on a GPU."
-} else {
-    "Applies to the next analysis in every workflow. Automatic chooses a platform provider; CPU is the default on this computer. Missing or failing providers fall back to CPU per model.\n\nAcceleration requires a compatible ONNX Runtime and driver. First model preparation can take minutes and extra memory. Native compilation finishes before cancellation can release it; cached photo results remain reusable.\n\nSession providers can still use CPU for unsupported operations; they do not prove that every operation ran on a GPU."
-};
+/// Settings > Performance, Run AI on. Automatic is the default everywhere.
+const AI_PROCESSING_HELP: &str = "Applies to the next analysis in every workflow. Automatic, the default, tries this computer's accelerators first and falls back to CPU per model when one is missing or fails. The line under this setting says where AI will run, from a quick check of this computer when this page opens, and where it runs once models have loaded.
+
+Acceleration requires a compatible ONNX Runtime and driver. First model preparation can take minutes and extra memory. Native compilation finishes before cancellation can release it; cached photo results remain reusable.
+
+Session providers can still use CPU for unsupported operations; they do not prove that every operation ran on a GPU.";
 /// Settings > Storage, Disk cache limit. Only macOS prepares AI models for
 /// the computer (Core ML), which the limit leaves alone.
 const DISK_CACHE_HELP: &str = if cfg!(target_os = "macos") {
-    "Limits apply when settings are saved. The default follows the free space on this disk. Zero disables persistent previews and AI evidence. AI models prepared for this Mac are kept separately, whatever this limit. A model, runtime or macOS update replaces them, and clearing caches removes them. Displayed images and models use additional memory."
+    "Limits apply when settings are applied or saved. The default follows the free space on this disk. Zero disables persistent previews and AI evidence. AI models prepared for this Mac are kept separately, whatever this limit. A model, runtime or macOS update replaces them, and clearing caches removes them. Displayed images and models use additional memory."
 } else {
-    "Limits apply when settings are saved. The default follows the free space on this disk. Zero disables persistent previews and AI evidence. Displayed images and models use additional memory."
+    "Limits apply when settings are applied or saved. The default follows the free space on this disk. Zero disables persistent previews and AI evidence. Displayed images and models use additional memory."
 };
 
 /// A size in MiB in plain words.
@@ -561,8 +561,42 @@ impl PhotoSortApp {
         ui.add_space(S4);
     }
 
+    /// The line under Run AI on for the backend chosen in the dialog. Once
+    /// models have loaded under the setting in effect, it says where they
+    /// run; otherwise it says where they will run, from the accelerator check,
+    /// so a choice is explained before it is applied or used.
+    pub(super) fn running_on_note(&self, choice: Backend) -> String {
+        let processing = &self.runtime.processing;
+        let applied = self.preferences.processing.backend;
+        let prediction = self.prediction(choice);
+        match (processing.placement(), prediction) {
+            (Some(placement), _) if choice == applied && processing.prepared_for() == applied => {
+                placement.label()
+            }
+            (Some(placement), Ok(next)) => {
+                format!("{} · next analysis on {}", placement.label(), next.target())
+            }
+            (Some(placement), Err(note)) => format!("{} · {note}", placement.label()),
+            (None, Ok(next)) => next.label(),
+            (None, Err(note)) => note,
+        }
+    }
+
+    /// Where `choice` would run, or what stands in while the accelerator
+    /// check runs or when it could not load ONNX Runtime.
+    fn prediction(&self, choice: Backend) -> Result<Prediction, String> {
+        match self.runtime.processing.accelerators() {
+            Check::Done(Ok(accelerators)) => Ok(Prediction::of(choice, &accelerators)),
+            Check::Done(Err(error)) => Err(format!("Could not check this computer: {error}")),
+            Check::NotStarted | Check::Running => {
+                Err("Checking this computer's accelerators…".into())
+            }
+        }
+    }
+
     fn performance_page(&mut self, ui: &mut egui::Ui, draft: &mut Preferences) {
-        use crate::core::processing::{Backend, Mode};
+        use crate::core::processing::Mode;
+        let ui_ctx = ui.ctx().clone();
         card(ui, icon::CPU, "AI processing", None, false, |rows| {
             rows.row(
                 "Run AI on",
@@ -587,6 +621,20 @@ impl PhotoSortApp {
                         });
                 },
             );
+            // The check loads ONNX Runtime once per launch, in the background.
+            self.runtime.processing.check_accelerators();
+            if self.runtime.processing.accelerators() == Check::Running {
+                ui_ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
+            let chosen = draft.processing.backend;
+            rows.note(&self.running_on_note(chosen));
+            let placed = self.runtime.processing.placement().is_some()
+                && chosen == self.preferences.processing.backend
+                && self.runtime.processing.prepared_for() == chosen;
+            if !placed && let Some(reasons) = self.prediction(chosen).ok().and_then(|p| p.reasons())
+            {
+                rows.note(&reasons);
+            }
             for status in self.runtime.processing.status() {
                 rows.note(&format!(
                     "{} · {} · {}",

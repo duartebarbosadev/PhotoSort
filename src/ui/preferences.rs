@@ -12,6 +12,17 @@ pub(super) enum Section {
     Storage,
 }
 
+/// Copies into `next` what Settings does not own from `live`: history
+/// recorded while the dialog is open, such as a folder that finished loading,
+/// and the photo size, which the size sliders own.
+fn keep_live(next: &mut Preferences, live: &Preferences) {
+    next.recent_folders = live.recent_folders.clone();
+    next.updates.last_attempt = live.updates.last_attempt;
+    next.updates.repository = live.updates.repository.clone();
+    next.intro_shown = live.intro_shown;
+    next.photo_size = live.photo_size;
+}
+
 impl PhotoSortApp {
     fn cache_folder_request(&self) -> Option<crate::core::desktop::Request> {
         self.runtime.cache.directory().and_then(|path| {
@@ -114,14 +125,10 @@ impl PhotoSortApp {
             self.error = Some(error);
         }
     }
-    pub(super) fn apply_preferences(&mut self, mut next: Preferences) {
-        // A dialog does not own history; a folder may finish loading while it is open.
-        next.recent_folders = self.preferences.recent_folders.clone();
-        next.updates.last_attempt = self.preferences.updates.last_attempt;
-        next.updates.repository = self.preferences.updates.repository.clone();
-        next.intro_shown = self.preferences.intro_shown;
-        // The size sliders own the photo size, not the dialog.
-        next.photo_size = self.preferences.photo_size;
+    /// Settings › Apply and Save: puts the draft into effect and writes it.
+    /// Apply keeps the dialog open; Save closes it.
+    pub(super) fn save_settings(&mut self, mut next: Preferences) {
+        keep_live(&mut next, &self.preferences);
         next.normalize();
         self.runtime.cache.configure(next.cache);
         self.runtime.processing.configure(next.processing);
@@ -362,13 +369,30 @@ impl PhotoSortApp {
                             ui.painter().circle_filled(dot.center(), 3.5, ACCENT);
                             ui.label(RichText::new("Unsaved changes").color(ACCENT));
                         } else {
-                            ui.label(RichText::new("Changes apply when you save.").color(FAINT));
+                            ui.label(RichText::new("All changes saved.").color(FAINT));
                         }
                         pages::trailing(ui, egui::Id::new("settings_footer"), |ui| {
-                            if ui.button("Cancel").clicked() {
+                            // With nothing unsaved there is nothing to cancel.
+                            let (label, hover) = if pending {
+                                ("Cancel", "Close without saving")
+                            } else {
+                                ("Close", "Close Settings")
+                            };
+                            if ui.button(label).on_hover_text(hover).clicked() {
                                 action = 1;
                             }
-                            if ui.add_enabled(pending, primary("Save settings")).clicked() {
+                            if ui
+                                .add_enabled(pending, egui::Button::new("Apply"))
+                                .on_hover_text("Save these settings and keep Settings open")
+                                .clicked()
+                            {
+                                action = 3;
+                            }
+                            if ui
+                                .add_enabled(pending, primary("Save"))
+                                .on_hover_text("Save these settings and close")
+                                .clicked()
+                            {
                                 action = 2;
                             }
                         });
@@ -380,7 +404,11 @@ impl PhotoSortApp {
             }
             match action {
                 1 => {}
-                2 => self.apply_preferences(draft),
+                2 => self.save_settings(draft),
+                3 => {
+                    self.save_settings(draft.clone());
+                    self.preferences_draft = Some(draft);
+                }
                 _ => self.preferences_draft = Some(draft),
             }
         }

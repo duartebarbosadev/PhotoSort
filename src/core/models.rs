@@ -46,7 +46,7 @@ impl Default for Models {
             cpu_threads: super::processing::Preferences::default()
                 .threads(super::processing::available()),
             compiled_cache: None,
-            backend: Backend::Cpu,
+            backend: Backend::default(),
             processing: Control::default(),
             cancellation: None,
             sessions: Default::default(),
@@ -89,6 +89,7 @@ impl Models {
     pub fn configure(&mut self, config: RunConfig) -> bool {
         self.cancellation = None;
         let changed = self.backend != config.backend;
+        self.processing.set_prepared_for(config.backend);
         if changed {
             self.sessions.clear();
             self.processing.clear_status();
@@ -209,19 +210,7 @@ impl Models {
             .get(kind)
             .is_none_or(|(p, f, _, _)| p != path || *f != fingerprint)
         {
-            let runtime = runtime_path()
-                .context("Install ONNX Runtime or set ORT_DYLIB_PATH to its native library")?;
-            anyhow::ensure!(
-                runtime.is_file(),
-                "ONNX Runtime library is missing: {}",
-                runtime.display()
-            );
-            #[cfg(target_os = "windows")]
-            search_runtime_directory(&runtime);
-            ort::init_from(&runtime)?
-                .with_name("PhotoSort")
-                .with_telemetry(false)
-                .commit();
+            start_runtime()?;
             self.sessions.remove(kind);
             self.processing.preparing(kind, self.backend);
             let processing = self.processing.clone();
@@ -598,6 +587,48 @@ pub fn model_path(name: &str) -> Option<PathBuf> {
         .into_iter()
         .map(|p| p.join("models").join(name))
         .find(|p| p.is_file())
+}
+/// Loads ONNX Runtime for this process; the first library loaded stays.
+fn start_runtime() -> Result<()> {
+    let runtime = runtime_path()
+        .context("Install ONNX Runtime or set ORT_DYLIB_PATH to its native library")?;
+    anyhow::ensure!(
+        runtime.is_file(),
+        "ONNX Runtime library is missing: {}",
+        runtime.display()
+    );
+    #[cfg(target_os = "windows")]
+    search_runtime_directory(&runtime);
+    ort::init_from(&runtime)?
+        .with_name("PhotoSort")
+        .with_telemetry(false)
+        .commit();
+    Ok(())
+}
+/// Tries each accelerator this platform offers on a tiny model, so Settings
+/// can say where AI will run before any model loads. Fails only when ONNX
+/// Runtime itself cannot be loaded.
+pub(crate) fn check_accelerators() -> std::result::Result<super::processing::Accelerators, String> {
+    start_runtime().map_err(|error| error.to_string())?;
+    let probes = Backend::ALL
+        .into_iter()
+        .filter(|b| b.on_this_platform() && !matches!(b, Backend::Cpu | Backend::Auto))
+        .map(|backend| (backend, execution::probe(backend)))
+        .collect();
+    Ok(super::processing::Accelerators {
+        probes,
+        nvidia_driver: nvidia_driver(),
+    })
+}
+/// The NVIDIA driver installs its CUDA driver library into System32.
+fn nvidia_driver() -> bool {
+    cfg!(target_os = "windows")
+        && std::env::var_os("SystemRoot").is_some_and(|root| {
+            std::path::Path::new(&root)
+                .join("System32")
+                .join("nvcuda.dll")
+                .is_file()
+        })
 }
 pub fn runtime_path() -> Option<PathBuf> {
     let name = if cfg!(target_os = "macos") {
