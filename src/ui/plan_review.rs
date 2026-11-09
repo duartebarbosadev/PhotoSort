@@ -843,7 +843,6 @@ impl PhotoSortApp {
         placed: Placed,
         rect: egui::Rect,
     ) {
-        let summary = &rows.summary;
         // Cards: one rounded panel across touching pieces.
         let in_card = !matches!(placed.block, Block::Section(_) | Block::Tidy);
         let mut card = rect;
@@ -863,34 +862,17 @@ impl PhotoSortApp {
         let inner = card.shrink2(egui::vec2(S3, 0.0));
         match placed.block {
             Block::Section(section) => {
+                // The counts are in the sentence at the top.
                 let (glyph, title, color, note) = match section {
-                    Section::Moving => (
-                        icon::FOLDER_SIMPLE,
-                        "Moving",
-                        ACCENT,
-                        photos(summary.moved + summary.renamed),
-                    ),
-                    Section::Folders => (
-                        icon::PENCIL_SIMPLE,
-                        "Renaming folders",
-                        INK,
-                        count(summary.folder_renames, "folder", "folders"),
-                    ),
+                    Section::Moving => (icon::FOLDER_SIMPLE, "Moving", ACCENT, ""),
+                    Section::Folders => (icon::PENCIL_SIMPLE, "Renaming folders", INK, ""),
                     Section::Trash => (
                         icon::TRASH,
                         "Going to the Trash",
                         RED,
-                        format!(
-                            "{} · you can restore them from the Trash",
-                            photos(summary.trashed)
-                        ),
+                        "You can restore them",
                     ),
-                    Section::Updates => (
-                        icon::STAR,
-                        "Ratings and rotations",
-                        INK,
-                        photos(summary.updated),
-                    ),
+                    Section::Updates => (icon::STAR, "Ratings and rotations", INK, ""),
                 };
                 let row = egui::Rect::from_min_size(
                     inner.min + egui::vec2(-S3, S3),
@@ -903,8 +885,10 @@ impl PhotoSortApp {
                     |ui| {
                         ui.label(RichText::new(glyph).size(16.0).color(color));
                         ui.label(RichText::new(title).font(semibold(15.0)).color(color));
-                        ui.add_space(S1);
-                        line_label(ui, RichText::new(note).color(MUTED));
+                        if !note.is_empty() {
+                            ui.add_space(S1);
+                            line_label(ui, RichText::new(note).color(MUTED));
+                        }
                     },
                 );
             }
@@ -976,7 +960,7 @@ impl PhotoSortApp {
                         line_label(
                             ui,
                             RichText::new(format!(
-                                "Folders left empty afterwards are removed: {}",
+                                "Folders left empty are removed: {}",
                                 cleanup_text(plan, rows, root, 3)
                             ))
                             .small()
@@ -1416,39 +1400,26 @@ impl PhotoSortApp {
             ui.set_width((ctx.content_rect().width() - 64.0).clamp(240.0, 760.0));
             let top = ui.cursor().top();
             let retry = self.retry_plan.is_some();
-            ui.heading(if retry { "Unfinished file operations" } else { "Review your changes" });
+            ui.heading(if retry { "Unfinished file operations" } else { "Review changes" });
             ui.add_space(S1);
             ui.add(egui::Label::new(RichText::new(self.review_sentence(&plan, &rows)).font(medium(15.0)).color(INK)).wrap());
-            // Reassurance; the library is named, its full path is on hover.
-            let library = self.root.as_deref().map(|root| (folder_text(root, Some(root)), root.to_path_buf()));
-            let note = if retry {
-                "Changes that finished are already applied. These are the ones left.".to_string()
-            } else {
-                match &library {
-                    Some((name, _)) => format!("Nothing in {name} has changed yet."),
-                    None => "Nothing has changed yet.".into(),
-                }
-            };
-            let response = ui.add(egui::Label::new(RichText::new(note).color(MUTED)).wrap());
-            if let Some((_, root)) = &library { response.on_hover_text(root.display().to_string()); }
+            if retry {
+                ui.label(RichText::new("Changes that finished are already applied. These are the ones left.").color(MUTED));
+            }
             if let Some(output) = &plan.output_root && self.root.as_ref() != Some(output) {
                 ui.add(egui::Label::new(RichText::new(format!("Photos go to {}", folder_text(output, Some(output)))).color(MUTED)).truncate())
                     .on_hover_text(output.display().to_string());
             }
-            if retry && self.error.is_some() { ui.colored_label(RED, "Some operations need attention. Open details before retrying."); }
+            if retry && self.error.is_some() { ui.colored_label(RED, "Some operations need attention. See Operation details."); }
             // Details swap the plain view for every file operation, so the
             // list keeps one height budget. Retries start there.
             let details = egui::CollapsingHeader::new("Operation details").id_salt(("plan_details", retry)).default_open(retry).show(ui, |ui| {
                 egui::ScrollArea::vertical().id_salt("plan_explanation").max_height(70.0).show(ui, |ui| {
                     ui.label(&plan.description);
                     if retry {
-                        ui.label("Successful operations are already applied. Finish staged move rechecks that the destination is the same file before removing its source link. Edit destination saves a revised folder or base name for a pending move and all its companions. Retry uses the saved destinations and source checks. Resolve remaining conflicts first. Discard abandons only unfinished operations; the audit record is retained.");
                         if let Some(error) = &self.error { ui.colored_label(RED, error); }
-                    } else {
-                        ui.label(if self.rotation_plan { "Only confirmed corrections are included. Metadata rows identify embedded updates, XMP sidecars or lossless pixel rotations." } else { "All listed companion files are included. Metadata rows identify embedded updates, XMP sidecars or lossless pixel rotations. Trash entries go to your system's Trash. Moves never overwrite existing files. Folders are removed only when nothing is left in them." });
-                        if !rows.trash.is_empty() || !rows.updates.is_empty() {
-                            ui.label("Trash marks, ratings and rotations are planned and applied right after the moves, for the files at their new places.");
-                        }
+                    } else if !self.rotation_plan {
+                        ui.label("Moves never overwrite existing files.");
                     }
                 });
             });

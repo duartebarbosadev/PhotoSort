@@ -489,6 +489,7 @@ fn main() -> anyhow::Result<()> {
             [1440.0, 900.0],
         ),
         ("15-about", Dialog::About, [1440.0, 900.0]),
+        ("15b-keyboard-shortcuts", Dialog::Shortcuts, [1440.0, 900.0]),
         (
             "16-organize-new-folder",
             Dialog::OrganizeNewFolder,
@@ -515,6 +516,7 @@ fn main() -> anyhow::Result<()> {
             }
             Dialog::PlanReview => harness.state_mut().gallery_plan_review(3),
             Dialog::About => harness.state_mut().gallery_about(),
+            Dialog::Shortcuts => harness.state_mut().gallery_shortcuts(),
             Dialog::Compare => harness.state_mut().gallery_compare(3),
             Dialog::Models => harness.state_mut().gallery_models(),
             Dialog::OrganizeNewFolder => {
@@ -675,6 +677,7 @@ enum Dialog {
     SettingsEdited(usize),
     PlanReview,
     About,
+    Shortcuts,
     OrganizeNewFolder,
     Compare,
     Models,

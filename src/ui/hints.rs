@@ -170,7 +170,8 @@ impl Hint {
         format!("{} · {}", self.keys_text(), self.action)
     }
 }
-/// The step's hints on one line, for the keyboard guide.
+/// The step's hints on one line.
+#[cfg(test)]
 pub(super) fn workflow_hint(step: Step) -> String {
     step_hints(step)
         .iter()

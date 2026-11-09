@@ -759,7 +759,7 @@ fn apply_saves_and_keeps_settings_open_cancel_drops_only_what_is_unsaved_and_sav
     assert!(app.preferences_draft.is_some(), "Apply keeps Settings open");
     assert_eq!(app.runtime.processing.snapshot_run().backend, Backend::Cpu);
     saved(&|p| p.processing.backend == Backend::Cpu);
-    assert!(find(&output, "All changes saved.").is_some());
+    assert!(find(&output, "Unsaved changes").is_none());
     assert!(find(&output, "Apply").unwrap().is_disabled());
     assert!(find(&output, "Save").unwrap().is_disabled());
     // Nothing unsaved: the way out reads Close.

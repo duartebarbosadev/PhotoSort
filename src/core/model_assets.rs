@@ -27,7 +27,6 @@ pub struct Asset {
     pub id: Id,
     pub name: &'static str,
     pub title: &'static str,
-    pub purpose: &'static str,
     pub bytes: u64,
     /// Direct download of the pinned file.
     pub url: &'static str,
@@ -49,7 +48,6 @@ pub const ALL: [Asset; 7] = [
         id: Id::Scene,
         name: "dinov2-small.onnx",
         title: "Scene and subject similarity",
-        purpose: "Visual/Mixed Organize, Easy Delete, Pick Best and Cull",
         bytes: 88_532_934,
         url: "https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/model.onnx",
         license: "Apache-2.0",
@@ -63,7 +61,6 @@ pub const ALL: [Asset; 7] = [
         id: Id::Aesthetic,
         name: "aesthetic.onnx",
         title: "Aesthetic scoring",
-        purpose: "Pick Best",
         // Basic-level ORT folding of the pinned export (examples/fold_model.rs),
         // then Gemm weights stored pre-transposed (scripts/transpose_gemm_weights.py).
         bytes: 534_515_718,
@@ -81,7 +78,6 @@ pub const ALL: [Asset; 7] = [
         id: Id::Detector,
         name: "face_detector.onnx",
         title: "Face detection",
-        purpose: "People Organize, Easy Delete, Pick Best and Cull",
         bytes: 425_659,
         url: "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-2/face_detector.onnx",
         license: "MediaPipe / Apache-2.0",
@@ -95,7 +91,6 @@ pub const ALL: [Asset; 7] = [
         id: Id::Landmarks,
         name: "face_landmarks_detector.onnx",
         title: "Face landmarks",
-        purpose: "People Organize, Easy Delete, Pick Best and Cull",
         // Pooling pads made explicit for Core ML (scripts/explicit_pads.py).
         bytes: 4_996_107,
         url: "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-2/face_landmarks_detector.onnx",
@@ -110,7 +105,6 @@ pub const ALL: [Asset; 7] = [
         id: Id::Blendshapes,
         name: "face_blendshapes.onnx",
         title: "Eye openness",
-        purpose: "Closed-eye checks in Easy Delete, Pick Best and Cull",
         // MediaPipe face_blendshapes.tflite via scripts/convert_blendshapes.py.
         bytes: 1_884_171,
         url: "https://github.com/duartebarbosadev/PhotoSort/releases/download/models-2/face_blendshapes.onnx",
@@ -125,7 +119,6 @@ pub const ALL: [Asset; 7] = [
         id: Id::People,
         name: "face_recognition_sface.onnx",
         title: "Person recognition",
-        purpose: "People Organize",
         bytes: 38_696_353,
         url: "https://media.githubusercontent.com/media/opencv/opencv_zoo/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
         license: "Apache-2.0",
@@ -139,7 +132,6 @@ pub const ALL: [Asset; 7] = [
         id: Id::Rotation,
         name: "orientation.onnx",
         title: "Orientation detection",
-        purpose: "Fix Rotation suggestions",
         bytes: 80_578_424,
         url: "https://github.com/duartebarbosadev/deep-image-orientation-detection/releases/download/v2/orientation_model_v2_0.9882.onnx",
         license: "MIT (upstream repository)",

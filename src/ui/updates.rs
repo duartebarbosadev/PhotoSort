@@ -48,7 +48,7 @@ impl PhotoSortApp {
         let mut close = false;
         let response = modal(egui::Id::new("updates")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 64.0).clamp(240.0, 480.0));
-            ui.heading("PhotoSort updates");
+            ui.heading("Updates");
             ui.label(format!("Installed version {}", env!("CARGO_PKG_VERSION")));
             egui::ScrollArea::vertical()
                 .max_height((ctx.content_rect().height() - 220.0).max(80.0))
@@ -56,7 +56,7 @@ impl PhotoSortApp {
                     match &state {
                         State::Checking => {
                             ui.spinner();
-                            ui.label("Checking for a new stable release…");
+                            ui.label("Checking…");
                         }
                         State::Available(release) => {
                             ui.heading(format!("Version {} is available", release.version));
@@ -70,13 +70,11 @@ impl PhotoSortApp {
                                 &release.notes
                             });
                             if release.notes_truncated {
-                                ui.small("Preview shortened. Full notes are on the release page.");
+                                ui.small("Shortened. The full notes are on the release page.");
                             }
                         }
                         State::Current { latest } => {
-                            ui.label(format!(
-                                "No newer stable release is available. Latest published: {latest}."
-                            ));
+                            ui.label(format!("Up to date. The latest release is {latest}."));
                         }
                         State::Failed(error) => {
                             ui.colored_label(RED, "Could not check for updates.");
@@ -88,9 +86,7 @@ impl PhotoSortApp {
                         State::Cancelled => {
                             ui.label("Update check cancelled.");
                         }
-                        State::Idle => {
-                            ui.label("Check for a new stable release.");
-                        }
+                        State::Idle => {}
                     }
                 });
             // Keep the primary action visible even for long, scrolling notes.

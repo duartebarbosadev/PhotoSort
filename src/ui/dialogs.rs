@@ -1,7 +1,140 @@
 use super::*;
 
-/// The keyboard-shortcuts window, centred like the other dialogs.
+/// The Keyboard Shortcuts window, centred like the other dialogs.
 pub(super) const HELP_DIALOG: &str = "help_dialog";
+
+/// Keys by where they work. In a key, `+` joins the keys of one combination
+/// and ` / ` separates alternatives; `Ctrl` reads Cmd on macOS.
+const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "Everywhere",
+        &[
+            ("Ctrl+O", "Open a folder"),
+            ("Ctrl+F", "Search"),
+            ("Ctrl+S", "Analyze"),
+            ("Ctrl+Alt+1–5", "Switch step"),
+            ("Shift+Enter", "Review changes"),
+            ("Ctrl+C", "Copy selected photos"),
+            ("F10 / Ctrl+,", "Settings"),
+            ("F12", "About PhotoSort"),
+        ],
+    ),
+    (
+        "Organize",
+        &[
+            ("Alt+1–5", "Grouping mode"),
+            ("F2", "Rename photo"),
+            ("Ctrl+Shift+N", "New folder"),
+            ("\\", "Hold to show original folders"),
+            ("Up / Down", "Previous / next in the tree"),
+            ("Left / Right", "Collapse / expand"),
+        ],
+    ),
+    (
+        "Easy Delete",
+        &[
+            ("1 / Left", "Keep"),
+            ("2 / Right", "Trash"),
+            ("Enter", "Next"),
+            ("R", "Undo"),
+            ("A", "Accept all suggestions"),
+        ],
+    ),
+    (
+        "Fix Rotation",
+        &[
+            ("Q / E", "Rotate left / right"),
+            ("Enter", "Next"),
+            ("R", "Undo"),
+        ],
+    ),
+    (
+        "Pick Best",
+        &[
+            ("1–9", "Keep or trash"),
+            ("Enter", "Show or next"),
+            ("R", "Undo"),
+            ("A", "Accept all suggestions"),
+        ],
+    ),
+    (
+        "Cull",
+        &[
+            ("Left / Right", "Previous / next photo"),
+            ("Up / Down", "Previous / next group"),
+            ("D", "Mark for Trash"),
+            ("Alt+D", "Clear all marks"),
+            ("Ctrl+0–5", "Rate"),
+            ("R / Shift+R", "Rotate right / left"),
+            ("Ctrl+A", "Select all"),
+            ("F", "Folder navigator"),
+            ("I", "Photo details"),
+        ],
+    ),
+    (
+        "Viewer",
+        &[
+            ("F1", "Single photo"),
+            ("F2", "Compare similar"),
+            ("F3", "Sync views"),
+            ("1–9", "Focus a compared photo"),
+            ("0 / A", "Fit / actual size"),
+            ("C", "Swipe compare"),
+        ],
+    ),
+];
+
+/// What a key cap shows: arrows as glyphs, modifiers in the platform's words.
+fn cap_text(key: &str) -> &str {
+    use egui_phosphor::regular as icon;
+    let mac = cfg!(target_os = "macos");
+    match key {
+        "Left" => icon::ARROW_LEFT,
+        "Right" => icon::ARROW_RIGHT,
+        "Up" => icon::ARROW_UP,
+        "Down" => icon::ARROW_DOWN,
+        "Ctrl" if mac => "Cmd",
+        "Alt" if mac => "Option",
+        other => other,
+    }
+}
+
+/// One key cap.
+fn key_cap(ui: &mut egui::Ui, key: &str) {
+    egui::Frame::new()
+        .fill(SELECTED)
+        .stroke(Stroke::new(1.0, LINE))
+        .corner_radius(R_CONTROL)
+        .inner_margin(egui::Margin::symmetric(5, 1))
+        .show(ui, |ui| {
+            ui.label(RichText::new(cap_text(key)).font(medium(11.5)).color(INK));
+        });
+}
+
+/// The caps for `keys`: combinations side by side, alternatives apart.
+fn key_caps(ui: &mut egui::Ui, keys: &str) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        for (index, combo) in keys.split(" / ").enumerate() {
+            if index > 0 {
+                ui.label(RichText::new("/").small().color(FAINT));
+            }
+            // "Ctrl+," splits into "Ctrl" and ",".
+            let mut parts = combo.split('+').peekable();
+            while let Some(part) = parts.next() {
+                if part.is_empty() && parts.peek().is_some_and(|p| p.is_empty()) {
+                    parts.next();
+                    key_cap(ui, "+");
+                } else if !part.is_empty() {
+                    key_cap(ui, part);
+                }
+            }
+        }
+    });
+}
+
+/// The width of the key column, so every action starts at the same place.
+const KEY_COLUMN: f32 = 120.0;
 
 impl PhotoSortApp {
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
@@ -62,142 +195,39 @@ impl PhotoSortApp {
         self.updates_dialog(ctx);
         self.models_dialog(ctx);
         if self.help {
-            let width = (ctx.content_rect().width() - 64.0).clamp(280.0, 460.0);
-            egui::Window::new("A few useful keys")
+            let width = (ctx.content_rect().width() - 64.0).clamp(280.0, 400.0);
+            let height = (ctx.content_rect().height() - 80.0).max(120.0);
+            egui::Window::new("Keyboard Shortcuts")
                 .id(egui::Id::new(HELP_DIALOG))
                 .open(&mut self.help)
                 .collapsible(false)
+                .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
                 .default_width(width)
                 .max_width(width)
-                .max_height((ctx.content_rect().height() - 80.0).max(120.0))
+                .default_height(height)
+                .max_height(height)
                 .vscroll(true)
                 .show(ctx, |ui| {
-                    let shortcuts = [
-                        ("Ctrl/Cmd + O", "Open a library"),
-                        ("Ctrl/Cmd + F", "Focus library search (except Pick Best)"),
-                        ("Ctrl/Cmd + S", "Analyze this step; detect in Fix Rotation"),
-                        (
-                            "Organize: Alt + 1–5",
-                            "Current / date + similarity / visual / faces / location",
-                        ),
-                        ("F", "Cull folder and date navigator"),
-                        ("F10 / Ctrl/Cmd + ,", "Open Settings"),
-                        ("F12", "About PhotoSort"),
-                        (
-                            "Organize: F2",
-                            "Rename the current photo; Enter stages the name",
-                        ),
-                        (
-                            "Organize: Ctrl/Cmd+Shift+N",
-                            "New folder inside the folder you clicked",
-                        ),
-                        (
-                            "Organize: hold \\",
-                            "Show the original folders until released",
-                        ),
-                        (
-                            "Organize: drag on empty space",
-                            "Select every photo the rectangle touches; Shift or Ctrl/Cmd adds",
-                        ),
-                        (
-                            "Shift+Enter",
-                            "Review changes: every move, rename, new folder and Trash mark",
-                        ),
-                        (
-                            "Tree: Up / Down",
-                            "Select the previous / next visible folder, date or group",
-                        ),
-                        (
-                            "Tree: Left / Right",
-                            "Collapse or select parent / expand or select child",
-                        ),
-                        (
-                            "Tree: Home / End / Page keys",
-                            "Jump or page through the focused tree",
-                        ),
-                        (
-                            "Left / Right",
-                            "Cull cycles through visible photos or the current similarity group",
-                        ),
-                        (
-                            "Up / Down",
-                            "Cull follows rating and group navigation preferences",
-                        ),
-                        (
-                            "Ctrl or Cmd + arrows",
-                            "Include Trash marks and bypass Cull movement filters",
-                        ),
-                        (
-                            "Shift + arrows / Shift + click",
-                            "Select a range in Cull browser; extend comparison in Review",
-                        ),
-                        (
-                            "Ctrl/Cmd + C",
-                            "Copy the selected photos to paste in a folder or another app",
-                        ),
-                        (
-                            "Ctrl/Cmd + click / Ctrl/Cmd + A",
-                            "Toggle browser selection / select all visible",
-                        ),
-                        ("D / Alt + D", "Toggle mark / clear library Trash marks"),
-                        (
-                            "Ctrl or Cmd + 0-5",
-                            "Rate selection; viewer stars rate the focused photo",
-                        ),
-                        (
-                            "R / Shift + R / Alt + R",
-                            "Rotate right / left / 180 degrees",
-                        ),
-                        ("I", "Toggle photo details"),
-                        (
-                            "F1 / F2",
-                            "Viewer: single photo, press again to return / similar comparison",
-                        ),
-                        (
-                            "F2 / Ctrl or Cmd + Shift + N",
-                            "Organize grid: rename / new folder",
-                        ),
-                        (
-                            "0 / A / Double-click canvas",
-                            "Fit / actual size / toggle actual size",
-                        ),
-                        (
-                            "C / 1-9 / Esc",
-                            "Swipe compare: the 2-9 photos compared or selected in slices with dividers / show one whole, again for the slices (Ctrl/Cmd + 0-5 rates it) / close",
-                        ),
-                        (
-                            "1-9 / F3",
-                            "Focus comparison photo (in single view: nth photo of its group) / toggle synchronized views",
-                        ),
-                        (
-                            "Drag / Scroll canvas",
-                            "Pan / zoom toward the pointer for the focused photo or synchronized set",
-                        ),
-                        ("Shift + Enter", "Review staged changes"),
-                    ];
-                    for (key, action) in shortcuts {
-                        let row = |ui: &mut egui::Ui| {
-                            ui.monospace(key);
-                            ui.add(egui::Label::new(action).wrap());
-                        };
-                        // Narrow windows put the action under its key.
-                        if width < 400.0 {
-                            ui.vertical(row);
-                        } else {
-                            ui.horizontal(row);
+                    ui.set_width(width - 16.0);
+                    for (index, (title, keys)) in SHORTCUTS.iter().enumerate() {
+                        if index > 0 {
+                            ui.add_space(S3);
                         }
+                        ui.label(caption(title));
+                        ui.add_space(S1);
+                        egui::Grid::new(("shortcuts", index))
+                            .num_columns(2)
+                            .min_col_width(KEY_COLUMN.min(width / 2.0))
+                            .spacing(egui::vec2(S2, 5.0))
+                            .show(ui, |ui| {
+                                for (key, action) in *keys {
+                                    key_caps(ui, key);
+                                    ui.label(RichText::new(*action).color(INK));
+                                    ui.end_row();
+                                }
+                            });
                     }
-                    ui.separator();
-                    ui.label("Ctrl/Cmd+Alt+1–5 switches to a visible workflow step.");
-                    for step in Step::ALL {
-                        ui.label(format!(
-                            "{}: {}",
-                            step.title(),
-                            hints::workflow_hint(step)
-                        ));
-                    }
-                    ui.label("All analysis runs on your computer. Nothing is uploaded.");
                 });
         }
         self.plan_review_dialog(ctx);
@@ -320,6 +350,15 @@ mod error_tests {
         let long = "x".repeat(400);
         let (headline, details) = error_parts(&long);
         assert!(headline.chars().count() <= 141 && details.is_some());
+    }
+}
+
+/// Hooks for the headless screenshot gallery (`examples/ui_gallery.rs`); not
+/// part of the application API.
+#[doc(hidden)]
+impl PhotoSortApp {
+    pub fn gallery_shortcuts(&mut self) {
+        self.help = true;
     }
 }
 
