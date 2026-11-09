@@ -112,67 +112,22 @@ impl PhotoSortApp {
     /// Never replaces an unreadable file with defaults behind the user's
     /// back: opening a folder, the intro or an update check keep their change
     /// for this session only. Saving Settings writes the file again.
-    /// Settings applied but not saved stay out of the file; the history
-    /// recorded meanwhile, such as recent folders, goes in.
     pub(super) fn save_preferences(&mut self) {
         if self.preferences_unreadable {
             return;
         }
-        let preferences = match &self.preferences_saved {
-            Some(saved) => {
-                let mut file = saved.clone();
-                keep_live(&mut file, &self.preferences);
-                file
-            }
-            None => self.preferences.clone(),
-        };
         if let Some(path) = &self.preferences_path
             && let Err(error) = self.runtime.io(IoWork::SavePreferences {
                 path: path.clone(),
-                preferences,
+                preferences: self.preferences.clone(),
             })
         {
             self.error = Some(error);
         }
     }
-    /// Settings › Apply: puts the draft into effect and keeps the dialog
-    /// open. The file keeps the saved settings until Save.
-    pub(super) fn apply_settings(&mut self, draft: Preferences) {
-        let saved = self
-            .preferences_saved
-            .take()
-            .unwrap_or_else(|| self.preferences.clone());
-        self.preferences_saved = Some(saved);
-        self.use_preferences(draft);
-        // Applying the saved settings again leaves nothing unsaved.
-        if self
-            .preferences_saved
-            .as_ref()
-            .is_some_and(|saved| !pages::has_pending(&self.preferences, saved))
-        {
-            self.preferences_saved = None;
-        }
-    }
-    /// Settings › Save: puts the draft into effect and writes it to the file.
-    pub(super) fn save_settings(&mut self, draft: Preferences) {
-        self.preferences_saved = None;
-        self.use_preferences(draft);
-        self.preferences_unreadable = false;
-        self.save_preferences();
-    }
-    /// Settings › Cancel: settings applied but not saved go back to the
-    /// saved ones.
-    pub(super) fn cancel_settings(&mut self) {
-        if let Some(saved) = self.preferences_saved.take() {
-            self.use_preferences(saved);
-        }
-    }
-    /// The saved settings that Save and the sidebar's dots compare with.
-    pub(super) fn saved_settings(&self) -> &Preferences {
-        self.preferences_saved.as_ref().unwrap_or(&self.preferences)
-    }
-    /// Puts `next` into effect for this session without writing the file.
-    fn use_preferences(&mut self, mut next: Preferences) {
+    /// Settings › Apply and Save: puts the draft into effect and writes it.
+    /// Apply keeps the dialog open; Save closes it.
+    pub(super) fn save_settings(&mut self, mut next: Preferences) {
         keep_live(&mut next, &self.preferences);
         next.normalize();
         self.runtime.cache.configure(next.cache);
@@ -189,6 +144,8 @@ impl PhotoSortApp {
         // A new cache limit or RAW look: build what that now needs.
         self.build_previews();
         self.navigation_notice = None;
+        self.preferences_unreadable = false;
+        self.save_preferences();
         if auto_on && self.step == Step::EasyDelete {
             self.stage_delete_suggestions();
         }
@@ -387,7 +344,7 @@ impl PhotoSortApp {
                 let body = (screen.height() - 220.0 - error_height).clamp(120.0, 600.0);
                 ui.horizontal_top(|ui| {
                     if let Some(chosen) =
-                        pages::sidebar(ui, current, compact, &draft, self.saved_settings())
+                        pages::sidebar(ui, current, compact, &draft, &self.preferences)
                     {
                         current = chosen;
                     }
@@ -403,56 +360,37 @@ impl PhotoSortApp {
                 ctx.data_mut(|d| d.insert_temp(page_id, current));
                 ui.add_space(S2);
                 ui.separator();
-                // Unapplied: the draft differs from the settings in effect.
-                // Unsaved: it differs from the saved settings, which Apply
-                // leaves in the file until Save.
-                let unapplied = pages::has_pending(&draft, &self.preferences);
-                let unsaved = pages::has_pending(&draft, self.saved_settings());
-                let trial = self.preferences_saved.is_some();
+                let pending = pages::has_pending(&draft, &self.preferences);
                 pages::fixed_width(ui, |ui| {
                     ui.horizontal(|ui| {
-                        let note = if unapplied {
-                            Some("Changes not applied")
-                        } else if unsaved {
-                            Some("Applied, not saved")
-                        } else {
-                            None
-                        };
-                        if let Some(note) = note {
+                        if pending {
                             let (dot, _) =
                                 ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
                             ui.painter().circle_filled(dot.center(), 3.5, ACCENT);
-                            ui.label(RichText::new(note).color(ACCENT));
+                            ui.label(RichText::new("Unsaved changes").color(ACCENT));
                         } else {
-                            ui.label(
-                                RichText::new("Apply uses changes now; Save keeps them.")
-                                    .color(FAINT),
-                            );
+                            ui.label(RichText::new("All changes saved.").color(FAINT));
                         }
                         pages::trailing(ui, egui::Id::new("settings_footer"), |ui| {
-                            if ui
-                                .button("Cancel")
-                                .on_hover_text(if trial {
-                                    "Close and go back to the saved settings"
-                                } else {
-                                    "Close without saving"
-                                })
-                                .clicked()
-                            {
+                            // With nothing unsaved there is nothing to cancel.
+                            let (label, hover) = if pending {
+                                ("Cancel", "Close without saving")
+                            } else {
+                                ("Close", "Close Settings")
+                            };
+                            if ui.button(label).on_hover_text(hover).clicked() {
                                 action = 1;
                             }
                             if ui
-                                .add_enabled(unapplied, egui::Button::new("Apply"))
-                                .on_hover_text("Use these settings now and keep Settings open")
+                                .add_enabled(pending, egui::Button::new("Apply"))
+                                .on_hover_text("Save these settings and keep Settings open")
                                 .clicked()
                             {
                                 action = 3;
                             }
-                            // After Apply, a draft edited back to the saved
-                            // settings still has something for Save to put back.
                             if ui
-                                .add_enabled(unapplied || unsaved, primary("Save"))
-                                .on_hover_text("Use and keep these settings, then close")
+                                .add_enabled(pending, primary("Save"))
+                                .on_hover_text("Save these settings and close")
                                 .clicked()
                             {
                                 action = 2;
@@ -465,10 +403,10 @@ impl PhotoSortApp {
                 action = 1;
             }
             match action {
-                1 => self.cancel_settings(),
+                1 => {}
                 2 => self.save_settings(draft),
                 3 => {
-                    self.apply_settings(draft.clone());
+                    self.save_settings(draft.clone());
                     self.preferences_draft = Some(draft);
                 }
                 _ => self.preferences_draft = Some(draft),

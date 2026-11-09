@@ -560,7 +560,7 @@ fn settings_access_cache_and_general_anchors_keep_footer_visible_at_small_sizes(
                 ));
             }
             let tree = output.unwrap().platform_output.accesskit_update.unwrap();
-            for label in [label, "General", "Storage", "Cancel", "Apply", "Save"] {
+            for label in [label, "General", "Storage", "Close", "Apply", "Save"] {
                 let node = tree
                     .nodes
                     .iter()
@@ -675,62 +675,7 @@ fn first_visit_to_each_settings_page_draws_the_dialog_in_place() {
     }
 }
 #[test]
-fn apply_uses_settings_now_and_only_save_writes_them() {
-    use crate::core::processing::Backend;
-    let (dir, mut app) = fixture();
-    let path = dir.path().join("preferences.json");
-    let mut saved = Preferences::default();
-    saved.processing.backend = Backend::Cpu;
-    saved.save(&path).unwrap();
-    app.load_preferences(path.clone());
-    app.runtime.processing.configure(app.preferences.processing);
-    let mut draft = app.preferences.clone();
-    draft.processing.backend = Backend::Cuda;
-    draft.show_shortcuts = false;
-    // Apply: in effect at once, for the next analysis, without restarting.
-    app.apply_settings(draft.clone());
-    assert_eq!(app.runtime.processing.snapshot_run().backend, Backend::Cuda);
-    assert!(!app.preferences.show_shortcuts);
-    assert!(app.preferences_saved.is_some());
-    assert!(pages::has_pending(&draft, app.saved_settings()));
-    assert!(!pages::has_pending(&draft, &app.preferences));
-    // History recorded meanwhile is written; the applied settings are not.
-    app.preferences.remember(dir.path());
-    app.save_preferences();
-    app.runtime.shutdown();
-    let file = Preferences::load(&path).unwrap();
-    assert_eq!(file.processing.backend, Backend::Cpu);
-    assert!(file.show_shortcuts);
-    assert_eq!(file.recent_folders, vec![dir.path().to_path_buf()]);
-    // Cancel goes back to the saved settings and keeps the history.
-    let (_other, mut app) = fixture();
-    app.load_preferences(path.clone());
-    app.runtime.processing.configure(app.preferences.processing);
-    app.apply_settings(draft.clone());
-    app.cancel_settings();
-    assert_eq!(app.runtime.processing.snapshot_run().backend, Backend::Cpu);
-    assert!(app.preferences.show_shortcuts && app.preferences_saved.is_none());
-    assert_eq!(
-        app.preferences.recent_folders,
-        vec![dir.path().to_path_buf()]
-    );
-    // Applying the saved settings again leaves nothing to save.
-    app.apply_settings(draft.clone());
-    app.apply_settings(app.saved_settings().clone());
-    assert!(app.preferences_saved.is_none());
-    // Save after Apply writes what is in effect and leaves nothing to undo.
-    app.apply_settings(draft.clone());
-    app.save_settings(draft);
-    assert!(app.preferences_saved.is_none());
-    app.cancel_settings();
-    assert_eq!(app.runtime.processing.snapshot_run().backend, Backend::Cuda);
-    app.runtime.shutdown();
-    let file = Preferences::load(&path).unwrap();
-    assert_eq!(file.processing.backend, Backend::Cuda);
-    assert!(!file.show_shortcuts);
-}
-#[test]
-fn settings_buttons_apply_keep_the_dialog_open_and_save_closes_it() {
+fn apply_saves_and_keeps_settings_open_cancel_drops_only_what_is_unsaved_and_save_closes() {
     use crate::core::processing::Backend;
     let (dir, mut app) = fixture();
     let path = dir.path().join("preferences.json");
@@ -798,19 +743,44 @@ fn settings_buttons_apply_keep_the_dialog_open_and_save_closes_it() {
         }
         frame(app, vec![])
     };
+    // The file worker writes in the background.
+    let saved = |check: &dyn Fn(&Preferences) -> bool| {
+        let deadline = Instant::now() + worker_patience();
+        loop {
+            if Preferences::load(&path).is_ok_and(|p| check(&p)) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "preferences were not written");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    // Apply: in effect and written, for the next analysis, with Settings open.
     let output = click(&mut app, "Apply");
     assert!(app.preferences_draft.is_some(), "Apply keeps Settings open");
     assert_eq!(app.runtime.processing.snapshot_run().backend, Backend::Cpu);
-    assert!(find(&output, "Applied, not saved").is_some());
+    saved(&|p| p.processing.backend == Backend::Cpu);
+    assert!(find(&output, "All changes saved.").is_some());
     assert!(find(&output, "Apply").unwrap().is_disabled());
-    assert!(!path.exists(), "Apply writes nothing");
+    assert!(find(&output, "Save").unwrap().is_disabled());
+    // Nothing unsaved: the way out reads Close.
+    assert!(find(&output, "Close").is_some() && find(&output, "Cancel").is_none());
+    // Cancel drops the edit made since Apply and keeps what Apply saved.
+    app.preferences_draft.as_mut().unwrap().show_shortcuts = false;
+    click(&mut app, "Cancel");
+    assert!(app.preferences_draft.is_none());
+    assert!(app.preferences.show_shortcuts);
+    assert_eq!(app.runtime.processing.snapshot_run().backend, Backend::Cpu);
+    saved(&|p| p.show_shortcuts && p.processing.backend == Backend::Cpu);
+    // Save writes and closes.
+    app.open_settings(Section::Performance);
+    app.preferences_draft.as_mut().unwrap().processing.backend = Backend::Auto;
     click(&mut app, "Save");
     assert!(app.preferences_draft.is_none(), "Save closes Settings");
-    assert!(app.preferences_saved.is_none());
+    assert_eq!(app.runtime.processing.snapshot_run().backend, Backend::Auto);
     app.runtime.shutdown();
     assert_eq!(
         Preferences::load(&path).unwrap().processing.backend,
-        Backend::Cpu
+        Backend::Auto
     );
 }
 #[test]
@@ -853,14 +823,14 @@ fn run_ai_on_says_where_ai_will_run_then_where_it_runs() {
     assert_eq!(app.running_on(), None);
     app.analysis_run = Some(3);
     assert_eq!(app.running_on().as_deref(), Some("Running on NVIDIA CUDA"));
-    // Choosing CPU, applied or not, tells what the next analysis uses.
+    // Choosing CPU, saved or not, tells what the next analysis uses.
     assert_eq!(
         app.running_on_note(Backend::Cpu),
         "Running on NVIDIA CUDA · next analysis on CPU"
     );
     let mut draft = app.preferences.clone();
     draft.processing.backend = Backend::Cpu;
-    app.apply_settings(draft);
+    app.save_settings(draft);
     assert_eq!(
         app.running_on_note(Backend::Cpu),
         "Running on NVIDIA CUDA · next analysis on CPU"

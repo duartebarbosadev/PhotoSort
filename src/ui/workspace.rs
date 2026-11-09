@@ -159,9 +159,6 @@ pub struct PhotoSortApp {
     /// The preferences file exists but could not be read; defaults stand in.
     preferences_unreadable: bool,
     preferences_draft: Option<crate::core::preferences::Preferences>,
-    /// The saved settings while Settings › Apply has others in effect; the
-    /// file keeps these until Save, and Cancel goes back to them.
-    preferences_saved: Option<crate::core::preferences::Preferences>,
     preferences_section: Option<preferences::Section>,
     /// Settings is asking before it forgets every remembered folder.
     forget_confirm: bool,
@@ -466,7 +463,6 @@ impl PhotoSortApp {
             preferences_path: None,
             preferences_unreadable: false,
             preferences_draft: None,
-            preferences_saved: None,
             preferences_section: None,
             forget_confirm: false,
             forget_message: None,
