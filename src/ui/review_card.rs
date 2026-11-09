@@ -101,7 +101,7 @@ pub(super) struct ReviewCard {
     /// Shown large beside the grid: a soft, neutral highlight that eases in.
     pub shown: bool,
     /// A link in the header back to the suggestion: its label (such as
-    /// "Undo") and tooltip.
+    /// "Undo") and tooltip, if any.
     pub undo: Option<(String, String)>,
 }
 
@@ -134,6 +134,9 @@ pub(super) struct CardLayout {
     /// The height of its photos, shared by its row; each photo is as wide
     /// as its shape needs at that height.
     pub photo_height: f32,
+    /// A header over the photos, for a title or buttons. Without one, Undo
+    /// sits over the first photo's top-left corner.
+    pub header: bool,
     pub captions: bool,
     /// A line of facts under each photo.
     pub facts: bool,
@@ -155,9 +158,11 @@ const RADIUS: f32 = 8.0;
 
 impl CardLayout {
     pub fn height(&self) -> f32 {
-        PAD + HEADER
-            + HEADER_GAP
-            + self.photo_height
+        PAD + if self.header {
+            HEADER + HEADER_GAP
+        } else {
+            0.0
+        } + self.photo_height
             + if self.captions { CAPTION } else { 0.0 }
             + if self.facts { FACTS } else { 0.0 }
             + PAD
@@ -218,11 +223,12 @@ impl PhotoSortApp {
     /// a row share one height, near the shared photo size, and each photo
     /// is as wide as its shape needs, so it fills its slot. `aspects` gives
     /// a card's photos' widths over their heights, from what is known
-    /// without drawing it, and `facts` whether it shows a line of facts
-    /// under its photos; a row keeps that line only when one of its cards
-    /// needs it. Cards are numbered across sections, `sections` holding each
-    /// one's count. Returns the card and event clicked this frame, or a
-    /// click on the empty space around the cards.
+    /// without drawing it, `facts` whether it shows a line of facts under
+    /// its photos, and `titled` whether it has a title; a row keeps that
+    /// line, or a header, only when one of its cards needs it. Cards are
+    /// numbered across sections, `sections` holding each one's count.
+    /// Returns the card and event clicked this frame, or a click on the
+    /// empty space around the cards.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn sectioned_card_grid(
         &mut self,
@@ -231,12 +237,13 @@ impl PhotoSortApp {
         sections: &[usize],
         aspects: impl Fn(&Self, usize) -> Vec<f32>,
         facts: impl Fn(&Self, usize) -> bool,
+        titled: impl Fn(&Self, usize) -> bool,
         header: impl FnMut(&mut Self, &mut egui::Ui, usize),
         card: impl FnMut(&mut Self, usize) -> Option<ReviewCard>,
         current: Option<usize>,
     ) -> Option<GridClick> {
         self.rows_card_grid(
-            ui, salt, sections, true, aspects, facts, header, card, current,
+            ui, salt, sections, true, aspects, facts, titled, header, card, current,
         )
     }
 
@@ -259,6 +266,7 @@ impl PhotoSortApp {
             false,
             aspects,
             facts,
+            |_, _| true,
             |_, _, _| {},
             card,
             current,
@@ -274,6 +282,7 @@ impl PhotoSortApp {
         headers: bool,
         aspects: impl Fn(&Self, usize) -> Vec<f32>,
         facts: impl Fn(&Self, usize) -> bool,
+        titled: impl Fn(&Self, usize) -> bool,
         mut header: impl FnMut(&mut Self, &mut egui::Ui, usize),
         mut card: impl FnMut(&mut Self, usize) -> Option<ReviewCard>,
         current: Option<usize>,
@@ -309,6 +318,7 @@ impl PhotoSortApp {
                 row.range = row.range.start + start..row.range.end + start;
                 let layout = CardLayout {
                     photo_height: row.height,
+                    header: row.range.clone().any(|i| titled(self, i)),
                     captions,
                     facts: row.range.clone().any(|i| facts(self, i)),
                 };
@@ -413,7 +423,11 @@ impl PhotoSortApp {
             egui::WidgetInfo::labeled(
                 egui::WidgetType::Button,
                 true,
-                format!("{}: {photos}", card.title),
+                if card.title.is_empty() {
+                    photos.clone()
+                } else {
+                    format!("{}: {photos}", card.title)
+                },
             )
         });
         let hover = ui
@@ -443,91 +457,92 @@ impl PhotoSortApp {
         // link back to the suggestion, from the right.
         let inner = rect.shrink(PAD);
         let header = egui::Rect::from_min_size(inner.min, egui::vec2(inner.width(), HEADER));
-        let mut right = header.right();
-        for (index, button) in card.buttons.iter().enumerate().rev() {
-            let ink = if button.enabled { MUTED } else { FAINT };
-            let glyph =
-                painter.layout_no_wrap(button.text.clone(), FontId::proportional(15.0), ink);
-            let rect = Align2::RIGHT_CENTER.anchor_size(
-                egui::pos2(right, header.center().y),
-                egui::vec2(glyph.size().x + 10.0, HEADER + 4.0),
-            );
-            let response = ui
-                .interact(rect, ui.id().with(("button", index)), Sense::click())
-                .on_hover_text(&button.hover);
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Button, button.enabled, &button.hover)
-            });
-            if button.enabled && response.hovered() {
-                painter.rect_filled(rect, R_CONTROL, ACCENT_SOFT);
+        if layout.header {
+            let mut right = header.right();
+            for (index, button) in card.buttons.iter().enumerate().rev() {
+                let ink = if button.enabled { MUTED } else { FAINT };
+                let glyph =
+                    painter.layout_no_wrap(button.text.clone(), FontId::proportional(15.0), ink);
+                let rect = Align2::RIGHT_CENTER.anchor_size(
+                    egui::pos2(right, header.center().y),
+                    egui::vec2(glyph.size().x + 10.0, HEADER + 4.0),
+                );
+                let response = ui
+                    .interact(rect, ui.id().with(("button", index)), Sense::click())
+                    .on_hover_text(&button.hover);
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        button.enabled,
+                        &button.hover,
+                    )
+                });
+                if button.enabled && response.hovered() {
+                    painter.rect_filled(rect, R_CONTROL, ACCENT_SOFT);
+                }
+                painter.galley(rect.center() - glyph.size() / 2.0, glyph, ink);
+                if button.enabled && response.clicked() {
+                    event = Some(CardEvent::Button(index));
+                }
+                right = rect.left() - 2.0;
             }
-            painter.galley(rect.center() - glyph.size() / 2.0, glyph, ink);
-            if button.enabled && response.clicked() {
-                event = Some(CardEvent::Button(index));
+            if !card.buttons.is_empty() {
+                right -= S1;
             }
-            right = rect.left() - 2.0;
-        }
-        if !card.buttons.is_empty() {
-            right -= S1;
-        }
-        if let Some((label, hover)) = &card.undo {
-            let undo = painter.layout_no_wrap(
-                format!("{}  {label}", egui_phosphor::regular::ARROW_U_UP_LEFT),
+            if let Some((label, hover)) = &card.undo {
+                let (link, clicked) = undo_link(
+                    ui,
+                    &painter,
+                    Align2::RIGHT_CENTER,
+                    egui::pos2(right, header.center().y),
+                    label,
+                    hover,
+                    false,
+                );
+                if clicked {
+                    event = Some(CardEvent::Undo);
+                }
+                right = link.left() - S2;
+            }
+            let color = MUTED;
+            let state = painter.layout_no_wrap(
+                card.state_text.clone().unwrap_or_default(),
                 medium(11.0),
-                ACCENT,
+                color,
             );
-            let link = Align2::RIGHT_CENTER.anchor_size(
-                egui::pos2(right, header.center().y),
-                undo.size() + egui::vec2(8.0, 4.0),
+            painter.galley(
+                egui::pos2(
+                    right - state.size().x,
+                    header.center().y - state.size().y / 2.0,
+                ),
+                state.clone(),
+                color,
             );
-            let response = ui
-                .interact(link, ui.id().with("undo"), Sense::click())
-                .on_hover_text(hover)
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            response
-                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-            if response.hovered() {
-                painter.rect_filled(link, R_CONTROL, ACCENT_SOFT);
+            let mut title =
+                egui::text::LayoutJob::simple_singleline(card.title.clone(), semibold(13.0), INK);
+            title.wrap = egui::text::TextWrapping::truncate_at_width(
+                (right - header.left() - state.size().x - S3).max(S6),
+            );
+            let title = painter.layout_job(title);
+            let title_rect = egui::Rect::from_min_size(
+                header.left_center() - egui::vec2(0.0, title.size().y / 2.0),
+                title.size(),
+            );
+            painter.galley(title_rect.min, title, INK);
+            if let Some(hover) = &card.title_hover {
+                ui.interact(title_rect, ui.id().with("title"), Sense::hover())
+                    .on_hover_text(hover);
             }
-            painter.galley(link.min + egui::vec2(4.0, 2.0), undo, ACCENT);
-            if response.clicked() {
-                event = Some(CardEvent::Undo);
-            }
-            right = link.left() - S2;
-        }
-        let color = MUTED;
-        let state = painter.layout_no_wrap(
-            card.state_text.clone().unwrap_or_default(),
-            medium(11.0),
-            color,
-        );
-        painter.galley(
-            egui::pos2(
-                right - state.size().x,
-                header.center().y - state.size().y / 2.0,
-            ),
-            state.clone(),
-            color,
-        );
-        let mut title =
-            egui::text::LayoutJob::simple_singleline(card.title.clone(), semibold(13.0), INK);
-        title.wrap = egui::text::TextWrapping::truncate_at_width(
-            (right - header.left() - state.size().x - S3).max(S6),
-        );
-        let title = painter.layout_job(title);
-        let title_rect = egui::Rect::from_min_size(
-            header.left_center() - egui::vec2(0.0, title.size().y / 2.0),
-            title.size(),
-        );
-        painter.galley(title_rect.min, title, INK);
-        if let Some(hover) = &card.title_hover {
-            ui.interact(title_rect, ui.id().with("title"), Sense::hover())
-                .on_hover_text(hover);
         }
 
         // Photos, side by side, each as wide as its shape needs; on a card
         // wider than its photos, as for a header, they are centred.
-        let top = header.bottom() + HEADER_GAP;
+        let top = if layout.header {
+            header.bottom() + HEADER_GAP
+        } else {
+            inner.top()
+        };
+        let mut last = None;
         let widths: Vec<f32> = (0..card.photos.len())
             .map(|i| aspects.get(i).copied().unwrap_or(4.0 / 3.0) * layout.photo_height)
             .collect();
@@ -542,6 +557,7 @@ impl PhotoSortApp {
                 egui::vec2(widths[side] * scale, layout.photo_height),
             );
             left = slot.right() + PHOTO_GAP;
+            last = Some(slot);
             let (pill, mark) = self.card_photo(ui, &painter, slot, fill, photo);
             let response = ui.interact(slot, ui.id().with(("photo", side)), Sense::click());
             response.widget_info(|| {
@@ -660,6 +676,17 @@ impl PhotoSortApp {
                     galley,
                     MUTED,
                 );
+            }
+        }
+        // A card without a header puts Undo in its last photo's lower-right
+        // corner, clear of the pills and the eye insets, and after the
+        // photos so it takes the click.
+        if !layout.header
+            && let (Some((label, hover)), Some(last)) = (&card.undo, last)
+        {
+            let at = last.right_bottom() - egui::vec2(S1 + 2.0, S1 + 2.0);
+            if undo_link(ui, &painter, Align2::RIGHT_BOTTOM, at, label, hover, true).1 {
+                event = Some(CardEvent::Undo);
             }
         }
 
@@ -810,6 +837,46 @@ fn paint_inset(painter: &egui::Painter, slot: egui::Rect, inset: &Inset) {
     );
 }
 
+/// A card's link back to its suggestion, placed by `align` at `at`; over a
+/// photo it gets a dark backing. Returns its rect and whether it was
+/// clicked.
+fn undo_link(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    align: Align2,
+    at: egui::Pos2,
+    label: &str,
+    hover: &str,
+    over_photo: bool,
+) -> (egui::Rect, bool) {
+    let text = painter.layout_no_wrap(
+        format!("{}  {label}", egui_phosphor::regular::ARROW_U_UP_LEFT),
+        medium(11.0),
+        ACCENT,
+    );
+    let (pad, size) = if over_photo {
+        (egui::vec2(8.0, 3.0), text.size() + egui::vec2(16.0, 6.0))
+    } else {
+        (egui::vec2(4.0, 2.0), text.size() + egui::vec2(8.0, 4.0))
+    };
+    let link = align.anchor_size(at, size);
+    let mut response = ui
+        .interact(link, ui.id().with("undo"), Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    if !hover.is_empty() {
+        response = response.on_hover_text(hover);
+    }
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    if over_photo {
+        painter.rect_filled(link, R_CONTROL, Color32::from_black_alpha(170));
+    }
+    if response.hovered() {
+        painter.rect_filled(link, R_CONTROL, ACCENT_SOFT);
+    }
+    painter.galley(link.min + pad, text, ACCENT);
+    (link, response.clicked())
+}
+
 /// The pill over a card photo's top-right corner. Returns its rect.
 fn badge_pill(painter: &egui::Painter, slot: egui::Rect, badge: &Badge) -> egui::Rect {
     use egui_phosphor::regular as icon;
@@ -866,6 +933,13 @@ pub(super) fn slot_ratio(width: u32, height: u32, orientation: u8) -> f32 {
     (h as f32 / w as f32).clamp(0.56, 1.5)
 }
 
+/// The one line over a guided step's grid, cut short when the room runs out
+/// with the whole line in its tooltip.
+pub(super) fn summary_label(ui: &mut egui::Ui, text: &str) {
+    ui.add(egui::Label::new(RichText::new(text).color(INK)).truncate())
+        .on_hover_text(text);
+}
+
 pub(super) fn size_text(bytes: u64) -> String {
     let megabytes = bytes as f64 / 1_048_576.0;
     if megabytes >= 1024.0 {
@@ -907,7 +981,7 @@ impl PhotoSortApp {
             egui::WidgetType::Slider,
             "Photo size",
         )
-        .on_hover_text("Photo size, the same in every step");
+        .on_hover_text("Photo size");
         if response.changed() {
             self.preferences.photo_size = value;
         }
@@ -1090,11 +1164,18 @@ mod tests {
     fn cards_reserve_lines_only_for_what_they_show() {
         let bare = CardLayout {
             photo_height: 160.0,
+            header: true,
             captions: false,
             facts: false,
         };
         // Header, the photo and padding: nothing under the photo.
         assert_eq!(bare.height(), PAD + HEADER + HEADER_GAP + 160.0 + PAD);
+        // A row of untitled cards has no header.
+        let untitled = CardLayout {
+            header: false,
+            ..bare
+        };
+        assert_eq!(untitled.height(), PAD + 160.0 + PAD);
         let named = CardLayout {
             captions: true,
             ..bare

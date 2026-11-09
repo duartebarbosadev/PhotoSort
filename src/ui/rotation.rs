@@ -68,7 +68,7 @@ impl PhotoSortApp {
                 self.analysis_failures.clear();
                 self.analysis_successes = 0;
                 self.progress = Some((0, self.media.len()));
-                self.set_status("Detecting orientations locally…".into());
+                self.set_status("Checking orientation…".into());
             }
             Err(error) => self.error = Some(error),
         }
@@ -137,7 +137,6 @@ impl PhotoSortApp {
         let mut queue_only = self.rotation_queue_only;
         if ui
             .add(Switch::new(&mut queue_only, "Suggestions only"))
-            .on_hover_text("Off: every photo, so any of them can be turned by hand")
             .changed()
         {
             self.rotation_queue_only = queue_only;
@@ -165,11 +164,8 @@ impl PhotoSortApp {
     }
     fn rotation_link_text(&self, id: MediaId, link: RotationLink) -> (&'static str, String) {
         match link {
-            RotationLink::Undo => ("Undo", "Back to where it started · R".to_owned()),
-            RotationLink::KeepOriginal => (
-                "Keep original",
-                "Leave the photo as it is on disk".to_owned(),
-            ),
+            RotationLink::Undo => ("Undo", "R".to_owned()),
+            RotationLink::KeepOriginal => ("Keep original", String::new()),
             RotationLink::UseSuggestion => ("Use suggestion", self.rotation_suggestion_text(id)),
         }
     }
@@ -178,17 +174,12 @@ impl PhotoSortApp {
         let Some(suggestion) = self.rotation_review.suggestion(id) else {
             return String::new();
         };
-        let mut text = format!(
-            "PhotoSort suggests turning it {}",
-            turn_text(suggestion.turns)
-        );
+        let mut text = format!("Suggested: {}", turn_text(suggestion.turns));
         if let Some(found) = self.rotations.get(&id) {
             text.push_str(&format!(" · {:.0}% confident", found.confidence * 100.0));
         }
         if suggestion.uncertain {
-            text.push_str(
-                "\nUnsure: the rotated views disagree, so it is not turned until you choose",
-            );
+            text.push_str("\nUnsure, so not turned until you choose");
         }
         text
     }
@@ -252,7 +243,11 @@ impl PhotoSortApp {
             }
             if let Some(link) = self.rotation_link(id) {
                 let (label, hover) = self.rotation_link_text(id, link);
-                if ui.button(label).on_hover_text(hover).clicked() {
+                let mut response = ui.button(label);
+                if !hover.is_empty() {
+                    response = response.on_hover_text(hover);
+                }
+                if response.clicked() {
                     self.follow_rotation_link(id, link);
                 }
             }
@@ -312,8 +307,11 @@ impl PhotoSortApp {
                         &lengths,
                         |app, i| app.rotation_card_aspects(ids[i]),
                         |_, _| false,
+                        // The rotate buttons sit in every card's header.
+                        |_, _| true,
                         |_, ui, section| {
-                            let (suggestions, n) = sections[section];
+                            // The status bar counts the suggestions.
+                            let (suggestions, _) = sections[section];
                             ui.label(
                                 RichText::new(if suggestions {
                                     "Sideways or upside down"
@@ -323,7 +321,6 @@ impl PhotoSortApp {
                                 .font(semibold(14.0))
                                 .color(INK),
                             );
-                            ui.label(RichText::new(n.to_string()).color(MUTED));
                         },
                         |app, i| Some(app.rotation_card(ids[i])),
                         current,
@@ -354,20 +351,10 @@ impl PhotoSortApp {
                 self.size_slider(ui);
                 ui.add_space(S3);
                 ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
-                    let mut job = egui::text::LayoutJob::default();
-                    let body = egui::TextStyle::Body.resolve(ui.style());
-                    job.append(
+                    super::review_card::summary_label(
+                        ui,
                         &format!("{} turned", count(turned, "photo", "photos")),
-                        0.0,
-                        egui::TextFormat::simple(body.clone(), INK),
                     );
-                    job.append(
-                        " · nothing changes on disk until you apply Review changes",
-                        0.0,
-                        egui::TextFormat::simple(body, MUTED),
-                    );
-                    let full = job.text.clone();
-                    ui.add(egui::Label::new(job).truncate()).on_hover_text(full);
                 });
             });
         });
@@ -395,18 +382,9 @@ impl PhotoSortApp {
                     .inner_margin(S2 - 1.0)
                     .show(ui, |ui| {
                         ui.set_min_size(ui.available_size());
+                        // No title: the selected card beside the panel names
+                        // the photo.
                         ui.horizontal(|ui| {
-                            let name = self
-                                .active
-                                .and_then(|id| self.index.get(&id))
-                                .map(|i| self.media[*i].name())
-                                .unwrap_or_default();
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(name).font(semibold(13.0)).color(INK),
-                                )
-                                .truncate(),
-                            );
                             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                                 if icon_button(ui, icon::X, "Close · Esc").clicked() {
                                     self.rotation_panel = false;
@@ -504,11 +482,19 @@ impl PhotoSortApp {
         };
         let mut photos = vec![photo(0, path.clone())];
         if staged != 0 {
+            // The suggestion only when the turn differs from it.
             let mut name = format!("{path}\nTurned {}", turn_text(staged));
-            let suggestion = self.rotation_suggestion_text(id);
-            if !suggestion.is_empty() {
-                name.push('\n');
-                name.push_str(&suggestion);
+            match self.rotation_review.suggestion(id) {
+                Some(s) if s.turns % 4 != staged % 4 => {
+                    name.push('\n');
+                    name.push_str(&self.rotation_suggestion_text(id));
+                }
+                Some(_) => {
+                    if let Some(found) = self.rotations.get(&id) {
+                        name.push_str(&format!(" · {:.0}% confident", found.confidence * 100.0));
+                    }
+                }
+                None => {}
             }
             photos.push(photo(staged, name));
         }

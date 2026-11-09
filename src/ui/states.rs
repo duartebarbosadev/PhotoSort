@@ -84,18 +84,9 @@ impl PhotoSortApp {
                 organize_activity(mode),
                 "Previews stay available. Folders appear when grouping finishes.",
             ),
-            _ if self.rotation_run == Some(run) => (
-                "Checking orientation",
-                "Looking at each photo to find the ones that are sideways or upside down.",
-            ),
-            _ if self.delete_run == Some(run) => (
-                "Looking for photos to clean up",
-                "Checking for duplicates, near-duplicates, and blurry or badly exposed shots.",
-            ),
-            _ if self.pick_run == Some(run) => (
-                "Finding similar photos",
-                "Grouping bursts and near-identical frames, then scoring each photo.",
-            ),
+            _ if self.rotation_run == Some(run) => ("Checking orientation", ""),
+            _ if self.delete_run == Some(run) => ("Looking for photos to clean up", ""),
+            _ if self.pick_run == Some(run) => ("Finding similar photos", ""),
             _ if self.cull_group_run == Some(run) => (
                 "Analyzing the library",
                 "Finding similar photos and subjects. You can keep culling meanwhile.",
@@ -205,11 +196,7 @@ impl PhotoSortApp {
                 } else {
                     "Find sideways photos"
                 },
-                if detected {
-                    "PhotoSort found no photo to turn. Show all photos to turn any of them by hand."
-                } else {
-                    "Detect rotations checks each photo's orientation on this computer and lists the ones that look sideways or upside down."
-                },
+                "",
                 |ui| {
                     if !detected
                         && ui
@@ -225,21 +212,15 @@ impl PhotoSortApp {
                 },
             );
         } else if self.step == Step::PickBest {
-            state_card(
-                ui,
-                icon::STACK,
-                "No similar photos to compare",
-                "Pick Best compares bursts and near-identical frames. Analyze the library to find them; if none turn up, every photo is already one of a kind.",
-                |ui| {
-                    if ui
-                        .add_enabled(can_analyze, primary("Analyze library"))
-                        .clicked()
-                    {
-                        action = Some(Empty::Analyze);
-                    }
-                    next_button(ui, next, &mut action);
-                },
-            );
+            state_card(ui, icon::STACK, "No similar photos to compare", "", |ui| {
+                if ui
+                    .add_enabled(can_analyze, primary("Analyze library"))
+                    .clicked()
+                {
+                    action = Some(Empty::Analyze);
+                }
+                next_button(ui, next, &mut action);
+            });
         } else if self.step == Step::EasyDelete {
             let hidden = !self.delete_review.entries().is_empty();
             state_card(
@@ -248,12 +229,12 @@ impl PhotoSortApp {
                 if hidden {
                     "No suggestions match"
                 } else {
-                    "Nothing to clean up yet"
+                    "Nothing to clean up"
                 },
                 if hidden {
                     "The search or the selected group hides every suggestion."
                 } else {
-                    "Easy Delete looks for exact duplicates, near-duplicates, and blurry or badly exposed shots. Analyze the library to find them."
+                    ""
                 },
                 |ui| {
                     if hidden {
@@ -341,8 +322,10 @@ fn state_card(
         ui.label(RichText::new(glyph).size(40.0).color(FAINT));
         ui.add_space(S3);
         ui.label(RichText::new(title).font(semibold(18.0)));
-        ui.add_space(S1);
-        ui.add(egui::Label::new(RichText::new(body).color(MUTED)).wrap());
+        if !body.is_empty() {
+            ui.add_space(S1);
+            ui.add(egui::Label::new(RichText::new(body).color(MUTED)).wrap());
+        }
         ui.add_space(S4);
         ui.spacing_mut().item_spacing.y = S2;
         actions(ui);
@@ -411,8 +394,10 @@ fn progress_card(ui: &mut egui::Ui, activity: &Activity, centred: bool) -> bool 
             ui.add(egui::Spinner::new().size(28.0).color(ACCENT));
             ui.add_space(S3);
             ui.label(RichText::new(&activity.title).font(semibold(18.0)));
-            ui.add_space(S1);
-            ui.add(egui::Label::new(RichText::new(&activity.detail).color(MUTED)).wrap());
+            if !activity.detail.is_empty() {
+                ui.add_space(S1);
+                ui.add(egui::Label::new(RichText::new(&activity.detail).color(MUTED)).wrap());
+            }
             if let Some(fraction) = activity.fraction {
                 ui.add_space(S4);
                 ui.add(
@@ -466,11 +451,13 @@ fn progress_card(ui: &mut egui::Ui, activity: &Activity, centred: bool) -> bool 
                     }
                     ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
                         ui.add(egui::Spinner::new().size(16.0).color(ACCENT));
-                        ui.add(
+                        let title = ui.add(
                             egui::Label::new(RichText::new(&activity.title).font(semibold(14.0)))
                                 .truncate(),
-                        )
-                        .on_hover_text(&activity.detail);
+                        );
+                        if !activity.detail.is_empty() {
+                            title.on_hover_text(&activity.detail);
+                        }
                     });
                 });
             });

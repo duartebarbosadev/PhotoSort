@@ -1817,7 +1817,9 @@ impl PhotoSortApp {
                         ui.spacing_mut().button_padding = egui::vec2(8.0, 4.0);
                         ui.spacing_mut().item_spacing = egui::vec2(8.0, 5.0);
                     }
-                    if self.busy { ui.disable(); }
+                    if self.busy {
+                        ui.disable();
+                    }
                     // The step's controls live in the top bar.
                     let margin: i8 = if compact { 8 } else { 12 };
                     // Organize's panels sit as far below the bar as they are
@@ -1828,7 +1830,12 @@ impl PhotoSortApp {
                         margin
                     };
                     egui::Frame::new()
-                        .inner_margin(egui::Margin { left: margin, right: margin, top, bottom: margin })
+                        .inner_margin(egui::Margin {
+                            left: margin,
+                            right: margin,
+                            top,
+                            bottom: margin,
+                        })
                         .show(ui, |ui| {
                             ui.set_min_size(ui.available_size());
                             // Cull says when a filter hides some photos.
@@ -1837,15 +1844,26 @@ impl PhotoSortApp {
                             }
                             self.navigator_panel(ui);
                             if self.step == Step::PickBest && self.pick_run.is_some() {
-                                self.working_state(ui, "Finding similar photos", "Grouping bursts and near-identical frames, then scoring each photo.");
+                                self.working_state(ui, "Finding similar photos", "");
                             } else if self.step == Step::EasyDelete && self.delete_run.is_some() {
-                                self.working_state(ui, "Looking for photos to clean up", "Checking for duplicates, near-duplicates, and blurry or badly exposed shots.");
+                                self.working_state(ui, "Looking for photos to clean up", "");
                             } else if self.step == Step::Rotation && self.rotation_run.is_some() {
-                                self.working_state(ui, "Checking orientation", "Looking at each photo to find the ones that are sideways or upside down.");
+                                self.working_state(ui, "Checking orientation", "");
                             } else if self.media.is_empty() && self.scanning {
-                                self.working_state(ui, "Finding your photos", "Reading the folder and its subfolders.");
-                            } else if self.filtered.is_empty() && self.browse_run.is_some() && self.step == Step::Cull {
-                                self.working_state(ui, "Updating the view", "Applying the search and filters.");
+                                self.working_state(
+                                    ui,
+                                    "Finding your photos",
+                                    "Reading the folder and its subfolders.",
+                                );
+                            } else if self.filtered.is_empty()
+                                && self.browse_run.is_some()
+                                && self.step == Step::Cull
+                            {
+                                self.working_state(
+                                    ui,
+                                    "Updating the view",
+                                    "Applying the search and filters.",
+                                );
                             } else if self.media.is_empty() || self.filtered.is_empty() {
                                 self.empty_state(ui);
                             } else {

@@ -103,7 +103,6 @@ impl PhotoSortApp {
             return;
         }
         let count = others.len();
-        ui.label(format!("Affects {count} other displayed items"));
         for (rejected, label) in [
             (true, format!("Mark other {count} for Trash")),
             (false, format!("Unmark other {count}")),
@@ -111,9 +110,7 @@ impl PhotoSortApp {
             let changes = others
                 .iter()
                 .any(|other| self.decision(*other).rejected != rejected);
-            if ui.add_enabled(changes, egui::Button::new(label)).on_hover_text(
-                "Changes only the other items in this comparison. Review changes before moving anything to Trash."
-            ).clicked() {
+            if ui.add_enabled(changes, egui::Button::new(label)).clicked() {
                 self.mark_comparison_others(id, rejected);
                 ui.close();
             }
@@ -356,7 +353,7 @@ impl PhotoSortApp {
             egui::Id::new(("review_bar", compact, self.step)),
             |ui| {
                 use egui_phosphor::regular as icon;
-                const NAVIGATION: &str = "Cull follows Up/Down navigation preferences. Hold Ctrl or Cmd to include marked photos and bypass movement filters.";
+                const NAVIGATION: &str = "Hold Ctrl or Cmd to include marked photos";
                 if icon_button(
                     ui,
                     icon::CARET_LEFT,
@@ -384,19 +381,11 @@ impl PhotoSortApp {
                     );
                 }
                 if matches!(self.step, Step::EasyDelete | Step::PickBest) {
-                    // A Keep/Trash switch per photo, with its number key.
+                    // A Keep/Trash switch per photo, labelled with its number
+                    // key.
                     for (side, id) in ids.iter().enumerate() {
                         let keep = !self.decision(*id).rejected;
-                        let hover = if side < 9 {
-                            format!("Toggle photo {} · {}", side + 1, side + 1)
-                        } else {
-                            format!("Toggle photo {}", side + 1)
-                        };
-                        if ui
-                            .add(decision_button(side, keep))
-                            .on_hover_text(hover)
-                            .clicked()
-                        {
+                        if ui.add(decision_button(side, keep)).clicked() {
                             if self.step == Step::EasyDelete {
                                 self.toggle_delete_candidate(side);
                             } else {
@@ -491,15 +480,6 @@ impl PhotoSortApp {
                 self.rating(active, if rating == star { 0 } else { star });
             }
         }
-        // Offered only when there is a rating to clear.
-        if rating > 0
-            && ui
-                .small_button("Clear rating")
-                .on_hover_text("Ctrl/Cmd+0")
-                .clicked()
-        {
-            self.rating(active, 0);
-        }
         self.review_view_controls(ui);
     }
     fn review_view_controls(&mut self, ui: &mut egui::Ui) {
@@ -520,7 +500,7 @@ impl PhotoSortApp {
         }
         if ui
             .small_button("1:1")
-            .on_hover_text("One source pixel per display pixel; loads original detail")
+            .on_hover_text("Actual pixels")
             .clicked()
         {
             self.actual_size();
@@ -531,7 +511,7 @@ impl PhotoSortApp {
         if several
             && ui
                 .selectable_label(self.sync_views, "Sync")
-                .on_hover_text("Synchronize pan and zoom across the comparison (F3)")
+                .on_hover_text("Same pan and zoom for every photo · F3")
                 .clicked()
         {
             self.toggle_sync();
@@ -1289,35 +1269,24 @@ impl PhotoSortApp {
                 }
             };
             // Fix Rotation's photos need no label: as it is, then turned,
-            // under the panel's header with the file name.
-            let label = if self.step == Step::Rotation {
-                String::new()
-            } else {
-                let mut label = named(&(slot + 1).to_string());
-                // Easy Delete and Pick Best show what tells the photos
-                // apart, as on their cards, in place of the scores.
-                let facts = match self.step {
-                    Step::EasyDelete => self.delete_photo_facts(id),
-                    Step::PickBest => self.pick_photo_facts(id),
-                    _ => None,
-                };
-                if let Some(facts) = &facts {
-                    label.push_str(" · ");
-                    label.push_str(facts);
-                }
-                // Elsewhere show the photo's quality score once analysis has
-                // run.
-                let score = self.analysis.get(&id).map(|a| a.score);
-                if let Some(score) = score.filter(|_| facts.is_none()) {
-                    label.push_str(&format!(" · score {score:.1}"));
-                }
-                if let Some(analysis) = self.analysis.get(&id).filter(|_| facts.is_none()) {
-                    for issue in &analysis.issues {
-                        label.push_str(" · ");
-                        label.push_str(issue);
+            // beside its card. Easy Delete and Pick Best name their photos
+            // and their facts on the card beside the panel: here only the
+            // number their key uses.
+            let label = match self.step {
+                Step::Rotation => String::new(),
+                Step::EasyDelete | Step::PickBest => (slot + 1).to_string(),
+                _ => {
+                    // The quality score once analysis has run.
+                    let mut label = named(&(slot + 1).to_string());
+                    if let Some(analysis) = self.analysis.get(&id) {
+                        label.push_str(&format!(" · score {:.1}", analysis.score));
+                        for issue in &analysis.issues {
+                            label.push_str(" · ");
+                            label.push_str(issue);
+                        }
                     }
+                    label
                 }
-                label
             };
             // Leave room for the Keep/Trash pill in the top-right corner.
             let pill = matches!(self.step, Step::EasyDelete | Step::PickBest) || d.rejected;
