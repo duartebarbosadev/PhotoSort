@@ -616,9 +616,9 @@ fn choosing_faces_starts_finding_faces_with_progress_or_says_why_it_waits() {
     app.pick_run = Some(41);
     app.set_group_mode(GroupMode::Faces);
     assert_eq!(app.analysis_run, Some(41));
-    assert_eq!(
-        app.workflow_status(),
-        "Grouping by faces starts when the current analysis finishes"
+    assert!(
+        app.organize_notice_text()
+            .is_some_and(|(_, title, _, _)| title == "Grouping is next")
     );
     app.pick_run = None;
     deliver(
@@ -643,9 +643,9 @@ fn choosing_faces_starts_finding_faces_with_progress_or_says_why_it_waits() {
     });
     app.set_group_mode(GroupMode::Faces);
     assert!(app.analysis_run.is_none());
-    assert_eq!(
-        app.workflow_status(),
-        "Grouping by faces needs AI models · open AI models to set them up"
+    assert!(
+        app.organize_notice_text()
+            .is_some_and(|(_, title, _, _)| title == "AI models needed")
     );
     // Models reported missing by the worker after the start.
     let (_dir, mut app) = visual_fixture();
@@ -711,7 +711,7 @@ fn finished_face_grouping_says_when_nothing_or_nobody_repeats() {
     deliver(&mut app, faces_done(42, once));
     assert_eq!(
         app.workflow_status(),
-        "Faces found, but no person appears in more than one photo"
+        "No person appears in more than one photo"
     );
 
     app.face_groups = None;
@@ -719,10 +719,8 @@ fn finished_face_grouping_says_when_nothing_or_nobody_repeats() {
     app.organize_run = Some((43, GroupMode::Faces));
     let twice = face_groups(&[(ids[0], 1, "Person 001"), (ids[1], 3, "People 001 + 002")]);
     deliver(&mut app, faces_done(43, twice));
-    assert_eq!(
-        app.workflow_status(),
-        "People groups ready · 1 person in more than one photo"
-    );
+    // The people folders on the board are the result; nothing to announce.
+    assert!(app.status.is_empty(), "{}", app.status);
     app.runtime.shutdown();
 }
 #[test]

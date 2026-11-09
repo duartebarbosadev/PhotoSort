@@ -64,12 +64,9 @@ impl PhotoSortApp {
         draft.keep_in_place(&back, &self.media, false);
         let what = |n: usize| format!("{n} {}", if n == 1 { "item" } else { "items" });
         self.navigation_notice = Some(if back.len() >= ids.len() {
-            format!(
-                "{} not moving · already in {title}{STAGED}",
-                what(ids.len())
-            )
+            format!("{} not moving · already in {title}", what(ids.len()))
         } else {
-            format!("Moved {} to {title}{STAGED}", what(ids.len()))
+            format!("Moved {} to {title}", what(ids.len()))
         });
     }
     /// Leaves items in the folders they are in now: they join "Not moving".
@@ -81,15 +78,13 @@ impl PhotoSortApp {
             draft.keep_in_place(&ids.iter().copied().collect(), &self.media, self.companions);
         }
         self.navigation_notice = Some(format!(
-            "{} {} in {} current {}{STAGED}",
+            "{} {} in place",
             ids.len(),
             if ids.len() == 1 {
                 "item stays"
             } else {
                 "items stay"
             },
-            if ids.len() == 1 { "its" } else { "their" },
-            if ids.len() == 1 { "folder" } else { "folders" },
         ));
     }
     pub(super) fn board_finish_edit(&mut self) {
@@ -174,7 +169,6 @@ impl PhotoSortApp {
                     format!("Mark {what} for Trash")
                 }),
             )
-            .on_hover_text("Nothing goes to Trash until you review the changes")
             .clicked()
         {
             self.stage_manual(ids, crate::core::decisions::Change::Trash(!marked));
@@ -391,14 +385,13 @@ impl PhotoSortApp {
                     Ok(moved) => {
                         self.board_refocus(&source, &moved);
                         self.navigation_notice = Some(format!(
-                            "Moved {} into {}{}",
+                            "Moved {} into {}",
                             leaf(&source),
                             if target.is_empty() {
                                 self.board_root_name()
                             } else {
                                 target.replace('/', " / ")
                             },
-                            STAGED
                         ));
                     }
                     Err(error) => self.navigation_notice = Some(error.to_string()),
@@ -450,7 +443,7 @@ impl PhotoSortApp {
             }
             FolderAction::SamePerson(from, into) => {
                 self.navigation_notice = Some(match self.same_person(&from, &into) {
-                    Ok(name) => format!("{} is now {name}{STAGED}", leaf(&from)),
+                    Ok(name) => format!("{} is now {name}", leaf(&from)),
                     Err(error) => error.to_string(),
                 });
             }
