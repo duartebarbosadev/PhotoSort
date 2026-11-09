@@ -576,7 +576,7 @@ impl PhotoSortApp {
             analysis_failures: HashMap::new(),
             analysis_successes: 0,
             review: false,
-            inspector: true,
+            inspector: false,
             was_wide: true,
             bar_fit: Default::default(),
             bar_needs: Default::default(),
@@ -1526,8 +1526,7 @@ impl PhotoSortApp {
                 || self.browse_run.is_some()
                 || (self.navigation_index.is_some() && self.filter_dirty))
         {
-            self.navigation_notice =
-                Some("Updating library view… Navigation will resume when ready.".into());
+            self.navigation_notice = Some("Updating library view…".into());
             return;
         }
         if self.step == Step::PickBest {

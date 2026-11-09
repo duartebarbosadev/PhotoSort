@@ -229,9 +229,14 @@ impl PhotoSortApp {
             let count = self.filtered.len();
             let total = self.media.len();
             let noun = if total == 1 { "photo" } else { "photos" };
-            // Similar sets are counted by their own headers.
+            // Similar sets are counted by their own headers, and every
+            // photo by the navigator's library row when it is beside them.
             let text = if count < total {
                 format!("{count} of {total} {noun}")
+            } else if self.navigator_sidebar_shown(ui.ctx())
+                && self.navigator.mode == crate::core::browsing::tree::Mode::Folders
+            {
+                String::new()
             } else {
                 format!("{count} {noun}")
             };

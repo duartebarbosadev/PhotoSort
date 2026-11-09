@@ -435,25 +435,19 @@ impl PhotoSortApp {
             // A refreshing view is reported here, in the fixed-height bar: a
             // row above the photos would push the grid and navigator under
             // the pointer whenever a query starts.
+            // Only work in progress: the photos are counted where they are.
             let work = if self.browse_run.is_some() && !self.scanning {
-                Some("Updating library view".to_owned())
+                "Updating library view".to_owned()
             } else if loading > 0 && !self.scanning {
-                Some(format!(
+                format!(
                     "Loading {loading} {}",
                     if loading == 1 { "preview" } else { "previews" }
-                ))
+                )
             } else {
-                None
+                String::new()
             };
-            // Cull counts its photos in the header above them.
-            let photos =
-                (self.step != Step::Cull).then(|| format!("{} photos", self.filtered.len()));
-            let count = match (work, photos) {
-                (Some(work), Some(photos)) => format!("{work} · {photos}"),
-                (work, photos) => work.or(photos).unwrap_or_default(),
-            };
-            if !count.is_empty() {
-                ui.label(RichText::new(count).small().color(MUTED))
+            if !work.is_empty() {
+                ui.label(RichText::new(work).small().color(MUTED))
                     .on_hover_text(format!(
                         "{:.0} MB of previews in memory",
                         self.stats.resident_bytes as f64 / 1048576.0

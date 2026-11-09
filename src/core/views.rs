@@ -83,7 +83,7 @@ impl Default for Bookmark {
             anchor: None,
             comparison: vec![],
             review: false,
-            inspector: true,
+            inspector: false,
             query: String::new(),
             filter: Default::default(),
             browse: Default::default(),
