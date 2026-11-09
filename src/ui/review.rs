@@ -385,7 +385,18 @@ impl PhotoSortApp {
                     // key.
                     for (side, id) in ids.iter().enumerate() {
                         let keep = !self.decision(*id).rejected;
-                        if ui.add(decision_button(side, keep)).clicked() {
+                        let name = format!(
+                            "Photo {}: {}",
+                            side + 1,
+                            if keep { "Keep" } else { "Trash" }
+                        );
+                        if named(
+                            ui.add(decision_button(side, keep)),
+                            egui::WidgetType::Button,
+                            &name,
+                        )
+                        .clicked()
+                        {
                             if self.step == Step::EasyDelete {
                                 self.toggle_delete_candidate(side);
                             } else {
@@ -1529,15 +1540,15 @@ const STRIP_THUMB: f32 = 72.0;
 /// Room beside a one-column strip for its similarity group marks.
 const GROUP_GUTTER: f32 = 9.0;
 
-/// Keep/Trash toggle for one side of a guided comparison.
+/// Keep/Trash toggle for one side of a guided comparison: its number key
+/// and an icon, as the photo's own pill says the word.
 fn decision_button(side: usize, keep: bool) -> egui::Button<'static> {
     use egui_phosphor::regular as icon;
     egui::Button::new(
         RichText::new(format!(
-            "{}  {}  {}",
+            "{}  {}",
             side + 1,
             if keep { icon::CHECK } else { icon::TRASH },
-            if keep { "Keep" } else { "Trash" }
         ))
         .color(if keep { GREEN } else { RED }),
     )

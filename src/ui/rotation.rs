@@ -68,7 +68,8 @@ impl PhotoSortApp {
                 self.analysis_failures.clear();
                 self.analysis_successes = 0;
                 self.progress = Some((0, self.media.len()));
-                self.set_status("Checking orientation…".into());
+                // The progress card says what runs.
+                self.set_status(String::new());
             }
             Err(error) => self.error = Some(error),
         }
@@ -98,13 +99,7 @@ impl PhotoSortApp {
         self.rotation_queue_only = true;
         self.filter_dirty = true;
         self.stage_rotation_suggestions();
-        self.set_workflow_status(
-            Step::Rotation,
-            match self.rotation_review.ids().len() {
-                0 => "No rotation suggestions · every photo looks upright".to_owned(),
-                n => count(n, "rotation suggestion", "rotation suggestions"),
-            } + &self.failure_note(),
-        );
+        self.finish_step_status(Step::Rotation);
     }
     /// The grid's photos: only the suggestions, or every photo with the
     /// suggestions first. A card hidden by the search stops being selected.

@@ -52,45 +52,7 @@ impl PhotoSortApp {
         self.delete_categories = self.delete_tab_categories(saved.as_ref());
         self.delete_run = None;
         self.filter_dirty = true;
-        let cards: Vec<MediaId> = self
-            .delete_review
-            .entries()
-            .iter()
-            .map(|e| e.subject)
-            .collect();
-        let trash = self
-            .delete_candidates(&cards)
-            .into_iter()
-            .filter(|id| self.decision(*id).rejected)
-            .count();
-        // A closed-eyes shot with no better one is kept: a note, not a suggestion.
-        let notes = self
-            .delete_review
-            .entries()
-            .iter()
-            .filter(|e| e.informational())
-            .count();
-        let kept = if notes > 0 {
-            format!(
-                " · {} kept with no better shot",
-                count(notes, "closed-eyes photo", "closed-eyes photos")
-            )
-        } else {
-            String::new()
-        };
-        self.set_workflow_status(
-            Step::EasyDelete,
-            match self.delete_review.entries().len() - notes {
-                0 if notes == 0 => {
-                    "Nothing to clean up · no duplicates or problem shots found".to_owned()
-                }
-                n => format!(
-                    "{} · {} marked for Trash{kept}",
-                    count(n, "suggestion", "suggestions"),
-                    count(trash, "photo", "photos")
-                ),
-            } + &self.failure_note(),
-        );
+        self.finish_step_status(Step::EasyDelete);
     }
     /// With the setting on, suggestions are the default decisions: each
     /// photo's is staged once, when it is first found or when Easy Delete
@@ -495,10 +457,9 @@ impl PhotoSortApp {
                     summary_label(
                         ui,
                         &format!(
-                            "{} going to Trash · frees {} · {} kept",
+                            "{} going to Trash · frees {}",
                             count(trash.len(), "photo", "photos"),
                             size_text(freed),
-                            candidates.len() - trash.len()
                         ),
                     );
                 });
@@ -1116,11 +1077,8 @@ mod tests {
         app.delete_pairs = vec![exact];
         app.finish_delete_analysis();
         assert!(trashed(&app, 2) && !trashed(&app, 1));
-        assert!(
-            app.status.contains("1 photo marked for Trash"),
-            "{}",
-            app.status
-        );
+        // The grid and the Review button show what was found and staged.
+        assert_eq!(app.status, "");
         // The user keeps it; the same result arriving again leaves it kept.
         app.delete_current = Some(MediaId(2));
         app.toggle_delete_candidate(0);

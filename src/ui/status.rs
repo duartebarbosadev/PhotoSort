@@ -175,17 +175,17 @@ mod tests {
         let mut app = app(&temp);
         app.step = Step::Cull;
         app.finish_pick_analysis();
-        // An empty fixture: no groups and nothing to clean up.
-        assert!(app.status.contains("No similar photos found"));
+        // An empty fixture: no groups and nothing to clean up, which the
+        // steps' own empty states say.
         assert_eq!(app.status_scope, Some((Step::PickBest, None)));
-        assert!(!app.workflow_status().contains("similar photos"));
         app.finish_delete_analysis();
-        assert!(app.status.contains("Nothing to clean up"));
         assert_eq!(app.status_scope, Some((Step::EasyDelete, None)));
-        assert!(!app.workflow_status().contains("clean up"));
+        // A photo that could not be checked is the one thing it reports.
+        app.analysis_failures
+            .insert(MediaId(1), "Cannot decode".into());
         app.finish_rotation_detection();
         assert_eq!(app.status_scope, Some((Step::Rotation, None)));
-        assert!(!app.workflow_status().contains("rotation suggestions"));
+        assert!(!app.workflow_status().contains("could not be analyzed"));
         let ctx = egui::Context::default();
         theme_install(&ctx);
         ctx.enable_accesskit();
@@ -212,7 +212,10 @@ mod tests {
                 .any(|(_, n)| n.value().is_some_and(|v| v.contains("confirm choices")))
         );
         app.set_step(Step::Rotation);
-        assert!(app.workflow_status().contains("rotation suggestions"));
+        assert!(
+            app.workflow_status()
+                .contains("1 photo could not be analyzed")
+        );
         app.runtime.shutdown();
     }
     #[test]

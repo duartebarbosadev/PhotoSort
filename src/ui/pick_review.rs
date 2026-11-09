@@ -57,25 +57,7 @@ impl PhotoSortApp {
         self.pick_review.replace(clusters);
         self.pick_run = None;
         self.stage_pick_suggestions();
-        let groups = self.pick_review.clusters().len();
-        let trash = self
-            .pick_review
-            .clusters()
-            .iter()
-            .flat_map(|c| c.ordered.iter())
-            .filter(|id| self.decision(**id).rejected)
-            .count();
-        self.set_workflow_status(
-            Step::PickBest,
-            match groups {
-                0 => "No similar photos found · every photo is one of a kind".to_owned(),
-                n => format!(
-                    "{} · {} marked for Trash",
-                    count(n, "group of similar photos", "groups of similar photos"),
-                    count(trash, "photo", "photos")
-                ),
-            } + &self.failure_note(),
-        );
+        self.finish_step_status(Step::PickBest);
         self.filter_dirty = true;
         self.review_changed();
     }
@@ -296,11 +278,9 @@ impl PhotoSortApp {
                     super::review_card::summary_label(
                         ui,
                         &format!(
-                            "{} · {} going to Trash · frees {} · {} kept",
-                            count(groups.len(), "group", "groups"),
+                            "{} going to Trash · frees {}",
                             count(trash.len(), "photo", "photos"),
                             super::review_card::size_text(freed),
-                            members.len() - trash.len()
                         ),
                     );
                 });

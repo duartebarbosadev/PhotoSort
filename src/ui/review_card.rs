@@ -959,6 +959,14 @@ impl PhotoSortApp {
         })
     }
 
+    /// A guided step's status once its analysis finishes: only the photos
+    /// it could not analyze. What it found shows in the step itself, and
+    /// what is staged on the Review button.
+    pub(super) fn finish_step_status(&mut self, step: Step) {
+        let note = self.failure_note();
+        self.set_workflow_status(step, note.trim_start_matches(" · ").to_owned());
+    }
+
     /// The photo size every grid shares: the height of its photos.
     pub(super) fn photo_size(&self) -> f32 {
         self.preferences.photo_size
