@@ -550,10 +550,13 @@ impl PhotoSortApp {
                                 let row = ui
                                     .add_enabled(
                                         !self.busy,
+                                        // Framed only when hovered or focused, like a
+                                        // menu row.
                                         egui::Button::new(format!("{}  {name}", icon::FOLDER))
-                                            .frame(false)
+                                            .frame_when_inactive(false)
                                             .min_size(egui::vec2(column - 2.0 * S3, 30.0)),
                                     )
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
                                     .on_hover_text(path.display().to_string());
                                 let enabled = row.enabled();
                                 row.widget_info(|| {
