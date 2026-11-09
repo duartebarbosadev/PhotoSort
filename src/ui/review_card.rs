@@ -894,24 +894,18 @@ fn badge_pill(painter: &egui::Painter, slot: egui::Rect, badge: &Badge) -> egui:
     rect
 }
 
-/// A star beside the pill of the photo PhotoSort suggests keeping, or
-/// under it when the photo is too narrow for both side by side, and only
-/// the star when even that does not fit. Returns its rect.
+/// A star beside the pill of the photo PhotoSort suggests keeping, or under
+/// it when the photo is too narrow for both side by side: the pill says the
+/// choice, the star whose it was. Returns its rect.
 fn suggested_mark(painter: &egui::Painter, slot: egui::Rect, pill: egui::Rect) -> egui::Rect {
-    let star = egui_phosphor::regular::STAR;
-    let mark = |text: String| {
-        let galley = painter.layout_no_wrap(text, medium(11.0), ACCENT);
-        let size = galley.size() + egui::vec2(14.0, 6.0);
-        (galley, size)
-    };
-    let (mut galley, size) = mark(format!("{star}  Suggested"));
+    let galley = painter.layout_no_wrap(
+        egui_phosphor::regular::STAR.to_owned(),
+        medium(11.0),
+        ACCENT,
+    );
+    let size = galley.size() + egui::vec2(14.0, 6.0);
     let mut rect = Align2::RIGHT_TOP.anchor_size(pill.left_top() - egui::vec2(S1, 0.0), size);
     if rect.left() < slot.left() + S1 {
-        rect = Align2::RIGHT_TOP.anchor_size(pill.right_bottom() + egui::vec2(0.0, S1), size);
-    }
-    if rect.left() < slot.left() + S1 {
-        let (icon, size) = mark(star.to_owned());
-        galley = icon;
         rect = Align2::RIGHT_TOP.anchor_size(pill.right_bottom() + egui::vec2(0.0, S1), size);
     }
     painter.rect_filled(rect, R_CONTROL, Color32::from_black_alpha(170));

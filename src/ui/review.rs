@@ -1283,44 +1283,36 @@ impl PhotoSortApp {
                 ACCENT,
             );
         }
-        if let Some(&index) = self.index.get(&id) {
-            // The file name follows the app-wide file name preference.
-            let named = |head: &str| {
-                if self.preferences.show_filenames {
-                    format!("{head} / {}", self.media[index].name())
-                } else {
-                    head.to_owned()
-                }
+        if self.index.contains_key(&id) {
+            // The photo's name shows under its strip tile and over Details,
+            // so a photo here is labelled only by its number when there are
+            // several: the number Details lists it under, and in Easy Delete
+            // and Pick Best its key. Fix Rotation shows one photo twice and
+            // needs none. Cull and Organize add any issue analysis found.
+            let mut label = if count > 1 && self.step != Step::Rotation {
+                (slot + 1).to_string()
+            } else {
+                String::new()
             };
-            // Fix Rotation's photos need no label: as it is, then turned,
-            // beside its card. Easy Delete and Pick Best name their photos
-            // and their facts on the card beside the panel: here only the
-            // number their key uses.
-            let label = match self.step {
-                Step::Rotation => String::new(),
-                Step::EasyDelete | Step::PickBest => (slot + 1).to_string(),
-                _ => {
-                    // The quality score once analysis has run.
-                    let mut label = named(&(slot + 1).to_string());
-                    if let Some(analysis) = self.analysis.get(&id) {
-                        label.push_str(&format!(" · score {:.1}", analysis.score));
-                        for issue in &analysis.issues {
-                            label.push_str(" · ");
-                            label.push_str(issue);
-                        }
+            if matches!(self.step, Step::Cull | Step::Organize)
+                && let Some(analysis) = self.analysis.get(&id)
+            {
+                for issue in &analysis.issues {
+                    if !label.is_empty() {
+                        label.push_str(" · ");
                     }
-                    label
+                    label.push_str(issue);
                 }
-            };
+            }
             // Leave room for the Keep/Trash pill in the top-right corner.
             let pill = matches!(self.step, Step::EasyDelete | Step::PickBest) || d.rejected;
             let mut label_clip = rect;
             if pill {
-                // Pick Best and Easy Delete add a Suggested mark beside it.
+                // Pick Best and Easy Delete add a star beside it.
                 label_clip.max.x -= if self.step == Step::PickBest
                     || (self.step == Step::EasyDelete && self.delete_suggested_keeper(id))
                 {
-                    210.0
+                    150.0
                 } else {
                     104.0
                 };
@@ -1333,10 +1325,11 @@ impl PhotoSortApp {
                 MUTED,
             );
             if self.comparison_ids().len() == 1 {
+                let gap = if shown.width() > 0.0 { 8.0 } else { 0.0 };
                 self.group_chip(
                     ui,
                     id,
-                    shown.right_center() + egui::vec2(8.0, 0.0),
+                    shown.right_center() + egui::vec2(gap, 0.0),
                     label_clip,
                 );
             }
@@ -1587,10 +1580,15 @@ fn decision_pill(painter: &egui::Painter, slot: egui::Rect, keep: bool) -> egui:
     painter.galley(rect.min + egui::vec2(10.0, 4.0), galley, Color32::BLACK);
     rect
 }
-/// Marks Pick Best's suggested keeper, beside its Keep/Trash pill.
+/// Marks the keeper PhotoSort suggests with a star beside its Keep/Trash
+/// pill: the pill says the choice, the star whose it was, and its tooltip
+/// why.
 fn suggested_badge(painter: &egui::Painter, pill: egui::Rect) -> egui::Rect {
-    let text = format!("{}  Suggested", egui_phosphor::regular::STAR);
-    let galley = painter.layout_no_wrap(text, medium(12.0), ACCENT);
+    let galley = painter.layout_no_wrap(
+        egui_phosphor::regular::STAR.to_owned(),
+        medium(12.0),
+        ACCENT,
+    );
     let size = galley.size() + egui::vec2(16.0, 8.0);
     let rect = Align2::RIGHT_TOP.anchor_size(pill.left_top() - egui::vec2(S1 + 2.0, 0.0), size);
     painter.rect_filled(rect, R_CONTROL, Color32::from_black_alpha(170));

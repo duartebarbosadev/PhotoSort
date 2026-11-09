@@ -5,6 +5,9 @@ use super::review_card::{
 use super::*;
 use crate::core::delete_review::{self, Category, Entry, FormatChoice, Review};
 
+/// How the star on a suggested keeper explains itself.
+pub(super) const SUGGESTED: &str = "Suggested by PhotoSort.";
+
 /// The long side, in pixels, a closed-eyes card's zoomed eyes are cut at.
 const EYE_EDGE: f32 = 480.0;
 
@@ -589,9 +592,14 @@ fn keeps_for(entry: &Entry, id: MediaId) -> bool {
     entry.companion == Some(id) && entry.subject != id && entry.category != Category::Formats
 }
 
-/// The Suggested mark's tooltip for `entry`'s keeper, when it has a reason.
+/// The suggested keeper's star tooltip for `entry`: whose choice it is,
+/// and why when the card says.
 fn keep_why_text(entry: &Entry) -> Option<String> {
-    (!entry.keep_why.is_empty()).then(|| entry.keep_why.clone())
+    Some(if entry.keep_why.is_empty() {
+        SUGGESTED.to_owned()
+    } else {
+        format!("{SUGGESTED} {}", entry.keep_why)
+    })
 }
 
 /// A card's title: its tag, only where it adds to the group's heading and
@@ -1195,7 +1203,7 @@ mod tests {
         // Its tooltip says why.
         assert_eq!(
             app.delete_keep_why(MediaId(2)).as_deref(),
-            Some("Why this one is kept")
+            Some("Suggested by PhotoSort. Why this one is kept")
         );
         assert_eq!(app.delete_keep_why(MediaId(1)), None);
         let entry = app.delete_review.entry(MediaId(1)).unwrap().clone();
@@ -1205,13 +1213,16 @@ mod tests {
             app.delete_keep_why(MediaId(2))
         );
         assert_eq!(card.photos[0].suggested_hover, None);
+        // One badge says the choice; a star beside it, whose it was.
+        let star = egui_phosphor::regular::STAR;
         let shown = super::super::review_card::render_grid(&mut app);
-        assert_eq!(shown.matches("Suggested").count(), 1, "{shown}");
+        assert_eq!(shown.matches(star).count(), 1, "{shown}");
+        assert!(!shown.contains("Suggested"), "{shown}");
         // Moving the keeper to Trash by hand keeps the mark.
         app.delete_card_event(MediaId(1), CardEvent::Toggle(1));
         app.delete_panel = false;
         let shown = super::super::review_card::render_grid(&mut app);
-        assert_eq!(shown.matches("Suggested").count(), 1, "{shown}");
+        assert_eq!(shown.matches(star).count(), 1, "{shown}");
     }
     #[test]
     fn changing_a_card_stages_it_at_once_and_undo_restores_the_suggestion() {
@@ -1347,17 +1358,17 @@ mod tests {
         let card = app.delete_card(&eyes);
         assert_eq!(
             card.photos[2].suggested_hover.as_deref(),
-            Some("Everyone's eyes are open here.")
+            Some("Suggested by PhotoSort. Everyone's eyes are open here.")
         );
         let copy = app.delete_review.entry(MediaId(9)).unwrap().clone();
         assert_eq!(
             app.delete_card(&copy).photos[1].suggested_hover.as_deref(),
-            Some("Why this one is kept")
+            Some("Suggested by PhotoSort. Why this one is kept")
         );
         app.set_active(MediaId(6));
         assert_eq!(
             app.delete_keep_why(MediaId(7)).as_deref(),
-            Some("Everyone's eyes are open here.")
+            Some("Suggested by PhotoSort. Everyone's eyes are open here.")
         );
         // Every photo of the card is shown: both closed-eyes shots, then the
         // better one on the right, with two people's eyes on the first.

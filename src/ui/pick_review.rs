@@ -338,7 +338,7 @@ impl PhotoSortApp {
     pub(super) fn pick_keep_why(&self, cluster: &Cluster) -> String {
         let best = cluster.best();
         let next = cluster.ordered[1];
-        match cluster.reason {
+        let why = match cluster.reason {
             Reason::Sharper => match cluster.soft.len() {
                 1 => "Sharp; 1 other photo is softer.".to_owned(),
                 n => format!("Sharp; {n} others are softer."),
@@ -351,7 +351,8 @@ impl PhotoSortApp {
                 "Best overall score: {:.0}, next best {:.0}.",
                 cluster.scores[&best], cluster.scores[&next]
             ),
-        }
+        };
+        format!("{} {why}", super::delete_review::SUGGESTED)
     }
 
     /// The facts that tell a group's photos apart, for the photos given:
@@ -719,7 +720,12 @@ mod tests {
     fn the_grid_shows_one_card_per_group_with_its_suggested_photo_and_no_confirm() {
         let mut app = app();
         let shown = super::super::review_card::render_grid(&mut app);
-        for text in ["Group 1", "Group 2", "Suggested", "Accept all suggestions"] {
+        for text in [
+            "Group 1",
+            "Group 2",
+            egui_phosphor::regular::STAR,
+            "Accept all suggestions",
+        ] {
             assert!(shown.contains(text), "{text} missing from:\n{shown}");
         }
         for text in ["Confirm", "Provisional", "Keep all", "Round"] {
