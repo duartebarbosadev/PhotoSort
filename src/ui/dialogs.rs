@@ -222,23 +222,21 @@ impl PhotoSortApp {
         modal(egui::Id::new("crash_notice")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 64.0).clamp(280.0, 460.0));
             ui.heading(if previous {
-                "PhotoSort closed unexpectedly"
+                "PhotoSort closed unexpectedly last time"
             } else {
                 "Part of PhotoSort stopped working"
             });
             ui.add_space(S2);
             ui.label(if previous {
-                "It happened during your last session. A report was saved on this computer; nothing was sent anywhere."
+                "A report was saved on this computer. Nothing was sent."
             } else {
-                "Restart PhotoSort to continue. A report was saved on this computer; nothing was sent anywhere."
+                "Restart PhotoSort to continue. A report was saved on this computer. Nothing was sent."
             });
             ui.add_space(S1);
             ui.label(
-                RichText::new(
-                    "Your photos only change when you apply a reviewed plan. An interrupted apply can be finished from Review changes.",
-                )
-                .small()
-                .color(MUTED),
+                RichText::new("An interrupted apply can be finished from Review changes.")
+                    .small()
+                    .color(MUTED),
             );
             ui.add_space(S3);
             ui.horizontal(|ui| {

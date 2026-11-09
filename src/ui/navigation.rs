@@ -715,108 +715,74 @@ impl PhotoSortApp {
         use egui_phosphor::regular as icon;
         let width = ui.available_width();
         let column = (width - 2.0 * S6).clamp(280.0, 520.0);
-        egui::ScrollArea::vertical().id_salt("welcome").show(ui, |ui| {
-            ui.add_space((ui.available_height() * 0.12).max(S6));
-            ui.vertical_centered(|ui| {
-                crate::ui::brand::app_logo(ui, 64.0);
-                ui.add_space(S4);
-                ui.label(
-                    RichText::new("Make room for your best work.")
-                        .font(semibold(if width > 750.0 { 34.0 } else { 26.0 })),
-                );
-                ui.add_space(S2);
-                ui.label(
-                    RichText::new("Sort, clean up and pick the keepers from a folder of photos. Nothing changes on disk until you review it.")
-                        .size(14.5)
-                        .color(MUTED),
-                );
-                ui.add_space(S6);
-                let open = ui.add(
-                    primary(format!("{}  Open a photo folder", icon::FOLDER_OPEN))
-                        .min_size(egui::vec2(220.0, 42.0)),
-                );
-                let enabled = open.enabled();
-                open.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "Open a photo folder")
-                });
-                if open.clicked() {
-                    self.select_folder();
-                }
-                ui.add_space(S2);
-                ui.label(
-                    RichText::new("or drop a folder anywhere in this window")
-                        .small()
-                        .color(FAINT),
-                );
-                let recent: Vec<PathBuf> = self
-                    .preferences
-                    .recent_folders
-                    .iter()
-                    .filter(|p| !self.missing_recent.contains(*p))
-                    .take(5)
-                    .cloned()
-                    .collect();
-                if !recent.is_empty() {
+        egui::ScrollArea::vertical()
+            .id_salt("welcome")
+            .show(ui, |ui| {
+                ui.add_space((ui.available_height() * 0.12).max(S6));
+                ui.vertical_centered(|ui| {
+                    crate::ui::brand::app_logo(ui, 64.0);
+                    ui.add_space(S4);
+                    ui.label(RichText::new("PhotoSort").font(semibold(if width > 750.0 {
+                        34.0
+                    } else {
+                        26.0
+                    })));
                     ui.add_space(S6);
-                    welcome_section(ui, column, "Recent folders", |ui| {
-                        let labels = crate::core::preferences::folder_labels(&recent);
-                        for (path, name) in recent.into_iter().zip(labels) {
-                            let row = ui
-                                .add_enabled(
-                                    !self.busy,
-                                    egui::Button::new(format!("{}  {name}", icon::FOLDER))
-                                        .frame(false)
-                                        .min_size(egui::vec2(column - 2.0 * S3, 30.0)),
-                                )
-                                .on_hover_text(path.display().to_string());
-                            let enabled = row.enabled();
-                            row.widget_info(|| {
-                                egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name)
-                            });
-                            if row.clicked() {
-                                self.open(path);
-                            }
-                        }
+                    let open = ui.add(
+                        primary(format!("{}  Open a photo folder", icon::FOLDER_OPEN))
+                            .min_size(egui::vec2(220.0, 42.0)),
+                    );
+                    let enabled = open.enabled();
+                    open.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            enabled,
+                            "Open a photo folder",
+                        )
                     });
-                }
-                ui.add_space(S6);
-                let steps = self.navigation_steps();
-                welcome_section(ui, column, "Steps, in any order", |ui| {
-                    for step in steps {
-                        ui.horizontal_top(|ui| {
-                            ui.label(
-                                RichText::new(format!("{}", step.index() + 1))
-                                    .font(semibold(13.0))
-                                    .color(ACCENT),
-                            );
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 2.0;
-                                ui.label(RichText::new(step.title()).font(medium(13.5)));
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(step_summary(step)).small().color(MUTED),
-                                    )
-                                    .wrap(),
-                                );
-                            });
-                        });
-                        ui.add_space(S1);
+                    if open.clicked() {
+                        self.select_folder();
                     }
+                    ui.add_space(S2);
+                    ui.label(RichText::new("or drop a folder here").small().color(FAINT));
+                    let recent: Vec<PathBuf> = self
+                        .preferences
+                        .recent_folders
+                        .iter()
+                        .filter(|p| !self.missing_recent.contains(*p))
+                        .take(5)
+                        .cloned()
+                        .collect();
+                    if !recent.is_empty() {
+                        ui.add_space(S6);
+                        welcome_section(ui, column, "Recent folders", |ui| {
+                            let labels = crate::core::preferences::folder_labels(&recent);
+                            for (path, name) in recent.into_iter().zip(labels) {
+                                let row = ui
+                                    .add_enabled(
+                                        !self.busy,
+                                        egui::Button::new(format!("{}  {name}", icon::FOLDER))
+                                            .frame(false)
+                                            .min_size(egui::vec2(column - 2.0 * S3, 30.0)),
+                                    )
+                                    .on_hover_text(path.display().to_string());
+                                let enabled = row.enabled();
+                                row.widget_info(|| {
+                                    egui::WidgetInfo::labeled(
+                                        egui::WidgetType::Button,
+                                        enabled,
+                                        &name,
+                                    )
+                                });
+                                if row.clicked() {
+                                    self.open(path);
+                                }
+                            }
+                        });
+                    }
+                    ui.add_space(S6);
                 });
-                ui.add_space(S6);
             });
-        });
-    }
-}
-
-/// A plain-language line for each step on the welcome screen.
-fn step_summary(step: Step) -> &'static str {
-    match step {
-        Step::Organize => "Sort photos into folders by date, place, camera or people.",
-        Step::EasyDelete => "Find duplicates, blurry and badly exposed shots to clear out.",
-        Step::Rotation => "Spot sideways photos and turn them upright.",
-        Step::PickBest => "Keep the best frame from each run of similar shots.",
-        Step::Cull => "Rate, mark and compare every photo yourself.",
     }
 }
 

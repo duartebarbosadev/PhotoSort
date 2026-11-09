@@ -315,19 +315,23 @@ impl PhotoSortApp {
     pub(super) fn shortcuts_button(&mut self, ui: &mut egui::Ui, labelled: bool) {
         let text = shortcuts_label(labelled);
         let open = egui::Popup::is_id_open(ui.ctx(), egui::Id::new(SHORTCUT_SHEET));
-        let button = ui
-            .add(
-                egui::Button::new(RichText::new(text).size(11.5).color(if open {
-                    INK
-                } else {
-                    MUTED
-                }))
-                .fill(if open { CARD_HOVER } else { PANEL })
-                .stroke(Stroke::new(1.0, LINE))
-                .corner_radius(R_CONTROL)
-                .min_size(egui::vec2(26.0, 22.0)),
+        let button = ui.add(
+            egui::Button::new(
+                RichText::new(text)
+                    .size(11.5)
+                    .color(if open { INK } else { MUTED }),
             )
-            .on_hover_text("Keyboard shortcuts");
+            .fill(if open { CARD_HOVER } else { PANEL })
+            .stroke(Stroke::new(1.0, LINE))
+            .corner_radius(R_CONTROL)
+            .min_size(egui::vec2(26.0, 22.0)),
+        );
+        // The icon alone needs its name on hover; the labelled button shows it.
+        let button = if labelled {
+            button
+        } else {
+            button.on_hover_text("Keyboard shortcuts")
+        };
         let button = named(button, egui::WidgetType::Button, "Keyboard shortcuts");
         egui::Popup::menu(&button)
             .id(egui::Id::new(SHORTCUT_SHEET))
@@ -381,7 +385,7 @@ impl PhotoSortApp {
                 ui.separator();
                 if ui
                     .add(
-                        egui::Button::new(RichText::new("Full keyboard guide…").color(MUTED))
+                        egui::Button::new(RichText::new("Keyboard guide…").color(MUTED))
                             .frame(false),
                     )
                     .clicked()

@@ -656,11 +656,12 @@ fn main() -> anyhow::Result<()> {
         "examples/ui_gallery.rs",
         "",
     )?;
-    let folder = root.clone();
+    // Over the welcome screen: a reopened folder's paused analysis would
+    // open the models dialog on top of it.
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
         .with_pixels_per_point(2.0)
-        .build_eframe(|cc| PhotoSortApp::new(cc, Some(folder)));
+        .build_eframe(|cc| PhotoSortApp::new(cc, None));
     settle(&mut harness);
     harness
         .render()
