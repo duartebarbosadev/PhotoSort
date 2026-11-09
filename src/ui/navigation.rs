@@ -363,12 +363,16 @@ impl PhotoSortApp {
                 shown.push(hint);
             }
         }
-        ui.add(egui::Label::new(RichText::new(&status).small().color(MUTED)).truncate())
-            .on_hover_text(&status);
+        if !status.is_empty() {
+            ui.add(egui::Label::new(RichText::new(&status).small().color(MUTED)).truncate())
+                .on_hover_text(&status);
+        }
         if !shown.is_empty() {
-            ui.add_space(S1);
-            divider(ui);
-            ui.add_space(S1);
+            if !status.is_empty() {
+                ui.add_space(S1);
+                divider(ui);
+                ui.add_space(S1);
+            }
             let spacing = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, hints::HINT_GAP);
             for hint in shown {
                 hints::hint_row(ui, hint, MUTED);
@@ -431,22 +435,30 @@ impl PhotoSortApp {
             // A refreshing view is reported here, in the fixed-height bar: a
             // row above the photos would push the grid and navigator under
             // the pointer whenever a query starts.
-            let count = if self.browse_run.is_some() && !self.scanning {
-                format!("Updating library view · {} photos", self.filtered.len())
+            let work = if self.browse_run.is_some() && !self.scanning {
+                Some("Updating library view".to_owned())
             } else if loading > 0 && !self.scanning {
-                format!(
-                    "Loading {loading} {} · {} photos",
-                    if loading == 1 { "preview" } else { "previews" },
-                    self.filtered.len()
-                )
+                Some(format!(
+                    "Loading {loading} {}",
+                    if loading == 1 { "preview" } else { "previews" }
+                ))
             } else {
-                format!("{} photos", self.filtered.len())
+                None
             };
-            ui.label(RichText::new(count).small().color(MUTED))
-                .on_hover_text(format!(
-                    "{:.0} MB of previews in memory",
-                    self.stats.resident_bytes as f64 / 1048576.0
-                ));
+            // Cull counts its photos in the header above them.
+            let photos =
+                (self.step != Step::Cull).then(|| format!("{} photos", self.filtered.len()));
+            let count = match (work, photos) {
+                (Some(work), Some(photos)) => format!("{work} · {photos}"),
+                (work, photos) => work.or(photos).unwrap_or_default(),
+            };
+            if !count.is_empty() {
+                ui.label(RichText::new(count).small().color(MUTED))
+                    .on_hover_text(format!(
+                        "{:.0} MB of previews in memory",
+                        self.stats.resident_bytes as f64 / 1048576.0
+                    ));
+            }
         }
     }
 
