@@ -533,8 +533,8 @@ mod tests {
         assert_eq!(machine.fit(ram / 4), Fit::Fits);
         assert_eq!(machine.fit(ram * 2), Fit::Impossible);
         let limits = crate::core::cache::Limits::for_machine(machine);
-        assert!((128..=1024).contains(&limits.previews_mib));
-        assert!((512..=8192).contains(&limits.originals_mib));
+        assert!((128..=4096).contains(&limits.previews_mib));
+        assert!((512..=16_384).contains(&limits.originals_mib));
         assert!(limits.disk_mib <= 32_768);
     }
     #[test]

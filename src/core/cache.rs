@@ -9,34 +9,51 @@ use std::{
 };
 pub(crate) mod compiled;
 pub const MIB: u64 = 1024 * 1024;
+/// Saved only where they differ from this computer's defaults, so a limit the
+/// user never changed keeps following the machine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Limits {
+    #[serde(skip_serializing_if = "Limits::default_previews")]
     pub previews_mib: u32,
+    #[serde(skip_serializing_if = "Limits::default_originals")]
     pub originals_mib: u32,
+    #[serde(skip_serializing_if = "Limits::default_disk")]
     pub disk_mib: u32,
 }
 /// The disk default when the free space is unknown, and the most a nearly
 /// full disk gets.
 const DISK_DEFAULT_MIB: u32 = 4096;
-pub const PREVIEWS_MIB: std::ops::RangeInclusive<u32> = 64..=2048;
+pub const PREVIEWS_MIB: std::ops::RangeInclusive<u32> = 64..=8192;
 pub const DISK_MAX_MIB: u32 = 131_072;
 const ORIGINALS_MIN_MIB: u32 = 256;
 const ORIGINALS_MAX_MIB: u32 = 32_768;
+const ORIGINALS_DEFAULT_MAX_MIB: u32 = 16_384;
 impl Default for Limits {
     fn default() -> Self {
         Self::for_machine(super::memory::Machine::current())
     }
 }
-/// The largest power of two at most `value`, kept within `floor..=ceiling`.
+/// The power of two nearest `value`, kept within `floor..=ceiling`. Nearest,
+/// not lower: a 32 GB computer reports a little under 32 GiB.
 fn power_of_two(value: u64, floor: u32, ceiling: u32) -> u32 {
-    let rounded = if value == 0 { 0 } else { 1u64 << value.ilog2() };
+    let lower = if value == 0 { 0 } else { 1u64 << value.ilog2() };
+    let rounded = if value - lower >= lower / 2 {
+        lower * 2
+    } else {
+        lower
+    };
     rounded.clamp(u64::from(floor), u64::from(ceiling)) as u32
 }
 impl Limits {
-    /// Defaults for a computer: previews 1/64 of memory (128 MB to 1 GB),
-    /// full-size detail 1/16 (512 MB to 8 GB) and disk 1/20 of the free space
+    /// Defaults for a computer: previews 1/16 of memory (128 MB to 4 GB),
+    /// full-size detail 1/8 (512 MB to 16 GB) and disk 1/20 of the free space
     /// (4 to 32 GB), or at most a tenth of it when under 40 GB are free.
+    ///
+    /// On 32 GB that is 2 GB of previews, about 180 photos at 2048 px, and
+    /// 4 GB of full-size detail, enough for nine 45 MP RAW files side by side.
+    /// Both shrink to a half or a quarter while the system is short of memory
+    /// (`memory::Pressure`).
     pub fn for_machine(machine: super::memory::Machine) -> Self {
         let ram = machine.ram / MIB;
         let disk = match machine.free_disk.map(|free| free / MIB) {
@@ -45,10 +62,19 @@ impl Limits {
             Some(free) => (free / 20 / 1024 * 1024).clamp(4096, 32_768) as u32,
         };
         Self {
-            previews_mib: power_of_two(ram / 64, 128, 1024),
-            originals_mib: power_of_two(ram / 16, 512, 8192),
+            previews_mib: power_of_two(ram / 16, 128, 4096),
+            originals_mib: power_of_two(ram / 8, 512, ORIGINALS_DEFAULT_MAX_MIB),
             disk_mib: disk,
         }
+    }
+    fn default_previews(mib: &u32) -> bool {
+        *mib == Self::default().previews_mib
+    }
+    fn default_originals(mib: &u32) -> bool {
+        *mib == Self::default().originals_mib
+    }
+    fn default_disk(mib: &u32) -> bool {
+        *mib == Self::default().disk_mib
     }
     /// The most full-size detail memory Settings offers: half the memory.
     pub fn originals_max_mib() -> u32 {
@@ -376,24 +402,44 @@ mod tests {
         };
         let sizes = |limits: Limits| (limits.previews_mib, limits.originals_mib, limits.disk_mib);
         assert_eq!(
+            sizes(Limits::for_machine(machine(4, Some(80)))),
+            (256, 512, 4096)
+        );
+        assert_eq!(
             sizes(Limits::for_machine(machine(8, Some(80)))),
-            (128, 512, 4096)
+            (512, 1024, 4096)
         );
         assert_eq!(
             sizes(Limits::for_machine(machine(16, Some(200)))),
-            (256, 1024, 10240)
+            (1024, 2048, 10240)
         );
         assert_eq!(
             sizes(Limits::for_machine(machine(36, Some(500)))),
-            (512, 2048, 25600)
+            (2048, 4096, 25600)
         );
         assert_eq!(
             sizes(Limits::for_machine(machine(128, Some(2000)))),
-            (1024, 8192, 32768)
+            (4096, 16384, 32768)
         );
+        // A 32 GB computer that reports 31.1 GiB still gets the 32 GB defaults.
+        let reported = Machine {
+            ram: 31_850 * MIB,
+            free_disk: Some(500 * GIB),
+        };
+        assert_eq!(sizes(Limits::for_machine(reported)), (2048, 4096, 25600));
         // A nearly full disk gets a tenth of what is free; unknown keeps 4 GB.
         assert_eq!(Limits::for_machine(machine(16, Some(12))).disk_mib, 1228);
         assert_eq!(Limits::for_machine(machine(16, None)).disk_mib, 4096);
+
+        // Limits left at this computer's defaults are not saved, so they keep
+        // following the machine; a chosen one is saved.
+        let mut defaults = Limits::default();
+        assert_eq!(serde_json::to_string(&defaults).unwrap(), "{}");
+        defaults.previews_mib = PREVIEWS_MIB.start() + 1;
+        assert_eq!(
+            serde_json::to_string(&defaults).unwrap(),
+            format!("{{\"previews_mib\":{}}}", PREVIEWS_MIB.start() + 1)
+        );
 
         // A chosen limit survives a save and reload.
         let mut chosen = Limits::for_machine(machine(32, Some(500)));
