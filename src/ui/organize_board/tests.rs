@@ -1380,9 +1380,22 @@ fn one_top_bar_holds_every_step_and_fits_every_width() {
             if step == Step::Organize {
                 // Search and the photo filter sit over the board.
                 assert!(found(&nodes, "Show")[0].top() > HEADER_HEIGHT);
-                // Wide windows run the folder sidebar up beside the bar.
+                // Wide windows run the folder sidebar up beside the bar,
+                // and Menu moves to the sidebar's top; narrower ones keep
+                // it at the bar's left.
+                let bar = egui::PanelState::load(&ctx, egui::Id::new("header"))
+                    .unwrap()
+                    .outer_rect;
+                let menu = found(&nodes, "Menu")[0];
                 let folders = found(&nodes, "FOLDERS")[0];
-                assert_eq!(folders.top() < HEADER_HEIGHT, width > 1180.0, "at {width}");
+                assert_eq!(bar.left() > 0.0, width > 1180.0, "at {width}");
+                assert!(
+                    menu.right() <= bar.left() + 120.0 && menu.bottom() <= folders.top(),
+                    "Menu {menu:?} not at the left, bar {bar:?}, at {width}"
+                );
+                if width > 1180.0 {
+                    assert!(menu.right() <= bar.left(), "at {width}");
+                }
             }
         }
     }
@@ -1402,6 +1415,105 @@ fn one_top_bar_holds_every_step_and_fits_every_width() {
             "{menu} at {width}"
         );
     }
+    app.runtime.shutdown();
+}
+
+#[test]
+fn a_frameless_window_draws_its_buttons_at_the_bar_right_and_closes_through_the_app() {
+    use super::super::compact_cull_tests::rendered;
+    use super::super::top_bar::HEADER_HEIGHT;
+    let (_temp, mut app) = organize();
+    app.window_frame = true;
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let buttons = ["Minimize", "Maximize", "Close"];
+    let narrowest = crate::ui::FRAMELESS_MIN_WIDTH;
+    for width in [narrowest, 1000.0, 1280.0, 1800.0] {
+        let nodes = rendered(&mut app, &ctx, egui::vec2(width, 800.0));
+        // Flush with the window's top-right corner, as tall as the bar.
+        let rects: Vec<egui::Rect> = buttons
+            .iter()
+            .map(|name| {
+                let rects = found(&nodes, name);
+                assert_eq!(rects.len(), 1, "{name} at {width}");
+                *rects[0]
+            })
+            .collect();
+        for (i, rect) in rects.iter().enumerate() {
+            assert_eq!(rect.top(), 0.0, "at {width}");
+            assert_eq!(rect.height(), HEADER_HEIGHT, "at {width}");
+            assert_eq!(rect.width(), 46.0, "at {width}");
+            assert_eq!(rect.right(), width - 46.0 * (2 - i) as f32, "at {width}");
+        }
+        // The bar's own contents stop before them, and still fit.
+        assert!(found(&nodes, "More actions").is_empty(), "at {width}");
+        for name in ["Menu", "Review changes", "Details"] {
+            assert_eq!(found(&nodes, name).len(), 1, "{name} at {width}");
+        }
+        for (name, rect) in nodes.iter().filter(|(name, r)| {
+            r.bottom() <= HEADER_HEIGHT
+                && r.width() < width / 2.0
+                && !buttons.contains(&name.as_str())
+        }) {
+            assert!(
+                rect.right() <= rects[0].left(),
+                "{name} {rect:?} under the window buttons at {width}"
+            );
+        }
+    }
+    // In the narrowest window every step's bar still fits at its tightest.
+    let room = narrowest - S3 - super::super::window_frame::BUTTONS_WIDTH - S2;
+    for step in Step::ALL {
+        app.set_step(step);
+        if step == Step::Cull {
+            // A selection makes Cull's bar its widest.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while app.filtered.is_empty() && std::time::Instant::now() < deadline {
+                rendered(&mut app, &ctx, egui::vec2(1280.0, 800.0));
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            app.select_library(app.media[app.filtered[0]].id, false, false);
+            app.review = false;
+        }
+        rendered(&mut app, &ctx, egui::vec2(narrowest, 800.0));
+        let need = app.bar_needs[step.index()][app.bar_fit as usize].unwrap();
+        assert!(need <= room + 0.5, "{step:?} needs {need} of {room}");
+    }
+    app.set_step(Step::Organize);
+    // Close asks to close the window, as the system's own button does, so
+    // the app's close handling still runs.
+    let size = egui::vec2(1280.0, 800.0);
+    let close = found(&rendered(&mut app, &ctx, size), "Close")[0].center();
+    let mut commands = Vec::new();
+    for pressed in [true, false] {
+        let out = ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events: vec![
+                    egui::Event::PointerMoved(close),
+                    egui::Event::PointerButton {
+                        pos: close,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| app.update_workspace(ui, false),
+        );
+        commands.extend(
+            out.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .clone(),
+        );
+    }
+    assert!(
+        commands.contains(&egui::ViewportCommand::Close),
+        "{commands:?}"
+    );
+    assert!(!commands.contains(&egui::ViewportCommand::StartDrag));
     app.runtime.shutdown();
 }
 

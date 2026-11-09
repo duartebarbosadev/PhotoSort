@@ -29,13 +29,22 @@ pub(super) fn place_window_buttons(height: f32, inset: f32) -> bool {
         false
     }
 }
-/// macOS: a double-click on the top bar zooms or minimises the window, as set
-/// for title bars in System Settings.
-pub(super) fn title_bar_double_click() {
+/// A double-click on the top bar. On macOS it zooms or minimises the window,
+/// as set for title bars in System Settings; elsewhere it maximises the
+/// window or restores it.
+pub(super) fn title_bar_double_click(ctx: &egui::Context) {
     #[cfg(target_os = "macos")]
-    // SAFETY: called from the UI thread, which is the main thread.
-    unsafe {
-        photosort_window_title_double_click();
+    {
+        let _ = ctx;
+        // SAFETY: called from the UI thread, which is the main thread.
+        unsafe {
+            photosort_window_title_double_click();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
     }
 }
 /// The 1024 px app icon artwork, also drawn as the in-window logo.
