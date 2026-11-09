@@ -1,8 +1,12 @@
 use super::review_card::{
     Badge, CardEvent, CardPhoto, Fact, GridClick, Inset, ReviewCard, size_text, slot_ratio,
+    summary_label,
 };
 use super::*;
 use crate::core::delete_review::{self, Category, Entry, FormatChoice, Review};
+
+/// How the star on a suggested keeper explains itself.
+pub(super) const SUGGESTED: &str = "Suggested by PhotoSort.";
 
 /// The long side, in pixels, a closed-eyes card's zoomed eyes are cut at.
 const EYE_EDGE: f32 = 480.0;
@@ -51,45 +55,7 @@ impl PhotoSortApp {
         self.delete_categories = self.delete_tab_categories(saved.as_ref());
         self.delete_run = None;
         self.filter_dirty = true;
-        let cards: Vec<MediaId> = self
-            .delete_review
-            .entries()
-            .iter()
-            .map(|e| e.subject)
-            .collect();
-        let trash = self
-            .delete_candidates(&cards)
-            .into_iter()
-            .filter(|id| self.decision(*id).rejected)
-            .count();
-        // A closed-eyes shot with no better one is kept: a note, not a suggestion.
-        let notes = self
-            .delete_review
-            .entries()
-            .iter()
-            .filter(|e| e.informational())
-            .count();
-        let kept = if notes > 0 {
-            format!(
-                " · {} kept with no better shot",
-                count(notes, "closed-eyes photo", "closed-eyes photos")
-            )
-        } else {
-            String::new()
-        };
-        self.set_workflow_status(
-            Step::EasyDelete,
-            match self.delete_review.entries().len() - notes {
-                0 if notes == 0 => {
-                    "Nothing to clean up · no duplicates or problem shots found".to_owned()
-                }
-                n => format!(
-                    "{} · {} marked for Trash{kept} · nothing changes on disk until you apply Review changes",
-                    count(n, "suggestion", "suggestions"),
-                    count(trash, "photo", "photos")
-                ),
-            } + &self.failure_note(),
-        );
+        self.finish_step_status(Step::EasyDelete);
     }
     /// With the setting on, suggestions are the default decisions: each
     /// photo's is staged once, when it is first found or when Easy Delete
@@ -241,10 +207,7 @@ impl PhotoSortApp {
                 Segment {
                     shown: format!("{title}  {n}"),
                     name: format!("{title}, {n}"),
-                    hover: Some(match tab {
-                        None => "Every suggestion, grouped".to_owned(),
-                        Some(c) => format!("Only {}", c.heading().to_lowercase()),
-                    }),
+                    hover: None,
                 }
             })
             .collect();
@@ -325,7 +288,7 @@ impl PhotoSortApp {
                     changed && self.delete_enabled(),
                     egui::Button::new(self.delete_undo_label()),
                 )
-                .on_hover_text("Back to PhotoSort's suggestion · R")
+                .on_hover_text("R")
                 .clicked()
             {
                 self.undo_delete();
@@ -397,6 +360,11 @@ impl PhotoSortApp {
                         &lengths,
                         |app, i| app.delete_card_aspects(subjects[i]),
                         |app, i| app.delete_card_has_facts(subjects[i]),
+                        |app, i| {
+                            app.delete_review
+                                .entry(subjects[i])
+                                .is_some_and(|e| !card_title(e).is_empty())
+                        },
                         |app, ui, section| {
                             let (category, n) = sections[section];
                             let ids = &subjects[starts[section]..starts[section] + n];
@@ -471,21 +439,6 @@ impl PhotoSortApp {
             .collect();
         let freed: u64 = trash.iter().map(|id| self.delete_bytes(*id)).sum();
         let changed = self.delete_review.changed_count(subjects, &self.decisions);
-        let note = if changed > 0 {
-            format!(
-                " · {} · nothing changes on disk until you apply Review changes",
-                if self.preferences.easy_delete_auto {
-                    format!("{} changed by you", count(changed, "card", "cards"))
-                } else {
-                    format!(
-                        "{} not following the suggestion",
-                        count(changed, "card", "cards")
-                    )
-                }
-            )
-        } else {
-            " · nothing changes on disk until you apply Review changes".to_owned()
-        };
         ui.horizontal(|ui| {
             // Accept all and the size slider are placed first, from the
             // right; the summary then gets only the room left and truncates.
@@ -495,11 +448,7 @@ impl PhotoSortApp {
                         changed > 0 && self.delete_enabled(),
                         egui::Button::new("Accept all suggestions"),
                     )
-                    .on_hover_text(if changed > 0 {
-                        "Puts every card shown back to PhotoSort's suggestion · A"
-                    } else {
-                        "Every card shown already follows PhotoSort's suggestion"
-                    })
+                    .on_hover_text("A")
                     .clicked()
                 {
                     self.accept_delete_defaults();
@@ -508,78 +457,47 @@ impl PhotoSortApp {
                 self.size_slider(ui);
                 ui.add_space(S3);
                 ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
-                    let mut job = egui::text::LayoutJob::default();
-                    let body = egui::TextStyle::Body.resolve(ui.style());
-                    job.append(
+                    summary_label(
+                        ui,
                         &format!(
-                            "{} going to Trash · frees {} · {} kept",
+                            "{} going to Trash · frees {}",
                             count(trash.len(), "photo", "photos"),
                             size_text(freed),
-                            candidates.len() - trash.len()
                         ),
-                        0.0,
-                        egui::TextFormat::simple(body.clone(), INK),
                     );
-                    job.append(&note, 0.0, egui::TextFormat::simple(body, MUTED));
-                    let full = job.text.clone();
-                    ui.add(egui::Label::new(job).truncate()).on_hover_text(full);
                 });
             });
         });
     }
 
-    /// A group's header: its name and size, and the action for all of it.
+    /// A group's header: its name, and the action for all of it. The tab
+    /// over the grid has its size.
     fn delete_section_header(&mut self, ui: &mut egui::Ui, category: Category, ids: &[MediaId]) {
         ui.label(
             RichText::new(category.heading())
                 .font(semibold(14.0))
                 .color(INK),
         );
-        ui.label(RichText::new(ids.len().to_string()).color(MUTED));
         let enabled = self.delete_enabled();
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
             if category == Category::Formats {
                 // What each choice frees, measured on these files: which
                 // format is smaller depends on the camera and its settings.
-                let pairs = ids
-                    .iter()
-                    .filter_map(|id| self.delete_review.entry(*id))
-                    .filter(|e| e.category == Category::Formats)
-                    .count();
-                let shots = if pairs == 1 {
-                    "the shot".to_owned()
-                } else {
-                    format!("all {pairs} shots")
-                };
                 let segments: Vec<Segment> = FormatChoice::ALL
                     .into_iter()
                     .map(|choice| {
-                        let freed = size_text(self.format_trash_bytes(ids, choice));
-                        let (shown, hover) = match choice {
-                            FormatChoice::Both => (
-                                choice.title().to_owned(),
-                                "Keeps the JPEG and the HEIC of every shot. Nothing goes to Trash."
-                                    .to_owned(),
-                            ),
-                            FormatChoice::Heic => (
-                                format!("{} · frees {freed}", choice.title()),
-                                format!(
-                                    "Moves the JPEG of {} to Trash and keeps the HEIC: frees {freed}.",
-                                    shots
-                                ),
-                            ),
-                            FormatChoice::Jpeg => (
-                                format!("{} · frees {freed}", choice.title()),
-                                format!(
-                                    "Moves the HEIC of {} to Trash and keeps the JPEG: frees {freed}.",
-                                    shots
-                                ),
+                        let shown = match choice {
+                            FormatChoice::Both => choice.title().to_owned(),
+                            _ => format!(
+                                "{} · frees {}",
+                                choice.title(),
+                                size_text(self.format_trash_bytes(ids, choice))
                             ),
                         };
                         Segment {
                             name: shown.clone(),
                             shown,
-                            hover: Some(hover),
+                            hover: None,
                         }
                     })
                     .collect();
@@ -598,7 +516,6 @@ impl PhotoSortApp {
                         self.choose_delete_formats(ids, FormatChoice::ALL[clicked]);
                     }
                 });
-                ui.label(RichText::new("For all of them:").color(MUTED));
                 return;
             }
             // Only shots with a better one have a suggestion to act on; the
@@ -617,79 +534,25 @@ impl PhotoSortApp {
             };
             let ids = ids.as_slice();
             if ids.is_empty() {
-                ui.label(RichText::new("No better shots found · kept").color(MUTED))
-                    .on_hover_text(
-                        "None of these has another shot of the same moment with everyone's eyes open, so they are kept",
-                    );
+                ui.label(RichText::new("No better shots · kept").color(MUTED));
                 return;
             }
-            let n = ids.len();
-            let (label, hover) = match category {
-                Category::Exact => (
-                    if n == 1 {
-                        "Trash the exact copy".to_owned()
-                    } else {
-                        format!("Trash all {n} exact copies")
-                    },
-                    "Moves the copy of each identical pair to Trash and keeps the other",
-                ),
-                Category::Near => (
-                    if n == 1 {
-                        "Keep the sharper one".to_owned()
-                    } else {
-                        format!("Keep the sharper one in all {n}")
-                    },
-                    "Keeps the sharper photo of each pair (or, when equally sharp, the one with more metadata) and moves the other to Trash",
-                ),
-                Category::EyesClosed => (
-                    // Photos, not cards: a card can hold several shots.
-                    match ids
-                        .iter()
-                        .filter_map(|id| self.delete_review.entry(*id))
-                        .flat_map(|e| e.suggestion())
-                        .filter(|keep| !keep)
-                        .count()
-                    {
-                        1 => "Trash the closed-eyes shot".to_owned(),
-                        n => format!("Trash all {n} closed-eyes shots"),
-                    },
-                    "Moves each closed-eyes shot that has a better shot of the same moment to Trash and keeps the better one. Shots with no better one stay kept",
-                ),
-                Category::Blur => (
-                    if n == 1 {
-                        "Trash the blurry photo".to_owned()
-                    } else {
-                        format!("Trash all {n} blurry photos")
-                    },
-                    "Moves every blurry photo here to Trash",
-                ),
-                Category::Dark => (
-                    if n == 1 {
-                        "Trash the dark photo".to_owned()
-                    } else {
-                        format!("Trash all {n} dark photos")
-                    },
-                    "Moves every very dark photo here to Trash",
-                ),
-                Category::Bright => (
-                    if n == 1 {
-                        "Trash the overexposed photo".to_owned()
-                    } else {
-                        format!("Trash all {n} overexposed photos")
-                    },
-                    "Moves every overexposed photo here to Trash",
-                ),
+            let hover = match category {
+                Category::Exact => "Trashes one file of each identical pair",
+                Category::Near => "Trashes the weaker photo of each pair",
+                Category::EyesClosed => "Trashes each closed-eyes shot that has a better one",
+                Category::Blur | Category::Dark | Category::Bright => "Trashes every photo here",
                 Category::Formats => unreachable!(),
             };
             let changed = self.delete_review.changed_count(ids, &self.decisions);
-            let label = format!("{label} · frees {}", size_text(self.suggested_trash_bytes(ids)));
+            let label = format!(
+                "Accept all · frees {}",
+                size_text(self.suggested_trash_bytes(ids))
+            );
             if ui
                 .add_enabled(enabled && changed > 0, egui::Button::new(label))
-                .on_hover_text(if changed > 0 {
-                    hover.to_owned()
-                } else {
-                    format!("Already the choice on every card here. {hover}.")
-                })
+                .on_hover_text(hover)
+                .on_disabled_hover_text(hover)
                 .clicked()
             {
                 self.accept_delete_suggestions(ids);
@@ -702,23 +565,25 @@ impl PhotoSortApp {
     /// the suggestion stays visible after a change. Both formats of one shot
     /// are kept, so neither is marked.
     pub(super) fn delete_suggested_keeper(&self, id: MediaId) -> bool {
-        self.delete_keep_why(id).is_some()
+        self.delete_keeper_entry(id).is_some()
     }
-    /// Why PhotoSort suggests keeping this photo, for its Suggested mark:
-    /// the selected card's reason when it keeps the photo, as one photo can
-    /// be the keeper of several cards (an identical pair and a closed-eyes
-    /// shot, say), otherwise the first card's.
+    /// Why PhotoSort suggests keeping this photo, for its Suggested mark.
     pub(super) fn delete_keep_why(&self, id: MediaId) -> Option<String> {
+        keep_why_text(self.delete_keeper_entry(id)?)
+    }
+    /// The card that suggests keeping this photo: the selected card when it
+    /// does, as one photo can be the keeper of several cards (an identical
+    /// pair and a closed-eyes shot, say), otherwise the first one.
+    fn delete_keeper_entry(&self, id: MediaId) -> Option<&Entry> {
         let current = self
             .delete_current
             .and_then(|c| self.delete_review.entry(c));
-        let entry = current.filter(|e| keeps_for(e, id)).or_else(|| {
+        current.filter(|e| keeps_for(e, id)).or_else(|| {
             self.delete_review
                 .entries()
                 .iter()
                 .find(|e| keeps_for(e, id))
-        })?;
-        keep_why_text(entry)
+        })
     }
 }
 
@@ -727,13 +592,25 @@ fn keeps_for(entry: &Entry, id: MediaId) -> bool {
     entry.companion == Some(id) && entry.subject != id && entry.category != Category::Formats
 }
 
-/// The Suggested mark's tooltip for `entry`'s keeper.
+/// The suggested keeper's star tooltip for `entry`: whose choice it is,
+/// and why when the card says.
 fn keep_why_text(entry: &Entry) -> Option<String> {
     Some(if entry.keep_why.is_empty() {
-        "PhotoSort suggests keeping this photo and moving the other to Trash.".to_owned()
+        SUGGESTED.to_owned()
     } else {
-        format!("Suggested to keep. {}", entry.keep_why)
+        format!("{SUGGESTED} {}", entry.keep_why)
     })
+}
+
+/// A card's title: its tag, only where it adds to the group's heading and
+/// the Suggested mark, as in why a near-duplicate is kept, or that a
+/// closed-eyes shot is kept for want of a better one.
+fn card_title(entry: &Entry) -> String {
+    if entry.category == Category::Near || entry.informational() {
+        entry.tag.clone()
+    } else {
+        String::new()
+    }
 }
 
 impl PhotoSortApp {
@@ -965,21 +842,6 @@ impl PhotoSortApp {
             .sum()
     }
 
-    /// One photo's facts on its card, in one line, for Review.
-    pub(super) fn delete_photo_facts(&self, id: MediaId) -> Option<String> {
-        let entry = self.delete_review.entry(self.delete_current?)?;
-        let ids = entry.candidates();
-        let side = ids.iter().position(|other| *other == id)?;
-        let facts = self.delete_facts(entry, &ids).swap_remove(side);
-        (!facts.is_empty()).then(|| {
-            facts
-                .iter()
-                .map(|f| f.text.as_str())
-                .collect::<Vec<_>>()
-                .join(" · ")
-        })
-    }
-
     /// The card for one suggestion: a short tag (the full reason in its
     /// tooltip), its photos with a Keep/Trash pill each and their deciding
     /// facts, and Undo once it differs from the suggestion.
@@ -1030,18 +892,14 @@ impl PhotoSortApp {
             })
             .collect();
         ReviewCard {
-            title: entry.tag.clone(),
+            title: card_title(entry),
             state_text: None,
             photos,
             buttons: Vec::new(),
             shown: self.delete_panel && self.delete_current == Some(subject),
             title_hover: Some(entry.reason.clone()),
-            undo: (enabled && self.delete_review.changed(subject, &self.decisions)).then(|| {
-                (
-                    self.delete_undo_label().to_owned(),
-                    "Back to PhotoSort's suggestion · R on the selected card".to_owned(),
-                )
-            }),
+            undo: (enabled && self.delete_review.changed(subject, &self.decisions))
+                .then(|| (self.delete_undo_label().to_owned(), String::new())),
         }
     }
 
@@ -1112,6 +970,7 @@ mod tests {
             tag: match category {
                 Category::Exact => "Identical copy",
                 Category::Formats => "JPEG + HEIC",
+                Category::Near => "Sharper kept",
                 _ => category.title(),
             }
             .into(),
@@ -1226,11 +1085,8 @@ mod tests {
         app.delete_pairs = vec![exact];
         app.finish_delete_analysis();
         assert!(trashed(&app, 2) && !trashed(&app, 1));
-        assert!(
-            app.status.contains("1 photo marked for Trash"),
-            "{}",
-            app.status
-        );
+        // The grid and the Review button show what was found and staged.
+        assert_eq!(app.status, "");
         // The user keeps it; the same result arriving again leaves it kept.
         app.delete_current = Some(MediaId(2));
         app.toggle_delete_candidate(0);
@@ -1291,10 +1147,6 @@ mod tests {
         assert!(app.decisions.values().all(|d| !d.rejected));
         let shown = super::super::review_card::render_grid(&mut app);
         assert!(shown.contains("Use suggestion"), "{shown}");
-        assert!(
-            shown.contains("2 cards not following the suggestion"),
-            "{shown}"
-        );
         assert!(!shown.contains("Undo"), "{shown}");
         // One card at a time, or all at once.
         app.undo_delete();
@@ -1351,7 +1203,7 @@ mod tests {
         // Its tooltip says why.
         assert_eq!(
             app.delete_keep_why(MediaId(2)).as_deref(),
-            Some("Suggested to keep. Why this one is kept")
+            Some("Suggested by PhotoSort. Why this one is kept")
         );
         assert_eq!(app.delete_keep_why(MediaId(1)), None);
         let entry = app.delete_review.entry(MediaId(1)).unwrap().clone();
@@ -1361,13 +1213,16 @@ mod tests {
             app.delete_keep_why(MediaId(2))
         );
         assert_eq!(card.photos[0].suggested_hover, None);
+        // One badge says the choice; a star beside it, whose it was.
+        let star = egui_phosphor::regular::STAR;
         let shown = super::super::review_card::render_grid(&mut app);
-        assert_eq!(shown.matches("Suggested").count(), 1, "{shown}");
+        assert_eq!(shown.matches(star).count(), 1, "{shown}");
+        assert!(!shown.contains("Suggested"), "{shown}");
         // Moving the keeper to Trash by hand keeps the mark.
         app.delete_card_event(MediaId(1), CardEvent::Toggle(1));
         app.delete_panel = false;
         let shown = super::super::review_card::render_grid(&mut app);
-        assert_eq!(shown.matches("Suggested").count(), 1, "{shown}");
+        assert_eq!(shown.matches(star).count(), 1, "{shown}");
     }
     #[test]
     fn changing_a_card_stages_it_at_once_and_undo_restores_the_suggestion() {
@@ -1479,17 +1334,17 @@ mod tests {
         app.refilter();
         let shown = super::super::review_card::render_grid(&mut app);
         for text in [
-            "Keep the shot with eyes open",
             "No shot with eyes open - kept",
             "Eyes open",
             "Eyes closed",
             "10.jpg",
             // Photos, not cards; the note is kept, so it is not counted.
-            "Trash all 2 closed-eyes shots · frees 16.0 MB",
+            "Accept all · frees 16.0 MB",
         ] {
             assert!(shown.contains(text), "{text} missing from:\n{shown}");
         }
-        assert!(!shown.contains("Identical copy"), "{shown}");
+        // The heading says what the cards with a better shot are.
+        assert!(!shown.contains("Keep the shot with eyes open"), "{shown}");
         // The zoomed eyes are cut sharp from the originals, off the UI thread.
         let wanted: Vec<_> = app.board.people.wanted.iter().map(|r| r.media.id).collect();
         for n in [6, 7, 8] {
@@ -1503,17 +1358,17 @@ mod tests {
         let card = app.delete_card(&eyes);
         assert_eq!(
             card.photos[2].suggested_hover.as_deref(),
-            Some("Suggested to keep. Everyone's eyes are open here.")
+            Some("Suggested by PhotoSort. Everyone's eyes are open here.")
         );
         let copy = app.delete_review.entry(MediaId(9)).unwrap().clone();
         assert_eq!(
             app.delete_card(&copy).photos[1].suggested_hover.as_deref(),
-            Some("Suggested to keep. Why this one is kept")
+            Some("Suggested by PhotoSort. Why this one is kept")
         );
         app.set_active(MediaId(6));
         assert_eq!(
             app.delete_keep_why(MediaId(7)).as_deref(),
-            Some("Suggested to keep. Everyone's eyes are open here.")
+            Some("Suggested by PhotoSort. Everyone's eyes are open here.")
         );
         // Every photo of the card is shown: both closed-eyes shots, then the
         // better one on the right, with two people's eyes on the first.
@@ -1543,16 +1398,14 @@ mod tests {
         let mut app = app();
         let shown = super::super::review_card::render_grid(&mut app);
         for text in [
-            "Identical copy",
-            "JPEG + HEIC",
             "Too dark",
             "Exact copies",
             "Same photo, two formats",
             "Keep both",
             "Keep HEIC",
             "Keep JPEG",
-            "Trash the exact copy · frees 1.0 MB",
-            "Trash the dark photo · frees 3.0 MB",
+            "Accept all · frees 1.0 MB",
+            "Accept all · frees 3.0 MB",
             "Keep HEIC · frees 4.0 MB",
             "Keep JPEG · frees 5.0 MB",
             "Accept all suggestions",
@@ -1561,7 +1414,17 @@ mod tests {
         ] {
             assert!(shown.contains(text), "{text} missing from:\n{shown}");
         }
-        for gone in ["Provisional", "Confirm", "explained", "1 Trash", "2 Keep"] {
+        // A card under a heading that says what it is has no title of its own.
+        for gone in [
+            "Provisional",
+            "Confirm",
+            "explained",
+            "1 Trash",
+            "2 Keep",
+            "Identical copy",
+            "JPEG + HEIC",
+            "For all of them",
+        ] {
             assert!(!shown.contains(gone), "{gone} still shown:\n{shown}");
         }
         assert_eq!(
@@ -1573,7 +1436,7 @@ mod tests {
         app.set_delete_tab(Some(Category::Dark));
         app.refilter();
         let shown = super::super::review_card::render_grid(&mut app);
-        assert!(shown.contains("Too dark") && !shown.contains("Identical copy"));
+        assert!(shown.contains("Too dark") && !shown.contains("Same photo, two formats"));
     }
     #[test]
     fn cards_show_only_what_differs_and_the_folder_when_copies_live_apart() {
@@ -1621,12 +1484,6 @@ mod tests {
         assert_eq!(
             text(&app.delete_facts(&dark, &dark.candidates())[0]),
             vec!["Brightness 9/255", "JPEG", "3.0 MB", "4000×3000"]
-        );
-        // Review shows the same facts beside each file name.
-        app.delete_current = Some(MediaId(1));
-        assert_eq!(
-            app.delete_photo_facts(MediaId(2)).as_deref(),
-            Some("2025/sorted")
         );
     }
     #[test]
@@ -1687,12 +1544,12 @@ mod tests {
         key(&mut app, egui::Key::F19, egui::Modifiers::NONE);
         assert!(!app.review);
         let shown = super::super::review_card::render_grid(&mut app);
-        assert_eq!(shown.matches("Identical copy").count(), 1, "{shown}");
+        assert_eq!(shown.matches("Identical copy").count(), 0, "{shown}");
         // The card's photos open beside the grid under its tag, with Undo;
         // the reason stays in the tag's tooltip.
         app.delete_card_event(MediaId(1), CardEvent::Select(0));
         let shown = super::super::review_card::render_grid(&mut app);
-        assert_eq!(shown.matches("Identical copy").count(), 2, "{shown}");
+        assert_eq!(shown.matches("Identical copy").count(), 1, "{shown}");
         assert!(
             shown.contains("Undo") && !shown.contains("explained"),
             "{shown}"
@@ -1701,7 +1558,7 @@ mod tests {
         key(&mut app, egui::Key::Escape, egui::Modifiers::NONE);
         assert!(!app.delete_panel);
         let shown = super::super::review_card::render_grid(&mut app);
-        assert_eq!(shown.matches("Identical copy").count(), 1, "{shown}");
+        assert_eq!(shown.matches("Identical copy").count(), 0, "{shown}");
     }
     #[test]
     fn the_size_slider_sets_how_many_cards_fit_at_every_window_width() {
@@ -1722,7 +1579,7 @@ mod tests {
             .collect();
         app.delete_review.replace(
             (0..6)
-                .map(|i| entry(2 * i + 1, Some(2 * i + 2), Category::Exact))
+                .map(|i| entry(2 * i + 1, Some(2 * i + 2), Category::Near))
                 .collect(),
         );
         app.view_data_ready.insert(Step::EasyDelete);
@@ -1748,7 +1605,7 @@ mod tests {
             let mut titles = Vec::new();
             fn walk(shape: &egui::Shape, titles: &mut Vec<egui::Pos2>) {
                 match shape {
-                    egui::Shape::Text(text) if text.galley.text() == "Identical copy" => {
+                    egui::Shape::Text(text) if text.galley.text() == "Sharper kept" => {
                         titles.push(text.pos)
                     }
                     egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, titles)),
@@ -1788,7 +1645,7 @@ mod tests {
         assert_eq!(app.preferences.photo_size, *sizes.end());
         app.delete_card_event(MediaId(3), CardEvent::Select(0));
         let (_, text) = titles(&mut app, 1200.0);
-        assert!(text.matches("Identical copy").count() >= 2, "{text}");
+        assert!(text.matches("Sharper kept").count() >= 2, "{text}");
         // Its suggestion was staged on entry; 1 switches the copy to Keep.
         assert!(app.decision(MediaId(3)).rejected);
         key(&mut app, egui::Key::Num1, egui::Modifiers::NONE);
@@ -1800,11 +1657,17 @@ mod tests {
     #[test]
     fn the_panel_slides_over_the_grid_without_reflowing_it_every_frame() {
         let mut app = app();
+        // A near-duplicate card keeps its tag as its title.
+        app.delete_review.replace(vec![
+            entry(1, Some(2), Category::Near),
+            entry(3, None, Category::Dark),
+        ]);
+        app.refilter();
         app.review = false;
         let ctx = egui::Context::default();
         theme_install(&ctx);
         ctx.global_style_mut(|style| style.animation_time = 1.0);
-        // Where each "Identical copy" title was painted: the card's first,
+        // Where each "Sharper kept" title was painted: the card's first,
         // then the panel's.
         let titles = |app: &mut PhotoSortApp, time: f64| {
             let output = ctx.run_test(
@@ -1823,7 +1686,7 @@ mod tests {
             let mut found = Vec::new();
             fn walk(shape: &egui::Shape, found: &mut Vec<egui::Pos2>) {
                 match shape {
-                    egui::Shape::Text(text) if text.galley.text() == "Identical copy" => {
+                    egui::Shape::Text(text) if text.galley.text() == "Sharper kept" => {
                         found.push(text.pos)
                     }
                     egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, found)),
@@ -1904,7 +1767,7 @@ mod tests {
         key(&mut app, egui::Key::Num1, egui::Modifiers::NONE);
         assert_eq!(app.decisions, before);
         let shown = super::super::review_card::render_grid(&mut app);
-        assert_eq!(shown.matches("JPEG + HEIC").count(), 1, "{shown}");
+        assert_eq!(shown.matches("JPEG + HEIC").count(), 0, "{shown}");
         // The same through a real click beside the first group's only card.
         app.delete_card_event(MediaId(1), CardEvent::Select(0));
         app.delete_panel = false;
@@ -1950,8 +1813,35 @@ mod tests {
         assert!(!trashed(&app, 1));
         assert_eq!(app.delete_current, Some(MediaId(1)));
         assert!(!app.delete_panel);
-        // A click on the card around the photos opens the panel.
-        click(&mut app, egui::pos2(300.0, 300.0));
+        // A click on the card around the photos, here on the second
+        // photo's name under it, opens the panel.
+        let output = ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.library(ui));
+            },
+        );
+        fn find(shape: &egui::Shape, name: &str) -> Option<egui::Pos2> {
+            match shape {
+                egui::Shape::Text(text) if text.galley.text() == name => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, name)),
+                _ => None,
+            }
+        }
+        let caption = output
+            .shapes
+            .iter()
+            .find_map(|clipped| find(&clipped.shape, "2.jpg"))
+            .expect("the second photo's name");
+        click(&mut app, caption);
         assert!(app.delete_panel);
         assert!(!trashed(&app, 1), "a card click changed a photo");
         app.deselect_delete_card();

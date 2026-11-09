@@ -75,9 +75,9 @@ pub(super) fn detail_notice(bytes: u64, limits: Limits, max_mib: u32) -> Option<
     let increase_to = holding(bytes * 2, limits.originals_mib).min(max_mib);
     (increase_to > limits.originals_mib).then(|| Notice {
         prompt: LimitPrompt::DetailMemory,
-        title: "Full-size photos don't fit in detail memory".into(),
+        title: "Full-size detail memory is too small".into(),
         body: format!(
-            "This photo takes {} at full size and detail memory is {}, so comparing photos or going back to one decodes it again, which is slow.",
+            "This photo needs {} at full size and the limit is {}, so going back to it loads it again, which is slow.",
             size_text(bytes),
             mib_text(limits.originals_mib)
         ),
@@ -99,7 +99,7 @@ pub(super) fn disk_notice(needed: u64, limits: Limits, free: Option<u64>) -> Opt
         prompt: LimitPrompt::DiskCache,
         title: "The disk cache is full".into(),
         body: format!(
-            "PhotoSort is removing previews it made earlier, so they are made again the next time you open this folder, which takes longer. This folder needs about {}; the limit is {}{}.",
+            "Previews of this folder are being removed and will be made again next time. It needs about {}; the limit is {}{}.",
             size_text(needed),
             mib_text(limits.disk_mib),
             free.map(|free| format!(" and {} is free", size_text(free)))
@@ -316,7 +316,7 @@ impl PhotoSortApp {
             Fit::Fits | Fit::Large if !allowed => (
                 format!("Full size needs about {needed} of memory"),
                 format!(
-                    "This {megapixels} MP photo is large for {} ({ram}). Opening it can take a while, and other apps may slow down meanwhile. The preview stays sharp up to fit size.",
+                    "This {megapixels} MP photo is large for {} ({ram}). Opening it can take a while and slow down other apps.",
                     computer()
                 ),
                 Some("Open anyway"),
@@ -324,7 +324,7 @@ impl PhotoSortApp {
             Fit::Exceeds if !allowed => (
                 format!("This photo needs more memory than {} has", computer()),
                 format!(
-                    "Opening it at full size needs about {needed}; {} has {ram}. The system would have to swap, which is very slow.",
+                    "It needs about {needed}; {} has {ram}. Opening it would be very slow.",
                     computer()
                 ),
                 Some("Try anyway"),
@@ -332,7 +332,7 @@ impl PhotoSortApp {
             _ => (
                 format!("This photo needs more memory than {} has", computer()),
                 format!(
-                    "Opening it at full size needs about {needed}; {} has {ram}. The preview is shown instead.",
+                    "It needs about {needed}; {} has {ram}. The preview is shown instead.",
                     computer()
                 ),
                 None,

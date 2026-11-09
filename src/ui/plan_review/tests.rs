@@ -169,7 +169,6 @@ fn organize_review_reads_as_plain_sentences_without_full_paths() {
         let texts = dialog_texts(&mut app, &ctx, size);
         for expected in [
             "You're about to move 3 photos into a new folder \"h\".",
-            "Nothing in library has changed yet.",
             "Moving",
             // The card says where its photos go and where they come from,
             // then shows them by source folder.
@@ -187,7 +186,7 @@ fn organize_review_reads_as_plain_sentences_without_full_paths() {
         if size.y > 600.0 {
             // Folder cleanup is one quiet, conditional line, never one row per folder.
             assert!(texts.iter().any(|t| t.starts_with(
-                "Folders left empty afterwards are removed: 2025-10-25 / group-6, 2025-10-25 / group-2, 2025-10-25"
+                "Folders left empty are removed: 2025-10-25 / group-6, 2025-10-25 / group-2, 2025-10-25"
             )), "{texts:?}");
         }
         assert!(!texts.iter().any(|t| t.contains("Remove folder if empty")

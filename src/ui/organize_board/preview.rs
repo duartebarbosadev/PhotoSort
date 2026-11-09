@@ -67,7 +67,6 @@ impl PhotoSortApp {
                         ui.set_width(inner.width());
                         ui.set_height(inner.height());
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("Preview").font(semibold(13.0)));
                             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                                 if icon_button(ui, egui_phosphor::regular::X, "Close preview")
                                     .clicked()
@@ -85,6 +84,7 @@ impl PhotoSortApp {
     pub(super) fn board_preview_toggle(&mut self, ui: &mut egui::Ui) {
         use egui_phosphor::regular as icon;
         let open = self.board.preview_open;
+        let name = if open { "Hide preview" } else { "Show preview" };
         let response = named(
             ui.add(
                 egui::Button::new(RichText::new(icon::SIDEBAR_SIMPLE).color(if open {
@@ -97,9 +97,9 @@ impl PhotoSortApp {
                 .min_size(egui::vec2(28.0, 0.0)),
             ),
             egui::WidgetType::Button,
-            if open { "Hide preview" } else { "Show preview" },
+            name,
         )
-        .on_hover_text("The clicked photo, over the board");
+        .on_hover_text(name);
         if response.clicked() {
             self.board.preview_open = !open;
             // The Details drawer opens in the same place.
@@ -202,7 +202,7 @@ impl PhotoSortApp {
                 if ids.len() > 1 {
                     if ui
                         .small_button("End comparison")
-                        .on_hover_text("Show only this photo · Esc")
+                        .on_hover_text("Esc")
                         .clicked()
                     {
                         self.end_board_comparison();
@@ -211,7 +211,6 @@ impl PhotoSortApp {
                     // The single preview of a large selection: back to all of them.
                     if ui
                         .small_button(format!("Show all {}", self.selection.len()))
-                        .on_hover_text("Every selected photo as a contact sheet")
                         .clicked()
                     {
                         self.board.single = None;
@@ -231,14 +230,15 @@ impl PhotoSortApp {
             .board_pending()
             .filter(|_| !self.organize_drafts.contains_key(&self.group_mode));
         let mut reason = None;
+        // While grouping, the notice over the board says what is happening.
         let line = match pending {
-            None if self.board.original => format!(
+            None if self.board.original => Some(format!(
                 "{}  Now in {}",
                 icon::FOLDER_SIMPLE,
                 self.readable_folder(media.path.parent().unwrap_or(std::path::Path::new("")))
-            ),
-            Some(pending) => format!("{}  {}", icon::CIRCLE_DASHED, unplaced_title(Some(pending))),
-            None => {
+            )),
+            Some(_) => None,
+            None => Some({
                 let placement = self.placement(&media);
                 if placement.label.is_none() {
                     reason = Some(format!("Not moving · {}", self.unplaced_reason(&media)));
@@ -248,17 +248,24 @@ impl PhotoSortApp {
                 } else {
                     format!("{}  Stays in {}", icon::FOLDER_SIMPLE, placement.folder)
                 }
-            }
+            }),
         };
-        let line = ui.add(egui::Label::new(RichText::new(line).small().color(MUTED)).truncate());
-        if let Some(reason) = reason {
-            line.on_hover_text(reason);
+        if let Some(line) = line {
+            let line =
+                ui.add(egui::Label::new(RichText::new(line).small().color(MUTED)).truncate());
+            if let Some(reason) = reason {
+                line.on_hover_text(reason);
+            }
         }
         ui.add_space(S1);
-        // The mark, rating and zoom controls take two rows in a narrow panel,
-        // so they never widen it over the board.
+        // The floating bar of photo commands, as in Cull, wraps in a narrow
+        // panel, so it never widens it over the board. The photo leaves room
+        // for the rows it took in the last frame.
         let narrow = ui.available_width() < 560.0;
-        let controls = if narrow { 70.0 } else { 34.0 };
+        let bar_id = egui::Id::new(("organize_bar", narrow));
+        let controls = ui
+            .data(|d| d.get_temp::<f32>(bar_id.with("height")))
+            .unwrap_or(if narrow { 96.0 } else { 52.0 });
         let size = egui::vec2(
             ui.available_width(),
             (ui.available_height() - controls).max(80.0),
@@ -287,14 +294,17 @@ impl PhotoSortApp {
                 }
             });
         }
-        let row = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
-            if narrow {
-                ui.horizontal_wrapped(|ui| add(ui));
-            } else {
-                ui.horizontal_centered(|ui| add(ui));
+        let top = ui.cursor().top();
+        ui.add_space(S1);
+        floating_bar(ui, bar_id, |ui| {
+            for (glyph, delta, hover) in [
+                (icon::CARET_LEFT, -1, "Previous photo · Left"),
+                (icon::CARET_RIGHT, 1, "Next photo · Right"),
+            ] {
+                if icon_button(ui, glyph, hover).clicked() {
+                    self.navigate_selection(delta, false, false);
+                }
             }
-        };
-        row(ui, &mut |ui| {
             let (all, rejected) = self.trash_button_state(active);
             let (label, hover) = selection::trash_button_text(all, rejected, ids.len() > 1);
             // Compared selected photos give every label the widest one's
@@ -310,8 +320,16 @@ impl PhotoSortApp {
             {
                 self.trash_button_clicked(active);
             }
+            if narrow {
+                ui.end_row();
+            }
             self.review_ratings(ui, active);
         });
+        let height = ui.cursor().top() - top;
+        if ui.data(|d| d.get_temp::<f32>(bar_id.with("height"))) != Some(height) {
+            ui.data_mut(|d| d.insert_temp(bar_id.with("height"), height));
+            ui.ctx().request_repaint();
+        }
     }
     /// More than nine selected photos show in the preview as a contact
     /// sheet, unless the single preview was chosen for this selection.
@@ -331,11 +349,7 @@ impl PhotoSortApp {
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("{} selected", ids.len())).font(semibold(13.0)));
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .small_button("Show one")
-                    .on_hover_text("Only the active photo, large · Esc")
-                    .clicked()
-                {
+                if ui.small_button("Show one").on_hover_text("Esc").clicked() {
                     self.board.single = Some(ids.len());
                 }
                 let marked = ids.iter().all(|id| self.decision(*id).rejected);
@@ -361,11 +375,6 @@ impl PhotoSortApp {
                 }
             });
         });
-        ui.label(
-            RichText::new("Click a photo so D marks only that one · double-click to see it large")
-                .small()
-                .color(MUTED),
-        );
         ui.add_space(S1);
         let gap = ui.spacing().item_spacing.x;
         let width = ui.available_width();

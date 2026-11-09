@@ -103,7 +103,6 @@ impl PhotoSortApp {
             return;
         }
         let count = others.len();
-        ui.label(format!("Affects {count} other displayed items"));
         for (rejected, label) in [
             (true, format!("Mark other {count} for Trash")),
             (false, format!("Unmark other {count}")),
@@ -111,9 +110,7 @@ impl PhotoSortApp {
             let changes = others
                 .iter()
                 .any(|other| self.decision(*other).rejected != rejected);
-            if ui.add_enabled(changes, egui::Button::new(label)).on_hover_text(
-                "Changes only the other items in this comparison. Review changes before moving anything to Trash."
-            ).clicked() {
+            if ui.add_enabled(changes, egui::Button::new(label)).clicked() {
                 self.mark_comparison_others(id, rejected);
                 ui.close();
             }
@@ -224,11 +221,16 @@ impl PhotoSortApp {
         let show_filmstrip = !side_strip && !beside_grid && ui.available_height() >= 360.0;
         let filmstrip_height = FILMSTRIP + 26.0 + if self.strip_names() { STRIP_NAME } else { 0.0 };
         let short = ui.ctx().content_rect().height() < 760.0;
-        let controls_height = match (compact, short) {
-            (true, true) => 80.0,
-            (true, false) => 100.0,
-            (false, _) => 60.0,
-        };
+        // The floating bar's height as last drawn: in a narrow panel its
+        // controls can wrap to a third row.
+        let bar_key = egui::Id::new(("review_bar_height", compact, self.step));
+        let controls_height =
+            ui.data(|d| d.get_temp::<f32>(bar_key))
+                .unwrap_or(match (compact, short) {
+                    (true, true) => 80.0,
+                    (true, false) => 100.0,
+                    (false, _) => 60.0,
+                });
         let height = (ui.available_height()
             - controls_height
             - if show_filmstrip {
@@ -350,13 +352,14 @@ impl PhotoSortApp {
         if background.is_some_and(|response| response.clicked()) {
             self.comparison_focus = None;
         }
+        let bar_top = ui.cursor().top();
         ui.add_space(S1);
         floating_bar(
             ui,
             egui::Id::new(("review_bar", compact, self.step)),
             |ui| {
                 use egui_phosphor::regular as icon;
-                const NAVIGATION: &str = "Cull follows Up/Down navigation preferences. Hold Ctrl or Cmd to include marked photos and bypass movement filters.";
+                const NAVIGATION: &str = "Hold Ctrl or Cmd to include marked photos";
                 if icon_button(
                     ui,
                     icon::CARET_LEFT,
@@ -384,18 +387,21 @@ impl PhotoSortApp {
                     );
                 }
                 if matches!(self.step, Step::EasyDelete | Step::PickBest) {
-                    // A Keep/Trash switch per photo, with its number key.
+                    // A Keep/Trash switch per photo, labelled with its number
+                    // key.
                     for (side, id) in ids.iter().enumerate() {
                         let keep = !self.decision(*id).rejected;
-                        let hover = if side < 9 {
-                            format!("Toggle photo {} · {}", side + 1, side + 1)
-                        } else {
-                            format!("Toggle photo {}", side + 1)
-                        };
-                        if ui
-                            .add(decision_button(side, keep))
-                            .on_hover_text(hover)
-                            .clicked()
+                        let name = format!(
+                            "Photo {}: {}",
+                            side + 1,
+                            if keep { "Keep" } else { "Trash" }
+                        );
+                        if named(
+                            ui.add(decision_button(side, keep)),
+                            egui::WidgetType::Button,
+                            &name,
+                        )
+                        .clicked()
                         {
                             if self.step == Step::EasyDelete {
                                 self.toggle_delete_candidate(side);
@@ -440,6 +446,13 @@ impl PhotoSortApp {
                 }
             },
         );
+        // Room for the bar as drawn now, from the next frame; a different
+        // height redraws at once.
+        let used = (ui.cursor().top() - bar_top).ceil();
+        if (used - controls_height).abs() > 0.5 {
+            ui.data_mut(|d| d.insert_temp(bar_key, used));
+            ui.ctx().request_repaint();
+        }
         if show_filmstrip {
             ui.add_space(S1);
             self.photos_header(ui, true);
@@ -491,15 +504,6 @@ impl PhotoSortApp {
                 self.rating(active, if rating == star { 0 } else { star });
             }
         }
-        // Offered only when there is a rating to clear.
-        if rating > 0
-            && ui
-                .small_button("Clear rating")
-                .on_hover_text("Ctrl/Cmd+0")
-                .clicked()
-        {
-            self.rating(active, 0);
-        }
         self.review_view_controls(ui);
     }
     fn review_view_controls(&mut self, ui: &mut egui::Ui) {
@@ -520,7 +524,7 @@ impl PhotoSortApp {
         }
         if ui
             .small_button("1:1")
-            .on_hover_text("One source pixel per display pixel; loads original detail")
+            .on_hover_text("Actual pixels")
             .clicked()
         {
             self.actual_size();
@@ -531,7 +535,7 @@ impl PhotoSortApp {
         if several
             && ui
                 .selectable_label(self.sync_views, "Sync")
-                .on_hover_text("Synchronize pan and zoom across the comparison (F3)")
+                .on_hover_text("Same pan and zoom for every photo · F3")
                 .clicked()
         {
             self.toggle_sync();
@@ -1279,55 +1283,36 @@ impl PhotoSortApp {
                 ACCENT,
             );
         }
-        if let Some(&index) = self.index.get(&id) {
-            // The file name follows the app-wide file name preference.
-            let named = |head: &str| {
-                if self.preferences.show_filenames {
-                    format!("{head} / {}", self.media[index].name())
-                } else {
-                    head.to_owned()
-                }
-            };
-            // Fix Rotation's photos need no label: as it is, then turned,
-            // under the panel's header with the file name.
-            let label = if self.step == Step::Rotation {
-                String::new()
+        if self.index.contains_key(&id) {
+            // The photo's name shows under its strip tile and over Details,
+            // so a photo here is labelled only by its number when there are
+            // several: the number Details lists it under, and in Easy Delete
+            // and Pick Best its key. Fix Rotation shows one photo twice and
+            // needs none. Cull and Organize add any issue analysis found.
+            let mut label = if count > 1 && self.step != Step::Rotation {
+                (slot + 1).to_string()
             } else {
-                let mut label = named(&(slot + 1).to_string());
-                // Easy Delete and Pick Best show what tells the photos
-                // apart, as on their cards, in place of the scores.
-                let facts = match self.step {
-                    Step::EasyDelete => self.delete_photo_facts(id),
-                    Step::PickBest => self.pick_photo_facts(id),
-                    _ => None,
-                };
-                if let Some(facts) = &facts {
-                    label.push_str(" · ");
-                    label.push_str(facts);
-                }
-                // Elsewhere show the photo's quality score once analysis has
-                // run.
-                let score = self.analysis.get(&id).map(|a| a.score);
-                if let Some(score) = score.filter(|_| facts.is_none()) {
-                    label.push_str(&format!(" · score {score:.1}"));
-                }
-                if let Some(analysis) = self.analysis.get(&id).filter(|_| facts.is_none()) {
-                    for issue in &analysis.issues {
-                        label.push_str(" · ");
-                        label.push_str(issue);
-                    }
-                }
-                label
+                String::new()
             };
+            if matches!(self.step, Step::Cull | Step::Organize)
+                && let Some(analysis) = self.analysis.get(&id)
+            {
+                for issue in &analysis.issues {
+                    if !label.is_empty() {
+                        label.push_str(" · ");
+                    }
+                    label.push_str(issue);
+                }
+            }
             // Leave room for the Keep/Trash pill in the top-right corner.
             let pill = matches!(self.step, Step::EasyDelete | Step::PickBest) || d.rejected;
             let mut label_clip = rect;
             if pill {
-                // Pick Best and Easy Delete add a Suggested mark beside it.
+                // Pick Best and Easy Delete add a star beside it.
                 label_clip.max.x -= if self.step == Step::PickBest
                     || (self.step == Step::EasyDelete && self.delete_suggested_keeper(id))
                 {
-                    210.0
+                    150.0
                 } else {
                     104.0
                 };
@@ -1340,10 +1325,11 @@ impl PhotoSortApp {
                 MUTED,
             );
             if self.comparison_ids().len() == 1 {
+                let gap = if shown.width() > 0.0 { 8.0 } else { 0.0 };
                 self.group_chip(
                     ui,
                     id,
-                    shown.right_center() + egui::vec2(8.0, 0.0),
+                    shown.right_center() + egui::vec2(gap, 0.0),
                     label_clip,
                 );
             }
@@ -1560,15 +1546,15 @@ const STRIP_THUMB: f32 = 72.0;
 /// Room beside a one-column strip for its similarity group marks.
 const GROUP_GUTTER: f32 = 9.0;
 
-/// Keep/Trash toggle for one side of a guided comparison.
+/// Keep/Trash toggle for one side of a guided comparison: its number key
+/// and an icon, as the photo's own pill says the word.
 fn decision_button(side: usize, keep: bool) -> egui::Button<'static> {
     use egui_phosphor::regular as icon;
     egui::Button::new(
         RichText::new(format!(
-            "{}  {}  {}",
+            "{}  {}",
             side + 1,
             if keep { icon::CHECK } else { icon::TRASH },
-            if keep { "Keep" } else { "Trash" }
         ))
         .color(if keep { GREEN } else { RED }),
     )
@@ -1594,10 +1580,15 @@ fn decision_pill(painter: &egui::Painter, slot: egui::Rect, keep: bool) -> egui:
     painter.galley(rect.min + egui::vec2(10.0, 4.0), galley, Color32::BLACK);
     rect
 }
-/// Marks Pick Best's suggested keeper, beside its Keep/Trash pill.
+/// Marks the keeper PhotoSort suggests with a star beside its Keep/Trash
+/// pill: the pill says the choice, the star whose it was, and its tooltip
+/// why.
 fn suggested_badge(painter: &egui::Painter, pill: egui::Rect) -> egui::Rect {
-    let text = format!("{}  Suggested", egui_phosphor::regular::STAR);
-    let galley = painter.layout_no_wrap(text, medium(12.0), ACCENT);
+    let galley = painter.layout_no_wrap(
+        egui_phosphor::regular::STAR.to_owned(),
+        medium(12.0),
+        ACCENT,
+    );
     let size = galley.size() + egui::vec2(16.0, 8.0);
     let rect = Align2::RIGHT_TOP.anchor_size(pill.left_top() - egui::vec2(S1 + 2.0, 0.0), size);
     painter.rect_filled(rect, R_CONTROL, Color32::from_black_alpha(170));

@@ -111,7 +111,7 @@ library:
 
 ## Useful shortcuts
 
-Each step shows its keys in the status bar. **Menu → Keyboard guide** has the full list.
+Each step shows its keys in the status bar. **Menu → Keyboard Shortcuts** has the full list.
 
 | What you want to do | Shortcut |
 | --- | --- |

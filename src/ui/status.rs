@@ -8,6 +8,10 @@ impl PhotoSortApp {
         self.status = message;
         self.status_scope = None;
     }
+    /// Nothing to say: what is running or finished is already on screen.
+    pub(super) fn clear_status(&mut self) {
+        self.set_status(String::new());
+    }
     /// The producer names its owner, including when it completes in the background.
     pub(super) fn set_workflow_status(&mut self, step: Step, message: String) {
         self.status = message;
@@ -36,10 +40,11 @@ impl PhotoSortApp {
         }) {
             return Cow::Borrowed(&self.status);
         }
-        Cow::Owned(if self.root.is_some() {
-            format!("{} items · {} ready", self.media.len(), self.step.title())
+        // Another step's message: the count and the step are already on screen.
+        Cow::Borrowed(if self.root.is_some() {
+            ""
         } else {
-            "Open a folder to begin".into()
+            "Open a folder to begin"
         })
     }
 }
@@ -175,17 +180,17 @@ mod tests {
         let mut app = app(&temp);
         app.step = Step::Cull;
         app.finish_pick_analysis();
-        // An empty fixture: no groups and nothing to clean up.
-        assert!(app.status.contains("No similar photos found"));
+        // An empty fixture: no groups and nothing to clean up, which the
+        // steps' own empty states say.
         assert_eq!(app.status_scope, Some((Step::PickBest, None)));
-        assert!(!app.workflow_status().contains("similar photos"));
         app.finish_delete_analysis();
-        assert!(app.status.contains("Nothing to clean up"));
         assert_eq!(app.status_scope, Some((Step::EasyDelete, None)));
-        assert!(!app.workflow_status().contains("clean up"));
+        // A photo that could not be checked is the one thing it reports.
+        app.analysis_failures
+            .insert(MediaId(1), "Cannot decode".into());
         app.finish_rotation_detection();
         assert_eq!(app.status_scope, Some((Step::Rotation, None)));
-        assert!(!app.workflow_status().contains("rotation suggestions"));
+        assert!(!app.workflow_status().contains("could not be analyzed"));
         let ctx = egui::Context::default();
         theme_install(&ctx);
         ctx.enable_accesskit();
@@ -200,11 +205,7 @@ mod tests {
             |ui| app.footer(ui),
         );
         let tree = output.platform_output.accesskit_update.unwrap();
-        assert!(
-            tree.nodes
-                .iter()
-                .any(|(_, n)| n.value() == Some("0 items · Cull ready"))
-        );
+        assert_eq!(app.workflow_status(), "");
         assert!(
             !tree
                 .nodes
@@ -212,26 +213,28 @@ mod tests {
                 .any(|(_, n)| n.value().is_some_and(|v| v.contains("confirm choices")))
         );
         app.set_step(Step::Rotation);
-        assert!(app.workflow_status().contains("rotation suggestions"));
+        assert!(
+            app.workflow_status()
+                .contains("1 photo could not be analyzed")
+        );
         app.runtime.shutdown();
     }
     #[test]
     fn shared_activity_recovery_and_organize_mode_status_keep_their_correct_scope() {
         let temp = tempfile::tempdir().unwrap();
         let mut app = app(&temp);
-        app.set_organize_status(GroupMode::Faces, "People groups ready".into());
+        app.set_organize_status(GroupMode::Faces, "No faces found in these photos".into());
         app.step = Step::Organize;
         app.group_mode = GroupMode::Faces;
-        assert_eq!(app.workflow_status(), "People groups ready");
+        assert_eq!(app.workflow_status(), "No faces found in these photos");
         app.set_group_mode(GroupMode::Current);
-        assert!(!app.workflow_status().contains("People groups"));
+        assert!(!app.workflow_status().contains("No faces"));
         app.set_step(Step::Cull);
-        app.set_organize_status(GroupMode::Mixed, "Date and similarity groups ready".into());
-        assert!(!app.workflow_status().contains("similarity groups"));
+        app.set_organize_status(GroupMode::Mixed, "1 photo could not be analyzed".into());
+        assert!(!app.workflow_status().contains("could not be analyzed"));
         for message in [
-            "Discovering photos…",
-            "Analyzing locally · previews stay available",
-            "Applying reviewed changes…",
+            "Discovered 12 items…",
+            "Checking files and folders for Trash review…",
             "3 unfinished operations · Review changes to resolve",
         ] {
             app.set_status(message.into());

@@ -1095,7 +1095,9 @@ fn guided_comparisons_never_show_the_previous_photo_under_the_new_ones_pill() {
             output.shapes.iter().any(|clipped| match &clipped.shape {
                 egui::Shape::Text(text) => {
                     let text = text.galley.text();
-                    text.contains("Keep") || text.contains("Trash") || text.contains("Suggested")
+                    text.contains("Keep")
+                        || text.contains("Trash")
+                        || text.contains(egui_phosphor::regular::STAR)
                 }
                 _ => false,
             })

@@ -239,10 +239,7 @@ impl PhotoSortApp {
                 "Library navigator",
             )
         };
-        if button
-            .on_hover_text("Folders and capture dates, to jump between them · F")
-            .clicked()
-        {
+        if button.on_hover_text("Library navigator · F").clicked() {
             visible = !visible;
             self.set_navigator(visible);
         }
@@ -257,6 +254,15 @@ impl PhotoSortApp {
         }
         let (id, default) = super::review::side_strip_panel(self.preferences.compact_strip);
         egui::PanelState::load(ctx, egui::Id::new(id)).map_or(default, |p| p.size().x)
+    }
+    /// Whether the navigator is a sidebar, this frame or the last; its top
+    /// row then names the library folder.
+    pub(super) fn navigator_sidebar_shown(&self, ctx: &egui::Context) -> bool {
+        self.step == Step::Cull
+            && self.navigator.enabled
+            && ctx
+                .data(|d| d.get_temp::<u64>(egui::Id::new(SIDEBAR_FRAME)))
+                .is_some_and(|frame| frame.saturating_add(1) >= ctx.cumulative_frame_nr())
     }
     fn navigator_popup_id(&self) -> egui::Id {
         egui::Id::new(("navigator_popup_open", &self.root))
@@ -342,9 +348,7 @@ impl PhotoSortApp {
             };
             let width = ui.available_width().clamp(240., 420.);
             let height = (ui.ctx().content_rect().height() - 180.).clamp(160., 420.);
-            let response = ui
-                .add(egui::Button::new(label).truncate())
-                .on_hover_text("The library's folders. Counts cover the whole library.");
+            let response = ui.add(egui::Button::new(label).truncate());
             #[cfg(test)]
             ui.ctx()
                 .data_mut(|d| d.insert_temp(egui::Id::new("test_navigator_toggle"), response.rect));
@@ -388,12 +392,7 @@ impl PhotoSortApp {
             for choice in [Mode::Folders, Mode::Dates] {
                 let current = mode == choice;
                 let text = caption(choice.title()).color(if current { INK } else { FAINT });
-                let response =
-                    ui.add(egui::Button::new(text).frame(false))
-                        .on_hover_text(match choice {
-                            Mode::Dates => "Capture dates. Counts cover the whole library.",
-                            _ => "The library's folders. Counts cover the whole library.",
-                        });
+                let response = ui.add(egui::Button::new(text).frame(false));
                 let response = named(response, egui::WidgetType::Button, choice.title());
                 if response.clicked() {
                     self.set_navigator_mode(choice);
@@ -494,9 +493,11 @@ impl PhotoSortApp {
                             // The library folder by its name, as Organize's
                             // top row; dates as words.
                             let label = match &node.key {
-                                Key::Folder(path) if top => path
-                                    .file_name()
-                                    .map_or(node.label.clone(), |n| n.to_string_lossy().into_owned()),
+                                Key::Folder(path) if top => {
+                                    path.file_name().map_or(node.label.clone(), |n| {
+                                        n.to_string_lossy().into_owned()
+                                    })
+                                }
                                 Key::Date(date) => date_label(date),
                                 _ => node.label.clone(),
                             };
@@ -574,20 +575,27 @@ impl PhotoSortApp {
                                     ui.close();
                                 }
                             });
-                            let hover = match folder {
-                                Some(path) => format!(
-                                    "{} · click to scroll to it · Ctrl/Cmd-click to show only the folders you choose",
+                            // A folder's full path, and how to show only it.
+                            let response = match folder {
+                                Some(path) => response.on_hover_text(format!(
+                                    "{}\nCtrl/Cmd-click to show only the folders you choose",
                                     path.display()
-                                ),
-                                None => format!("{label} · click to scroll to its photos"),
+                                )),
+                                None => response,
                             };
-                            if response.on_hover_text(hover).clicked() {
+                            if response.clicked() {
                                 let modifiers = ui.input(|i| i.modifiers);
                                 match folder {
                                     Some(path)
-                                        if modifiers.shift || modifiers.command || modifiers.ctrl =>
+                                        if modifiers.shift
+                                            || modifiers.command
+                                            || modifiers.ctrl =>
                                     {
-                                        self.choose_navigator_folder(&view, path.clone(), modifiers);
+                                        self.choose_navigator_folder(
+                                            &view,
+                                            path.clone(),
+                                            modifiers,
+                                        );
                                     }
                                     _ => self.go_to(node.key.clone()),
                                 }

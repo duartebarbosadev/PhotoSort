@@ -1,36 +1,19 @@
-//! The board's header and Organize's top-bar controls: title and counts,
+//! The board's header and Organize's top-bar controls: the folder shown,
 //! search, filter, Show original and Reset changes.
 use super::*;
 
 impl PhotoSortApp {
-    /// Above the photos: where you are, what it holds, and thumbnail size.
+    /// Above the photos: the folder shown, when it is not every folder, and
+    /// search, filter and thumbnail size. The folders and their counts are
+    /// in the sidebar and the section headers.
     pub(super) fn board_summary(&mut self, ui: &mut egui::Ui) {
         use egui_phosphor::regular as icon;
-        let root = self.board_root_name();
         let focus = self.board.focus.clone();
-        let (folders, items) = if focus.is_empty() {
-            (
-                self.board
-                    .sections
-                    .iter()
-                    .filter(|s| s.path.is_some())
-                    .count(),
-                self.filtered.len(),
-            )
-        } else {
-            let shown: Vec<_> = self
-                .board
-                .sections
-                .iter()
-                .filter(|s| s.path.is_some() && shows(&focus, s.path.as_deref()))
-                .collect();
-            (shown.len(), shown.iter().map(|s| s.range.len()).sum())
-        };
         let title = match focus.as_slice() {
-            [] => root.clone(),
-            [path] if path.is_empty() => root.clone(),
-            [path] => format!("{root} / {}", path.replace('/', " / ")),
-            several => format!("{root} / {} folders", several.len()),
+            [] => None,
+            [path] if path.is_empty() => Some(self.board_root_name()),
+            [path] => Some(path.replace('/', " / ")),
+            several => Some(format!("{} folders", several.len())),
         };
         // Several folders shown are named on hover over the title.
         let names = (focus.len() > 1).then(|| {
@@ -40,11 +23,10 @@ impl PhotoSortApp {
                 .collect::<Vec<_>>()
                 .join("\n")
         });
-        let summary = self.board_counts(folders, items, focus.is_empty());
         ui.horizontal(|ui| {
             ui.set_height(28.0);
-            // The size slider is placed first, from the right; the title and
-            // counts then get only the room left of it and truncate there.
+            // The size slider is placed first, from the right; the title
+            // then gets only the room left of it and truncates there.
             // Folded away in a narrow window: the folders at the left, the
             // preview at the right.
             if !self.board.layout.sidebar {
@@ -60,56 +42,46 @@ impl PhotoSortApp {
                 self.board_filter(ui);
                 self.board_search(ui);
                 ui.add_space(S2);
-                // The selection count only when it fits beside the title.
-                let small = egui::TextStyle::Small.resolve(ui.style());
-                let width = |text: &str, font: FontId| {
-                    ui.painter()
-                        .layout_no_wrap(text.to_owned(), font, ACCENT)
-                        .size()
-                        .x
-                };
-                // The title and counts come first; the count of selected
-                // photos only fills what they leave.
-                let body = egui::TextStyle::Body.resolve(ui.style());
-                let reserved = width(&title, semibold(13.0)) + width(&summary, body) + 40.0;
+                // The count of selected photos only fills what the title
+                // leaves.
                 if self.library_selection_mode() && !self.selection.is_empty() {
-                    let count = self.selection.len();
-                    let full = format!("{count} selected · drag onto a folder to move");
-                    let short = format!("{count} selected");
-                    let room = ui.available_width() - reserved;
-                    let text = if width(&full, small.clone()) <= room {
-                        Some(full)
-                    } else if width(&short, small.clone()) <= room {
-                        Some(short)
-                    } else {
-                        None
+                    let text = format!("{} selected", self.selection.len());
+                    let width = |text: &str, font: FontId| {
+                        ui.painter()
+                            .layout_no_wrap(text.to_owned(), font, ACCENT)
+                            .size()
+                            .x
                     };
-                    if let Some(text) = text {
+                    let reserved = title
+                        .as_deref()
+                        .map_or(0.0, |title| width(title, semibold(13.0)) + 40.0);
+                    let small = egui::TextStyle::Small.resolve(ui.style());
+                    if width(&text, small) <= ui.available_width() - reserved {
                         ui.label(RichText::new(text).small().color(ACCENT))
                             .on_hover_text("Drag onto a folder to move");
                         ui.add_space(S3);
                     }
                 }
+                let Some(title) = &title else {
+                    return;
+                };
                 ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
-                    if !focus.is_empty()
-                        && named(
-                            ui.small_button(icon::ARROW_LEFT),
-                            egui::WidgetType::Button,
-                            "Back to all folders",
-                        )
-                        .on_hover_text(format!("Every item in {root}"))
-                        .clicked()
+                    if named(
+                        ui.small_button(icon::ARROW_LEFT),
+                        egui::WidgetType::Button,
+                        "Back to all folders",
+                    )
+                    .on_hover_text("All folders")
+                    .clicked()
                     {
                         self.board.focus.clear();
                     }
                     let title = ui.add(
-                        egui::Label::new(RichText::new(&title).font(semibold(13.0))).truncate(),
+                        egui::Label::new(RichText::new(title).font(semibold(13.0))).truncate(),
                     );
                     if let Some(names) = &names {
-                        title.on_hover_text(format!("Showing these folders together:\n{names}"));
+                        title.on_hover_text(names);
                     }
-                    ui.add(egui::Label::new(RichText::new(&summary).color(MUTED)).truncate())
-                        .on_hover_text(&summary);
                 });
             });
         });
@@ -174,8 +146,8 @@ impl PhotoSortApp {
             egui::WidgetType::Button,
             "Show original",
         )
-        .on_hover_text("Hold to see the folders as they are on disk now · or hold \\")
-        .on_disabled_hover_text("Nothing planned yet: the folders already look like this on disk");
+        .on_hover_text("Hold to see the folders on disk now · or hold \\")
+        .on_disabled_hover_text("Nothing planned yet");
         let held = response.is_pointer_button_down_on();
         if held != self.board.original_button {
             self.board.original_button = held;
@@ -215,7 +187,7 @@ impl PhotoSortApp {
             "Reset changes",
         )
         .on_hover_text("Discard every planned move, rename and new folder")
-        .on_disabled_hover_text("No planned changes to reset");
+        .on_disabled_hover_text("Nothing planned yet");
         if response.clicked() {
             self.board.confirm_reset = true;
         }
@@ -232,7 +204,6 @@ impl PhotoSortApp {
         self.board.marquee = None;
         self.board.focus.clear();
         self.board_epoch += 1;
-        self.navigation_notice = Some("Changes reset · the folders are as they are on disk".into());
     }
     pub(in crate::ui::workspace) fn organize_reset_dialog(&mut self, ctx: &egui::Context) {
         if !self.board.confirm_reset {
@@ -250,10 +221,7 @@ impl PhotoSortApp {
             } else {
                 "Reset planned changes?".into()
             });
-            ui.label(format!(
-                "Every move, rename and new folder planned in Organize is dropped, in every grouping, and Group by goes back to {}. Nothing on disk changes.",
-                GroupMode::Current.title()
-            ));
+            ui.label("Every planned move, rename and new folder is dropped, in every grouping.");
             ui.label(RichText::new("Trash marks, ratings and rotations stay.").color(MUTED));
             ui.add_space(S2);
             ui.horizontal_wrapped(|ui| {
@@ -285,21 +253,19 @@ impl PhotoSortApp {
             Pending::Cancelled => (
                 icon::PROHIBIT,
                 "Grouping cancelled".into(),
-                format!(
-                    "Grouping by {what} was cancelled. Photos stay where they are; group again to propose folders."
-                ),
+                "Photos stay where they are.".into(),
                 Some("Group again"),
             ),
             Pending::Failed => (
                 icon::WARNING,
                 "Grouping stopped".into(),
-                format!("Grouping by {what} could not finish. Group again to retry."),
+                format!("Grouping by {what} could not finish."),
                 Some("Group again"),
             ),
             Pending::Waiting if self.model_issue.is_some() || self.model_dialog => (
                 icon::CPU,
                 "AI models needed".into(),
-                format!("Grouping by {what} needs AI models. Set them up, then group again."),
+                format!("Grouping by {what} needs them."),
                 Some("AI models…"),
             ),
             Pending::Waiting if self.analysis_run.is_some() || self.rotation_run.is_some() => (
@@ -323,9 +289,7 @@ impl PhotoSortApp {
             Pending::Waiting => (
                 icon::CIRCLE_DASHED,
                 "Not grouped yet".into(),
-                format!(
-                    "Group by {what} to propose folders. Nothing moves until you review the changes and apply them."
-                ),
+                format!("Group by {what} to propose folders."),
                 Some("Group photos"),
             ),
         })

@@ -301,8 +301,21 @@ impl PhotoSortApp {
         )
     }
 
-    /// The app icon and, while there is room, the folder's name. Its full
-    /// path is in the tooltip either way.
+    /// Whether a sidebar beside the photos names the library folder in its
+    /// top row: Cull's navigator or Organize's folders.
+    fn sidebar_names_folder(&self, ctx: &egui::Context) -> bool {
+        let frame = ctx.cumulative_frame_nr();
+        self.navigator_sidebar_shown(ctx)
+            || (self.step == Step::Organize
+                && self.board.layout.sidebar
+                && self
+                    .board
+                    .sidebar_frame
+                    .is_some_and(|drawn| drawn.saturating_add(1) >= frame))
+    }
+
+    /// The app icon and, while there is room and no sidebar names it, the
+    /// folder's name. Its full path is in the tooltip either way.
     fn identity(&mut self, ui: &mut egui::Ui, fit: Fit) {
         let Some(root) = self.root.clone() else {
             return;
@@ -311,6 +324,7 @@ impl PhotoSortApp {
         let logo = crate::ui::brand::app_logo(ui, 16.0);
         let name = root.file_name().unwrap_or_default().to_string_lossy();
         let widest = match fit {
+            _ if self.sidebar_names_folder(ui.ctx()) => 0.0,
             Fit::Full => 220.0,
             Fit::Icons => 140.0,
             Fit::Tight | Fit::Overflow => 0.0,
@@ -372,7 +386,7 @@ impl PhotoSortApp {
                 egui::WidgetType::Button,
                 &name,
             )
-            .on_hover_text("See every staged change before applying · Shift+Enter")
+            .on_hover_text("Shift+Enter")
             .clicked()
             {
                 self.review_changes();
@@ -511,8 +525,7 @@ impl PhotoSortApp {
             menu.response,
             egui::WidgetType::Button,
             &format!("View: {title}"),
-        )
-        .on_hover_text("Change the view");
+        );
     }
 
     /// One segmented view switch: Grid, then Review. `narrow` shows icons
@@ -521,11 +534,7 @@ impl PhotoSortApp {
         use egui_phosphor::regular as icon;
         let segments: Vec<Segment> = [
             (icon::SQUARES_FOUR, "Grid", None),
-            (
-                icon::IMAGE,
-                "Review",
-                Some("One photo at a time, or a selection side by side"),
-            ),
+            (icon::IMAGE, "Review", None),
         ]
         .into_iter()
         .map(

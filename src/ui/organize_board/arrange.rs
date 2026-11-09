@@ -1,79 +1,8 @@
 //! Arranging the board: sorting the photos into their destination
-//! folders, the folder tree, and the counts and notes about them.
+//! folders and the folder tree.
 use super::*;
 
 impl PhotoSortApp {
-    /// The note under the folder tree about photos outside every folder.
-    pub(in crate::ui::workspace) fn board_note(&self) -> Option<String> {
-        let unplaced = self.board.unplaced;
-        if self.board.original {
-            return Some("The folders as they are on disk now · release to see the plan".into());
-        }
-        let planned = (self.board.changes > 0).then(|| {
-            format!(
-                "{} planned {} · nothing changes on disk until you review and apply {}",
-                self.board.changes,
-                if self.board.changes == 1 {
-                    "change"
-                } else {
-                    "changes"
-                },
-                if self.board.changes == 1 {
-                    "it"
-                } else {
-                    "them"
-                }
-            )
-        });
-        Some(match self.board_pending() {
-            None if unplaced > 0 => match planned {
-                Some(planned) => format!("{planned}\n\n{}", self.unplaced_sentence()),
-                None => self.unplaced_sentence(),
-            },
-            None if planned.is_some() => return planned,
-            Some(Pending::Running) => "Folders appear when grouping finishes".into(),
-            Some(Pending::Waiting) => {
-                "Not grouped yet · nothing moves until you review the changes".into()
-            }
-            Some(Pending::Cancelled) => "Grouping cancelled · no folders proposed".into(),
-            Some(Pending::Failed) => "Grouping stopped · no folders proposed".into(),
-            None => return None,
-        })
-    }
-    /// "58 photos without a recognized person stay in their current folders".
-    pub(in crate::ui::workspace) fn unplaced_sentence(&self) -> String {
-        let (all, videos) = (self.board.unplaced, self.board.unplaced_videos);
-        let what = self.unplaced_phrase(all - videos, videos);
-        format!(
-            "{what} {} in {} current {}",
-            if all == 1 { "stays" } else { "stay" },
-            if all == 1 { "its" } else { "their" },
-            if all == 1 { "folder" } else { "folders" }
-        )
-    }
-    /// The counts beside the board's title.
-    pub(in crate::ui::workspace) fn board_counts(
-        &self,
-        folders: usize,
-        items: usize,
-        all: bool,
-    ) -> String {
-        let items = format!("{items} {}", if items == 1 { "item" } else { "items" });
-        match self.board_pending() {
-            Some(Pending::Running) => format!("{items} · grouping…"),
-            Some(_) => format!("{items} · not grouped yet"),
-            None => {
-                let mut summary = format!(
-                    "{folders} {} · {items}",
-                    if folders == 1 { "folder" } else { "folders" }
-                );
-                if all && self.board.unplaced > 0 {
-                    summary.push_str(&format!(" · {} not moving", self.board.unplaced));
-                }
-                summary
-            }
-        }
-    }
     pub(in crate::ui::workspace) fn board_key(&self) -> BoardKey {
         BoardKey {
             mode: self.group_mode,

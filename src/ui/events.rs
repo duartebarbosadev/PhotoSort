@@ -176,7 +176,7 @@ impl PhotoSortApp {
         self.progress = None;
         self.root = None;
         self.output.clear();
-        self.set_status("Ready when you are".into());
+        self.clear_status();
         // A disconnected drive leaves Recents until it is back; a folder
         // that needs permission still exists and stays listed.
         if problem == crate::core::catalog::Unavailable::Missing {
@@ -227,7 +227,7 @@ impl PhotoSortApp {
         }
         self.active = self.media.first().map(|m| m.id);
         self.root = Some(catalog.root.clone());
-        self.set_status(format!("{} items · library ready", self.media.len()));
+        self.clear_status();
         self.report_scan_warnings(&catalog.warnings);
         self.preferences.remember(&catalog.root);
         self.missing_recent.remove(&catalog.root);
@@ -271,9 +271,6 @@ impl PhotoSortApp {
         if staged_next {
             self.apply_planned = true;
             self.review_decisions();
-            self.set_status(
-                "Moves applied · now applying Trash marks, ratings and rotations…".into(),
-            );
             if !self.busy {
                 self.apply_planned = false;
             }
@@ -565,14 +562,7 @@ impl PhotoSortApp {
 
     fn on_general_started(&mut self, run: u64) {
         if self.analysis_run == Some(run) {
-            self.set_status(
-                if self.organize_run == Some((run, GroupMode::Faces)) {
-                    "Grouping people · previews remain available"
-                } else {
-                    "Grouping photos by matching image regions · previews remain available"
-                }
-                .into(),
-            );
+            self.clear_status();
             self.progress = None;
         }
     }
@@ -598,10 +588,7 @@ impl PhotoSortApp {
 
     fn on_duplicate_started(&mut self, run: u64) {
         if self.analysis_run == Some(run) && self.delete_run == Some(run) {
-            self.set_status(
-                "Checking duplicate pairs for visible subject changes · previews remain available"
-                    .into(),
-            );
+            self.clear_status();
             self.progress = None;
         }
     }
@@ -620,7 +607,7 @@ impl PhotoSortApp {
 
     fn on_subject_started(&mut self, run: u64) {
         if self.analysis_run == Some(run) && self.cull_group_run == Some(run) {
-            self.set_status("Comparing same-subject candidates · previews remain available".into());
+            self.clear_status();
             self.progress = None;
         }
     }
@@ -668,12 +655,14 @@ impl PhotoSortApp {
                             .map(crate::core::face_groups::summarize)
                     })
                     .flatten();
+                // The groups are on the board; only a people summary or
+                // photos that failed need saying.
                 let message = match completed {
                     GroupMode::Faces => self.face_group_status().unwrap_or_default(),
-                    GroupMode::Mixed => "Date and similarity groups ready".into(),
-                    _ => "Visual groups ready · review destinations before applying".into(),
-                };
-                self.set_organize_status(completed, message + &self.failure_note());
+                    _ => String::new(),
+                } + &self.failure_note();
+                let message = message.trim_start_matches(" · ").to_owned();
+                self.set_organize_status(completed, message);
                 // Without a single recognized face every photo stays in place, so
                 // a preview would move nothing; the message is the result.
                 let preview = std::mem::take(&mut self.organize_preview_requested)
@@ -697,12 +686,8 @@ impl PhotoSortApp {
             } else if self.delete_run == Some(run) {
                 self.finish_delete_analysis();
             } else {
-                self.set_status(format!(
-                    "Analysis ready · {} photos · {} exact duplicates{}",
-                    self.analysis.len(),
-                    self.duplicates.len(),
-                    self.failure_note()
-                ));
+                let note = self.failure_note();
+                self.set_status(note.trim_start_matches(" · ").to_owned());
             }
             // A grouping chosen while this run was busy starts now.
             if self.step == Step::Organize && self.analysis_run.is_none() {
@@ -717,7 +702,7 @@ impl PhotoSortApp {
         self.plan_stop = None;
         self.busy = false;
         self.organize_departure = None;
-        self.set_status("File planning cancelled · edits retained".into());
+        self.clear_status();
     }
 
     fn on_planned(&mut self, mut plan: Plan) {
@@ -725,10 +710,10 @@ impl PhotoSortApp {
             if stop.load(std::sync::atomic::Ordering::Acquire) {
                 self.busy = false;
                 self.organize_departure = None;
-                self.set_status("File planning cancelled · edits retained".into());
+                self.clear_status();
                 return;
             }
-            self.set_status("File plan ready · review your changes".into());
+            self.clear_status();
         }
 
         if self.rotation_plan {
@@ -799,7 +784,7 @@ impl PhotoSortApp {
                 if let Some(edit) = &mut self.retry_edit {
                     if edit.cancelled.load(std::sync::atomic::Ordering::Acquire) {
                         self.retry_edit = None;
-                        self.set_status("Destination edit cancelled · saved plan unchanged".into());
+                        self.clear_status();
                     } else {
                         edit.saving = false;
                         edit.error = Some(error);

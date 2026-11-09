@@ -207,13 +207,14 @@ impl Control {
             Ok(usage) => {
                 let pinned = usage.pinned_disk_bytes;
                 state.status.usage = Some(usage);
-                state.status.message = Some(
-                    match (clear, pinned > 0) {
-                        (true, true) => "Unused caches cleared. Some prepared model files are still in use; try clearing again when processing finishes.",
-                        (true, false) => "Reusable caches cleared. Current reviews and saved positions are preserved.",
-                        (false, _) => "Cache usage updated.",
-                    }.into()
-                );
+                // A refresh shows its result in the usage line itself.
+                state.status.message = match (clear, pinned > 0) {
+                    (true, true) => Some(
+                        "Caches cleared. Some model files are in use; clear again when processing finishes.".into(),
+                    ),
+                    (true, false) => Some("Caches cleared.".into()),
+                    (false, _) => None,
+                };
             }
             Err(e) => {
                 state.status.usage = None;
