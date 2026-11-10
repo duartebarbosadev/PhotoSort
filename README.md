@@ -35,10 +35,11 @@ PhotoSort opens JPEG, PNG, TIFF, WebP, HEIC, GIF, BMP and most camera RAW format
 video formats. Ratings and rotations go into the photo's metadata or an XMP sidecar, so
 Lightroom and other editors see them.
 
-## Five steps
+## Six steps
 
-The steps sit along the bottom of the window. Use only the ones you need, in any order.
-PhotoSort remembers where you left off in each folder. **Menu → Watch the intro** shows a
+The steps sit along the bottom of the window. Use only the ones you need, in any order, and
+finish in **Review** to apply everything at once. PhotoSort remembers where you left off in
+each folder. **Menu → Watch the intro** shows a
 30-second tour.
 
 | Step | What it's for |
@@ -48,6 +49,7 @@ PhotoSort remembers where you left off in each folder. **Menu → Watch the intr
 | **Fix Rotation** | Straighten sideways and upside-down photos. |
 | **Pick Best** | Keep the best shot from each burst. |
 | **Cull** | Go through everything yourself and decide what stays. |
+| **Review** | See every change from the other steps, undo any of them, and apply them all. |
 
 ### Organize
 
@@ -60,8 +62,8 @@ together.
 ### Easy Delete
 
 PhotoSort finds exact and near duplicates, JPEG and HEIC copies of the same shot, blurry
-shots and bad exposures, and shows each next to its better match. Its suggestions start as
-your choices: change only the ones you disagree with.
+shots and bad exposures, and shows each next to its better match. Accept its suggestions in
+one click, or let them start as your choices in Settings.
 
 [![Easy Delete comparing a photo with a near duplicate](assets/screenshots/easy-delete.webp)](assets/screenshots/easy-delete.webp)
 
@@ -88,11 +90,14 @@ or by group of similar shots.
 
 [![Cull comparing three similar shots side by side](assets/screenshots/cull-compare.webp)](assets/screenshots/cull-compare.webp)
 
-### Nothing changes until you say so
+### Review: nothing changes until you say so
 
-Marks, ratings and folder plans stay staged while you work. **Review changes** (Shift+Enter)
-lists every move, rename, rating and file sent to Trash before anything happens. If PhotoSort
-stops halfway, reopen the folder to finish the rest.
+Folder plans, Trash marks, ratings and rotations stay staged while you move between steps.
+Photos marked for Trash stay visible in the other steps, dimmed, so you can still change your
+mind. The **Review** step (Shift+Enter) lists every move, rename, rating, rotation and photo
+sent to Trash, grouped by what happens to it. Undo any single change there, or go back to a
+step to change more. **Apply** applies them all: moves and renames first, then everything
+else. If PhotoSort stops halfway, reopen the folder to finish the rest.
 
 ## Keep your photos safe
 
@@ -103,7 +108,7 @@ library:
   Machine, File History, a NAS or cloud backup) is current before you apply changes.
 - **Work on a copy of new imports.** Keep the photos on the memory card until you have sorted
   them and backed up the result.
-- **Read the review list.** Check every move and deletion in **Review changes** first.
+- **Read the review list.** Check every move and deletion in the **Review** step first.
 - **Empty the Trash later.** Deleted photos go to the system Trash (Recycle Bin on Windows).
   Keep them there until you are sure.
 - **Leave originals untouched.** **Settings → Save changes to → Sidecars only** writes
@@ -116,14 +121,14 @@ Each step shows its keys in the status bar. **Menu → Keyboard Shortcuts** has 
 | What you want to do | Shortcut |
 | --- | --- |
 | Open a folder | Ctrl/Cmd+O |
-| Switch step | Ctrl/Cmd+Alt+1–5 |
+| Switch step | Ctrl/Cmd+Alt+1–6 |
 | Run this step's analysis | Ctrl/Cmd+S |
 | Keep / trash the shown photo (Easy Delete, Pick Best) | 1 / 2 |
 | Move to the next or previous photo (Cull) | Left / Right |
 | Mark or unmark for Trash (Cull) | D |
 | Rate, or clear the rating with 0 | Ctrl/Cmd+0–5 |
 | Show one photo or compare side by side | F1 |
-| Review and apply your changes | Shift+Enter |
+| Go to Review to check and apply your changes | Shift+Enter |
 
 ## Local AI
 

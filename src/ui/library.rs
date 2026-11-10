@@ -384,7 +384,7 @@ impl PhotoSortApp {
                 1.0,
                 Vec2::ZERO,
                 self.preview_turns(id),
-                Color32::from_white_alpha((shown * 255.0) as u8),
+                photo_tint(shown, self.trashed_elsewhere(id)),
             );
             round_corners(&painter, drawn, image_radius, fill);
         } else if self.requested.contains(&(id, false)) {
@@ -414,7 +414,8 @@ impl PhotoSortApp {
             );
         }
         if d.rejected {
-            // Edged in red, never darkened: the photo must still be judged.
+            // Edged in red, and darkened only when marked in another step:
+            // a mark made here is still being judged.
             painter.rect_stroke(
                 drawn,
                 image_radius,
@@ -549,7 +550,7 @@ impl PhotoSortApp {
                 1.0,
                 Vec2::ZERO,
                 self.preview_turns(id),
-                Color32::from_white_alpha((shown * 255.0) as u8),
+                photo_tint(shown, self.trashed_elsewhere(id)),
             );
         } else if self.requested.contains(&(id, false)) {
             shimmer(ui, thumb);
@@ -761,6 +762,20 @@ fn badge(painter: &egui::Painter, anchor: egui::Pos2, align: Align2, text: &str,
 /// A loading thumbnail's placeholder: a shade lighter than its tile, so a
 /// photo arriving brightens the tile instead of flashing dark first.
 pub(super) const WELL: Color32 = Color32::from_rgb(0x33, 0x32, 0x2F);
+/// How bright a photo marked for Trash in another step is drawn in grids
+/// and cards. The large views keep it bright, so it can still be judged.
+const DIMMED: f32 = 0.4;
+/// The tint of a thumbnail fading in (`shown`), dimmed when marked for Trash
+/// in another step.
+pub(super) fn photo_tint(shown: f32, dimmed: bool) -> Color32 {
+    let alpha = (shown * 255.0) as u8;
+    if dimmed {
+        let level = (shown * DIMMED * 255.0) as u8;
+        Color32::from_rgba_premultiplied(level, level, level, alpha)
+    } else {
+        Color32::from_white_alpha(alpha)
+    }
+}
 
 /// How far a thumbnail has faded in. The first frame with pixels starts the
 /// fade, so a scrolling grid fills softly instead of popping; thumbnails that
@@ -1012,7 +1027,7 @@ mod tests {
         }
     }
     #[test]
-    fn photos_marked_for_trash_stay_bright_in_every_grid() {
+    fn photos_marked_for_trash_stay_bright_where_marked_and_dim_elsewhere() {
         let temp = tempfile::tempdir().unwrap();
         let mut app =
             PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, temp.path().join("cache")), None);
@@ -1058,9 +1073,8 @@ mod tests {
                 },
             );
         }
-        for step in [Step::Cull, Step::EasyDelete] {
-            app.step = step;
-            let output = ctx.run_test(
+        let render = |app: &mut PhotoSortApp| {
+            ctx.run_test(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1071,8 +1085,30 @@ mod tests {
                 |ui| {
                     egui::CentralPanel::default().show(ui, |ui| app.library(ui));
                 },
-            );
+            )
+        };
+        for step in [Step::Cull, Step::EasyDelete] {
+            app.step = step;
+            app.trash_steps.insert(id, step);
+            let output = render(&mut app);
             super::super::review_card::assert_trash_drawn_bright(&output, texture_id);
+            // Marked in another step: still there, still edged, but darker.
+            app.trash_steps.insert(id, Step::PickBest);
+            let output = render(&mut app);
+            let dimmed = output.shapes.iter().any(|clipped| {
+                let mut shapes = vec![&clipped.shape];
+                while let Some(shape) = shapes.pop() {
+                    match shape {
+                        egui::Shape::Vec(inner) => shapes.extend(inner),
+                        egui::Shape::Mesh(mesh) if mesh.texture_id == texture_id => {
+                            return mesh.vertices.iter().all(|v| v.color.r() < 128);
+                        }
+                        _ => {}
+                    }
+                }
+                false
+            });
+            assert!(dimmed, "{step:?}");
         }
     }
     #[test]

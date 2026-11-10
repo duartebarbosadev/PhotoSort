@@ -205,12 +205,13 @@ impl PhotoSortApp {
             self.accept_location_layout(layout);
         }
     }
+    /// A grouping by metadata. Its folder changes are planned from any
+    /// step, so its metadata is read whatever the step.
     pub(super) fn metadata_organize_mode(&self) -> bool {
-        self.step == Step::Organize
-            && matches!(
-                self.group_mode,
-                GroupMode::Date | GroupMode::Camera | GroupMode::Location
-            )
+        matches!(
+            self.group_mode,
+            GroupMode::Date | GroupMode::Camera | GroupMode::Location
+        )
     }
     pub(super) fn organize_metadata_ready(&self) -> bool {
         !self.metadata_organize_mode()
@@ -590,3 +591,96 @@ impl PhotoSortApp {
 #[cfg(test)]
 #[path = "organize/tests.rs"]
 mod tests;
+
+/// What [`PhotoSortApp::organize_change_count`] was last worked out from.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ChangeCountKey {
+    epoch: u64,
+    mode: GroupMode,
+    drafts: usize,
+    names: u64,
+    output: String,
+    catalog: usize,
+    metadata: usize,
+    ready: bool,
+}
+
+impl PhotoSortApp {
+    /// Organize's planned moves, renames and new folders, from any step.
+    /// Worked out again only when the folders, names or grouping change,
+    /// since the bar and the step tabs ask every frame.
+    pub(super) fn organize_change_count(&self) -> usize {
+        use std::hash::{Hash, Hasher};
+        // Map order is arbitrary: each name is hashed alone and combined.
+        let names = self.file_names.iter().fold(0u64, |all, entry| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            entry.hash(&mut hasher);
+            all ^ hasher.finish()
+        });
+        let key = ChangeCountKey {
+            epoch: self.board_epoch,
+            mode: self.group_mode,
+            drafts: self.organize_drafts.len(),
+            names,
+            output: self.output.clone(),
+            catalog: self.catalog.as_ref().map_or(0, |c| Arc::as_ptr(c) as usize),
+            metadata: self.metadata.len(),
+            ready: self.organize_grouping_ready(),
+        };
+        if let Some((cached, count)) = &*self.organize_count.borrow()
+            && *cached == key
+        {
+            return *count;
+        }
+        let count = self.count_organize_changes();
+        *self.organize_count.borrow_mut() = Some((key, count));
+        count
+    }
+    fn count_organize_changes(&self) -> usize {
+        if self.catalog.is_none() || self.scanning {
+            return 0;
+        }
+        let draft = self.organize_drafts.get(&self.group_mode);
+        let generated;
+        let labels = match draft {
+            Some(draft) => draft.labels(),
+            None if self.organize_grouping_ready() => {
+                generated = self.organize_labels();
+                &generated
+            }
+            None => {
+                generated = HashMap::new();
+                &generated
+            }
+        };
+        self.organize_changes_in(labels, draft.map_or(0, |d| d.created_folders().len()))
+    }
+    /// Items that move to the folder `labels` gives them, items renamed
+    /// where they are, and `created` new folders.
+    pub(super) fn organize_changes_in(
+        &self,
+        labels: &HashMap<MediaId, String>,
+        created: usize,
+    ) -> usize {
+        let output = std::path::Path::new(&self.output);
+        // Many photos share a folder: each destination is worked out once.
+        let mut destinations: HashMap<&str, PathBuf> = HashMap::new();
+        for label in labels.values() {
+            destinations
+                .entry(label)
+                .or_insert_with(|| crate::core::operations::folder_destination(output, label));
+        }
+        let moves = |id: &MediaId, label: &str| {
+            self.index.get(id).is_some_and(|&i| {
+                self.media[i].path.parent() != destinations.get(label).map(PathBuf::as_path)
+            })
+        };
+        let moved = labels.iter().filter(|(id, label)| moves(id, label)).count();
+        let renamed = self
+            .file_names
+            .keys()
+            .filter(|id| !labels.get(id).is_some_and(|label| moves(id, label)))
+            .count();
+        moved + renamed + created
+    }
+}

@@ -338,6 +338,7 @@ fn image_actor_reuses_indexed_metadata_while_planning_embedded_edits() {
             },
         )]),
         companions: false,
+        followers: None,
         policy: WritePolicy::EmbedWhenSupported,
     })
     .unwrap();
@@ -463,6 +464,7 @@ fn embedded_rotation_preserves_unapplied_ratings_and_saved_focus_across_reload()
         suggested: Default::default(),
         pick_suggested: Default::default(),
         rotations_staged: Default::default(),
+        trash_steps: Default::default(),
         organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),

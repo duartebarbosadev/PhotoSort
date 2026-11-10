@@ -582,7 +582,15 @@ mod playback_tests {
         let cases: [(&str, Setup, Asked); 3] = [
             (
                 "staged choices",
-                |app, _| {
+                |app, root| {
+                    // Staged choices count for photos of the folder.
+                    app.media.push(Media {
+                        id: MediaId(1),
+                        path: root.join("a.jpg"),
+                        kind: MediaKind::Photo,
+                        fingerprint: Default::default(),
+                    });
+                    app.index.insert(MediaId(1), 0);
                     app.decisions.insert(
                         MediaId(1),
                         Decision {

@@ -459,7 +459,7 @@ fn review_names_lossless_pixel_rotations() {
     let texts = dialog_texts(&mut app, &ctx, egui::vec2(900.0, 700.0));
     for expected in [
         "You're about to rotate 1 photo.",
-        "Ratings and rotations",
+        "Rotating",
         "scan.bmp: Rotate right (re-saves the image)",
         "Rotate 1 photo",
     ] {
@@ -505,14 +505,16 @@ fn review_shows_rotations_before_and_after_named_by_the_turn() {
     theme_install(&ctx);
     ctx.enable_accesskit();
     let texts = dialog_texts(&mut app, &ctx, egui::vec2(900.0, 700.0));
-    for expected in ["o1.jpg: Rotate left", "o6.jpg: Rotate right · ★★★"] {
+    // A photo rotated and rated is in both sections, each saying its part.
+    for expected in ["o1.jpg: Rotate left", "o6.jpg: Rotate right", "o6.jpg: ★★★"] {
         assert!(texts.iter().any(|t| t == expected), "{expected}: {texts:?}");
     }
     assert!(
         !texts.iter().any(|t| t.contains("Set upright")),
         "{texts:?}"
     );
-    assert_eq!(app.plan_rows.slot(List::Updates), PAIR);
+    assert_eq!(app.plan_rows.slot(List::Rotate), PAIR);
+    assert_eq!(app.plan_rows.slot(List::Rate), TILE.x);
     assert_eq!(app.plan_rows.slot(List::Trash), TILE.x);
     // A mirror or an unknown orientation is still named, without a pair.
     assert_eq!(turns_between(2, 7), Some(1));
@@ -520,19 +522,23 @@ fn review_shows_rotations_before_and_after_named_by_the_turn() {
     app.runtime.shutdown();
 }
 
-/// One review covers Organize's moves and the staged ratings: one Apply
-/// applies the moves, then plans and applies the ratings for the moved files
-/// without opening a second review.
+/// The Review step lists Organize's renames with the choices staged in the
+/// other steps, and one Apply applies the moves, then plans and applies the
+/// staged choices for the moved files without a second review.
 #[test]
 fn one_review_applies_moves_then_staged_choices_without_a_second_review() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     std::fs::create_dir_all(root.join("Before")).unwrap();
-    std::fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/samples/jpg_sample.jpg"),
-        root.join("Before/a.jpg"),
-    )
-    .unwrap();
+    for name in ["a.jpg", "c.jpg", "d.jpg"] {
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/samples/jpg_sample.jpg"),
+            root.join("Before").join(name),
+        )
+        .unwrap();
+    }
+    // The marked photo's sidecar, listed with its mark.
+    std::fs::write(root.join("Before/d.xmp"), "<x:xmpmeta/>").unwrap();
     let catalog = crate::core::catalog::Catalog::scan(&root, || false, |_| {}).unwrap();
     let mut app = PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, root.join("cache")), None);
     app.root = Some(root.clone());
@@ -545,50 +551,121 @@ fn one_review_applies_moves_then_staged_choices_without_a_second_review() {
         .enumerate()
         .map(|(i, m)| (m.id, i))
         .collect();
+    let id = |app: &PhotoSortApp, name: &str| {
+        app.media
+            .iter()
+            .find(|m| m.path.ends_with(name))
+            .unwrap()
+            .id
+    };
+    let (a, c, d) = (id(&app, "a.jpg"), id(&app, "c.jpg"), id(&app, "d.jpg"));
+    // Renames in Organize, a rating and a Trash mark in Cull and a turn in
+    // Fix Rotation.
     app.step = Step::Organize;
-    let id = app.media[0].id;
-    app.file_names.insert(id, "b".into());
-    app.decisions.insert(
-        id,
-        Decision {
-            rating: Some(3),
-            ..Default::default()
-        },
-    );
+    app.file_names.insert(a, "b".into());
+    app.file_names.insert(d, "e".into());
+    app.switch_step(Step::Cull);
+    app.rating(a, 3);
+    app.reject(d);
+    app.switch_step(Step::Rotation);
+    crate::core::rotation::set_turns(&mut app.decisions, c, 1);
+    app.changed_item(c);
+    assert_eq!(app.staged_change_count(), 5);
     let settle = |app: &mut PhotoSortApp| {
         let until = std::time::Instant::now() + crate::test_support::worker_patience();
         loop {
             let expired = std::time::Instant::now() >= until;
             app.poll(&egui::Context::default());
-            if !app.busy && !app.scanning && app.metadata_run.is_none() {
+            app.refresh_review();
+            if !app.busy && !app.scanning && app.metadata_run.is_none() && !app.review_stale {
                 break;
             }
             assert!(!expired, "worker did not finish");
             std::thread::sleep(Duration::from_millis(5));
         }
     };
+    // Shift+Enter, the bar's button and the footer tab all lead here.
     app.review_changes();
+    assert_eq!(app.step, Step::Review);
     settle(&mut app);
-    assert!(app.plan_open && app.error.is_none(), "{:?}", app.error);
-    // The staged rating is in the same review, under its own heading.
-    assert_eq!(app.plan_rows.updates.len(), 1);
+    assert!(!app.plan_open && app.error.is_none(), "{:?}", app.error);
+    assert_eq!(
+        (
+            app.plan_rows.ratings.len(),
+            app.plan_rows.rotations.len(),
+            app.plan_rows.trash.len()
+        ),
+        (1, 1, 1)
+    );
+    // The moves are planned first; the Trash mark waits for the moved file.
+    assert!(
+        app.plan
+            .as_ref()
+            .unwrap()
+            .actions
+            .iter()
+            .all(|a| !matches!(a, Action::Trash { .. } | Action::TrashDirectory(_)))
+    );
     assert_eq!(
         app.review_sentence(app.plan.as_ref().unwrap(), &app.plan_rows),
-        "You're about to rename 1 photo and rate 1 photo."
+        "You're about to rename 1 photo, change the rating or rotation of 2 photos and send 1 photo to the Trash."
     );
-    assert_eq!(app.plan_rows.summary.apply_label(), "Apply all changes");
-    app.apply_reviewed_plan();
+    assert_eq!(app.plan_rows.apply_label(), "Apply all changes");
+    assert_eq!(app.plan_rows.followers[&d], "+ XMP");
+    // Nothing has changed on disk while the changes are only listed.
+    assert!(root.join("Before/a.jpg").is_file() && root.join("Before/d.jpg").is_file());
+    app.apply_review();
+    // The moves are applied: the listed choices follow the moved files.
+    let until = std::time::Instant::now() + crate::test_support::worker_patience();
+    while !app
+        .review_after_moves
+        .as_ref()
+        .is_some_and(|chain| chain.root.is_some())
+    {
+        assert!(std::time::Instant::now() < until, "moves did not finish");
+        app.poll(&egui::Context::default());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let moved = MediaId::for_path(&root.join("Before/e.jpg"));
+    let chain = app.review_after_moves.as_mut().unwrap();
+    assert!(chain.decisions[&moved].rejected && !chain.decisions.contains_key(&d));
+    // Only the sidecar the mark listed may follow it, under its new name.
+    assert_eq!(
+        chain.followers,
+        HashSet::from([MediaId::for_path(&root.join("Before/e.xmp"))])
+    );
+    assert_eq!(
+        chain.decisions[&MediaId::for_path(&root.join("Before/b.jpg"))].rating,
+        Some(3)
+    );
+    // Kept out of the computer's Trash: the chain applies only what it holds.
+    chain.decisions.remove(&moved);
     settle(&mut app);
     assert!(app.error.is_none(), "{:?}", app.error);
     assert!(app.retry_plan.is_none() && !app.plan_open && !app.apply_planned);
     // Each apply journals on its own; a finished chain leaves none behind.
     assert!(app.recovery_ticket.is_none());
-    assert!(root.join("Before/b.jpg").exists());
-    // The rating was applied too: nothing is left staged.
+    assert!(root.join("Before/b.jpg").exists() && root.join("Before/e.jpg").exists());
+    // The rating and the turn were applied too: only the mark taken out of
+    // the chain is left staged, and the page says what was done.
     assert!(
-        app.decisions.values().all(|d| d.is_empty()),
+        app.decisions
+            .iter()
+            .all(|(id, d)| d.is_empty() || (*id == moved && d.rejected)),
         "{:?}",
         app.decisions
+    );
+    assert_eq!(app.step, Step::Review);
+    assert_eq!(app.staged_change_count(), 1);
+    assert_eq!(
+        app.review_outcome,
+        Some(review_step::Outcome {
+            sentence:
+                "Renamed 1 photo, rotated 1 photo, rated 1 photo and sent 1 photo to the Trash."
+                    .into(),
+            done: true,
+            left_behind: None,
+        })
     );
     app.runtime.shutdown();
 }
@@ -684,5 +761,128 @@ fn card_sentences_name_one_source_or_count_several() {
             .iter()
             .any(|p| matches!(p.block, Block::SourceHead(..)))
     );
+    app.runtime.shutdown();
+}
+
+/// The Review step lists the changes made in several steps by what happens
+/// to the photos, and each photo's Undo takes back its change alone.
+#[test]
+fn the_review_step_lists_changes_from_every_step_and_undoes_one_at_a_time() {
+    use super::super::compact_cull_tests::{click_label, fixture, frame, rendered};
+    let (_temp, mut app) = fixture();
+    app.output = app.root.as_ref().unwrap().display().to_string();
+    let ids: Vec<MediaId> = app.media.iter().map(|m| m.id).collect();
+    let name = |i: usize| app.media[i].name();
+    let names: Vec<String> = (1..5).map(name).collect();
+    // Cull: a Trash mark and a rating.
+    app.stage_manual([ids[1]], crate::core::decisions::Change::Trash(true));
+    app.rating(ids[2], 4);
+    // Organize: a new name. Fix Rotation: a turn.
+    app.switch_step(Step::Organize);
+    app.file_names.insert(ids[3], "Keeper".into());
+    app.switch_step(Step::Rotation);
+    crate::core::rotation::set_turns(&mut app.decisions, ids[4], 1);
+    app.changed_item(ids[4]);
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let size = egui::vec2(1440.0, 900.0);
+    let list = |app: &mut PhotoSortApp| {
+        let until = std::time::Instant::now() + crate::test_support::worker_patience();
+        loop {
+            frame(app, &ctx, size, Vec::new());
+            if !app.busy && !app.review_stale {
+                break;
+            }
+            assert!(std::time::Instant::now() < until, "the list did not come");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        rendered(app, &ctx, size)
+    };
+    app.switch_step(Step::Review);
+    let nodes = list(&mut app);
+    let has = |nodes: &[(String, egui::Rect)], label: &str| nodes.iter().any(|(l, _)| l == label);
+    for label in [
+        "You're about to rename 1 photo, change the rating or rotation of 2 photos and send 1 photo to the Trash.",
+        "Apply all changes",
+        &format!("Keep {}", names[0]),
+        &format!("Don't change the rating of {}", names[1]),
+        &format!("Leave {} where it is", names[2]),
+        &format!("Don't rotate {}", names[3]),
+    ] {
+        assert!(
+            has(&nodes, label),
+            "{label}: {:?}",
+            nodes.iter().map(|n| &n.0).collect::<Vec<_>>()
+        );
+    }
+    assert!(!app.plan_open);
+    // Undo on one photo: only its Trash mark goes.
+    click_label(&mut app, &ctx, size, &format!("Keep {}", names[0]));
+    assert!(!app.decision(ids[1]).rejected);
+    assert_eq!(app.decision(ids[2]).rating, Some(4));
+    // The list is made again without it.
+    let nodes = list(&mut app);
+    assert!(!has(&nodes, &format!("Keep {}", names[0])));
+    // Undo on a rename plans the folder changes again, without it.
+    click_label(
+        &mut app,
+        &ctx,
+        size,
+        &format!("Leave {} where it is", names[2]),
+    );
+    let nodes = list(&mut app);
+    assert!(app.file_names.is_empty());
+    assert!(!has(&nodes, &format!("Leave {} where it is", names[2])));
+    assert!(has(&nodes, &format!("Don't rotate {}", names[3])));
+    assert_eq!(app.staged_change_count(), 2);
+    // Nothing changed on disk.
+    assert!(app.media.iter().all(|m| m.path.is_file()));
+    app.runtime.shutdown();
+}
+
+/// A photo marked for Trash lists the files Apply sends to the Trash with
+/// it: its RAW twin and XMP sidecar.
+#[test]
+fn a_listed_trash_mark_names_the_raw_and_xmp_that_go_with_it() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["IMG_1.JPG", "IMG_1.CR2", "IMG_1.xmp", "IMG_2.JPG"] {
+        std::fs::write(dir.path().join(name), name).unwrap();
+    }
+    let catalog = crate::core::catalog::Catalog::scan(dir.path(), || false, |_| {}).unwrap();
+    let mut app = PhotoSortApp::with_runtime(crate::core::jobs::Runtime::new(|| {}), None);
+    app.root = Some(catalog.root.clone());
+    app.media = catalog.media.clone();
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+    app.catalog = Some(std::sync::Arc::new(catalog));
+    let id = |name: &str| {
+        app.media
+            .iter()
+            .find(|m| m.name() == name)
+            .map(|m| m.id)
+            .unwrap()
+    };
+    let (jpeg, other) = (id("IMG_1.JPG"), id("IMG_2.JPG"));
+    for photo in [jpeg, other] {
+        app.decisions.insert(
+            photo,
+            Decision {
+                rejected: true,
+                ..Default::default()
+            },
+        );
+    }
+    app.step = Step::Review;
+    app.set_review_plan(Some(Plan::default()));
+    assert_eq!(
+        app.plan_rows.followers.get(&jpeg).map(String::as_str),
+        Some("+ RAW, XMP")
+    );
+    assert!(!app.plan_rows.followers.contains_key(&other));
     app.runtime.shutdown();
 }

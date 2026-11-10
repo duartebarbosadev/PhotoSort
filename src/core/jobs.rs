@@ -8,7 +8,7 @@ use super::{
 };
 use image::RgbaImage;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -252,6 +252,8 @@ pub enum ImageWork {
         catalog: Arc<Catalog>,
         decisions: HashMap<MediaId, Decision>,
         companions: bool,
+        /// The only files that may follow a rejected photo to the Trash.
+        followers: Option<HashSet<MediaId>>,
         policy: super::metadata::WritePolicy,
     },
 

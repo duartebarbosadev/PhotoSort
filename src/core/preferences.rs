@@ -103,9 +103,9 @@ impl Default for Preferences {
             show_shortcuts: true,
             updates: Default::default(),
             easy_delete: Default::default(),
-            easy_delete_auto: true,
-            pick_best_auto: true,
-            rotation_auto: true,
+            easy_delete_auto: false,
+            pick_best_auto: false,
+            rotation_auto: false,
             cache: Default::default(),
             processing: Default::default(),
             metadata_writes: Default::default(),
@@ -132,8 +132,13 @@ impl Preferences {
     pub fn path() -> PathBuf {
         super::session::data_dir().join("preferences.json")
     }
+    /// Organize, Cull and Review are always shown: Review applies what the
+    /// other steps stage.
+    pub fn can_hide(&self, step: Step) -> bool {
+        !matches!(step, Step::Organize | Step::Cull | Step::Review)
+    }
     pub fn visible(&self, step: Step) -> bool {
-        matches!(step, Step::Organize | Step::Cull) || !self.hidden_steps.contains(&step)
+        !self.can_hide(step) || !self.hidden_steps.contains(&step)
     }
     pub fn neighbor(&self, step: Step, forward: bool) -> Option<Step> {
         if forward {
@@ -163,6 +168,7 @@ impl Preferences {
         };
         self.hidden_steps.remove(&Step::Organize);
         self.hidden_steps.remove(&Step::Cull);
+        self.hidden_steps.remove(&Step::Review);
         let mut seen = HashSet::new();
         self.recent_folders = self
             .recent_folders

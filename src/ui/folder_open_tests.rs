@@ -215,6 +215,13 @@ fn unavailable_folder_explains_itself_in_a_centred_dialog_over_the_welcome_scree
         let mut app = app(&dir);
         app.preferences.recent_folders = vec![folder.clone()];
         app.open(folder.clone());
+        // The Review step's Apply had moved photos there and waits for it.
+        app.review_after_moves = Some(review_step::Chain {
+            decisions: HashMap::new(),
+            followers: HashSet::new(),
+            source: dir.path().to_path_buf(),
+            root: Some(folder.clone()),
+        });
         let until = Instant::now() + worker_patience();
         let ctx = egui::Context::default();
         theme_install(&ctx);
@@ -226,6 +233,8 @@ fn unavailable_folder_explains_itself_in_a_centred_dialog_over_the_welcome_scree
         // Back on the welcome screen, ready for another folder.
         assert!(app.root.is_none() && app.catalog.is_none());
         assert!(app.output.is_empty());
+        // Its Apply is given up, so other folders and steps open again.
+        assert!(!app.review_applying());
         let error = app.error.clone().unwrap();
         // Long temporary paths are shortened in the middle; the name stays.
         let name = folder.file_name().unwrap().to_string_lossy();

@@ -205,14 +205,17 @@ pub enum Step {
     Rotation,
     PickBest,
     Cull,
+    /// Every staged change from the other steps, applied at once.
+    Review,
 }
 impl Step {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Organize,
         Self::EasyDelete,
         Self::Rotation,
         Self::PickBest,
         Self::Cull,
+        Self::Review,
     ];
     pub fn index(self) -> usize {
         Self::ALL.iter().position(|s| *s == self).unwrap()
@@ -224,6 +227,7 @@ impl Step {
             Self::Rotation => "Fix Rotation",
             Self::PickBest => "Pick Best",
             Self::Cull => "Cull",
+            Self::Review => "Review",
         }
     }
 }

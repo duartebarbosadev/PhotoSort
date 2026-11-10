@@ -371,11 +371,35 @@ fn trash_followers<'a>(
         .cloned()
 }
 
+/// The files that go to the Trash with the photo at `path` when every photo
+/// in `rejected` is trashed, as Apply plans it: its XMP sidecar and, with
+/// companions on, a RAW twin. `index` is [`Catalog::companion_index`].
+pub fn trash_followers_for(
+    index: &HashMap<PathBuf, Vec<PathBuf>>,
+    path: &Path,
+    companions: bool,
+    rejected: &HashSet<MediaId>,
+) -> Vec<PathBuf> {
+    if !MediaKind::from_path(path).is_some_and(|kind| kind != MediaKind::Video) {
+        return Vec::new();
+    }
+    index
+        .get(&path.with_extension(""))
+        .map(|group| {
+            trash_followers(group, companions, rejected)
+                .filter(|p| p != path)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Shared Trash expansion for staged decisions and explicit context-menu requests.
+/// With `only`, a file follows a rejected photo only if it is in that set.
 fn trash_actions(
     catalog: &Catalog,
     rejected: &HashSet<MediaId>,
     companions: bool,
+    only: Option<&HashSet<MediaId>>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<(Vec<Action>, HashSet<PathBuf>)> {
     let index = catalog.companion_index();
@@ -395,11 +419,12 @@ fn trash_actions(
     for (id, path) in catalog.organize_files() {
         anyhow::ensure!(!cancelled(), "File planning cancelled");
         if rejected.contains(&id) {
-            let photo = MediaKind::from_path(path).is_some_and(|kind| kind != MediaKind::Video);
             let mut files = vec![path.to_path_buf()];
-            if photo && let Some(group) = index.get(&path.with_extension("")) {
-                files.extend(trash_followers(group, companions, rejected));
-            }
+            files.extend(
+                trash_followers_for(&index, path, companions, rejected)
+                    .into_iter()
+                    .filter(|p| only.is_none_or(|only| only.contains(&MediaId::for_path(p)))),
+            );
             let files = files
                 .into_iter()
                 .filter(|p| seen.insert(p.clone()))
@@ -455,7 +480,7 @@ pub fn trash_plan(
         }
     }
     let inventories = directory::Inventory::capture(catalog, &roots, &cancelled)?;
-    let (mut actions, _) = trash_actions(catalog, &rejected, companions, &cancelled)?;
+    let (mut actions, _) = trash_actions(catalog, &rejected, companions, None, &cancelled)?;
     for (path, inventory) in roots.into_iter().zip(inventories) {
         inventory.verify(&path, &cancelled)?;
         actions.push(Action::TrashDirectory(TrashDirectory {
@@ -492,6 +517,22 @@ pub fn decisions_plan_with_metadata(
     decisions: &HashMap<MediaId, Decision>,
     companions: bool,
     policy: metadata::WritePolicy,
+    load: impl FnMut(&Media) -> Result<Metadata>,
+    cancelled: impl Fn() -> bool,
+) -> Result<Plan> {
+    decisions_plan_with_followers(
+        catalog, decisions, companions, None, policy, load, cancelled,
+    )
+}
+/// [`decisions_plan_with_metadata`] where, with `followers`, only those files
+/// may go to the Trash with a rejected photo: the RAW and XMP files a review
+/// listed, so a file that reached the photo's name since never follows.
+pub fn decisions_plan_with_followers(
+    catalog: &Catalog,
+    decisions: &HashMap<MediaId, Decision>,
+    companions: bool,
+    followers: Option<&HashSet<MediaId>>,
+    policy: metadata::WritePolicy,
     mut load: impl FnMut(&Media) -> Result<Metadata>,
     cancelled: impl Fn() -> bool,
 ) -> Result<Plan> {
@@ -500,7 +541,7 @@ pub fn decisions_plan_with_metadata(
         .filter(|(_, d)| d.rejected)
         .map(|(id, _)| *id)
         .collect();
-    let (mut actions, seen) = trash_actions(catalog, &rejected, companions, &cancelled)?;
+    let (mut actions, seen) = trash_actions(catalog, &rejected, companions, followers, &cancelled)?;
     let mut writes: HashMap<PathBuf, (Option<u8>, Option<u8>)> = HashMap::new();
     let mut prepared = Vec::new();
     let mut shared_sidecars = HashSet::new();

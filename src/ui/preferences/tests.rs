@@ -261,7 +261,7 @@ fn an_unreadable_preferences_file_is_kept_until_settings_are_saved() {
     assert_eq!(saved.recent_folders, app.preferences.recent_folders);
 }
 #[test]
-fn hiding_current_step_uses_departure_guard_and_keeps_it_reachable_until_resolved() {
+fn hiding_current_step_moves_on_and_keeps_its_staged_choices() {
     let (_dir, mut app) = fixture();
     app.step = Step::Rotation;
     app.decisions.insert(
@@ -274,14 +274,10 @@ fn hiding_current_step_uses_departure_guard_and_keeps_it_reachable_until_resolve
     let mut p = Preferences::default();
     p.hidden_steps.extend([Step::Rotation, Step::PickBest]);
     app.save_settings(p);
-    assert_eq!(app.step, Step::Rotation);
-    assert!(matches!(app.departure, Some(Destination::Step(Step::Cull))));
-    assert!(app.navigation_steps().contains(&Step::Rotation));
-    assert!(app.decisions.contains_key(&MediaId(1)));
-    let destination = app.departure.take().unwrap();
-    app.discard_staged_choices();
-    app.continue_departure(destination);
+    // Nothing is asked: the staged rating waits for the Review step.
+    assert!(app.departure.is_none());
     assert_eq!(app.step, Step::Cull);
+    assert!(app.decisions.contains_key(&MediaId(1)));
     assert!(!app.navigation_steps().contains(&Step::Rotation));
 }
 #[test]

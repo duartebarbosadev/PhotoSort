@@ -12,8 +12,8 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("Ctrl+O", "Open a folder"),
             ("Ctrl+F", "Search"),
             ("Ctrl+S", "Analyze"),
-            ("Ctrl+Alt+1–5", "Switch step"),
-            ("Shift+Enter", "Review changes"),
+            ("Ctrl+Alt+1–6", "Switch step"),
+            ("Shift+Enter", "Go to Review"),
             ("Ctrl+C", "Copy selected photos"),
             ("F10 / Ctrl+,", "Settings"),
             ("F12", "About PhotoSort"),
@@ -46,6 +46,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("Q / E", "Rotate left / right"),
             ("Enter", "Next"),
             ("R", "Undo"),
+            ("A", "Accept all suggestions"),
         ],
     ),
     (
@@ -64,6 +65,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("Up / Down", "Previous / next group"),
             ("D", "Mark for Trash"),
             ("Alt+D", "Clear all marks"),
+            ("Delete / Backspace", "Mark for Trash"),
             ("Ctrl+0–5", "Rate"),
             ("R / Shift+R", "Rotate right / left"),
             ("Ctrl+A", "Select all"),
@@ -71,6 +73,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("I", "Photo details"),
         ],
     ),
+    ("Review", &[("Alt+D", "Clear all Trash marks")]),
     (
         "Viewer",
         &[
@@ -264,7 +267,7 @@ impl PhotoSortApp {
             });
             ui.add_space(S1);
             ui.label(
-                RichText::new("An interrupted apply can be finished from Review changes.")
+                RichText::new("An interrupted apply can be finished from the Review step.")
                     .small()
                     .color(MUTED),
             );

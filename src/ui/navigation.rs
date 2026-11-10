@@ -14,6 +14,7 @@ impl Step {
             Step::Rotation => icon::ARROW_CLOCKWISE,
             Step::PickBest => icon::CROWN_SIMPLE,
             Step::Cull => icon::STAR,
+            Step::Review => icon::LIST_CHECKS,
         }
     }
 }
@@ -23,17 +24,23 @@ const STEP_HEIGHT: f32 = 28.0;
 /// Inset between the step control's container and its segments.
 const STEP_INSET: f32 = 3.0;
 /// A step's label in the bottom bar: its name, or its icon when narrow.
-fn step_label(step: Step, compact: bool) -> &'static str {
-    if compact { step.icon() } else { step.title() }
+/// Review adds how many changes wait for it.
+fn step_label(step: Step, compact: bool, pending: usize) -> String {
+    let label = if compact { step.icon() } else { step.title() };
+    if step == Step::Review && pending > 0 {
+        format!("{label} · {pending}")
+    } else {
+        label.to_owned()
+    }
 }
 /// Widths of the step control's segments.
-fn step_tab_widths(ui: &egui::Ui, steps: &[Step], compact: bool) -> Vec<f32> {
+fn step_tab_widths(ui: &egui::Ui, steps: &[Step], compact: bool, pending: usize) -> Vec<f32> {
     steps
         .iter()
         .map(|step| {
             let text = ui
                 .painter()
-                .layout_no_wrap(step_label(*step, compact).into(), semibold(11.5), INK)
+                .layout_no_wrap(step_label(*step, compact, pending), semibold(11.5), INK)
                 .size()
                 .x;
             text + 2.0 * if compact { S2 + 2.0 } else { S3 + 2.0 }
@@ -41,8 +48,11 @@ fn step_tab_widths(ui: &egui::Ui, steps: &[Step], compact: bool) -> Vec<f32> {
         .collect()
 }
 /// The whole step control's width, container included.
-fn step_bar_width(ui: &egui::Ui, steps: &[Step], compact: bool) -> f32 {
-    step_tab_widths(ui, steps, compact).iter().sum::<f32>() + 2.0 * STEP_INSET
+fn step_bar_width(ui: &egui::Ui, steps: &[Step], compact: bool, pending: usize) -> f32 {
+    step_tab_widths(ui, steps, compact, pending)
+        .iter()
+        .sum::<f32>()
+        + 2.0 * STEP_INSET
 }
 
 impl PhotoSortApp {
@@ -51,8 +61,9 @@ impl PhotoSortApp {
     /// step that slides to the next one when the step changes.
     fn step_tabs(&mut self, ui: &mut egui::Ui, area: egui::Rect, compact: bool) {
         let steps = self.navigation_steps();
-        let widths = step_tab_widths(ui, &steps, compact);
-        let total = step_bar_width(ui, &steps, compact);
+        let pending = self.staged_change_count();
+        let widths = step_tab_widths(ui, &steps, compact, pending);
+        let total = step_bar_width(ui, &steps, compact, pending);
         let time = ui.style().animation_time;
         let container = egui::Rect::from_center_size(
             egui::pos2(area.center().x, area.center().y),
@@ -62,6 +73,7 @@ impl PhotoSortApp {
         let mut x = inner.left();
         // Interact first, so the pill can be painted under every label.
         let mut tabs = Vec::with_capacity(steps.len());
+        let applying = self.review_applying();
         for (step, width) in steps.iter().zip(widths) {
             let rect = egui::Rect::from_min_size(
                 egui::pos2(x, inner.top()),
@@ -69,8 +81,14 @@ impl PhotoSortApp {
             );
             x += width;
             let active = *step == self.step;
-            let enabled = active || !self.busy;
-            let tip = if enabled {
+            let enabled = active || !(self.busy || applying);
+            let tip = if enabled && *step == Step::Review && pending > 0 {
+                format!(
+                    "Review {pending} {} · Ctrl/Cmd+Alt+{}",
+                    if pending == 1 { "change" } else { "changes" },
+                    step.index() + 1
+                )
+            } else if enabled {
                 format!("{} · Ctrl/Cmd+Alt+{}", step.title(), step.index() + 1)
             } else {
                 format!(
@@ -151,20 +169,16 @@ impl PhotoSortApp {
             } else {
                 medium(11.5)
             };
-            let text = painter.layout_no_wrap(step_label(step, compact).into(), font, color);
+            let text = painter.layout_no_wrap(step_label(step, compact, pending), font, color);
             painter.galley(rect.center() - text.size() / 2.0, text, color);
         }
     }
 
-    /// Photos with a staged Trash mark, rating or rotation, plus planned
-    /// changes in Organize.
+    /// Photos with a staged Trash mark, rating or rotation, plus Organize's
+    /// planned moves, renames and new folders: everything the Review step
+    /// applies.
     pub(super) fn staged_change_count(&self) -> usize {
-        let decided = self.decisions.values().filter(|d| !d.is_empty()).count();
-        match self.step {
-            // Moves, renames and new folders are reviewed with them.
-            Step::Organize => decided + self.board.changes,
-            _ => decided,
-        }
+        self.staged_choice_count() + self.organize_change_count()
     }
     pub(super) fn switch_step(&mut self, step: Step) {
         if self.step != step && self.preferences.visible(step) {
@@ -175,11 +189,25 @@ impl PhotoSortApp {
         self.browse_filters_open = false;
         if self.step != step {
             self.organize_preview_requested = false;
+            if step == Step::Review {
+                self.review_from = self.step;
+            }
+            // The Review step's list and result belong to it alone.
+            if self.step == Step::Review {
+                self.review_outcome = None;
+                if !self.plan_open && self.retry_plan.is_none() && !self.busy {
+                    self.set_review_plan(None);
+                }
+            }
         }
         self.checkpoint_bookmarks();
         self.runtime.browsing.cancel();
         self.browse_run = None;
-        self.cancel_metadata_index();
+        // Cull and a grouping by metadata both read it: a run the next step
+        // needs too keeps going.
+        if step != Step::Cull && !self.metadata_organize_mode() {
+            self.cancel_metadata_index();
+        }
         self.step = step;
         self.discard_stale_model_retry();
         self.navigation_notice = None;
@@ -189,7 +217,8 @@ impl PhotoSortApp {
         self.comparison_focus = None;
         self.filter = Filter::All;
         self.filter_dirty = true;
-        self.review = !matches!(step, Step::Organize | Step::Rotation);
+        self.trash_last = None;
+        self.review = !matches!(step, Step::Organize | Step::Rotation | Step::Review);
         self.fit_view();
         self.view_started = Instant::now();
         self.start_ready_analysis();
@@ -197,8 +226,14 @@ impl PhotoSortApp {
         // The guided steps select nothing until the user picks a card or a
         // group (a saved view restores its own); another step's photo is
         // not on screen for Copy, rating or rotation to act on.
-        if matches!(step, Step::EasyDelete | Step::Rotation | Step::PickBest) {
+        if matches!(
+            step,
+            Step::EasyDelete | Step::Rotation | Step::PickBest | Step::Review
+        ) {
             self.active = None;
+        }
+        if step == Step::Review {
+            self.review_stale = true;
         }
         if step == Step::EasyDelete {
             self.stage_delete_suggestions();
@@ -278,12 +313,13 @@ impl PhotoSortApp {
                 let mut left_edge = right_edge;
                 if self.root.is_some() {
                     let steps = self.navigation_steps();
+                    let pending = self.staged_change_count();
                     let mid = ui.ctx().content_rect().center().x;
-                    let labelled = step_bar_width(ui, &steps, false);
+                    let labelled = step_bar_width(ui, &steps, false, pending);
                     let compact = mid + labelled / 2.0 > right_edge
                         || mid - labelled / 2.0 < full.left() + 140.0;
                     let width = if compact {
-                        step_bar_width(ui, &steps, true)
+                        step_bar_width(ui, &steps, true, pending)
                     } else {
                         labelled
                     };
@@ -825,6 +861,8 @@ mod step_bar_tests {
     /// and one Pick Best group, so no step starts an analysis on entry.
     fn app() -> (tempfile::TempDir, PhotoSortApp, Vec<MediaId>) {
         let (temp, mut app) = fixture();
+        // Certain turns are staged as soon as they are found.
+        app.preferences.rotation_auto = true;
         let ids: Vec<MediaId> = app.media.iter().map(|m| m.id).collect();
         for (id, turns, uncertain) in [(ids[0], 1, false), (ids[1], 3, true)] {
             app.rotations.insert(
@@ -921,7 +959,9 @@ mod step_bar_tests {
         let size = egui::vec2(1800.0, 900.0);
         let nodes = rendered(&mut app, &ctx, size);
         for step in Step::ALL {
-            assert_eq!(found(&nodes, step.title()).len(), 1, "{step:?}");
+            // Cull's Grid and Review view switch shares the Review step's name.
+            let expected = if step == Step::Review { 2 } else { 1 };
+            assert_eq!(found(&nodes, step.title()).len(), expected, "{step:?}");
         }
         let steps = found(&nodes, "Organize")[0].left();
         assert!(found(&nodes, "Keyboard shortcuts")[0].right() < steps);
@@ -1030,9 +1070,11 @@ mod step_bar_tests {
         theme_install(&ctx);
         ctx.enable_accesskit();
         let nodes = rendered(&mut app, &ctx, egui::vec2(1440.0, 800.0));
-        for gone in ["Confirm all suggestions", "Grid", "Review"] {
+        for gone in ["Confirm all suggestions", "Grid"] {
             assert!(found(&nodes, gone).is_empty(), "{gone}");
         }
+        // Only the Review step's tab: no Grid and Review view switch.
+        assert_eq!(found(&nodes, "Review").len(), 1);
         assert_eq!(found(&nodes, "Suggestions only").len(), 1);
         assert_eq!(app.decision(ids[0]).turns, 1);
         assert_eq!(app.decision(ids[1]).turns, 0, "the uncertain photo waits");

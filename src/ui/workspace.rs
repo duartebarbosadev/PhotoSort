@@ -46,6 +46,8 @@ mod pointer;
 mod review;
 #[path = "review_card.rs"]
 mod review_card;
+#[path = "review_step.rs"]
+mod review_step;
 #[path = "rotation.rs"]
 mod rotation;
 #[path = "selection.rs"]
@@ -322,12 +324,44 @@ pub struct PhotoSortApp {
     /// The halted grouping was cancelled, rather than failed.
     organize_cancelled: bool,
     organize_preview_requested: bool,
-    /// Review changes in Organize shows the moves first; once they are
-    /// applied, the staged Trash marks, ratings and rotations come next.
-    review_after_moves: bool,
+    /// The Review step's Apply covered moves: once they are applied and the
+    /// folder is read again, the Trash marks, ratings and rotations it
+    /// listed come next.
+    review_after_moves: Option<review_step::Chain>,
     /// The next planned file plan applies without a review: the staged
     /// choices of a review that also covered moves.
     apply_planned: bool,
+    /// The plan on its way only lists Organize's changes on the Review step;
+    /// it is shown there, never applied or opened as a dialog.
+    review_preview: bool,
+    /// The Review step's list is out of date: it is planned again as soon
+    /// as nothing else runs.
+    review_stale: bool,
+    /// The Trash marks, ratings and rotations the Review step lists: its
+    /// Apply applies these, never a choice staged after they were listed.
+    review_listed: HashMap<MediaId, Decision>,
+    /// The plan on its way only tells the Review step how its ratings and
+    /// rotations would be written.
+    review_targets: bool,
+    /// Organize's folder changes cannot be listed yet, and why: the Review
+    /// step says so instead of listing forever.
+    review_blocked: Option<review_step::Blocked>,
+    /// What the Review step's last Apply did, shown once nothing is left.
+    review_outcome: Option<review_step::Outcome>,
+    /// An Undo or link clicked in the Review step's list this frame.
+    review_action: Option<plan_review::ReviewAction>,
+    /// The step the Review step was opened from, for its Back button.
+    review_from: Step,
+    /// Organize's change count and what it was worked out from.
+    organize_count: std::cell::RefCell<Option<(organize::ChangeCountKey, usize)>>,
+    /// The step each Trash mark was made in: a mark from another step is
+    /// shown dimmed.
+    trash_steps: HashMap<MediaId, Step>,
+    /// The photos Fix Rotation, Easy Delete and Pick Best show last: those
+    /// already marked for Trash when the step's list was built or entered.
+    /// `None` until the next list is built, so a photo never jumps away the
+    /// moment it is marked or unmarked.
+    trash_last: Option<HashSet<MediaId>>,
     file_names: HashMap<MediaId, String>,
     status: String,
     status_scope: Option<(Step, Option<GroupMode>)>,
@@ -485,7 +519,7 @@ impl PhotoSortApp {
             switched_from: None,
             forget_scroll: false,
             pending_bookmark: None,
-            view_data_ready: [Step::Organize, Step::Cull, Step::Rotation]
+            view_data_ready: [Step::Organize, Step::Cull, Step::Rotation, Step::Review]
                 .into_iter()
                 .collect(),
             resume_started: false,
@@ -602,8 +636,19 @@ impl PhotoSortApp {
             organize_halted: None,
             organize_cancelled: false,
             organize_preview_requested: false,
-            review_after_moves: false,
+            review_after_moves: None,
             apply_planned: false,
+            review_preview: false,
+            review_stale: false,
+            review_outcome: None,
+            review_listed: HashMap::new(),
+            review_targets: false,
+            review_blocked: None,
+            review_action: None,
+            review_from: Step::Cull,
+            organize_count: Default::default(),
+            trash_steps: HashMap::new(),
+            trash_last: None,
             file_names: HashMap::new(),
             status_scope: None,
             status: String::new(),
@@ -656,6 +701,7 @@ impl PhotoSortApp {
             suggested: self.delete_review.suggested().clone(),
             pick_suggested: self.pick_review.suggested().clone(),
             rotations_staged: self.rotation_review.staged().clone(),
+            trash_steps: self.trash_steps.clone(),
             organize: self.catalog.as_ref().and_then(|catalog| {
                 crate::core::organize::Intent::capture(
                     catalog,
@@ -715,6 +761,10 @@ impl PhotoSortApp {
         let switching = previous
             .as_ref()
             .is_some_and(|root| !root.components().eq(folder.components()));
+        // The Review step's Apply belongs to the folder it listed.
+        self.review_after_moves = None;
+        self.review_outcome = None;
+        self.review_targets = false;
         self.scan_folder(folder);
         // Another spelling of the same folder (a link, say) is only known to
         // be the same once the scan resolves it; it then gets its views back.
@@ -732,7 +782,7 @@ impl PhotoSortApp {
         self.runtime.next_epoch();
         self.saved_views = Default::default();
         self.pending_bookmark = None;
-        self.view_data_ready = [Step::Organize, Step::Cull, Step::Rotation]
+        self.view_data_ready = [Step::Organize, Step::Cull, Step::Rotation, Step::Review]
             .into_iter()
             .collect();
         self.library_restore_offset = None;
@@ -743,6 +793,10 @@ impl PhotoSortApp {
         self.filtered.clear();
         self.selection.clear();
         self.decisions.clear();
+        self.trash_steps.clear();
+        self.trash_last = None;
+        self.review_blocked = None;
+        self.review_targets = false;
         self.metadata.clear();
         self.browse = Default::default();
         self.browse_groups.clear();
@@ -826,7 +880,7 @@ impl PhotoSortApp {
         self.organize_halted = None;
         self.organize_preview_requested = false;
         // `review_after_moves` survives: the rescan after applying the moves
-        // is what opens the next review, and it consumes the flag.
+        // applies the listed choices next, in the folder it expects.
         self.file_names.clear();
         self.analysis_run = None;
         self.progress = None;
@@ -838,9 +892,13 @@ impl PhotoSortApp {
         if let Err(e) = self.runtime.io(IoWork::Scan(folder)) {
             self.error = Some(e);
             self.scanning = false;
+            self.abandon_review_apply();
         }
     }
     fn select_folder(&mut self) {
+        if self.review_applying() {
+            return;
+        }
         if let Some(path) = rfd::FileDialog::new()
             .set_title("Open a photo library")
             .pick_folder()
@@ -852,6 +910,9 @@ impl PhotoSortApp {
         self.changed_items([id]);
     }
     fn changed_items(&mut self, ids: impl IntoIterator<Item = MediaId>) {
+        let ids: Vec<MediaId> = ids.into_iter().collect();
+        self.note_trash_steps(&ids, self.step);
+        self.review_stale |= self.step == Step::Review;
         if self.browse_ready {
             self.runtime
                 .browsing
@@ -863,7 +924,12 @@ impl PhotoSortApp {
     fn changed(&mut self) {
         self.review_changed();
     }
+    /// Many choices changed at once. Their marks keep the step they were
+    /// made in; this does not guess one for marks it did not make.
     fn review_changed(&mut self) {
+        self.review_stale |= self.step == Step::Review;
+        self.trash_steps
+            .retain(|id, _| self.decisions.get(id).is_some_and(|d| d.rejected));
         if self.browse_ready {
             self.runtime.browsing.decisions(self.decisions.clone());
         }
@@ -874,6 +940,50 @@ impl PhotoSortApp {
     /// marks or ratings, so a choice there leaves its grid as it is.
     fn decisions_changed_filter(&mut self) {
         self.filter_dirty |= self.step != Step::EasyDelete;
+    }
+    /// Remembers the step a new Trash mark among `ids` was made in, and
+    /// forgets marks that were taken back.
+    fn note_trash_steps(&mut self, ids: &[MediaId], step: Step) {
+        for id in ids {
+            if self.decisions.get(id).is_some_and(|d| d.rejected) {
+                self.trash_steps.entry(*id).or_insert(step);
+            } else {
+                self.trash_steps.remove(id);
+            }
+        }
+    }
+    /// Marked for Trash in another step than this one: shown dimmed, still
+    /// there to be unmarked. A mark from before steps were remembered is
+    /// taken as this step's.
+    pub(super) fn trashed_elsewhere(&self, id: MediaId) -> bool {
+        self.decisions.get(&id).is_some_and(|d| d.rejected)
+            && self
+                .trash_steps
+                .get(&id)
+                .is_some_and(|step| *step != self.step)
+    }
+    /// Takes the photos this step shows last, unless already taken for this
+    /// list. Easy Delete puts only marks from other steps last, so its own
+    /// suggestions keep their order.
+    fn note_trash_last(&mut self) {
+        if self.trash_last.is_some() {
+            return;
+        }
+        let marked = self
+            .decisions
+            .iter()
+            .filter(|(id, d)| {
+                d.rejected && (self.step != Step::EasyDelete || self.trashed_elsewhere(**id))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        self.trash_last = Some(marked);
+    }
+    /// Whether `id` goes last in this step's list.
+    pub(super) fn shown_last(&self, id: MediaId) -> bool {
+        self.trash_last
+            .as_ref()
+            .is_some_and(|ids| ids.contains(&id))
     }
     fn decision(&self, id: MediaId) -> Decision {
         self.decisions.get(&id).cloned().unwrap_or_default()
@@ -936,7 +1046,11 @@ impl PhotoSortApp {
         if self.step == Step::PickBest
             && let Some(cluster) = self.pick_review.cluster_of(id)
         {
-            let slot = cluster.ordered.iter().position(|p| *p == id).unwrap_or(0);
+            let slot = self
+                .pick_order(cluster)
+                .iter()
+                .position(|p| *p == id)
+                .unwrap_or(0);
             let group = self.pick_group();
             self.library_reveal |= self.active != Some(id);
             self.pick_current = Some(id);
@@ -1059,12 +1173,23 @@ impl PhotoSortApp {
         None
     }
     fn refilter(&mut self) {
+        // The Review step lists staged changes, not the library.
+        if self.step == Step::Review {
+            self.filter_dirty = false;
+            return;
+        }
         if self.step == Step::Cull {
             self.refilter_browse();
             return;
         }
         if !self.filter_dirty {
             return;
+        }
+        if matches!(
+            self.step,
+            Step::Rotation | Step::EasyDelete | Step::PickBest
+        ) {
+            self.note_trash_last();
         }
         if self.step == Step::PickBest {
             // One entry per group: its suggested photo, in capture order.
@@ -1118,15 +1243,27 @@ impl PhotoSortApp {
                     .entry(self.media[*i].id)
                     .is_some_and(|e| self.delete_categories.contains(&e.category))
             });
+            // Each card keeps its category's place; within it, photos marked
+            // in another step go last.
+            let mut first: HashMap<crate::core::delete_review::Category, usize> = HashMap::new();
             let order: HashMap<_, _> = self
                 .delete_review
                 .entries()
                 .iter()
                 .enumerate()
-                .map(|(i, e)| (e.subject, i))
+                .map(|(i, e)| (e.subject, (*first.entry(e.category).or_insert(i), i)))
                 .collect();
-            self.filtered
-                .sort_by_key(|i| order.get(&self.media[*i].id).copied().unwrap_or(usize::MAX));
+            let mut keyed: Vec<_> = std::mem::take(&mut self.filtered)
+                .into_iter()
+                .map(|i| {
+                    let id = self.media[i].id;
+                    let (category, at) =
+                        order.get(&id).copied().unwrap_or((usize::MAX, usize::MAX));
+                    ((category, self.shown_last(id), at), i)
+                })
+                .collect();
+            keyed.sort_by_key(|(key, _)| *key);
+            self.filtered = keyed.into_iter().map(|(_, i)| i).collect();
             // No card is selected until the user picks one; a card hidden by
             // the tab or search stops being selected.
             if self
@@ -1256,36 +1393,13 @@ impl PhotoSortApp {
             Err(e) => self.error = Some(e),
         }
     }
-    fn review_changes(&mut self) {
-        if self.review_remaining_operations() {
-            return;
-        }
-        // Organize's moves, renames and new folders are one plan; staged
-        // Trash marks, ratings and rotations follow once it is applied.
-        // Nothing changes on disk until each plan is reviewed and applied.
-        if self.step == Step::Organize && self.organize_changes_pending() {
-            self.review_after_moves = self.decisions.values().any(|d| !d.is_empty());
-            self.set_review_plan(None);
-            self.organize();
-            // Metadata or a grouping comes first: no plan is on its way.
-            if !self.busy {
-                self.review_after_moves = false;
-            }
-            return;
-        }
-        // With nothing staged, a grouping that has not run yet runs first
-        // and its plan opens after; staged marks never wait for a grouping.
-        if self.step == Step::Organize
-            && !self.organize_grouping_ready()
-            && !self.organize_drafts.contains_key(&self.group_mode)
-            && self.decisions.values().all(|d| d.is_empty())
-        {
-            self.organize();
-            return;
-        }
-        self.review_decisions();
-    }
-    fn review_decisions(&mut self) {
+    /// Plans these Trash marks, ratings and rotations, to apply them.
+    /// With `followers`, only those files may go to the Trash with a mark.
+    pub(super) fn plan_decisions(
+        &mut self,
+        decisions: HashMap<MediaId, Decision>,
+        followers: Option<HashSet<MediaId>>,
+    ) {
         if self.review_remaining_operations() {
             return;
         }
@@ -1296,8 +1410,9 @@ impl PhotoSortApp {
                 .runtime
                 .image(crate::core::jobs::ImageWork::PlanDecisions {
                     catalog,
-                    decisions: self.decisions.clone(),
+                    decisions,
                     companions: self.companions,
+                    followers,
                     policy: self.preferences.metadata_writes,
                 }) {
                 Ok(()) => self.busy = true,
@@ -1427,7 +1542,9 @@ impl PhotoSortApp {
             let current = self
                 .analysis_run
                 .is_some_and(|run| self.organize_run == Some((run, self.group_mode)));
-            if !current {
+            // Only Organize groups its photos: an analysis started from the
+            // Review step would run another step's profile.
+            if !current && self.step != Step::Review {
                 self.analyze();
             }
             self.organize_preview_requested = self
@@ -1725,6 +1842,7 @@ impl PhotoSortApp {
         }
         self.tick += 1;
         self.poll(ctx);
+        self.refresh_review();
         self.check_board();
         self.refilter_and_restore(ctx);
         self.intro_keys(ctx);
@@ -1734,7 +1852,7 @@ impl PhotoSortApp {
         // board or grid.
         if matches!(
             self.step,
-            Step::Organize | Step::EasyDelete | Step::Rotation | Step::PickBest
+            Step::Organize | Step::EasyDelete | Step::Rotation | Step::PickBest | Step::Review
         ) {
             self.review = false;
         }
@@ -1844,6 +1962,15 @@ impl PhotoSortApp {
                         })
                         .show(ui, |ui| {
                             ui.set_min_size(ui.available_size());
+                            // The Review step lists staged changes, never the library.
+                            if self.step == Step::Review
+                                && !(self.media.is_empty()
+                                    && self.scanning
+                                    && self.review_outcome.is_none())
+                            {
+                                self.review_page(ui);
+                                return;
+                            }
                             // Cull says when a filter hides some photos.
                             if self.step == Step::Cull {
                                 self.cull_filter_notice(ui);
@@ -2050,6 +2177,8 @@ impl PhotoSortApp {
                 },
             );
             self.finish_rotation_detection();
+            self.rotation_review
+                .stage_new_suggestions(&mut self.decisions);
         }
         // DSC01231 is the sharp frame, suggested over the slightly soft
         // DSC01232 and DSC01233.
@@ -2410,6 +2539,40 @@ impl PhotoSortApp {
         self.changed();
         self.review_changes();
     }
+    /// Stages changes in several steps, then opens the Review step: a new
+    /// name in Organize, Trash marks from Easy Delete and Cull, a rating and
+    /// a turn.
+    pub fn gallery_review_mixed(&mut self) {
+        let ids: Vec<_> = self.media.iter().map(|m| m.id).collect();
+        if ids.len() < 6 {
+            return;
+        }
+        self.file_names.insert(ids[0], "Keeper".into());
+        for (id, step) in [(ids[1], Step::EasyDelete), (ids[2], Step::Cull)] {
+            self.decisions.entry(id).or_default().rejected = true;
+            self.trash_steps.insert(id, step);
+        }
+        self.decisions.entry(ids[3]).or_default().rating = Some(5);
+        self.decisions.entry(ids[4]).or_default().rating = Some(4);
+        crate::core::rotation::set_turns(&mut self.decisions, ids[5], 1);
+        self.changed();
+        self.board_epoch += 1;
+        self.set_step(Step::Review);
+    }
+    /// Takes back the Trash marks on the Review step, so applying never
+    /// fills the computer's Trash, and lists the rest again.
+    pub fn gallery_review_keep_all(&mut self) {
+        for decision in self.decisions.values_mut() {
+            decision.rejected = false;
+        }
+        self.decisions.retain(|_, d| !d.is_empty());
+        self.changed();
+        self.review_stale = true;
+    }
+    /// The Review step's Apply.
+    pub fn gallery_review_apply(&mut self) {
+        self.apply_review();
+    }
     /// Thumbnails and previews currently uploaded as textures.
     pub fn gallery_textures(&self) -> usize {
         self.textures.len()
@@ -2418,6 +2581,7 @@ impl PhotoSortApp {
     pub fn gallery_busy(&self) -> bool {
         self.scanning
             || self.busy
+            || (self.step == Step::Review && self.review_stale)
             || !self.requested.is_empty()
             || self.metadata_run.is_some()
             || self.analysis_run.is_some()

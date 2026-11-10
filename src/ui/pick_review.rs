@@ -55,6 +55,9 @@ impl PhotoSortApp {
             &self.metadata,
         );
         self.pick_review.replace(clusters);
+        if self.step == Step::PickBest {
+            self.trash_last = None;
+        }
         self.pick_run = None;
         self.stage_pick_suggestions();
         self.finish_step_status(Step::PickBest);
@@ -70,6 +73,7 @@ impl PhotoSortApp {
         }
         let marked = self.pick_review.stage_new_suggestions(&mut self.decisions);
         if !marked.is_empty() {
+            self.note_trash_steps(&marked, Step::PickBest);
             self.changed_items(marked);
         }
     }
@@ -87,8 +91,15 @@ impl PhotoSortApp {
     /// The selected group's photos, best first, as the panel shows them.
     pub(super) fn pick_panel_ids(&self) -> Vec<MediaId> {
         self.pick_cluster()
-            .map(|c| c.ordered.clone())
+            .map(|c| self.pick_order(c))
             .unwrap_or_default()
+    }
+    /// A group's photos as its card and panel show them: best first, and
+    /// those already marked for Trash when the list was built last.
+    pub(super) fn pick_order(&self, cluster: &Cluster) -> Vec<MediaId> {
+        let (last, first): (Vec<MediaId>, Vec<MediaId>) =
+            cluster.ordered.iter().partition(|id| self.shown_last(**id));
+        first.into_iter().chain(last).collect()
     }
     /// Switches one photo between Keep and Trash.
     pub(super) fn toggle_pick(&mut self, id: MediaId) {
@@ -325,8 +336,7 @@ impl PhotoSortApp {
 
     /// Each photo's width over its height on a group's card, in order.
     fn pick_card_aspects(&self, group: usize) -> Vec<f32> {
-        self.pick_review.clusters()[group]
-            .ordered
+        self.pick_order(&self.pick_review.clusters()[group])
             .iter()
             .take(CARD_PHOTOS)
             .map(|id| self.photo_aspect(*id, 0))
@@ -466,7 +476,8 @@ impl PhotoSortApp {
     fn pick_card(&self, group: usize) -> ReviewCard {
         let cluster = &self.pick_review.clusters()[group];
         let enabled = self.pick_enabled();
-        let shown: Vec<MediaId> = cluster.ordered.iter().take(CARD_PHOTOS).copied().collect();
+        let order = self.pick_order(cluster);
+        let shown: Vec<MediaId> = order.iter().take(CARD_PHOTOS).copied().collect();
         let facts = self.pick_facts(cluster, &shown);
         let photos = shown
             .iter()
@@ -488,6 +499,7 @@ impl PhotoSortApp {
                         .unwrap_or_default(),
                     facts,
                     trash: !keep,
+                    dimmed: self.trashed_elsewhere(*id),
                     inset: None,
                     toggle: enabled.then(|| {
                         format!(
@@ -504,7 +516,7 @@ impl PhotoSortApp {
             })
             .collect();
         // Only the photos the card leaves out, and any of them kept.
-        let hidden = &cluster.ordered[shown.len()..];
+        let hidden = &order[shown.len()..];
         let state_text = (!hidden.is_empty()).then(|| {
             let kept = hidden
                 .iter()
@@ -538,7 +550,7 @@ impl PhotoSortApp {
             .pick_review
             .clusters()
             .get(group)
-            .map(|c| c.ordered.clone())
+            .map(|c| self.pick_order(c))
         else {
             return;
         };
@@ -577,6 +589,10 @@ mod tests {
     /// Two groups: photos 1-3 (3 is best) and 4-5 (5 is best).
     fn app() -> PhotoSortApp {
         let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+        // These tests cover suggestions applied automatically.
+        app.preferences.easy_delete_auto = true;
+        app.preferences.pick_best_auto = true;
+        app.preferences.rotation_auto = true;
         app.media = (1..=5).map(photo).collect();
         app.index = app
             .media
@@ -662,6 +678,51 @@ mod tests {
         assert!(trashed(&app).is_empty());
         app.accept_pick_defaults();
         assert_eq!(trashed(&app), vec![1]);
+    }
+
+    /// Photos already marked for Trash show last in their group, and stay
+    /// where they are while the user marks or unmarks them.
+    #[test]
+    fn photos_marked_for_trash_show_last_until_pick_best_is_entered_again() {
+        let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+        app.media = (1..=3).map(photo).collect();
+        app.index = app
+            .media
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
+        app.pick_review.replace(vec![Cluster::new(
+            1,
+            vec![MediaId(1), MediaId(2), MediaId(3)],
+            HashMap::from([(MediaId(1), 10.), (MediaId(2), 20.), (MediaId(3), 30.)]),
+        )]);
+        app.view_data_ready.insert(Step::PickBest);
+        // The best photo was marked for Trash in Cull.
+        app.decisions.insert(
+            MediaId(3),
+            Decision {
+                rejected: true,
+                ..Default::default()
+            },
+        );
+        app.set_step(Step::PickBest);
+        app.refilter();
+        let shown = |app: &PhotoSortApp| -> Vec<u64> {
+            app.pick_card(0).photos.iter().map(|p| p.id.0).collect()
+        };
+        assert_eq!(shown(&app), vec![2, 1, 3]);
+        // Marking photo 2 leaves it in place.
+        app.pick_card_event(0, CardEvent::Toggle(0));
+        app.refilter();
+        assert!(app.decision(MediaId(2)).rejected);
+        assert_eq!(shown(&app), vec![2, 1, 3]);
+        assert_eq!(app.pick_panel_ids(), [2, 1, 3].map(MediaId));
+        // Coming back to the step puts it last too.
+        app.set_step(Step::Cull);
+        app.set_step(Step::PickBest);
+        app.refilter();
+        assert_eq!(shown(&app), vec![1, 3, 2]);
     }
 
     #[test]

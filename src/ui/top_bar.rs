@@ -32,7 +32,7 @@ impl Fit {
 /// The width each fit needed when last drawn, per step. Measuring the drawn
 /// bar, rather than guessing breakpoints, keeps it right as controls come
 /// and go (Faces adds a menu, a selection adds its count).
-pub(super) type BarNeeds = [[Option<f32>; 4]; 5];
+pub(super) type BarNeeds = [[Option<f32>; 4]; Step::ALL.len()];
 
 /// The roomiest fit that is known, or hoped, to fit in `room`.
 fn choose(needs: &[Option<f32>; 4], current: Fit, room: f32) -> Fit {
@@ -177,7 +177,7 @@ impl PhotoSortApp {
         let name = "Open folder… (Ctrl/Cmd+O)";
         if bar_icon(
             ui,
-            !self.busy,
+            !self.busy && !self.review_applying(),
             false,
             egui_phosphor::regular::FOLDER_OPEN,
             name,
@@ -417,7 +417,8 @@ impl PhotoSortApp {
     /// Review changes, the bar's primary action, while there is a library
     /// or a plan to retry. True when it was shown.
     fn review_button(&mut self, ui: &mut egui::Ui, fit: Fit) -> bool {
-        if self.catalog.is_none() && self.retry_plan.is_none() {
+        // On the Review step the page itself has the list and Apply.
+        if (self.catalog.is_none() && self.retry_plan.is_none()) || self.step == Step::Review {
             return false;
         }
         // Accent only when there is something to review, so the bar
@@ -459,6 +460,10 @@ impl PhotoSortApp {
     /// Reset changes, Cull's view switch and view options).
     fn step_actions(&mut self, ui: &mut egui::Ui, fit: Fit) {
         use egui_phosphor::regular as icon;
+        // The Review step shows no photo to detail or analyze.
+        if self.step == Step::Review {
+            return;
+        }
         let icons = fit >= Fit::Icons;
         let details = if icons {
             bar_icon(ui, true, self.inspector, icon::INFO, "Details")
@@ -487,7 +492,7 @@ impl PhotoSortApp {
                     self.view_switch(ui, icons);
                 }
             }
-            Step::EasyDelete | Step::Rotation | Step::PickBest => {}
+            Step::EasyDelete | Step::Rotation | Step::PickBest | Step::Review => {}
         }
     }
 
@@ -507,7 +512,7 @@ impl PhotoSortApp {
             Step::Organize => self.organize_controls(ui),
             Step::EasyDelete => self.delete_controls(ui),
             Step::Rotation => self.rotation_controls(ui),
-            Step::PickBest => {}
+            Step::PickBest | Step::Review => {}
             Step::Cull => self.browse_controls(ui),
         }
         if self.analysis_run.is_some() {

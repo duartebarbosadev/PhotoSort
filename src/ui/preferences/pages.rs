@@ -982,7 +982,7 @@ fn steps_page(ui: &mut egui::Ui, draft: &mut Preferences) {
         |rows| {
             for step in Step::ALL {
                 rows.row_with(Some(step.icon()), step.title(), "", None, |ui| {
-                    if matches!(step, Step::Organize | Step::Cull) {
+                    if !draft.can_hide(step) {
                         ui.label(RichText::new("Always on").small().color(FAINT));
                     } else {
                         let mut visible = draft.visible(step);

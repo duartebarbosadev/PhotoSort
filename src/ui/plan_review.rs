@@ -1,6 +1,7 @@
 //! Shared presentation of immutable operation plans. Rendering never rescans files.
 use super::library::shimmer;
 use super::*;
+use crate::core::metadata::WriteTarget;
 use crate::core::operations::Action;
 use egui::text::{LayoutJob, TextFormat};
 use egui_phosphor::regular as icon;
@@ -17,8 +18,20 @@ pub(super) struct Rows {
     /// The plain view, as plan groups and staged media: never a copy of paths.
     folders: Vec<Folder>,
     trash: Vec<Item>,
-    updates: Vec<Item>,
+    rotations: Vec<Item>,
+    ratings: Vec<Item>,
     renamed_folders: Vec<usize>,
+    /// How each staged rating or rotation would be written, from a plan of
+    /// them made only to say so on the Review step.
+    targets: HashMap<MediaId, WriteTarget>,
+    /// The files that go to the Trash with a staged Trash mark, as a short
+    /// note: "+ RAW, XMP".
+    followers: HashMap<MediaId, String>,
+    /// The files those notes name.
+    follower_ids: HashSet<MediaId>,
+    /// Shown on the Review step: each photo has an Undo button, and the
+    /// folder sections a link back to Organize.
+    pub(super) editable: bool,
     /// The plain view laid out for `columns` thumbnails per row, or
     /// `pair_columns` before-and-after pairs in a list with rotations.
     layout: Vec<Placed>,
@@ -30,7 +43,7 @@ pub(super) struct Rows {
 /// One photo in the plain view: a plan group, or a choice staged for after
 /// the moves of the same review (its Trash mark, rating or turns).
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Item {
+pub(super) enum Item {
     Group(usize),
     Staged {
         id: MediaId,
@@ -60,14 +73,25 @@ enum Section {
     Moving,
     Folders,
     Trash,
-    Updates,
+    Rotate,
+    Rate,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Hash)]
-enum List {
+pub(super) enum List {
     /// The photos of `folders[i]` from its source folder `g`.
     Folder(usize, usize),
     Trash,
-    Updates,
+    Rotate,
+    Rate,
+}
+
+/// What the Review step's list was asked to do this frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum ReviewAction {
+    /// Take back the change of one photo in one section.
+    Undo(List, Item),
+    /// Go back to a step to change things there.
+    Open(Step),
 }
 /// A piece of the plain view. Thumbnail rows are laid out per width, and
 /// only the pieces in view are drawn, so any number of photos scrolls.
@@ -188,8 +212,12 @@ impl Rows {
         self.movable.clear();
         self.folders.clear();
         self.trash.clear();
-        self.updates.clear();
+        self.rotations.clear();
+        self.ratings.clear();
         self.renamed_folders.clear();
+        self.targets.clear();
+        self.followers.clear();
+        self.follower_ids.clear();
         self.layout.clear();
         self.columns = 0;
         self.pair_columns = 0;
@@ -262,7 +290,12 @@ impl Rows {
                     summary.updated += 1;
                     summary.rated += usize::from(rating.is_some());
                     summary.rotated += usize::from(orientation.is_some());
-                    self.updates.push(Item::Group(group));
+                    if orientation.is_some() {
+                        self.rotations.push(Item::Group(group));
+                    }
+                    if rating.is_some() {
+                        self.ratings.push(Item::Group(group));
+                    }
                 }
                 Action::RenameDirectory(_) => {
                     summary.folder_renames += 1;
@@ -293,7 +326,12 @@ impl Rows {
                 summary.updated += 1;
                 summary.rated += usize::from(decision.rating.is_some());
                 summary.rotated += usize::from(decision.turns % 4 != 0);
-                self.updates.push(item);
+                if decision.turns % 4 != 0 {
+                    self.rotations.push(item);
+                }
+                if decision.rating.is_some() {
+                    self.ratings.push(item);
+                }
             }
         }
         // A new folder that only holds other new folders is shown through them.
@@ -341,6 +379,81 @@ impl Rows {
     fn len(&self) -> usize {
         self.ends.last().copied().unwrap_or(0)
     }
+    /// Nothing to show: no file operation and no staged choice.
+    /// The RAW and XMP files listed as going to the Trash with a staged mark.
+    pub(super) fn follower_ids(&self) -> HashSet<MediaId> {
+        self.follower_ids.clone()
+    }
+    pub(super) fn is_empty(&self) -> bool {
+        self.len() == 0
+            && self.trash.is_empty()
+            && self.rotations.is_empty()
+            && self.ratings.is_empty()
+    }
+    /// What applying it did, said once it is done: "Moved 3 photos and
+    /// sent 2 photos to the Trash."
+    pub(super) fn applied_sentence(&self) -> String {
+        let summary = &self.summary;
+        let mut parts = Vec::new();
+        if summary.moved > 0 {
+            parts.push(format!("moved {}", photos(summary.moved)));
+        }
+        if summary.renamed > 0 {
+            parts.push(format!("renamed {}", photos(summary.renamed)));
+        }
+        if summary.folder_renames > 0 {
+            parts.push(format!(
+                "renamed {}",
+                count(summary.folder_renames, "folder", "folders")
+            ));
+        }
+        if summary.empty_folders > 0 {
+            parts.push(format!(
+                "created {}",
+                count(summary.empty_folders, "empty folder", "empty folders")
+            ));
+        }
+        if summary.rotated > 0 {
+            parts.push(format!("rotated {}", photos(summary.rotated)));
+        }
+        if summary.rated > 0 {
+            parts.push(format!("rated {}", photos(summary.rated)));
+        }
+        let mut trash = Vec::new();
+        if summary.trashed > 0 {
+            trash.push(photos(summary.trashed));
+        }
+        if summary.trashed_folders > 0 {
+            trash.push(count(summary.trashed_folders, "folder", "folders"));
+        }
+        if !trash.is_empty() {
+            parts.push(format!("sent {} to the Trash", and_list(&trash)));
+        }
+        let text = and_list(&parts);
+        let mut chars = text.chars();
+        match chars.next() {
+            Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
+            None => "Your changes are applied.".into(),
+        }
+    }
+    /// Remembers how `plan`, the staged ratings and rotations planned, would
+    /// write each of them.
+    pub(super) fn set_targets(&mut self, plan: &Plan) {
+        self.targets = plan
+            .actions
+            .iter()
+            .filter_map(|action| match action {
+                Action::Metadata { source, target, .. } => {
+                    Some((MediaId::for_path(&source.path), *target))
+                }
+                _ => None,
+            })
+            .collect();
+    }
+    /// The button that applies everything listed.
+    pub(super) fn apply_label(&self) -> String {
+        self.summary.apply_label()
+    }
     fn at(&self, row: usize) -> (usize, usize) {
         let group = self.ends.partition_point(|end| *end <= row);
         let start = group.checked_sub(1).map_or(0, |i| self.ends[i]);
@@ -349,7 +462,8 @@ impl Rows {
     fn items(&self, list: List) -> &[Item] {
         match list {
             List::Trash => &self.trash,
-            List::Updates => &self.updates,
+            List::Rotate => &self.rotations,
+            List::Rate => &self.ratings,
             List::Folder(i, g) => &self.folders[i].groups[g].1,
         }
     }
@@ -361,10 +475,9 @@ impl Rows {
             self.columns = fit(TILE.x);
             self.pair_columns = fit(PAIR);
             self.width = width;
-            let pairs = self.summary.rotated > 0;
             let (columns, pair_columns) = (self.columns, self.pair_columns);
             let columns = |list: List| {
-                if pairs && list == List::Updates {
+                if list == List::Rotate {
                     pair_columns
                 } else {
                     columns
@@ -399,11 +512,6 @@ impl Rows {
                     );
                 }
             };
-            let len = self.items(List::Trash).len();
-            if len > 0 {
-                place(Block::Section(Section::Trash), SECTION_HEIGHT, false, false);
-                thumbs(&mut place, List::Trash, len, true, true);
-            }
             if !self.folders.is_empty() {
                 place(
                     Block::Section(Section::Moving),
@@ -443,15 +551,16 @@ impl Rows {
                     );
                 }
             }
-            let len = self.items(List::Updates).len();
-            if len > 0 {
-                place(
-                    Block::Section(Section::Updates),
-                    SECTION_HEIGHT,
-                    false,
-                    false,
-                );
-                thumbs(&mut place, List::Updates, len, true, true);
+            for (section, list) in [
+                (Section::Trash, List::Trash),
+                (Section::Rotate, List::Rotate),
+                (Section::Rate, List::Rate),
+            ] {
+                let len = self.items(list).len();
+                if len > 0 {
+                    place(Block::Section(section), SECTION_HEIGHT, false, false);
+                    thumbs(&mut place, list, len, true, true);
+                }
             }
             if !self.summary.cleanup.is_empty() {
                 place(Block::Tidy, TIDY_HEIGHT, false, false);
@@ -462,11 +571,7 @@ impl Rows {
     }
     /// How wide one photo's place in `list` is: a pair where rotations are.
     fn slot(&self, list: List) -> f32 {
-        if self.summary.rotated > 0 && list == List::Updates {
-            PAIR
-        } else {
-            TILE.x
-        }
+        if list == List::Rotate { PAIR } else { TILE.x }
     }
 }
 
@@ -565,10 +670,22 @@ fn turned(turns: u8) -> Option<u8> {
     }
 }
 
+/// What Undo says for a photo in `list`, named `file`.
+fn undo_text(list: List, file: &str) -> String {
+    match list {
+        List::Trash => format!("Keep {file}"),
+        List::Rotate => format!("Don't rotate {file}"),
+        List::Rate => format!("Don't change the rating of {file}"),
+        List::Folder(..) => format!("Leave {file} where it is"),
+    }
+}
+
 /// One thumbnail of the plain view: what it shows and says.
 struct Thumb {
     id: MediaId,
     folder: bool,
+    /// The file's name as it is now, for Undo.
+    file: String,
     caption: String,
     name: String,
     hover: String,
@@ -678,11 +795,12 @@ impl PhotoSortApp {
         format!("You're about to {}.", and_list(&parts))
     }
 
-    fn thumb(&self, plan: &Plan, item: Item, list: List) -> Option<Thumb> {
+    fn thumb(&self, plan: &Plan, rows: &Rows, item: Item, list: List) -> Option<Thumb> {
         let root = self.root.as_deref();
         let blank = |id: MediaId, name: String| Thumb {
             id,
             folder: false,
+            file: name.clone(),
             caption: name.clone(),
             hover: name.clone(),
             name,
@@ -696,10 +814,16 @@ impl PhotoSortApp {
                 if let Some(from) = media.path.parent() {
                     thumb.hover = format!("{}\nin {}", thumb.name, folder_text(from, root));
                 }
-                if list == List::Updates {
-                    thumb.caption = update_text(rating, turned(turns), false);
+                if list == List::Rotate {
+                    let pixels = rows.targets.get(&id) == Some(&WriteTarget::Pixels);
+                    thumb.caption = update_text(None, turned(turns), pixels);
                     thumb.turns = turns;
                     thumb.hover = format!("{}: {}", thumb.name, thumb.caption);
+                } else if list == List::Rate {
+                    thumb.caption = update_text(rating, None, false);
+                    thumb.hover = format!("{}: {}", thumb.name, thumb.caption);
+                } else if let Some(extras) = rows.followers.get(&id) {
+                    thumb.extras = extras.clone();
                 }
                 Some(thumb)
             }
@@ -746,23 +870,24 @@ impl PhotoSortApp {
                 } => {
                     let id = MediaId::for_path(&source.path);
                     let mut thumb = blank(id, file_name(&source.path));
-                    // Said as a turn of the photo as it looks now, not as
-                    // the orientation tag it ends with.
-                    let from = self.metadata.get(&id).map(|m| m.orientation);
-                    thumb.turns = from
-                        .zip(*orientation)
-                        .and_then(|(from, to)| turns_between(from, to))
-                        .unwrap_or(0);
-                    let orientation = if thumb.turns == 0 {
-                        *orientation
+                    let pixels = *target == WriteTarget::Pixels;
+                    if list == List::Rate {
+                        thumb.caption = update_text(*rating, None, false);
                     } else {
-                        turned(thumb.turns)
-                    };
-                    thumb.caption = update_text(
-                        *rating,
-                        orientation,
-                        *target == crate::core::metadata::WriteTarget::Pixels,
-                    );
+                        // Said as a turn of the photo as it looks now, not as
+                        // the orientation tag it ends with.
+                        let from = self.metadata.get(&id).map(|m| m.orientation);
+                        thumb.turns = from
+                            .zip(*orientation)
+                            .and_then(|(from, to)| turns_between(from, to))
+                            .unwrap_or(0);
+                        let orientation = if thumb.turns == 0 {
+                            *orientation
+                        } else {
+                            turned(thumb.turns)
+                        };
+                        thumb.caption = update_text(None, orientation, pixels);
+                    }
                     thumb.hover = format!("{}: {}", thumb.name, thumb.caption);
                     Some(thumb)
                 }
@@ -788,6 +913,7 @@ impl PhotoSortApp {
         Thumb {
             id: MediaId::for_path(source),
             folder: false,
+            file: before.clone(),
             // A rename reads "old → new"; the caption fits the new name.
             name: hover.lines().next().unwrap_or_default().to_string(),
             caption: after,
@@ -799,7 +925,7 @@ impl PhotoSortApp {
 
     /// The plain view: sections of photo thumbnails by what happens to them.
     /// Only the pieces in view are drawn and only their thumbnails load.
-    fn plain_view(
+    pub(super) fn plain_view(
         &mut self,
         ui: &mut egui::Ui,
         plan: &Plan,
@@ -863,17 +989,16 @@ impl PhotoSortApp {
         match placed.block {
             Block::Section(section) => {
                 // The counts are in the sentence at the top.
-                let (glyph, title, color, note) = match section {
-                    Section::Moving => (icon::FOLDER_SIMPLE, "Moving", ACCENT, ""),
-                    Section::Folders => (icon::PENCIL_SIMPLE, "Renaming folders", INK, ""),
-                    Section::Trash => (
-                        icon::TRASH,
-                        "Going to the Trash",
-                        RED,
-                        "You can restore them",
-                    ),
-                    Section::Updates => (icon::STAR, "Ratings and rotations", INK, ""),
+                let (glyph, title, color) = match section {
+                    Section::Moving => (icon::FOLDER_SIMPLE, "Moving", ACCENT),
+                    Section::Folders => (icon::PENCIL_SIMPLE, "Renaming folders", INK),
+                    Section::Trash => (icon::TRASH, "Going to the Trash", RED),
+                    Section::Rotate => (icon::ARROW_CLOCKWISE, "Rotating", INK),
+                    Section::Rate => (icon::STAR, "Rating", INK),
                 };
+                // On the Review step, folder changes are edited in Organize.
+                let organize =
+                    rows.editable && matches!(section, Section::Moving | Section::Folders);
                 let row = egui::Rect::from_min_size(
                     inner.min + egui::vec2(-S3, S3),
                     egui::vec2(inner.width() + S3, SECTION_HEIGHT - S3),
@@ -885,9 +1010,15 @@ impl PhotoSortApp {
                     |ui| {
                         ui.label(RichText::new(glyph).size(16.0).color(color));
                         ui.label(RichText::new(title).font(semibold(15.0)).color(color));
-                        if !note.is_empty() {
-                            ui.add_space(S1);
-                            line_label(ui, RichText::new(note).color(MUTED));
+                        if organize {
+                            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                                if ui
+                                    .link(format!("{}  Edit in Organize", icon::FOLDERS))
+                                    .clicked()
+                                {
+                                    self.review_action = Some(ReviewAction::Open(Step::Organize));
+                                }
+                            });
                         }
                     },
                 );
@@ -1085,8 +1216,11 @@ impl PhotoSortApp {
             let column = (k - start) as f32;
             let tile =
                 egui::Rect::from_min_size(egui::pos2(left + column * (slot + S2), top), TILE);
-            if let Some(thumb) = self.thumb(plan, item, list) {
-                self.paint_thumb(ui, &thumb, tile, slot, (list, k));
+            if let Some(thumb) = self.thumb(plan, rows, item, list) {
+                let undo = (rows.editable && !thumb.folder).then(|| undo_text(list, &thumb.file));
+                if self.paint_thumb(ui, &thumb, tile, slot, (list, k), undo.as_deref()) {
+                    self.review_action = Some(ReviewAction::Undo(list, item));
+                }
             }
         }
     }
@@ -1098,7 +1232,8 @@ impl PhotoSortApp {
         tile: egui::Rect,
         slot: f32,
         key: (List, usize),
-    ) {
+        undo: Option<&str>,
+    ) -> bool {
         let painter = ui.painter().clone();
         self.paint_tile(ui, thumb, tile, 0);
         if thumb.turns != 0 {
@@ -1145,6 +1280,45 @@ impl PhotoSortApp {
         };
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &spoken));
         response.on_hover_text(&thumb.hover);
+        // The Review step's Undo, over the top-right corner of the photo's place.
+        let Some(text) = undo else {
+            return false;
+        };
+        let size = 24.0;
+        let button = egui::Rect::from_min_size(
+            egui::pos2(tile.left() + slot - size - S1, tile.top() + S1),
+            egui::vec2(size, size),
+        );
+        let response = ui.interact(button, ui.id().with(("undo", key)), Sense::click());
+        let hovered = response.hovered() && ui.is_enabled();
+        painter.circle(
+            button.center(),
+            size / 2.0,
+            Color32::from_black_alpha(if hovered { 230 } else { 170 }),
+            Stroke::new(
+                1.0,
+                if hovered {
+                    INK.gamma_multiply(0.5)
+                } else {
+                    LINE
+                },
+            ),
+        );
+        painter.text(
+            button.center(),
+            Align2::CENTER_CENTER,
+            icon::ARROW_COUNTER_CLOCKWISE,
+            FontId::proportional(13.0),
+            if hovered {
+                INK
+            } else {
+                lerp_color(MUTED, INK, 0.5)
+            },
+        );
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), text)
+        });
+        response.on_hover_text(text).clicked()
     }
 
     /// One photo tile, turned `turns` quarter turns from how it is now.
@@ -1363,20 +1537,103 @@ fn file_rows(
 impl PhotoSortApp {
     pub(super) fn set_review_plan(&mut self, plan: Option<Plan>) {
         self.retry_edit = None;
-        // A review that also covers moves shows the staged choices that are
-        // applied right after them, with the same click.
-        let mut staged: Vec<(MediaId, Decision)> = Vec::new();
-        if self.review_after_moves && self.retry_plan.is_none() {
-            staged = self
-                .decisions
-                .iter()
-                .filter(|(id, d)| !d.is_empty() && self.index.contains_key(id))
-                .map(|(id, d)| (*id, d.clone()))
-                .collect();
-            staged.sort_by_key(|(id, _)| self.index[id]);
-        }
+        // The Review step lists Organize's plan with every staged choice.
+        let listing = self.step == Step::Review && self.retry_plan.is_none();
+        let staged = if listing {
+            self.staged_choices()
+        } else {
+            Vec::new()
+        };
         self.plan_rows.replace(plan.as_ref(), &staged);
+        self.plan_rows.editable = listing && plan.is_some();
         self.plan = plan;
+        self.note_trash_followers(&staged);
+    }
+
+    /// Names, on each listed Trash mark, the files Apply sends to the Trash
+    /// with it: its XMP sidecar and RAW twin. A file with a mark of its own
+    /// is listed on its own.
+    fn note_trash_followers(&mut self, staged: &[(MediaId, Decision)]) {
+        let rejected: HashSet<MediaId> = staged
+            .iter()
+            .filter(|(_, d)| d.rejected)
+            .map(|(id, _)| *id)
+            .collect();
+        let Some(catalog) = self.catalog.as_ref().filter(|_| !rejected.is_empty()) else {
+            return;
+        };
+        let index = catalog.companion_index();
+        for id in &rejected {
+            let Some(media) = self.index.get(id).map(|i| &self.media[*i]) else {
+                continue;
+            };
+            let mut followers: Vec<PathBuf> = crate::core::operations::trash_followers_for(
+                &index,
+                &media.path,
+                self.companions,
+                &rejected,
+            )
+            .into_iter()
+            .filter(|path| !rejected.contains(&MediaId::for_path(path)))
+            .collect();
+            if followers.is_empty() {
+                continue;
+            }
+            // "+ RAW, XMP", whatever order the folder lists them in.
+            followers.sort_by_key(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("xmp")));
+            let paths: Vec<&Path> = std::iter::once(media.path.as_path())
+                .chain(followers.iter().map(PathBuf::as_path))
+                .collect();
+            let (_, extras) = lead_and_extras(&paths);
+            self.plan_rows.followers.insert(*id, extras);
+            self.plan_rows
+                .follower_ids
+                .extend(followers.iter().map(|p| MediaId::for_path(p)));
+        }
+    }
+
+    /// Takes back the change of one photo listed on the Review step.
+    pub(super) fn undo_review_item(&mut self, list: List, item: Item) {
+        if self.busy || self.scanning {
+            return;
+        }
+        match (list, item) {
+            (List::Trash, Item::Staged { id, .. }) => {
+                // With its RAW, JPEG and XMP companions, as it was marked.
+                self.stage_manual([id], crate::core::decisions::Change::Trash(false));
+            }
+            (List::Rotate, Item::Staged { id, .. }) => {
+                crate::core::rotation::set_turns(&mut self.decisions, id, 0);
+                self.changed_item(id);
+            }
+            (List::Rate, Item::Staged { id, .. }) => {
+                if let Some(decision) = self.decisions.get_mut(&id) {
+                    decision.rating = None;
+                    if decision.is_empty() {
+                        self.decisions.remove(&id);
+                    }
+                }
+                self.changed_item(id);
+            }
+            (List::Folder(..), Item::Group(group)) => {
+                let ids: HashSet<MediaId> =
+                    match self.plan.as_ref().and_then(|plan| plan.actions.get(group)) {
+                        Some(Action::Move { files } | Action::FinishMove { files }) => files
+                            .iter()
+                            .map(|(source, _)| MediaId::for_path(&source.path))
+                            .collect(),
+                        Some(Action::RenameFile { source, .. }) => {
+                            [MediaId::for_path(&source.path)].into_iter().collect()
+                        }
+                        _ => HashSet::new(),
+                    };
+                self.keep_organize_items_in_place(&ids);
+                return;
+            }
+            _ => return,
+        }
+        // The planned moves stay; the list follows the staged choices.
+        self.set_review_plan(self.plan.clone());
     }
 
     pub(super) fn plan_review_dialog(&mut self, ctx: &egui::Context) {
@@ -1427,7 +1684,7 @@ impl PhotoSortApp {
             // Account for actual wrapped heading/notice heights and reserve the footer.
             let footer = if retry && matches!(self.after_apply, Some(Destination::Close)) { 230.0 } else { 100.0 };
             let height = (ctx.content_rect().height() - footer - (ui.cursor().top() - top)).clamp(40.0, 520.0);
-            if details.openness > 0.0 || rows.len() == 0 && rows.trash.is_empty() && rows.updates.is_empty() {
+            if details.openness > 0.0 || rows.is_empty() {
                 file_rows(ui, &plan, &rows, self.root.as_deref(), height);
             } else {
                 self.plain_view(ui, &plan, &mut rows, height);
@@ -1459,7 +1716,7 @@ impl PhotoSortApp {
         if cancel {
             self.plan_open = false;
             self.after_apply = None;
-            self.review_after_moves = false;
+            self.review_after_moves = None;
             if self.retry_plan.is_none() {
                 self.rotation_plan = false;
             }

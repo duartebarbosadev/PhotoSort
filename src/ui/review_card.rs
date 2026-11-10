@@ -3,7 +3,7 @@
 //! PhotoSort suggests for each, and a few icon actions in its header. The
 //! steps describe cards; this module draws them and reports what was
 //! clicked, so every grid looks and behaves alike.
-use super::library::{WELL, reveal, shimmer};
+use super::library::{WELL, photo_tint, reveal, shimmer};
 use super::*;
 
 /// One photo on a card.
@@ -23,6 +23,8 @@ pub(super) struct CardPhoto {
     pub facts: Vec<Fact>,
     /// Edged in red: it goes to Trash.
     pub trash: bool,
+    /// Marked for Trash in another step: drawn darker.
+    pub dimmed: bool,
     /// Makes the pill a Keep/Trash switch, with this tooltip.
     pub toggle: Option<String>,
     /// Why it is the suggested keeper, over its Suggested mark.
@@ -731,7 +733,7 @@ impl PhotoSortApp {
                 1.0,
                 Vec2::ZERO,
                 photo.turns,
-                Color32::from_white_alpha((shown * 255.0) as u8),
+                photo_tint(shown, photo.dimmed),
             );
             round_corners(painter, drawn, RADIUS, BG);
             round_corners(painter, slot, RADIUS, fill);
