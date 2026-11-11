@@ -242,8 +242,12 @@ mod platform {
 mod platform {
     use super::*;
     use clipboard_win::{Clipboard, options::NoClear, raw};
-    /// The clipboard sequence number after the files were written.
-    pub type Token = i64;
+    /// The clipboard sequence number after the files were written, and the
+    /// files, which are written again with the image.
+    pub struct Token {
+        sequence: i64,
+        paths: Vec<String>,
+    }
     fn open() -> Result<Clipboard> {
         Clipboard::new_attempts(10)
             .map_err(|error| anyhow::anyhow!("Cannot open the clipboard: {error}"))
@@ -252,15 +256,27 @@ mod platform {
         raw::seq_num().map_or(0, |n| i64::from(n.get()))
     }
     pub fn write_files(paths: &[PathBuf]) -> Result<Token> {
+        // File Explorer pastes nothing for `\\?\` paths, which canonical
+        // Windows paths are; the plain form is kept wherever it still names
+        // the same file.
         let paths = paths
             .iter()
-            .map(|p| path_text(p))
+            .map(|p| path_text(dunce::simplified(p)))
             .collect::<Result<Vec<_>>>()?;
         let _open = open()?;
+        replace_with_files(&paths)?;
+        Ok(Token {
+            sequence: sequence(),
+            paths: paths.into_iter().map(str::to_owned).collect(),
+        })
+    }
+    /// Empties the clipboard and puts the files on it. Windows accepts data
+    /// only from the thread that emptied the clipboard, so a later image is
+    /// written with the files again rather than added to them.
+    fn replace_with_files(paths: &[impl AsRef<str>]) -> Result<()> {
         raw::empty().map_err(|error| anyhow::anyhow!("Cannot clear the clipboard: {error}"))?;
-        raw::set_file_list_with(&paths, NoClear)
-            .map_err(|error| anyhow::anyhow!("The clipboard did not accept the photos: {error}"))?;
-        Ok(sequence())
+        raw::set_file_list_with(paths, NoClear)
+            .map_err(|error| anyhow::anyhow!("The clipboard did not accept the photos: {error}"))
     }
     pub fn add_image(token: Token, image: &RgbaImage) -> Result<()> {
         let png = png(image)?;
@@ -270,9 +286,10 @@ mod platform {
             .into_rgb8()
             .write_to(&mut bmp, image::ImageFormat::Bmp)?;
         let _open = open()?;
-        if sequence() != token {
+        if sequence() != token.sequence {
             return Ok(());
         }
+        replace_with_files(&token.paths)?;
         raw::set_bitmap_with(bmp.get_ref(), NoClear)
             .map_err(|error| anyhow::anyhow!("The clipboard did not accept the image: {error}"))?;
         if let Some(format) = raw::register_format("PNG") {
@@ -843,6 +860,31 @@ mod tests {
         let image = pipeline.render_whole(&photo, IMAGE_EDGE).unwrap();
         assert_eq!(image.width(), IMAGE_EDGE);
         assert_eq!(pipeline.stats.decodes, 1);
+    }
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "replaces the contents of the system clipboard"]
+    fn the_image_joins_the_files_from_the_rendering_thread() {
+        use clipboard_win::{formats, raw};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("photo.jpg");
+        std::fs::write(&path, b"photo").unwrap();
+        // The catalog's paths are canonical, which on Windows means `\\?\`.
+        let path = std::fs::canonicalize(path).unwrap();
+        assert!(path.to_string_lossy().starts_with(r"\\?\"));
+        // As in the app: files from the UI thread, the image from another.
+        let token = platform::write_files(std::slice::from_ref(&path)).unwrap();
+        let image = RgbaImage::from_pixel(64, 48, image::Rgba([90, 120, 150, 255]));
+        thread::spawn(move || platform::add_image(token, &image))
+            .join()
+            .unwrap()
+            .unwrap();
+        let _open = clipboard_win::Clipboard::new_attempts(10).unwrap();
+        assert!(raw::is_format_avail(formats::CF_BITMAP));
+        let mut files = Vec::new();
+        raw::get_file_list_path(&mut files).unwrap();
+        // File Explorer pastes the plain form only.
+        assert_eq!(files, [dunce::simplified(&path)]);
     }
     #[test]
     fn one_photo_carries_its_image_and_several_carry_only_their_files() {
