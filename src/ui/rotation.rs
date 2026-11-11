@@ -89,6 +89,9 @@ impl PhotoSortApp {
             })
             .collect();
         rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.0.cmp(&b.1.0)));
+        if self.step == Step::Rotation {
+            self.trash_last = None;
+        }
         self.rotation_review.replace_predictions(
             rows.into_iter()
                 .map(|(_, id, turns, uncertain)| (id, turns, uncertain))
@@ -102,7 +105,8 @@ impl PhotoSortApp {
         self.finish_step_status(Step::Rotation);
     }
     /// The grid's photos: only the suggestions, or every photo with the
-    /// suggestions first. A card hidden by the search stops being selected.
+    /// suggestions first. In each part, photos marked for Trash go last.
+    /// A card hidden by the search stops being selected.
     pub(super) fn refilter_rotations(&mut self) {
         let queue_only = self.rotation_queue_only;
         let review = &self.rotation_review;
@@ -117,9 +121,17 @@ impl PhotoSortApp {
             .enumerate()
             .map(|(i, id)| (*id, i))
             .collect();
+        let mut keyed: Vec<_> = std::mem::take(&mut self.filtered)
+            .into_iter()
+            .map(|i| {
+                let id = self.media[i].id;
+                let at = order.get(&id).copied();
+                ((at.is_none(), self.shown_last(id), at), i)
+            })
+            .collect();
         // Stable: every other photo keeps the browsing order.
-        self.filtered
-            .sort_by_key(|i| order.get(&media[*i].id).copied().unwrap_or(usize::MAX));
+        keyed.sort_by_key(|(key, _)| *key);
+        self.filtered = keyed.into_iter().map(|(_, i)| i).collect();
         if self
             .active
             .is_some_and(|id| !self.filtered.iter().any(|i| self.media[*i].id == id))
@@ -193,6 +205,36 @@ impl PhotoSortApp {
         }
         self.pending_bookmark = None;
         self.changed_item(id);
+    }
+    /// The certain suggestions not taken yet. Uncertain ones are left to
+    /// the user, as when suggestions apply automatically.
+    fn rotation_suggestions_left(&self) -> Vec<MediaId> {
+        self.rotation_review
+            .ids()
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.rotation_review
+                    .suggestion(*id)
+                    .is_some_and(|s| !s.uncertain && turns(&self.decisions, *id) != s.turns)
+            })
+            .collect()
+    }
+    /// Accept all suggestions: every certain suggestion is staged.
+    pub(super) fn accept_rotation_suggestions(&mut self) {
+        if !self.rotation_enabled() {
+            return;
+        }
+        let ids = self.rotation_suggestions_left();
+        for id in &ids {
+            if let Some(suggestion) = self.rotation_review.suggestion(*id) {
+                set_turns(&mut self.decisions, *id, suggestion.turns);
+            }
+        }
+        if !ids.is_empty() {
+            self.pending_bookmark = None;
+            self.changed_items(ids);
+        }
     }
     /// R: the photo shown beside the grid goes back to where it started.
     pub(super) fn undo_rotation(&mut self) {
@@ -334,15 +376,28 @@ impl PhotoSortApp {
         }
     }
 
-    /// One line over the grid: what is staged, and the photo size.
+    /// One line over the grid: what is staged, the photo size, and Accept
+    /// all suggestions.
     fn rotation_summary(&mut self, ui: &mut egui::Ui) {
         let turned = self
             .filtered
             .iter()
             .filter(|i| turns(&self.decisions, self.media[**i].id) != 0)
             .count();
+        let left = !self.rotation_suggestions_left().is_empty();
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add_enabled(
+                        left && self.rotation_enabled(),
+                        egui::Button::new("Accept all suggestions"),
+                    )
+                    .on_hover_text("A")
+                    .clicked()
+                {
+                    self.accept_rotation_suggestions();
+                }
+                ui.add_space(S3);
                 self.size_slider(ui);
                 ui.add_space(S3);
                 ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
@@ -457,11 +512,17 @@ impl PhotoSortApp {
             .unwrap_or_default();
         let staged = turns(&self.decisions, id);
         let enabled = self.rotation_enabled();
+        // Marked for Trash in another step: dimmed, its pill takes it back.
+        let trash = self.decision(id).rejected;
         // One photo twice: its name once, under the first.
         let photo = |turns: u8, name: String| CardPhoto {
             id,
             turns,
-            badge: Badge::None,
+            badge: if trash && turns == 0 {
+                Badge::Trash("Trash".into())
+            } else {
+                Badge::None
+            },
             suggested: false,
             caption: if turns == 0 {
                 caption.clone()
@@ -470,8 +531,9 @@ impl PhotoSortApp {
             },
             name,
             facts: Vec::new(),
-            trash: false,
-            toggle: None,
+            trash,
+            dimmed: trash,
+            toggle: (trash && turns == 0 && enabled).then(|| "Keep instead".to_owned()),
             suggested_hover: None,
             inset: None,
         };
@@ -531,8 +593,10 @@ impl PhotoSortApp {
                     self.follow_rotation_link(id, link);
                 }
             }
-            // Rotation cards have no pill switches.
-            CardEvent::Toggle(_) => {}
+            // Only a photo marked for Trash elsewhere has a pill: Keep.
+            CardEvent::Toggle(_) => {
+                self.stage_manual([id], crate::core::decisions::Change::Trash(false));
+            }
         }
     }
 }
@@ -613,6 +677,9 @@ mod tests {
         assert_eq!(app.rotation_link(MediaId(1)), Some(RotationLink::Undo));
         app.rotation_card_event(MediaId(1), CardEvent::Undo);
         assert!(app.decisions.is_empty());
+        // Accept all suggestions turns the certain one only.
+        app.accept_rotation_suggestions();
+        assert_eq!((staged(&app, 1), staged(&app, 2)), (1, 0));
     }
 
     #[test]
@@ -755,19 +822,18 @@ mod tests {
     }
 
     #[test]
-    fn leaving_with_staged_turns_asks_first_and_keeps_them() {
+    fn leaving_keeps_staged_turns_and_coming_back_never_turns_a_kept_photo() {
         let mut app = fixture(true);
         app.switch_step(Step::Cull);
-        assert_eq!(app.step, Step::Rotation);
-        assert!(matches!(app.departure, Some(Destination::Step(Step::Cull))));
-        // Cancel: still here, still staged.
-        app.departure = None;
+        // Nothing is asked: the turn waits for the Review step.
+        assert_eq!(app.step, Step::Cull);
+        assert!(app.departure.is_none());
         assert_eq!(staged(&app, 1), 1);
-        // Review and apply plans the shared decisions, never a rotation-only plan.
-        app.after_apply = Some(Destination::Step(Step::Cull));
-        app.review_decisions();
-        assert!(!app.rotation_plan);
-        assert_eq!(staged(&app, 1), 1);
+        // The user keeps photo 1 as it is, from Cull.
+        app.rotate(MediaId(1), 3);
+        assert_eq!(staged(&app, 1), 0);
+        app.switch_step(Step::Rotation);
+        assert_eq!(staged(&app, 1), 0, "its suggestion is not staged again");
     }
 
     #[test]

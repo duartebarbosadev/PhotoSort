@@ -12,10 +12,11 @@ fn endpoints_and_navigation_share_one_visibility_policy() {
         ..Default::default()
     };
     p.normalize();
-    assert!(p.visible(Step::Organize) && p.visible(Step::Cull));
+    assert!(p.visible(Step::Organize) && p.visible(Step::Cull) && p.visible(Step::Review));
     assert_eq!(p.neighbor(Step::Organize, true), Some(Step::Cull));
     assert_eq!(p.neighbor(Step::Cull, false), Some(Step::Organize));
-    assert_eq!(p.neighbor(Step::Cull, true), None);
+    assert_eq!(p.neighbor(Step::Cull, true), Some(Step::Review));
+    assert_eq!(p.neighbor(Step::Review, true), None);
     assert_eq!(p.neighbor(Step::Organize, false), None);
 }
 #[test]
@@ -188,9 +189,16 @@ fn a_partial_preference_file_gains_defaults_and_every_setting_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("preferences.json");
     // A file holding one setting: the rest take their defaults.
-    std::fs::write(&path, br#"[1, {"show_shortcuts": false}]"#).unwrap();
+    std::fs::write(
+        &path,
+        br#"[1, {"show_shortcuts": false, "rotation_auto": true}]"#,
+    )
+    .unwrap();
     let mut p = Preferences::load(&path).unwrap();
     assert!(!p.show_shortcuts);
+    // Suggestions wait to be accepted, unless a saved choice says otherwise.
+    assert!(!p.easy_delete_auto && !p.pick_best_auto);
+    assert!(p.rotation_auto);
     assert!(!p.intro_shown);
     assert_eq!(p.easy_delete.blur, 100.0);
     assert_eq!(p.navigation, Default::default());

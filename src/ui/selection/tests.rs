@@ -4,6 +4,10 @@ fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
     let dir = tempfile::tempdir().unwrap();
     let mut app =
         PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, dir.path().join("cache")), None);
+    // These tests cover suggestions applied automatically.
+    app.preferences.easy_delete_auto = true;
+    app.preferences.pick_best_auto = true;
+    app.preferences.rotation_auto = true;
     app.media = (0..12)
         .map(|i| Media {
             id: MediaId(i),

@@ -275,6 +275,7 @@ fn real_application_reopen_restores_groups_and_bookmark_without_ai() {
         suggested: Default::default(),
         pick_suggested: Default::default(),
         rotations_staged: Default::default(),
+        trash_steps: Default::default(),
     }
     .save(&catalog.root)
     .unwrap();

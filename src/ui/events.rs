@@ -177,6 +177,7 @@ impl PhotoSortApp {
         self.root = None;
         self.output.clear();
         self.clear_status();
+        self.abandon_review_apply();
         // A disconnected drive leaves Recents until it is back; a folder
         // that needs permission still exists and stays listed.
         if problem == crate::core::catalog::Unavailable::Missing {
@@ -216,6 +217,9 @@ impl PhotoSortApp {
         self.manual_groups = session.manual_groups;
         self.scene_groups = session.scene_groups;
         self.decisions = session.decisions;
+        self.trash_steps = session.trash_steps;
+        self.trash_steps
+            .retain(|id, _| self.decisions.get(id).is_some_and(|d| d.rejected));
         self.delete_review.restore_suggested(session.suggested);
         self.pick_review.restore_suggested(session.pick_suggested);
         self.rotation_review
@@ -253,6 +257,12 @@ impl PhotoSortApp {
             views
         };
         self.views_forgotten = false;
+        // An Apply from the Review step ends there, whichever step this
+        // folder was last left on.
+        let mut views = views;
+        if self.step == Step::Review && self.review_outcome.as_ref().is_some_and(|o| !o.done) {
+            views.step = Some(Step::Review);
+        }
         self.load_bookmarks(views);
         if let Some(mut review) = self.rotation_reload.take() {
             review.retain(|id| self.index.contains_key(&id));
@@ -262,23 +272,63 @@ impl PhotoSortApp {
             self.rotation_queue_only = true;
         }
         self.filter_dirty = true;
-        // One review covered the moves and the staged choices: the moves are
-        // applied, so plan the choices for the moved files and apply them
-        // without a second review. A departure waits until they are applied.
-        let staged_next = std::mem::take(&mut self.review_after_moves)
+        self.trash_last = None;
+        // The Review step's Apply covered the moves and the staged choices:
+        // the moves are applied, so plan the choices it listed for the moved
+        // files and apply them without a second review. Only in the folder
+        // the moves went to; a departure waits until they are applied.
+        let expected = self.review_after_moves.take();
+        let dropped = expected.is_some();
+        let chain = expected.filter(|chain| {
+            chain
+                .root
+                .as_deref()
+                .zip(self.root.as_deref())
+                .is_some_and(|(expected, opened)| review_step::same_folder(expected, opened))
+        });
+        // Another folder than the moves went to: nothing it listed is applied.
+        if dropped && chain.is_none() {
+            self.review_outcome = None;
+        }
+        if let Some(chain) = chain
             && self.retry_plan.is_none()
-            && self.decisions.values().any(|d| !d.is_empty());
-        if staged_next {
-            self.apply_planned = true;
-            self.review_decisions();
-            if !self.busy {
-                self.apply_planned = false;
+        {
+            let listed = chain.decisions.len();
+            let decisions: HashMap<MediaId, Decision> = chain
+                .decisions
+                .into_iter()
+                .filter(|(id, _)| self.index.contains_key(id))
+                .collect();
+            // Photos left where they were, in a folder no longer open.
+            let left = listed - decisions.len();
+            if left > 0
+                && let Some(outcome) = &mut self.review_outcome
+            {
+                outcome.left_behind = Some((left, chain.source));
+            }
+            if !decisions.is_empty() {
+                self.apply_planned = true;
+                self.plan_decisions(decisions, Some(chain.followers));
+                if !self.busy {
+                    self.apply_planned = false;
+                }
             }
         }
         if !self.apply_planned
             && let Some(destination) = self.after_apply.take()
         {
             self.continue_departure(destination);
+        }
+        // The Review step lists what is left once its Apply has finished.
+        if self.step == Step::Review && !self.apply_planned {
+            self.review_stale = true;
+            if let Some(outcome) = &mut self.review_outcome {
+                if self.retry_plan.is_some() || self.error.is_some() {
+                    self.review_outcome = None;
+                } else {
+                    outcome.done = true;
+                }
+            }
         }
         if let Some(plan) = &self.retry_plan {
             self.set_status(format!(
@@ -432,6 +482,9 @@ impl PhotoSortApp {
             self.on_error(crate::core::jobs::WORKER_STOPPED.into());
             return;
         }
+        // The choices an Apply from the Review step was planning are not
+        // coming back.
+        self.abandon_review_apply();
         self.runtime.cancel_analysis();
         self.analysis_run = None;
         self.rotation_run = None;
@@ -697,8 +750,8 @@ impl PhotoSortApp {
     }
 
     fn on_planning_cancelled(&mut self) {
-        self.review_after_moves = false;
-        self.apply_planned = false;
+        self.abandon_review_apply();
+        self.review_preview = false;
         self.plan_stop = None;
         self.busy = false;
         self.organize_departure = None;
@@ -709,6 +762,8 @@ impl PhotoSortApp {
         if let Some(stop) = self.plan_stop.take() {
             if stop.load(std::sync::atomic::Ordering::Acquire) {
                 self.busy = false;
+                self.review_preview = false;
+                self.abandon_review_apply();
                 self.organize_departure = None;
                 self.clear_status();
                 return;
@@ -720,10 +775,20 @@ impl PhotoSortApp {
             plan.description = "Apply confirmed rotation corrections".into();
         }
         self.busy = false;
+        // How the Review step's ratings and rotations would be written.
+        if std::mem::take(&mut self.review_targets) {
+            self.plan_rows.set_targets(&plan);
+            return;
+        }
         // The staged choices of an applied review: apply them, unreviewed again.
         if std::mem::take(&mut self.apply_planned) {
             if plan.actions.is_empty() {
                 self.set_review_plan(None);
+                // Nothing left to write: the Review step's Apply is done.
+                if let Some(outcome) = &mut self.review_outcome {
+                    outcome.done = true;
+                    self.review_stale = true;
+                }
                 if let Some(destination) = self.after_apply.take() {
                     self.continue_departure(destination);
                 }
@@ -733,10 +798,9 @@ impl PhotoSortApp {
             }
             return;
         }
-        // No moves after all: review the staged choices straight away.
-        if self.review_after_moves && plan.actions.is_empty() && self.organize_departure.is_none() {
-            self.review_after_moves = false;
-            self.review_decisions();
+        // The Review step lists the plan; Apply there applies it.
+        if std::mem::take(&mut self.review_preview) {
+            self.list_review(plan);
             return;
         }
         if self.organize_departure.is_some() && plan.actions.is_empty() {
@@ -750,8 +814,7 @@ impl PhotoSortApp {
     }
 
     fn on_apply_failed(&mut self, error: String) {
-        self.review_after_moves = false;
-        self.apply_planned = false;
+        self.abandon_review_apply();
         self.applying_plan = None;
         self.apply_stop = None;
         self.rotation_plan = false;
@@ -822,6 +885,7 @@ impl PhotoSortApp {
             session.apply_verified_identities(&report.relocated);
         }
         self.decisions = session.decisions.clone();
+        self.trash_steps = session.trash_steps.clone();
         self.delete_review
             .restore_suggested(session.suggested.clone());
         self.pick_review
@@ -840,12 +904,30 @@ impl PhotoSortApp {
         let incomplete =
             report.cancelled || !report.errors.is_empty() || !report.remaining.actions.is_empty();
         // The staged choices wait for the moves; they stay staged, not lost.
-        let staged_kept = incomplete && self.review_after_moves;
+        let staged_kept = incomplete && self.review_after_moves.is_some();
         if incomplete {
             self.after_apply = None;
-            self.review_after_moves = false;
+            self.review_after_moves = None;
         }
         let output = report.remaining.output_root.clone();
+        // The listed choices follow their photos to where they moved, and
+        // wait for the folder read next.
+        if let Some(chain) = &mut self.review_after_moves {
+            let moved: HashMap<MediaId, MediaId> = report
+                .relocated
+                .iter()
+                .map(|(old, new, _)| (*old, *new))
+                .collect();
+            chain.decisions = std::mem::take(&mut chain.decisions)
+                .into_iter()
+                .map(|(id, d)| (moved.get(&id).copied().unwrap_or(id), d))
+                .collect();
+            chain.followers = std::mem::take(&mut chain.followers)
+                .into_iter()
+                .map(|id| moved.get(&id).copied().unwrap_or(id))
+                .collect();
+            chain.root = self.root.clone().map(|root| output.clone().unwrap_or(root));
+        }
         let retry = (!report.remaining.actions.is_empty()).then_some(report.remaining);
         let message = format!(
             "{} changes applied{}",
@@ -868,6 +950,8 @@ impl PhotoSortApp {
             }) {
                 self.error = Some(error);
                 self.retry_plan = retry;
+                self.review_after_moves = None;
+                self.review_outcome = None;
                 return ControlFlow::Break(());
             }
             if let Some(output) = output.as_ref().filter(|output| **output != root)
@@ -878,6 +962,8 @@ impl PhotoSortApp {
             {
                 self.error = Some(error);
                 self.retry_plan = retry;
+                self.review_after_moves = None;
+                self.review_outcome = None;
                 return ControlFlow::Break(());
             }
             self.scan_folder(if incomplete {
@@ -901,7 +987,8 @@ impl PhotoSortApp {
 
     fn on_error(&mut self, e: String) {
         self.plan_stop = None;
-        self.apply_planned = false;
+        self.abandon_review_apply();
+        self.review_preview = false;
         self.apply_stop = None;
         self.group_task = None;
         self.resume_suspended = self.pending_bookmark.is_some();

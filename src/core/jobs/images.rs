@@ -18,7 +18,7 @@ use crate::core::{
 };
 use anyhow::Context;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -599,8 +599,16 @@ impl ImageWorker {
                 catalog,
                 decisions,
                 companions,
+                followers,
                 policy,
-            } => self.plan_decisions(epoch, &catalog, &decisions, companions, policy),
+            } => self.plan_decisions(
+                epoch,
+                &catalog,
+                &decisions,
+                companions,
+                followers.as_ref(),
+                policy,
+            ),
             ImageWork::IndexMetadata { run, media } => {
                 self.metadata_index = Some(MetadataIndex {
                     epoch,
@@ -647,12 +655,14 @@ impl ImageWorker {
         catalog: &Catalog,
         decisions: &HashMap<MediaId, Decision>,
         companions: bool,
+        followers: Option<&HashSet<MediaId>>,
         policy: crate::core::metadata::WritePolicy,
     ) {
-        let plan = operations::decisions_plan_with_metadata(
+        let plan = operations::decisions_plan_with_followers(
             catalog,
             decisions,
             companions,
+            followers,
             policy,
             |media| {
                 self.pipeline

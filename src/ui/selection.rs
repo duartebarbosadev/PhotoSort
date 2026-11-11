@@ -489,7 +489,6 @@ impl PhotoSortApp {
                 egui::Key::Delete | egui::Key::Backspace => {
                     if self.selection_ready() && !self.selection.is_empty() {
                         self.stage_selection(Change::Trash(true));
-                        self.review_changes();
                     }
                     return true;
                 }

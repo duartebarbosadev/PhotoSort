@@ -302,7 +302,7 @@ fn next_button(ui: &mut egui::Ui, next: Option<Step>, action: &mut Option<Empty>
 }
 
 /// Centred column used by every full-panel state.
-fn state_frame(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
+pub(super) fn state_frame(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
     let top = (ui.available_height() * 0.22).max(S4);
     ui.vertical_centered(|ui| {
         ui.add_space(top);
@@ -311,7 +311,7 @@ fn state_frame(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
     });
 }
 
-fn state_card(
+pub(super) fn state_card(
     ui: &mut egui::Ui,
     glyph: &str,
     title: &str,

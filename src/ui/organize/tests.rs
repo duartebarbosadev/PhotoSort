@@ -206,9 +206,11 @@ fn metadata_organize_departure_waits_for_complete_metadata_before_reviewing_name
     let (mut app, _temp) = metadata_fixture(2);
     app.group_mode = GroupMode::Camera;
     app.file_names.insert(app.media[0].id, "Keeper".into());
-    app.request_departure(Destination::Step(Step::Cull));
+    // Planned from another step too: the names wait for every photo's camera.
+    app.step = Step::Cull;
+    app.request_departure(Destination::Close);
     assert!(app.organize_departure.is_some() && app.metadata_run.is_some());
-    assert!(app.plan.is_none() && !app.busy && app.step == Step::Organize);
+    assert!(app.plan.is_none() && !app.busy && !app.close_authorized);
     wait_metadata(&mut app);
     assert!(app.plan.is_some() && app.organize_departure.is_some());
     assert_eq!(app.stats.metadata_reads, 2);

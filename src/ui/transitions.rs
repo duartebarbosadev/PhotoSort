@@ -89,6 +89,8 @@ impl PhotoSortApp {
             .or(self.plan.as_ref())
             .is_some_and(|plan| plan.output_root.is_some());
         self.retry_plan = None;
+        self.review_after_moves = None;
+        self.apply_planned = false;
         self.set_review_plan(None);
         self.plan_open = false;
         self.rotation_plan = false;
@@ -237,8 +239,21 @@ impl PhotoSortApp {
         {
             return;
         }
+        // The Review step's Apply finishes in the folder it listed, on the
+        // Review step, where its result shows.
+        if matches!(destination, Destination::Folder(_) | Destination::Step(_))
+            && self.review_applying()
+        {
+            return;
+        }
         if self.review_remaining_operations() {
             self.after_apply = Some(destination);
+            return;
+        }
+        // Changing steps keeps every staged change: nothing is applied or
+        // asked until the Review step.
+        if let Destination::Step(step) = destination {
+            self.set_step(step);
             return;
         }
         if self.organize_changes_pending() {
@@ -250,7 +265,7 @@ impl PhotoSortApp {
         self.continue_departure(destination);
     }
     pub(super) fn continue_departure(&mut self, destination: Destination) {
-        if self.decisions.values().any(|d| !d.is_empty()) {
+        if !matches!(destination, Destination::Step(_)) && self.staged_choice_count() > 0 {
             self.departure = Some(destination);
         } else {
             self.finish_departure(destination);
@@ -269,8 +284,8 @@ impl PhotoSortApp {
             modal(egui::Id::new("pending_changes")).show(ctx, |ui| {
                 ui.set_max_width(460.0);
                 ui.heading("Resolve staged changes");
-                ui.label(format!("{} photos have staged ratings, rotations or Trash marks.",self.decisions.values().filter(|d|!d.is_empty()).count()));
-                ui.label("Discard clears these staged choices. Your files remain unchanged until you review and apply a plan.");
+                ui.label(format!("{} photos have staged ratings, rotations or Trash marks.",self.staged_choice_count()));
+                ui.label("Discard clears these staged choices. Your files remain unchanged until you apply them on the Review step.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancel").clicked() { action = 1; }
                     if ui.button("Discard").clicked() { action = 2; }
@@ -284,10 +299,9 @@ impl PhotoSortApp {
                         self.discard_staged_choices();
                         self.continue_departure(destination);
                     }
-                    3 => {
-                        self.after_apply = Some(destination);
-                        self.review_decisions();
-                    }
+                    // Every change is listed and applied on the Review step;
+                    // the departure is dropped, the user leaves after Apply.
+                    3 => self.set_step(Step::Review),
                     _ => {}
                 }
             }
@@ -319,8 +333,10 @@ impl PhotoSortApp {
         self.organize_preview_requested = false;
         self.set_review_plan(None);
     }
+    /// Whether Organize has folder changes, moves or renames waiting for
+    /// Review, from any step.
     pub(super) fn organize_changes_pending(&self) -> bool {
-        if self.step != Step::Organize || self.scanning {
+        if self.scanning {
             return false;
         }
         let Some(catalog) = &self.catalog else {
@@ -365,13 +381,13 @@ impl PhotoSortApp {
                 self.error = None;
                 self.continue_departure(destination);
             }
+            // Every change is listed and applied on the Review step; the
+            // departure is dropped, the user leaves after Apply.
             OrganizeResolution::Review => {
-                if self.plan.as_ref().is_some_and(|p| !p.actions.is_empty()) {
-                    self.after_apply = Some(destination);
-                    self.plan_open = true;
-                } else {
-                    self.organize_departure = Some(destination);
-                }
+                let _ = destination;
+                self.set_review_plan(None);
+                self.error = None;
+                self.set_step(Step::Review);
             }
         }
     }
@@ -388,11 +404,11 @@ impl PhotoSortApp {
             }
             if let Some(error) = &self.error { ui.colored_label(RED, error); }
             if !self.organize_metadata_ready() { self.metadata_status(ui); }
-            ui.label("Keep editing, discard the proposed organization, or review and apply it before leaving this step.");
+            ui.label("Keep editing, discard the proposed organization, or review and apply it before leaving.");
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Keep editing").clicked() { resolution = Some(OrganizeResolution::Cancel); }
                 if ui.button("Discard folder changes").clicked() { resolution = Some(OrganizeResolution::Discard); }
-                if ui.add_enabled(self.plan.as_ref().is_some_and(|p| !p.actions.is_empty()), egui::Button::new("Review and apply…")).clicked() { resolution = Some(OrganizeResolution::Review); }
+                if ui.button("Review and apply…").clicked() { resolution = Some(OrganizeResolution::Review); }
             });
         });
         if let Some(resolution) = resolution {

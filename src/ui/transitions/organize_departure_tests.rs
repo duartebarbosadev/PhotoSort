@@ -45,7 +45,9 @@ fn settle(app: &mut PhotoSortApp) {
         // one more look at the worker's results before the test fails.
         let expired = Instant::now() >= until;
         app.poll(&egui::Context::default());
-        if !app.busy && !app.scanning && app.metadata_run.is_none() {
+        app.refresh_review();
+        let listing = app.step == Step::Review && app.review_stale && app.retry_plan.is_none();
+        if !app.busy && !app.scanning && app.metadata_run.is_none() && !listing {
             break;
         }
         assert!(!expired, "worker did not finish");
@@ -68,7 +70,7 @@ fn folder_trash_discard_preserves_unrelated_organization_intent() {
     );
 }
 #[test]
-fn staged_rotation_and_rating_apply_together_and_keep_the_reviewed_destination() {
+fn staged_rotation_and_rating_apply_together_from_the_review_step() {
     let (dir, mut app) = fixture();
     let path = dir.path().join("Before/a.jpg");
     std::fs::copy(
@@ -89,20 +91,14 @@ fn staged_rotation_and_rating_apply_together_and_keep_the_reviewed_destination()
             ..Default::default()
         },
     );
-    // A staged turn goes through Review changes with the rating.
+    // A staged turn is listed on the Review step with the rating, and
+    // applied with it, embedded in the file.
     crate::core::rotation::set_turns(&mut app.decisions, id, 1);
     app.review_changes();
     settle(&mut app);
-    assert!(app.plan_open && !app.rotation_plan, "{:?}", app.error);
-    assert!(matches!(
-        app.plan.as_ref().unwrap().actions[0],
-        Action::Metadata {
-            target: crate::core::metadata::WriteTarget::Embedded,
-            ..
-        }
-    ));
-    app.preferences.metadata_writes = crate::core::metadata::WritePolicy::SidecarOnly;
-    app.apply_reviewed_plan();
+    assert!(!app.plan_open && !app.rotation_plan, "{:?}", app.error);
+    assert_eq!(app.staged_change_count(), 1);
+    app.apply_review();
     settle(&mut app);
     assert!(app.error.is_none(), "{:?}", app.error);
     assert!(
@@ -112,6 +108,123 @@ fn staged_rotation_and_rating_apply_together_and_keep_the_reviewed_destination()
     let meta = crate::core::metadata::read(&path);
     assert_eq!((meta.rating, meta.orientation), (2, 3));
     assert!(!crate::core::metadata::sidecar(&path).exists());
+}
+/// Waits until the Review step's moves are applied and the folder is being
+/// read again, before the listed choices are planned.
+fn until_moves_applied(app: &mut PhotoSortApp) {
+    let until = Instant::now() + worker_patience();
+    while !app
+        .review_after_moves
+        .as_ref()
+        .is_some_and(|chain| chain.root.is_some())
+    {
+        assert!(Instant::now() < until, "moves did not finish");
+        app.poll(&egui::Context::default());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+/// The Review step's Apply applies what it listed: a choice staged after the
+/// list was made, by an analysis finishing say, is listed first, and one
+/// staged while Apply runs stays staged.
+#[test]
+fn choices_staged_after_the_review_lists_are_never_applied_with_it() {
+    let (dir, mut app) = fixture();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::write(root.join("Before/c.jpg"), b"other bytes").unwrap();
+    let catalog = Catalog::scan(&root, || false, |_| {}).unwrap();
+    app.media = catalog.media.clone();
+    app.catalog = Some(Arc::new(catalog));
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+    let id = |name: &str| MediaId::for_path(&root.join(name));
+    let (a, c) = (id("Before/a.jpg"), id("Before/c.jpg"));
+    app.step = Step::Organize;
+    edit(&mut app);
+    app.decisions.entry(a).or_default().rating = Some(2);
+    app.changed_item(a);
+    app.review_changes();
+    settle(&mut app);
+    let trash = |app: &PhotoSortApp| app.review_listed.values().filter(|d| d.rejected).count();
+    assert_eq!((app.review_listed.len(), trash(&app)), (1, 0));
+    // Staged behind the page's back: Apply lists it before anything else.
+    app.decisions.entry(c).or_default().rejected = true;
+    app.apply_review();
+    assert!(!app.busy && app.review_stale && app.review_outcome.is_none());
+    settle(&mut app);
+    assert_eq!(trash(&app), 1);
+    app.decisions.remove(&c);
+    app.changed_item(c);
+    settle(&mut app);
+    assert_eq!(trash(&app), 0);
+    app.apply_review();
+    assert!(app.busy);
+    // Staged while the listed changes are applied, as an analysis would.
+    app.decisions.entry(c).or_default().rejected = true;
+    app.changed_items([c]);
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let moved = id("After/c.jpg");
+    assert!(
+        root.join("After/c.jpg").is_file(),
+        "never sent to the Trash"
+    );
+    assert!(app.decisions[&moved].rejected, "still staged");
+    assert!(
+        !app.decisions.contains_key(&id("After/a.jpg")),
+        "rating applied"
+    );
+    // The page lists it, below what was just applied.
+    assert_eq!(app.step, Step::Review);
+    assert_eq!(trash(&app), 1);
+    assert!(app.review_outcome.as_ref().is_some_and(|o| o.done));
+}
+/// The Review step's Apply finishes in the folder it listed: opening another
+/// folder waits for it, and a folder opened anyway never gets its choices.
+#[test]
+fn the_review_steps_apply_never_applies_choices_in_another_folder() {
+    let (other_dir, mut other) = fixture();
+    let other_root = other_dir.path().canonicalize().unwrap();
+    let marked = other.media[0].id;
+    Session {
+        decisions: HashMap::from([(
+            marked,
+            Decision {
+                rejected: true,
+                ..Default::default()
+            },
+        )]),
+        fingerprints: HashMap::from([(marked, other.media[0].fingerprint)]),
+        ..Default::default()
+    }
+    .save(&other_root)
+    .unwrap();
+    other.runtime.shutdown();
+    let (dir, mut app) = fixture();
+    let root = dir.path().canonicalize().unwrap();
+    let a = app.media[0].id;
+    app.step = Step::Organize;
+    edit(&mut app);
+    app.decisions.entry(a).or_default().rating = Some(2);
+    app.changed_item(a);
+    app.review_changes();
+    settle(&mut app);
+    app.apply_review();
+    until_moves_applied(&mut app);
+    assert!(app.scanning && app.review_applying());
+    app.open(other_root.clone());
+    assert!(app.departure.is_none() && app.review_applying());
+    assert!(app.root.as_ref().is_some_and(|r| r.starts_with(&root)));
+    // Any other way in leaves the Apply with its folder.
+    app.open_now(other_root.clone());
+    settle(&mut app);
+    assert_eq!(app.root.as_ref(), Some(&other_root));
+    assert!(other_root.join("Before/a.jpg").is_file());
+    assert!(app.decisions[&marked].rejected, "still staged");
+    assert!(!app.review_applying() && app.review_outcome.is_none());
 }
 fn smoke_frame(app: &mut PhotoSortApp, ctx: &egui::Context, now: Instant) -> egui::FullOutput {
     ctx.run_test(egui::RawInput::default(), |ui| {
@@ -348,13 +461,19 @@ fn existing_folder_names_with_reserved_characters_are_not_changes() {
     }
 }
 #[test]
-fn cancel_preserves_edits_and_discard_leaves_without_file_mutation() {
+fn changing_steps_keeps_edits_and_closing_asks_to_keep_or_discard_them() {
     let (dir, mut app) = fixture();
     edit(&mut app);
     let before = app.organize_drafts.clone();
-    app.request_departure(Destination::Step(Step::Cull));
+    // Another step asks nothing, plans nothing and keeps the folder edits.
+    app.switch_step(Step::Cull);
+    assert!(app.step == Step::Cull && app.organize_departure.is_none());
+    assert!(app.plan.is_none() && !app.busy && app.organize_drafts == before);
+    assert!(app.organize_changes_pending());
+    assert_eq!(app.staged_change_count(), 1);
+    app.request_departure(Destination::Close);
     settle(&mut app);
-    assert!(app.step == Step::Organize && !app.plan_open);
+    assert!(app.organize_departure.is_some() && !app.plan_open && !app.close_authorized);
     assert!(
         app.plan
             .as_ref()
@@ -366,10 +485,10 @@ fn cancel_preserves_edits_and_discard_leaves_without_file_mutation() {
     app.resolve_organize_departure(OrganizeResolution::Cancel);
     assert!(app.organize_drafts == before);
     assert!(app.organize_departure.is_none() && app.after_apply.is_none());
-    app.request_departure(Destination::Step(Step::Cull));
+    app.request_departure(Destination::Close);
     settle(&mut app);
     app.resolve_organize_departure(OrganizeResolution::Discard);
-    assert!(app.step == Step::Cull && app.group_mode == GroupMode::Current);
+    assert!(app.close_authorized && app.group_mode == GroupMode::Current);
     assert!(app.organize_drafts.is_empty() && app.analysis_run.is_none());
     app.set_step(Step::Organize);
     assert!(
@@ -396,11 +515,11 @@ fn generated_plan_requires_resolution_and_discard_preserves_other_review_marks()
             ..Default::default()
         },
     );
-    app.request_departure(Destination::Step(Step::Cull));
+    app.request_departure(Destination::Close);
     settle(&mut app);
     assert!(app.organize_departure.is_some());
     app.resolve_organize_departure(OrganizeResolution::Discard);
-    assert!(app.step == Step::Organize && app.departure.is_some());
+    assert!(!app.close_authorized && app.departure.is_some());
     assert_eq!(app.decisions[&id].rating, Some(4));
     assert!(app.group_mode == GroupMode::Current);
 }
@@ -414,8 +533,13 @@ fn failed_plan_can_be_discarded_without_trapping_close() {
     app.request_departure(Destination::Close);
     settle(&mut app);
     assert!(app.error.is_some() && app.organize_departure.is_some());
+    // Review and apply leads to the Review step and drops the quit.
     app.resolve_organize_departure(OrganizeResolution::Review);
-    assert!(!app.plan_open && !app.close_authorized);
+    assert!(!app.plan_open && !app.close_authorized && app.step == Step::Review);
+    assert!(app.organize_departure.is_none());
+    app.request_departure(Destination::Close);
+    settle(&mut app);
+    assert!(app.organize_departure.is_some());
     app.resolve_organize_departure(OrganizeResolution::Discard);
     assert!(app.close_authorized && app.error.is_none());
     assert!(dir.path().join("Before/a.jpg").exists());
@@ -540,21 +664,30 @@ fn case_only_folder_edit_uses_shared_plan_and_preserves_staged_rating_after_relo
     assert!(!app.organize_changes_pending());
 }
 #[test]
-fn reviewed_apply_uses_worker_and_navigates_only_after_catalog_reload() {
+fn review_and_apply_in_the_quit_guard_applies_from_the_review_step() {
     let (dir, mut app) = fixture();
     edit(&mut app);
-    app.request_departure(Destination::Step(Step::Cull));
+    app.request_departure(Destination::Close);
     settle(&mut app);
     app.resolve_organize_departure(OrganizeResolution::Review);
-    assert!(app.plan_open && app.after_apply.is_some() && app.step == Step::Organize);
-    assert!(dir.path().join("Before/a.jpg").exists());
-    app.runtime
-        .io(IoWork::Apply(app.plan.take().unwrap()))
-        .unwrap();
-    app.plan_open = false;
-    app.busy = true;
     settle(&mut app);
-    assert!(app.step == Step::Cull && app.after_apply.is_none());
+    assert!(!app.plan_open && app.after_apply.is_none() && app.step == Step::Review);
+    assert!(dir.path().join("Before/a.jpg").exists());
+    // Quitting from the Review step and keeping on editing keeps the list.
+    app.request_departure(Destination::Close);
+    settle(&mut app);
+    app.resolve_organize_departure(OrganizeResolution::Cancel);
+    settle(&mut app);
+    assert!(
+        app.plan
+            .as_ref()
+            .is_some_and(|plan| !plan.actions.is_empty())
+    );
+    app.apply_review();
+    settle(&mut app);
+    // Still on the Review step, which now says it is done; no quit.
+    assert!(app.step == Step::Review && !app.close_authorized);
+    assert!(app.review_outcome.as_ref().is_some_and(|o| o.done));
     assert!(app.error.is_none(), "{:?}", app.error);
     assert_eq!(
         std::fs::read(dir.path().join("After/a.jpg")).unwrap(),
@@ -594,7 +727,7 @@ fn departure_modal_remains_usable_during_analysis_and_discard_rejects_late_resul
     edit(&mut app);
     app.analysis_run = Some(41);
     app.organize_run = Some((41, GroupMode::Mixed));
-    app.request_departure(Destination::Step(Step::Cull));
+    app.request_departure(Destination::Close);
     settle(&mut app);
     let ctx = egui::Context::default();
     theme_install(&ctx);
@@ -634,7 +767,7 @@ fn departure_modal_remains_usable_during_analysis_and_discard_rejects_late_resul
         .unwrap();
     }
     app.poll(&ctx);
-    assert!(app.step == Step::Cull && !app.plan_open && !app.busy);
+    assert!(app.close_authorized && !app.plan_open && !app.busy);
     assert!(app.mixed_labels.is_none());
 }
 #[test]
@@ -693,14 +826,16 @@ fn partial_move_reload_retains_retry_and_staged_ratings_on_both_photos() {
         "Resolve exact failed operations before making a competing plan"
     );
     std::fs::remove_file(root.join("After/b.jpg")).unwrap();
+    // Another step waits for the unfinished operations first.
     app.request_departure(Destination::Step(Step::Cull));
     assert!(app.plan_open && app.after_apply.is_some());
     app.apply_reviewed_plan();
     settle(&mut app);
     assert!(app.retry_plan.is_none() && app.error.is_none());
-    assert_eq!(app.decisions.len(), 2);
-    assert!(
-        app.departure.is_some(),
+    assert_eq!(app.step, Step::Cull);
+    assert_eq!(
+        app.decisions.len(),
+        2,
         "Moving files must not implicitly apply or discard their ratings"
     );
     assert!(!root.join("Before").exists());
@@ -733,6 +868,7 @@ fn external_output_retry_preserves_earlier_moves_and_existing_destination_marks(
         suggested: Default::default(),
         pick_suggested: Default::default(),
         rotations_staged: Default::default(),
+        trash_steps: Default::default(),
     }
     .save(&output)
     .unwrap();
@@ -1514,52 +1650,6 @@ fn hidden_window_keeps_receiving_worker_results() {
     assert_eq!(app.media.len(), 1);
 }
 #[test]
-fn one_review_shows_organize_changes_with_the_staged_trash_marks() {
-    let (dir, mut app) = fixture();
-    let root = dir.path().canonicalize().unwrap();
-    app.step = Step::Organize;
-    edit(&mut app);
-    let old_id = app.media[0].id;
-    app.decisions.entry(old_id).or_default().rejected = true;
-    app.review_changes();
-    settle(&mut app);
-    assert!(app.plan_open && app.error.is_none(), "{:?}", app.error);
-    assert!(app.review_after_moves);
-    let plan = app.plan.clone().unwrap();
-    assert!(!plan.actions.is_empty());
-    // The moves are planned first; the Trash mark is planned for the moved
-    // file once they are applied, by the same Apply, with no second review.
-    assert!(
-        plan.actions
-            .iter()
-            .all(|a| !matches!(a, Action::Trash { .. } | Action::TrashDirectory(_)))
-    );
-    let sentence = app.review_sentence(&plan, &app.plan_rows);
-    assert!(
-        sentence.ends_with("send 1 photo to the Trash."),
-        "{sentence}"
-    );
-    // Nothing has changed on disk while the plan is only reviewed.
-    assert!(root.join("Before/a.jpg").is_file());
-}
-#[test]
-fn review_changes_without_organize_changes_reviews_the_staged_marks_directly() {
-    let (_dir, mut app) = fixture();
-    app.step = Step::Organize;
-    let id = app.media[0].id;
-    app.decisions.entry(id).or_default().rejected = true;
-    app.review_changes();
-    settle(&mut app);
-    assert!(app.plan_open && !app.review_after_moves);
-    assert!(matches!(
-        app.plan.as_ref().unwrap().actions.as_slice(),
-        [Action::Trash { .. }]
-    ));
-    // Keeping on reviewing forgets nothing and moves nothing.
-    app.plan_open = false;
-    assert!(app.decisions[&id].rejected);
-}
-#[test]
 fn moving_an_existing_folder_to_trash_shows_the_whole_folder_for_review_first() {
     use super::super::organize_board::FolderAction;
     let (dir, mut app) = fixture();
@@ -1576,4 +1666,45 @@ fn moving_an_existing_folder_to_trash_shows_the_whole_folder_for_review_first() 
         [Action::TrashDirectory(_)]
     ));
     assert!(root.join("Before/a.jpg").is_file());
+}
+/// Under a grouping Organize has not made yet, the Review step says so and
+/// starts no analysis of its own, instead of listing forever. Once grouped,
+/// a renamed photo the grouping leaves in place is still renamed there:
+/// the page never says "Nothing to apply yet" while the badge counts it.
+#[test]
+fn the_review_step_never_waits_forever_for_a_grouping_only_organize_makes() {
+    let (_dir, mut app) = fixture();
+    // F2 in Organize under Current folders, then Faces, cancelled at once.
+    app.step = Step::Organize;
+    app.group_mode = GroupMode::Current;
+    let id = app.media[0].id;
+    app.board_rename_photo(id);
+    app.board.renaming = Some((id, "renamed_photo".into()));
+    app.board_finish_rename();
+    app.set_group_mode(GroupMode::Faces);
+    app.cancel_analysis();
+    app.switch_step(Step::Review);
+    for _ in 0..5 {
+        app.poll(&egui::Context::default());
+        app.refresh_review();
+    }
+    assert_eq!(app.review_blocked, Some(review_step::Blocked::Ungrouped));
+    assert!(!app.review_stale && app.staged_change_count() == 1);
+    assert!(app.analysis_run.is_none() && !app.busy);
+    assert!(app.plan.is_none() && app.error.is_none());
+    // Faces found no person in it: it stays where it is, with its new name.
+    app.face_groups = Some(crate::core::regional::grouping::Output {
+        groups: HashMap::new(),
+        folders: HashMap::new(),
+    });
+    app.switch_step(Step::Organize);
+    app.switch_step(Step::Review);
+    settle(&mut app);
+    assert!(app.review_blocked.is_none() && app.error.is_none());
+    assert_eq!(
+        app.review_sentence(app.plan.as_ref().unwrap(), &app.plan_rows),
+        "You're about to rename 1 photo."
+    );
+    assert_eq!(app.staged_change_count(), 1);
+    app.runtime.shutdown();
 }

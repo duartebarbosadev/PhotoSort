@@ -136,8 +136,26 @@ impl PhotoSortApp {
             if self.modal_active() {
                 break;
             }
-            if self.workflow_shortcut(pressed, modifiers)
-                || self.organize_shortcut(pressed, modifiers)
+            // The Review step has no photo to act on: only the step keys,
+            // and clearing every Trash mark, which lists the rest again.
+            if self.step == Step::Review {
+                if selection::clear_trash_shortcut(pressed, modifiers) {
+                    self.clear_all_trash_marks();
+                    self.review_stale = true;
+                } else {
+                    self.workflow_shortcut(pressed, modifiers);
+                }
+                continue;
+            }
+            let step = self.step;
+            if self.workflow_shortcut(pressed, modifiers) {
+                // Later keys of the frame were meant for the step just left.
+                if self.step != step {
+                    break;
+                }
+                continue;
+            }
+            if self.organize_shortcut(pressed, modifiers)
                 || self.view_shortcut(pressed, modifiers)
                 || self.swipe_key(pressed, modifiers)
             {
@@ -255,6 +273,7 @@ impl PhotoSortApp {
             egui::Key::R => {}
             egui::Key::Enter if modifiers.shift => self.review_changes(),
             egui::Key::Enter => self.next_rotation_card(),
+            egui::Key::A => self.accept_rotation_suggestions(),
             egui::Key::Escape if shown => self.rotation_panel = false,
             _ => return false,
         }
@@ -319,11 +338,10 @@ impl PhotoSortApp {
             }
             egui::Key::Enter if modifiers.shift => self.review_changes(),
             // Marks the photo, with its RAW, JPEG and XMP companions as D
-            // does, then opens the review of every staged change.
+            // does; the Review step applies it with the other changes.
             egui::Key::Delete | egui::Key::Backspace if marks && !self.busy => {
                 if let Some(id) = self.active {
                     self.stage_manual([id], crate::core::decisions::Change::Trash(true));
-                    self.review_changes();
                 }
             }
             _ => {}

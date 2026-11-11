@@ -46,6 +46,9 @@ impl PhotoSortApp {
             self.update_browse_item(id);
         }
         self.delete_review.replace(entries);
+        if self.step == Step::EasyDelete {
+            self.trash_last = None;
+        }
         self.view_data_ready.insert(Step::EasyDelete);
         self.stage_delete_suggestions();
         let saved = self
@@ -68,6 +71,7 @@ impl PhotoSortApp {
             .delete_review
             .stage_new_suggestions(&mut self.decisions);
         if !marked.is_empty() {
+            self.note_trash_steps(&marked, Step::EasyDelete);
             self.changed_items(marked);
         }
     }
@@ -876,6 +880,7 @@ impl PhotoSortApp {
                         .unwrap_or_default(),
                     facts,
                     trash: !keep,
+                    dimmed: self.trashed_elsewhere(*id),
                     toggle: enabled.then(|| {
                         format!(
                             "{} · {}",
@@ -988,6 +993,10 @@ mod tests {
     /// (4 + 5), with the suggestions staged as after an analysis.
     fn app() -> PhotoSortApp {
         let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+        // These tests cover suggestions applied automatically.
+        app.preferences.easy_delete_auto = true;
+        app.preferences.pick_best_auto = true;
+        app.preferences.rotation_auto = true;
         app.media = (1..=5)
             .map(|n| Media {
                 id: MediaId(n),
@@ -1041,7 +1050,7 @@ mod tests {
         let _ = ctx.run_test(input, |ui| app.update_workspace(ui, false));
     }
     #[test]
-    fn suggestions_are_the_staged_decisions_and_review_changes_lists_them() {
+    fn suggestions_are_the_staged_decisions_and_survive_leaving_and_coming_back() {
         let mut app = app();
         // The copy and the dark photo go to Trash; both formats stay.
         assert!(trashed(&app, 1) && trashed(&app, 3));
@@ -1049,14 +1058,27 @@ mod tests {
         assert_eq!(app.staged_change_count(), 2);
         // Nothing waits on a confirmation: moving between cards is free.
         app.navigate_selection(1, false, false);
-        // Leaving the step offers Review changes for the staged marks.
-        app.request_departure(Destination::Step(Step::Cull));
-        assert!(matches!(app.departure, Some(Destination::Step(Step::Cull))));
-        assert_eq!(app.step, Step::EasyDelete);
+        // The user keeps the copy after all.
+        app.set_active(MediaId(1));
+        app.toggle_delete_candidate(0);
+        assert!(!trashed(&app, 1));
+        // Leaving the step asks nothing and keeps every mark for Review.
+        app.switch_step(Step::Cull);
+        assert!(app.departure.is_none() && app.organize_departure.is_none());
+        assert_eq!(app.step, Step::Cull);
+        assert_eq!(app.staged_change_count(), 1);
+        // Coming back never marks the kept photo again.
+        app.switch_step(Step::EasyDelete);
+        assert!(!trashed(&app, 1) && trashed(&app, 3));
+        assert_eq!(app.staged_change_count(), 1);
     }
     #[test]
     fn a_finished_analysis_stages_its_suggestions_once() {
         let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+        // These tests cover suggestions applied automatically.
+        app.preferences.easy_delete_auto = true;
+        app.preferences.pick_best_auto = true;
+        app.preferences.rotation_auto = true;
         app.media = super::tests::app().media;
         app.index = app
             .media
@@ -1563,6 +1585,10 @@ mod tests {
     #[test]
     fn the_size_slider_sets_how_many_cards_fit_at_every_window_width() {
         let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+        // These tests cover suggestions applied automatically.
+        app.preferences.easy_delete_auto = true;
+        app.preferences.pick_best_auto = true;
+        app.preferences.rotation_auto = true;
         app.media = (1..=12)
             .map(|n| Media {
                 id: MediaId(n),

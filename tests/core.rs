@@ -61,7 +61,7 @@ fn scanner_never_follows_directory_or_file_symlinks() {
     assert!(catalog(d.path()).media.is_empty());
 }
 #[test]
-fn all_five_steps_share_one_decode_and_one_thumbnail() {
+fn every_step_shares_one_decode_and_one_thumbnail() {
     let d = TempDir::new().unwrap();
     let m = photo(d.path(), "a.png");
     let cache = TempDir::new().unwrap();
@@ -73,7 +73,7 @@ fn all_five_steps_share_one_decode_and_one_thumbnail() {
         assert!(Arc::ptr_eq(&first.thumbnail, &next.thumbnail));
     }
     assert_eq!(p.stats.decodes, 1);
-    assert_eq!(p.stats.hits, 5);
+    assert_eq!(p.stats.hits, Step::ALL.len() as u64);
 }
 #[test]
 fn proxy_survives_memory_eviction_without_redecoding_source() {
@@ -409,6 +409,7 @@ fn session_drops_stale_decisions() {
         suggested: Default::default(),
         pick_suggested: Default::default(),
         rotations_staged: Default::default(),
+        trash_steps: Default::default(),
         organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),

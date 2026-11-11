@@ -111,27 +111,8 @@ impl PhotoSortApp {
         keyed.sort();
         self.filtered = keyed.iter().map(|k| k.3).collect();
         if !original {
-            let output = std::path::Path::new(&self.output);
-            // Many photos share a folder: each destination is worked out once.
-            let mut destinations: HashMap<&str, PathBuf> = HashMap::new();
-            for label in labels.values() {
-                destinations
-                    .entry(label)
-                    .or_insert_with(|| crate::core::operations::folder_destination(output, label));
-            }
-            let moves = |id: &MediaId, label: &str| {
-                self.index.get(id).is_some_and(|&i| {
-                    self.media[i].path.parent() != destinations.get(label).map(PathBuf::as_path)
-                })
-            };
-            // Items that move, and items renamed where they are.
-            let moved = labels.iter().filter(|(id, label)| moves(id, label)).count();
-            let renamed = self
-                .file_names
-                .keys()
-                .filter(|id| !labels.get(id).is_some_and(|label| moves(id, label)))
-                .count();
-            self.board.changes = moved + renamed + draft.map_or(0, |d| d.created_folders().len());
+            self.board.changes =
+                self.organize_changes_in(labels, draft.map_or(0, |d| d.created_folders().len()));
         }
         let mut sections: Vec<Section> = Vec::new();
         for (position, (_, path, _, index)) in keyed.iter().enumerate() {

@@ -93,8 +93,9 @@ impl PhotoSortApp {
             self.pending_bookmark = self.saved_views.bookmarks.get(&self.step).cloned();
         }
         self.decisions.clear();
-        // Back to the defaults: Easy Delete, Fix Rotation and Pick Best stage
-        // their suggestions again.
+        // Back to the defaults: with suggestions applied automatically, Easy
+        // Delete, Fix Rotation and Pick Best stage them again; otherwise
+        // they wait to be accepted.
         self.delete_review.restore_suggested(Default::default());
         self.rotation_review.restore_staged(Default::default());
         self.pick_review.restore_suggested(Default::default());
@@ -125,7 +126,11 @@ impl PhotoSortApp {
             // Narrow windows show Details as a drawer over the photos; only
             // reopen it on request, never from a view saved in a wide window.
             self.inspector = view.inspector && self.was_wide;
-            self.group_mode = view.group_mode;
+            // The grouping is Organize's: its folder changes wait for the
+            // Review step in every other step.
+            if self.step == Step::Organize {
+                self.group_mode = view.group_mode;
+            }
             self.delete_categories = view.delete_categories.iter().copied().collect();
             self.rotation_queue_only = view.rotation_queue_only;
             self.active = view.active;
@@ -303,6 +308,9 @@ impl PhotoSortApp {
         self.filter_dirty = true;
     }
     pub(super) fn load_bookmarks(&mut self, views: Saved) {
+        if let Some(organize) = views.bookmarks.get(&Step::Organize) {
+            self.group_mode = organize.group_mode;
+        }
         self.saved_views = views;
         let step = self.saved_views.step.unwrap_or(self.step);
         self.step = if self.preferences.visible(step) {
@@ -310,7 +318,7 @@ impl PhotoSortApp {
         } else {
             self.preferences.neighbor(step, true).unwrap_or(Step::Cull)
         };
-        self.review = self.step != Step::Organize;
+        self.review = !matches!(self.step, Step::Organize | Step::Review);
         self.prepare_bookmark();
     }
 }

@@ -139,6 +139,9 @@ impl PhotoSortApp {
         let auto_on = next.easy_delete_auto && !self.preferences.easy_delete_auto;
         let pick_auto_on = next.pick_best_auto && !self.preferences.pick_best_auto;
         let rotation_auto_on = next.rotation_auto && !self.preferences.rotation_auto;
+        // The Review step says how ratings and rotations are written.
+        self.review_stale |=
+            self.step == Step::Review && next.metadata_writes != self.preferences.metadata_writes;
         self.preferences = next;
         // A new cache limit or RAW look: build what that now needs.
         self.build_previews();
@@ -177,6 +180,7 @@ impl PhotoSortApp {
             egui::Key::Num3,
             egui::Key::Num4,
             egui::Key::Num5,
+            egui::Key::Num6,
         ]
         .iter()
         .position(|k| *k == key) else {

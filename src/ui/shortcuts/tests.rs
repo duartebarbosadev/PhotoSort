@@ -318,7 +318,8 @@ fn navigator_opens_beside_review_without_image_or_model_work() {
 }
 #[test]
 fn modified_unbound_keys_do_not_change_photos_in_any_workflow() {
-    for step in Step::ALL {
+    // The Review step shows no photo to change or zoom.
+    for step in Step::ALL.into_iter().filter(|step| *step != Step::Review) {
         for command in [egui::Modifiers::CTRL, egui::Modifiers::COMMAND] {
             let mut app = app(step);
             let before = app.inspector;
@@ -362,7 +363,7 @@ fn find_shortcut_replaces_existing_query_in_the_real_toolbar() {
     // Organize's search sits on its board; see organize_board's tests.
     for step in Step::ALL
         .into_iter()
-        .filter(|step| !matches!(step, Step::PickBest | Step::Organize))
+        .filter(|step| !matches!(step, Step::PickBest | Step::Organize | Step::Review))
     {
         for width in [640.0, 1280.0] {
             for modifiers in [egui::Modifiers::CTRL, egui::Modifiers::COMMAND] {
@@ -529,7 +530,7 @@ fn repeated_global_keys_and_search_without_a_search_field_are_harmless() {
     assert!(!app.about);
 }
 #[test]
-fn opening_a_departure_guard_stops_later_photo_keys_in_the_same_frame() {
+fn changing_steps_stops_later_photo_keys_in_the_same_frame_and_keeps_marks() {
     let mut app = app(Step::Cull);
     app.decisions.insert(
         MediaId(7),
@@ -557,7 +558,10 @@ fn opening_a_departure_guard_stops_later_photo_keys_in_the_same_frame() {
             app.keyboard(ctx)
         },
     );
-    assert!(app.departure.is_some());
+    // No guard: the step changes at once and the mark waits for Review.
+    assert!(app.departure.is_none());
+    assert_eq!(app.step, Step::Organize);
+    assert!(app.decisions[&MediaId(7)].rejected);
     assert_eq!(app.decisions[&MediaId(7)].turns, 0);
 }
 #[test]

@@ -311,4 +311,26 @@ fn trash_takes_only_raw_and_xmp_with_a_photo_never_same_name_photos() {
         ["pair.ARW", "pair.jpg", "pair.xmp"]
     );
     assert_eq!(trashed(&["pair.jpg"], false), ["pair.jpg"]);
+    // A review that listed only the XMP never trashes the RAW beside it.
+    let decisions = HashMap::from([(
+        id(&c, "pair.jpg"),
+        Decision {
+            rejected: true,
+            ..Default::default()
+        },
+    )]);
+    let plan = operations::decisions_plan_with_followers(
+        &c,
+        &decisions,
+        true,
+        Some(&HashSet::from([id(&c, "pair.xmp")])),
+        metadata::WritePolicy::SidecarOnly,
+        |m| Ok(metadata::read(&m.path)),
+        || false,
+    )
+    .unwrap();
+    assert_eq!(
+        paths(&plan),
+        HashSet::from([c.root.join("pair.jpg"), c.root.join("pair.xmp")])
+    );
 }

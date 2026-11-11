@@ -93,6 +93,9 @@ pub struct Session {
     /// from Easy Delete's: one photo can be a suggestion in both steps.
     #[serde(default, rename = "staged_rotations")]
     pub rotations_staged: HashSet<MediaId>,
+    /// The step each Trash mark was made in; other steps show it dimmed.
+    #[serde(default)]
+    pub trash_steps: HashMap<MediaId, super::model::Step>,
 }
 pub(crate) fn session_path(root: &Path) -> PathBuf {
     // Equivalent trailing separators must not create different session stores.
@@ -159,6 +162,7 @@ impl Session {
             std::sync::Arc::make_mut(groups).relocate(changes);
         }
         remap_media_ids(&mut self.decisions, changes);
+        remap_media_ids(&mut self.trash_steps, changes);
         for (old, new, _) in changes {
             for staged in [
                 &mut self.suggested,
@@ -191,6 +195,7 @@ impl Session {
             std::sync::Arc::make_mut(groups).merge(incoming);
         }
         self.decisions.extend(other.decisions);
+        self.trash_steps.extend(other.trash_steps);
         self.suggested.extend(other.suggested);
         self.pick_suggested.extend(other.pick_suggested);
         self.rotations_staged.extend(other.rotations_staged);

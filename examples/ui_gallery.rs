@@ -25,8 +25,10 @@ fn main() -> anyhow::Result<()> {
     let cache = tempfile::tempdir()?;
     // SAFETY: set before any other thread exists.
     unsafe {
-        std::env::set_var("PHOTOSORT_DATA_ROOT", data.path());
-        std::env::set_var("PHOTOSORT_CACHE_ROOT", cache.path());
+        // Real paths: applying refuses a journal reached through a link,
+        // such as macOS's /var.
+        std::env::set_var("PHOTOSORT_DATA_ROOT", data.path().canonicalize()?);
+        std::env::set_var("PHOTOSORT_CACHE_ROOT", cache.path().canonicalize()?);
     }
     let library = tempfile::tempdir()?;
     let mut photos: Vec<_> = walkdir::WalkDir::new(&source)
@@ -457,6 +459,12 @@ fn main() -> anyhow::Result<()> {
             }
             shoot(&root, name, *step, *review, *size)?;
         }
+        if only
+            .as_deref()
+            .is_none_or(|only| "20-review".contains(only))
+        {
+            review_scenes(&root, &out)?;
+        }
         if only.is_some() {
             return Ok(());
         }
@@ -673,6 +681,48 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .save(out.join("13-crash-notice.png"))?;
     eprintln!("13-crash-notice");
+    Ok(())
+}
+
+/// The Review step in a copy of the library: empty, with changes from
+/// several steps, and after Apply.
+fn review_scenes(root: &std::path::Path, out: &std::path::Path) -> anyhow::Result<()> {
+    let copy = tempfile::tempdir()?;
+    // Applying refuses a path through a link, such as macOS's /var.
+    let folder = copy.path().canonicalize()?.join("Photos");
+    std::fs::create_dir(&folder)?;
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            std::fs::copy(entry.path(), folder.join(entry.file_name()))?;
+        }
+    }
+    fixed_times(&folder)?;
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(|cc| PhotoSortApp::new(cc, Some(folder)));
+    settle(&mut harness);
+    harness.state_mut().gallery_close_model_dialog();
+    harness.state_mut().gallery_step(Step::Review);
+    settle(&mut harness);
+    let shot = |harness: &mut Harness<'_, PhotoSortApp>, name: &str| -> anyhow::Result<()> {
+        let image = harness.render().map_err(|e| anyhow::anyhow!("{e}"))?;
+        image.save(out.join(format!("{name}.png")))?;
+        eprintln!("{name}");
+        Ok(())
+    };
+    shot(&mut harness, "20-review-empty")?;
+    harness.state_mut().gallery_step(Step::Cull);
+    settle(&mut harness);
+    harness.state_mut().gallery_review_mixed();
+    settle(&mut harness);
+    shot(&mut harness, "20b-review-mixed")?;
+    harness.state_mut().gallery_review_keep_all();
+    settle(&mut harness);
+    harness.state_mut().gallery_review_apply();
+    settle(&mut harness);
+    shot(&mut harness, "20c-review-applied")?;
     Ok(())
 }
 
