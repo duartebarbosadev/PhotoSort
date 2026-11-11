@@ -1668,19 +1668,43 @@ fn moving_an_existing_folder_to_trash_shows_the_whole_folder_for_review_first() 
     assert!(root.join("Before/a.jpg").is_file());
 }
 /// Under a grouping Organize has not made yet, the Review step says so and
-/// starts no analysis of its own, instead of listing forever.
+/// starts no analysis of its own, instead of listing forever. Once grouped,
+/// a renamed photo the grouping leaves in place is still renamed there:
+/// the page never says "Nothing to apply yet" while the badge counts it.
 #[test]
 fn the_review_step_never_waits_forever_for_a_grouping_only_organize_makes() {
     let (_dir, mut app) = fixture();
-    app.group_mode = GroupMode::Faces;
-    app.face_groups = None;
-    app.file_names.insert(app.media[0].id, "Keeper".into());
+    // F2 in Organize under Current folders, then Faces, cancelled at once.
+    app.step = Step::Organize;
+    app.group_mode = GroupMode::Current;
+    let id = app.media[0].id;
+    app.board_rename_photo(id);
+    app.board.renaming = Some((id, "renamed_photo".into()));
+    app.board_finish_rename();
+    app.set_group_mode(GroupMode::Faces);
+    app.cancel_analysis();
     app.switch_step(Step::Review);
     for _ in 0..5 {
+        app.poll(&egui::Context::default());
         app.refresh_review();
     }
-    assert!(app.review_blocked == Some(review_step::Blocked::Ungrouped) && !app.review_stale);
+    assert_eq!(app.review_blocked, Some(review_step::Blocked::Ungrouped));
+    assert!(!app.review_stale && app.staged_change_count() == 1);
     assert!(app.analysis_run.is_none() && !app.busy);
     assert!(app.plan.is_none() && app.error.is_none());
+    // Faces found no person in it: it stays where it is, with its new name.
+    app.face_groups = Some(crate::core::regional::grouping::Output {
+        groups: HashMap::new(),
+        folders: HashMap::new(),
+    });
+    app.switch_step(Step::Organize);
+    app.switch_step(Step::Review);
+    settle(&mut app);
+    assert!(app.review_blocked.is_none() && app.error.is_none());
+    assert_eq!(
+        app.review_sentence(app.plan.as_ref().unwrap(), &app.plan_rows),
+        "You're about to rename 1 photo."
+    );
+    assert_eq!(app.staged_change_count(), 1);
     app.runtime.shutdown();
 }

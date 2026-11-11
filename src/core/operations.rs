@@ -661,17 +661,22 @@ pub fn organize_changes_pending(
     // The plan review asks this every frame: build each folder path once.
     let mut folders: HashMap<&str, PathBuf> = HashMap::new();
     for (id, path) in catalog.organize_files() {
+        let renamed = || {
+            names
+                .get(&id)
+                .is_some_and(|name| super::organize::requested_stem(path, name).is_some())
+        };
+        // A file the grouping leaves where it is can still be renamed there.
         let Some(label) = labels.get(&id) else {
+            if renamed() {
+                return true;
+            }
             continue;
         };
         let folder = folders
             .entry(label)
             .or_insert_with(|| folder_destination(output, label));
-        if path.parent() != Some(folder.as_path())
-            || names
-                .get(&id)
-                .is_some_and(|name| super::organize::requested_stem(path, name).is_some())
-        {
+        if path.parent() != Some(folder.as_path()) || renamed() {
             return true;
         }
     }
@@ -755,8 +760,19 @@ pub fn organize_plan_with_layout_cancellable(
         if seen.contains(path) {
             continue;
         }
-        let Some(label) = labels.get(&id) else {
-            continue;
+        let new_name = names
+            .get(&id)
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| safe_component(s))
+            .filter(|name| path.file_stem().and_then(|s| s.to_str()) != Some(name.as_str()));
+        let dir = match labels.get(&id) {
+            Some(label) => folder_destination(&output, label),
+            // The grouping leaves it where it is: only its new name applies.
+            None if new_name.is_some() => match casing.rebase(path).parent() {
+                Some(parent) => parent.to_path_buf(),
+                None => continue,
+            },
+            None => continue,
         };
         let has_companions =
             MediaKind::from_path(path).is_some_and(|kind| kind != MediaKind::Video);
@@ -777,12 +793,6 @@ pub fn organize_plan_with_layout_cancellable(
             sources
         };
         let sources: Vec<_> = sources.into_iter().filter(|p| !seen.contains(p)).collect();
-        let dir = folder_destination(&output, label);
-        let new_name = names
-            .get(&id)
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| safe_component(s))
-            .filter(|name| path.file_stem().and_then(|s| s.to_str()) != Some(name.as_str()));
         if new_name.is_none()
             && sources
                 .iter()
