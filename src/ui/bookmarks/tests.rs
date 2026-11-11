@@ -184,7 +184,7 @@ fn empty_guided_bookmark_focuses_new_results_without_restarting_analysis() {
                 step,
                 Bookmark {
                     review: true,
-                    rotation_queue_only: step == Step::Rotation,
+                    rotation_queue_only: Some(step == Step::Rotation),
                     ..Default::default()
                 },
             );
@@ -229,6 +229,65 @@ fn empty_guided_bookmark_focuses_new_results_without_restarting_analysis() {
             assert!(app.analysis_run.is_none() && app.metadata_run.is_none());
             assert!(app.requested.is_empty() && app.textures.is_empty());
         }
+    }
+}
+#[test]
+fn rotation_suggestions_only_is_on_until_turned_off_after_detection() {
+    let (_dir, mut app) = fixture();
+    let ids: Vec<_> = app.media.iter().map(|m| m.id).collect();
+    app.step = Step::Rotation;
+    // A view saved by an older version, before detection ran, does not keep
+    // the switch off, and opening the step does not start detection itself.
+    let old: Bookmark =
+        serde_json::from_value(serde_json::json!({ "rotation_queue_only": false })).unwrap();
+    app.saved_views.bookmarks.insert(Step::Rotation, old);
+    for _ in 0..2 {
+        app.prepare_bookmark();
+        settle(&mut app);
+        assert!(app.rotation_queue_only && app.filtered.is_empty());
+        assert!(app.analysis_run.is_none() && app.rotation_run.is_none());
+        app.capture_saved_view();
+    }
+    // "Show all photos" before detection, then detection finishes while
+    // another step is open: the step opens again on the suggestions.
+    app.rotation_queue_only = false;
+    app.capture_saved_view();
+    app.step = Step::Cull;
+    app.rotations.insert(
+        ids[1],
+        crate::core::models::RotationSuggestion {
+            turns: 1,
+            confidence: 1.0,
+            uncertain: false,
+            views: 1,
+        },
+    );
+    app.finish_rotation_detection();
+    app.step = Step::Rotation;
+    app.prepare_bookmark();
+    settle(&mut app);
+    assert!(app.rotation_queue_only);
+    assert_eq!(app.filtered.len(), 1);
+    // Turned off while there are suggestions, it stays off.
+    app.rotation_queue_only = false;
+    app.capture_saved_view();
+    app.rotation_queue_only = true;
+    app.prepare_bookmark();
+    settle(&mut app);
+    assert!(!app.rotation_queue_only);
+    assert_eq!(app.filtered.len(), 3);
+    // Detection results are not kept: after a relaunch it is still off and
+    // nothing runs until asked, however often the view is saved.
+    let (_relaunch_dir, mut relaunched) = fixture();
+    relaunched.step = Step::Rotation;
+    relaunched.saved_views = app.saved_views.clone();
+    for _ in 0..2 {
+        relaunched.prepare_bookmark();
+        settle(&mut relaunched);
+        assert!(!relaunched.rotation_queue_only);
+        assert_eq!(relaunched.filtered.len(), 3);
+        assert!(relaunched.analysis_run.is_none() && relaunched.rotation_run.is_none());
+        relaunched.capture_saved_view();
     }
 }
 #[test]
@@ -353,11 +412,22 @@ fn guided_views_restore_position_and_group_without_decisions() {
     assert!(app.decision(ids[1]).rejected && !app.decision(ids[2]).rejected);
     assert_eq!(app.decisions.values().filter(|d| !d.is_empty()).count(), 1);
     let staged = app.decisions.clone();
+    // Detection ran and found every photo upright; all photos were showing.
+    app.rotations.insert(
+        ids[2],
+        crate::core::models::RotationSuggestion {
+            turns: 0,
+            confidence: 1.0,
+            uncertain: false,
+            views: 1,
+        },
+    );
     app.saved_views.bookmarks.insert(
         Step::Rotation,
         Bookmark {
             active: Some(ids[2]),
             review: true,
+            rotation_queue_only: Some(false),
             ..Default::default()
         },
     );

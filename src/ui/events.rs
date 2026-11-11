@@ -455,7 +455,7 @@ impl PhotoSortApp {
             self.analysis_failures.insert(id, error.clone());
             self.runtime.cancel_analysis();
             self.analysis_run = None;
-            self.rotation_run = None;
+            self.drop_rotation_run();
             self.delete_run = None;
             self.pick_run = None;
             self.halt_organize_run();
@@ -487,7 +487,7 @@ impl PhotoSortApp {
         self.abandon_review_apply();
         self.runtime.cancel_analysis();
         self.analysis_run = None;
-        self.rotation_run = None;
+        self.drop_rotation_run();
         self.delete_run = None;
         self.pick_run = None;
         self.organize_run = None;
@@ -1008,7 +1008,7 @@ impl PhotoSortApp {
         if self.retry_plan.is_none() {
             self.rotation_plan = false;
         }
-        self.rotation_run = None;
+        self.drop_rotation_run();
         self.delete_run = None;
         self.pick_run = None;
         if let Some((_, mode)) = self.organize_run {
