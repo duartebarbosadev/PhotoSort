@@ -37,7 +37,11 @@ pub struct Bookmark {
     pub group_mode: GroupMode,
     pub delete_current: Option<MediaId>,
     pub delete_categories: Vec<Category>,
-    pub rotation_queue_only: bool,
+    /// Fix Rotation's "Suggestions only" switch, kept only once detection
+    /// has found something to show: None means on. Views saved before this
+    /// could not tell the two apart, so the old key is left unread.
+    #[serde(rename = "rotation_suggestions_only")]
+    pub rotation_queue_only: Option<bool>,
     pub pick_focus: bool,
     pub view: inspection::View,
     pub independent_views: HashMap<u64, inspection::View>,
@@ -92,7 +96,7 @@ impl Default for Bookmark {
             group_mode: GroupMode::Current,
             delete_current: None,
             delete_categories: Category::ALL.to_vec(),
-            rotation_queue_only: false,
+            rotation_queue_only: None,
             pick_focus: false,
             view: Default::default(),
             independent_views: HashMap::new(),

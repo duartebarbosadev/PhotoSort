@@ -28,6 +28,18 @@ pub(super) enum RotationLink {
 }
 
 impl PhotoSortApp {
+    /// Whether detection ran, even if every photo looked upright.
+    pub(super) fn rotation_detected(&self) -> bool {
+        !self.rotations.is_empty() || !self.rotation_review.ids().is_empty()
+    }
+    /// A detection run that stopped before it finished leaves no partial
+    /// results: the step offers to detect again.
+    pub(super) fn drop_rotation_run(&mut self) {
+        if self.rotation_run.take().is_some() {
+            self.rotations.clear();
+            self.filter_dirty = true;
+        }
+    }
     fn rotation_enabled(&self) -> bool {
         !self.busy && self.rotation_run.is_none()
     }

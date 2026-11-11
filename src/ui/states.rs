@@ -187,7 +187,7 @@ impl PhotoSortApp {
                 },
             );
         } else if self.step == Step::Rotation {
-            let detected = !self.rotations.is_empty() || !self.rotation_review.ids().is_empty();
+            let detected = self.rotation_detected();
             state_card(
                 ui,
                 icon::ARROW_CLOCKWISE,

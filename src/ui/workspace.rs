@@ -530,7 +530,7 @@ impl PhotoSortApp {
             rotations: HashMap::new(),
             rotation_review: Default::default(),
             rotation_run: None,
-            rotation_queue_only: false,
+            rotation_queue_only: true,
             rotation_panel: false,
             rotation_panel_width: None,
             delete_review: Default::default(),
@@ -794,7 +794,7 @@ impl PhotoSortApp {
         self.embeddings.clear();
         self.rotation_review = Default::default();
         self.rotation_run = None;
-        self.rotation_queue_only = false;
+        self.rotation_queue_only = true;
         self.rotation_panel = false;
         self.active = None;
         self.comparison.clear();

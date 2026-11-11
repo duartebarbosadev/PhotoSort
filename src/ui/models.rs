@@ -80,7 +80,7 @@ impl PhotoSortApp {
         self.progress = None;
         self.pick_run = None;
         self.delete_run = None;
-        self.rotation_run = None;
+        self.drop_rotation_run();
         self.organize_run = None;
         self.organize_preview_requested = false;
         self.resume_suspended = true;

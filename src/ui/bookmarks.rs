@@ -33,12 +33,28 @@ impl PhotoSortApp {
             group_mode: self.group_mode,
             delete_current: self.delete_current,
             delete_categories: categories,
-            rotation_queue_only: self.rotation_queue_only,
+            rotation_queue_only: self.rotation_switch_to_save(),
             pick_focus: false,
             view: self.inspection_view,
             independent_views: self.independent_views.clone(),
             sync_views: self.sync_views,
             scroll: self.library_offset,
+        }
+    }
+    /// Fix Rotation's switch as its view keeps it; None is on. Off is a
+    /// choice only once detection found something, and it stays one after a
+    /// relaunch, before detection runs again.
+    fn rotation_switch_to_save(&self) -> Option<bool> {
+        if self.step != Step::Rotation {
+            None
+        } else if self.rotation_detected() {
+            Some(self.rotation_queue_only)
+        } else {
+            self.saved_views
+                .bookmarks
+                .get(&Step::Rotation)
+                .and_then(|view| view.rotation_queue_only)
+                .filter(|on| !on && !self.rotation_queue_only)
         }
     }
     pub(super) fn checkpoint_bookmarks(&mut self) {
@@ -127,7 +143,11 @@ impl PhotoSortApp {
             self.inspector = view.inspector && self.was_wide;
             self.group_mode = view.group_mode;
             self.delete_categories = view.delete_categories.iter().copied().collect();
-            self.rotation_queue_only = view.rotation_queue_only;
+            // Fix Rotation shows only its suggestions unless they were
+            // turned off while there were any.
+            if self.step == Step::Rotation {
+                self.rotation_queue_only = view.rotation_queue_only.unwrap_or(true);
+            }
             self.active = view.active;
             self.selection
                 .restore(view.selected.iter().copied(), view.anchor);
@@ -170,7 +190,7 @@ impl PhotoSortApp {
                     self.analyze()
                 }
                 Step::Rotation
-                    if view.rotation_queue_only && self.rotation_review.ids().is_empty() =>
+                    if view.rotation_queue_only == Some(true) && !self.rotation_detected() =>
                 {
                     if crate::core::models::orientation_model().is_some() {
                         self.detect_rotations();
@@ -286,7 +306,7 @@ impl PhotoSortApp {
         self.delete_current = view.delete_current;
         self.delete_categories = view.delete_categories.into_iter().collect();
         self.delete_panel = false;
-        self.rotation_queue_only = view.rotation_queue_only;
+        self.rotation_queue_only = view.rotation_queue_only.unwrap_or(true);
         self.pick_current = None;
         self.pick_panel = false;
         self.inspection_view = view.view;

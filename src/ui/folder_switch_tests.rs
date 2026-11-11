@@ -65,7 +65,7 @@ fn change_every_view(app: &mut PhotoSortApp) {
     app.delete_current = Some(first);
     app.delete_categories = [Category::Blur].into_iter().collect();
     app.delete_panel = true;
-    app.rotation_queue_only = true;
+    app.rotation_queue_only = false;
     app.pick_current = Some(first);
     app.pick_panel = true;
     app.inspection_view.zoom = 3.0;
@@ -86,10 +86,15 @@ fn change_every_view(app: &mut PhotoSortApp) {
 }
 /// How a step looks the first time a library opens in it: the first photo
 /// focused, and at most that photo selected (some steps select the focused
-/// photo). `review` follows the step when the step changes, so it is checked
-/// where the folder opens.
-fn assert_clean(app: &PhotoSortApp) {
-    let first = app.media.first().map(|m| m.id);
+/// photo). Fix Rotation shows no photo before detection, so a library that
+/// opens there focuses none. `review` follows the step when the step changes,
+/// so it is checked where the folder opens.
+fn assert_clean(app: &PhotoSortApp, opened_in: Step) {
+    let first = app
+        .media
+        .first()
+        .map(|m| m.id)
+        .filter(|_| opened_in != Step::Rotation);
     let (selected, anchor) = app.selection.snapshot();
     assert!(
         selected.iter().all(|id| Some(*id) == first) && anchor.is_none_or(|id| Some(id) == first)
@@ -106,6 +111,7 @@ fn assert_clean(app: &PhotoSortApp) {
         "{:?}",
         app.step
     );
+    assert!(app.rotation_queue_only);
     assert!(app.single_view_stash.is_empty() && app.focused_slot == 0);
     assert!(!app.browse_filters_open && !app.delete_panel);
     let board = &app.board;
@@ -177,7 +183,7 @@ fn another_folder_opens_with_clean_views_in_every_step_and_keeps_app_wide_choice
     for step in Step::ALL {
         app.step = step;
         app.prepare_bookmark();
-        assert_clean(&app);
+        assert_clean(&app, Step::Rotation);
     }
     assert!(app.forget_scroll);
     // Staged changes stay with their own folder.
@@ -255,7 +261,7 @@ fn the_same_folder_keeps_its_view_and_returning_to_it_restores_only_its_staged_c
     settle(&mut app);
     assert_eq!(app.root.as_ref(), Some(&a));
     assert_eq!(app.decisions[&a_photo].rating, Some(4));
-    assert_clean(&app);
+    assert_clean(&app, app.step);
 
     // A relaunch opening A restores the view A saved.
     viewed(&mut app);
@@ -289,7 +295,7 @@ fn a_folder_chosen_while_changes_were_applied_still_opens_clean() {
     app.scan_folder(a.clone());
     settle(&mut app);
     assert_eq!(app.root.as_ref(), Some(&b));
-    assert_clean(&app);
+    assert_clean(&app, app.step);
 }
 
 #[test]
@@ -330,7 +336,7 @@ fn a_folder_open_while_folders_are_forgotten_does_not_save_its_view_again() {
     settle(&mut relaunched);
     assert!(!relaunched.views_forgotten);
     assert_eq!(relaunched.saved_views, Saved::default());
-    assert_clean(&relaunched);
+    assert_clean(&relaunched, relaunched.step);
     // Staged changes are not views.
     assert_eq!(relaunched.decisions[&a_photo].rating, Some(4));
 }
