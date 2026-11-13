@@ -179,6 +179,7 @@ fn cleanup_rejects_replaced_symlinks_and_paths_outside_the_library() {
                     path,
                     root: root.clone(),
                     after: vec![dependency],
+                    leftovers: Vec::new(),
                 },
             ],
             description: "test".into(),
@@ -188,4 +189,64 @@ fn cleanup_rejects_replaced_symlinks_and_paths_outside_the_library() {
         assert!(outside.path().is_dir());
         assert!(root.is_dir());
     }
+}
+
+#[test]
+fn folders_left_with_only_system_files_are_listed_with_them_and_kept_when_that_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    for name in [
+        "Trip/a.jpg",
+        "Trip/.DS_Store",
+        "Trip/@eaDir/a.jpg/thumb.jpg",
+        "Notes/b.jpg",
+        "Notes/notes.txt",
+        "Bare/c.jpg",
+    ] {
+        let path = root.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, name).unwrap();
+    }
+    let c = scan(&root);
+    let mut all = labels(&c);
+    photosort::core::organize::include_inventory(&c, &mut all);
+    let mut d = Draft::from_catalog(&c, all);
+    d.create_folder("", "Picks").unwrap();
+    let photos: Vec<_> = c.media.iter().map(|m| m.id).collect();
+    d.move_photos(&photos, "Picks").unwrap();
+    let p = plan(&c, &d);
+    // The review is told, per folder, what goes to the Trash with it. A
+    // folder that keeps a document stays, so it is not planned at all: the
+    // review names only folders that go.
+    let listed: HashMap<_, _> = p
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::RemoveEmptyDirectory {
+                path, leftovers, ..
+            } => Some((
+                path.file_name().unwrap().to_str().unwrap(),
+                leftovers.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(listed["Trip"], [".DS_Store", "@eaDir"]);
+    assert!(!listed.contains_key("Notes") && listed["Bare"].is_empty());
+    // Only what was listed may go: a file that appears after the review
+    // keeps the folder, and nothing reaches the Trash.
+    std::fs::write(root.join("Trip/new.txt"), b"new").unwrap();
+    let report = run(&p, &temp.path().join("journal"));
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert!(report.kept_folders.is_empty());
+    for kept in [
+        "Trip/.DS_Store",
+        "Trip/new.txt",
+        "Trip/@eaDir/a.jpg/thumb.jpg",
+        "Notes/notes.txt",
+    ] {
+        assert!(root.join(kept).is_file(), "{kept}");
+    }
+    assert!(!root.join("Bare").exists());
+    assert_eq!(std::fs::read_dir(root.join("Picks")).unwrap().count(), 3);
 }

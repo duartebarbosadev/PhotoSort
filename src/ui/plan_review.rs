@@ -13,7 +13,11 @@ pub(super) struct Rows {
     // One cumulative offset per operation group, not a second copy of file paths.
     ends: Vec<usize>,
     movable: Vec<usize>,
+    /// Names the list's scroll area: a new list starts at the top.
     generation: u64,
+    /// The generation the next list takes instead of a new one: the list
+    /// made again after an Undo stays where it was scrolled to.
+    keep_scroll: Option<u64>,
     summary: Summary,
     /// The plain view, as plan groups and staged media: never a copy of paths.
     folders: Vec<Folder>,
@@ -29,6 +33,24 @@ pub(super) struct Rows {
     followers: HashMap<MediaId, String>,
     /// The files those notes name.
     follower_ids: HashSet<MediaId>,
+    /// Everything listed as going to the Trash: the marked photos and the
+    /// files that follow them.
+    going: HashSet<MediaId>,
+    /// Photos marked for Trash that the plan moves or renames first: the
+    /// plan group that does it, and which of its files the photo is. They
+    /// are listed once, under Trash.
+    moves_first: HashMap<MediaId, (usize, usize)>,
+    /// The files listed for the Trash on the Review step, where they are
+    /// now: the marked photos and the files that follow them.
+    trash_paths: Vec<PathBuf>,
+    /// Folders that were there before and that the listed Trash marks leave
+    /// empty, each with the leftovers that go to the Trash with it. Asked
+    /// of the file worker once the list is made; "Tidying up" names them
+    /// and Apply removes no other.
+    emptied: Vec<(PathBuf, Vec<String>)>,
+    /// RAW files the user rated, rotated or chose to keep whose JPEG is
+    /// listed for the Trash: Apply asks what happens to them.
+    wanted_raws: usize,
     /// Shown on the Review step: each photo has an Undo button, and the
     /// folder sections a link back to Organize.
     pub(super) editable: bool,
@@ -38,6 +60,19 @@ pub(super) struct Rows {
     columns: usize,
     pair_columns: usize,
     width: f32,
+}
+
+/// The files that go to the Trash with the listed Trash marks.
+#[derive(Default)]
+struct Followers {
+    /// "+ RAW, XMP", by the marked photo they follow.
+    notes: HashMap<MediaId, String>,
+    ids: HashSet<MediaId>,
+    /// The same files, as paths.
+    paths: Vec<PathBuf>,
+    /// The RAW files among them, or left out of them, that the user rated,
+    /// rotated or chose to keep.
+    wanted: HashSet<MediaId>,
 }
 
 /// One photo in the plain view: a plan group, or a choice staged for after
@@ -59,12 +94,16 @@ struct Folder {
     /// Its photos by the folder they come from, in folder order. A photo
     /// renamed where it is comes "from" this folder itself.
     groups: Vec<(PathBuf, Vec<Item>)>,
+    /// What each of `groups` is made of: photos, videos or other files.
+    tallies: Vec<Tally>,
     /// False when every photo here keeps its folder and only gets a new name.
     arrivals: bool,
 }
 impl Folder {
-    fn photos(&self) -> usize {
-        self.groups.iter().map(|(_, items)| items.len()).sum()
+    fn tally(&self) -> Tally {
+        self.tallies
+            .iter()
+            .fold(Tally::default(), |all, tally| all.plus(*tally))
     }
 }
 
@@ -135,6 +174,59 @@ fn count(n: usize, one: &str, many: &str) -> String {
 fn photos(n: usize) -> String {
     count(n, "photo", "photos")
 }
+
+/// What a count of listed changes is made of, so a video or a notes file
+/// that moves with its folder is never called a photo. A RAW is a photo.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct Tally {
+    pub(super) photos: usize,
+    pub(super) videos: usize,
+    pub(super) others: usize,
+}
+impl Tally {
+    /// One file, by its name: `lead` is the file a person thinks of as the
+    /// photo among those that move together.
+    fn of(lead: &Path) -> Self {
+        let mut tally = Self::default();
+        match MediaKind::from_path(lead) {
+            _ if crate::core::model::is_apple_double(lead) => tally.others = 1,
+            Some(MediaKind::Video) => tally.videos = 1,
+            Some(_) => tally.photos = 1,
+            None => tally.others = 1,
+        }
+        tally
+    }
+    fn plus(self, other: Self) -> Self {
+        Self {
+            photos: self.photos + other.photos,
+            videos: self.videos + other.videos,
+            others: self.others + other.others,
+        }
+    }
+    pub(super) fn total(&self) -> usize {
+        self.photos + self.videos + self.others
+    }
+    /// "3 photos", "1 video", "2 photos and 1 video", "1 photo and 2 other
+    /// files", "2 files". The numbers add up to `total`.
+    pub(super) fn text(&self) -> String {
+        let mut parts = Vec::new();
+        if self.photos > 0 {
+            parts.push(photos(self.photos));
+        }
+        if self.videos > 0 {
+            parts.push(count(self.videos, "video", "videos"));
+        }
+        if self.others > 0 && parts.is_empty() {
+            parts.push(count(self.others, "file", "files"));
+        } else if self.others > 0 {
+            parts.push(count(self.others, "other file", "other files"));
+        }
+        if parts.is_empty() {
+            return photos(0);
+        }
+        and_list(&parts)
+    }
+}
 /// "a", "a and b", "a, b and c".
 fn and_list(parts: &[String]) -> String {
     match parts {
@@ -144,16 +236,16 @@ fn and_list(parts: &[String]) -> String {
     }
 }
 
-/// Plain counts: photos, never file operations. The sentence, the section
-/// headings and the Apply button all read these same numbers.
+/// Plain counts: photos, never file operations. The sentence, the Apply
+/// button and the Review badge all read these same numbers.
 #[derive(Default)]
 struct Summary {
-    moved: usize,
-    renamed: usize,
+    moved: Tally,
+    renamed: Tally,
     destinations: usize,
     new_destinations: usize,
     empty_folders: usize,
-    trashed: usize,
+    trashed: Tally,
     trashed_folders: usize,
     updated: usize,
     rotated: usize,
@@ -172,15 +264,31 @@ impl Summary {
             format!("change the rating or rotation of {n}")
         }
     }
+    /// Every change the sentence counts, added up: what the Review badge
+    /// shows while this list is on screen.
+    fn total(&self) -> usize {
+        self.moved.total()
+            + self.renamed.total()
+            + self.folder_renames
+            + self.empty_folders
+            + self.updated
+            + self.trashed.total()
+            + self.trashed_folders
+    }
     /// The button that applies the plan, named for what it does.
     fn apply_label(&self) -> String {
+        let (moved, renamed, trashed) = (
+            self.moved.total(),
+            self.renamed.total(),
+            self.trashed.total(),
+        );
         let kinds = [
-            self.moved,
-            self.renamed,
+            moved,
+            renamed,
             self.folder_renames,
             self.empty_folders,
             self.updated,
-            self.trashed + self.trashed_folders,
+            trashed + self.trashed_folders,
         ];
         let capital = |text: String| {
             let mut chars = text.chars();
@@ -190,14 +298,14 @@ impl Summary {
         };
         match kinds.iter().filter(|n| **n > 0).count() {
             0 => "Apply".into(),
-            1 if self.moved > 0 => format!("Move {}", photos(self.moved)),
-            1 if self.renamed > 0 => format!("Rename {}", photos(self.renamed)),
+            1 if moved > 0 => format!("Move {}", self.moved.text()),
+            1 if renamed > 0 => format!("Rename {}", self.renamed.text()),
             1 if self.updated > 0 => capital(self.updates_text(photos(self.updated))),
-            1 if self.trashed > 0 && self.trashed_folders == 0 => {
-                format!("Move {} to the Trash", photos(self.trashed))
+            1 if trashed > 0 && self.trashed_folders == 0 => {
+                format!("Move {} to the Trash", self.trashed.text())
             }
-            2 if self.moved > 0 && self.trashed > 0 && self.trashed_folders == 0 => {
-                format!("Move {} and trash {}", self.moved, self.trashed)
+            2 if moved > 0 && trashed > 0 && self.trashed_folders == 0 => {
+                format!("Move {moved} and trash {trashed}")
             }
             _ => "Apply all changes".into(),
         }
@@ -206,8 +314,22 @@ impl Summary {
 
 impl Rows {
     /// Index `plan`, and the choices staged to apply right after its moves.
-    fn replace(&mut self, plan: Option<&Plan>, staged: &[(MediaId, Decision)]) {
-        self.generation = self.generation.wrapping_add(1);
+    /// `followers` are the files that go to the Trash with a staged mark,
+    /// `videos` the staged choices that are about a video.
+    fn replace(
+        &mut self,
+        plan: Option<&Plan>,
+        staged: &[(MediaId, Decision)],
+        followers: &HashSet<MediaId>,
+        videos: &HashSet<MediaId>,
+    ) {
+        self.generation = match self.keep_scroll.filter(|_| plan.is_some()) {
+            Some(kept) => {
+                self.keep_scroll = None;
+                kept
+            }
+            None => self.generation.wrapping_add(1),
+        };
         self.ends.clear();
         self.movable.clear();
         self.folders.clear();
@@ -218,6 +340,11 @@ impl Rows {
         self.targets.clear();
         self.followers.clear();
         self.follower_ids.clear();
+        self.going.clear();
+        self.moves_first.clear();
+        self.trash_paths.clear();
+        self.emptied.clear();
+        self.wanted_raws = 0;
         self.layout.clear();
         self.columns = 0;
         self.pair_columns = 0;
@@ -227,14 +354,20 @@ impl Rows {
             return;
         };
         let summary = &mut self.summary;
-        // Photos going to the Trash are shown there, not also as moved.
+        // A photo marked for Trash that also moves is moved first and trashed
+        // from its new folder. It is listed once, under Trash, with the files
+        // that follow it there, never also as moved.
         let trashed: HashSet<MediaId> = staged
             .iter()
             .filter(|(_, d)| d.rejected)
             .map(|(id, _)| *id)
             .collect();
+        self.going = trashed.union(followers).copied().collect();
+        // Folders that only such photos pass through: not listed, and
+        // removed again by the same Apply when they are new.
+        let mut passing = std::collections::BTreeSet::<&Path>::new();
         // Destination folder -> (photos arrive, plan groups by source folder).
-        type Sources<'a> = BTreeMap<&'a Path, Vec<Item>>;
+        type Sources<'a> = BTreeMap<&'a Path, (Vec<Item>, Tally)>;
         let mut into = BTreeMap::<&Path, (bool, Sources)>::new();
         let mut created = Vec::new();
         let mut end = 0;
@@ -252,30 +385,55 @@ impl Rows {
                 }
                 _ => Vec::new(),
             };
-            let sources: Vec<&Path> = pairs.iter().map(|(s, _)| *s).collect();
-            let lead = pairs.get(lead_and_extras(&sources).0);
+            // What moves and stays is the photo here: a RAW the user keeps
+            // while its JPEG goes to the Trash is still listed as moving.
+            let mut kept = Vec::new();
+            let staying = if self.going.is_empty() {
+                &pairs
+            } else {
+                for (member, pair) in pairs.iter().enumerate() {
+                    let id = MediaId::for_path(pair.0);
+                    if trashed.contains(&id) {
+                        self.moves_first.insert(id, (group, member));
+                    } else if !followers.contains(&id) {
+                        kept.push(*pair);
+                    }
+                }
+                &kept
+            };
+            let sources: Vec<&Path> = staying.iter().map(|(s, _)| *s).collect();
+            let lead = staying
+                .get(lead_and_extras(&sources).0)
+                .filter(|(source, _)| staying.len() == pairs.len() || !is_sidecar(source));
+            if lead.is_none()
+                && let Some(folder) = pairs.first().and_then(|(_, to)| to.parent())
+            {
+                passing.insert(folder);
+            }
             if let Some((source, to)) = lead
                 && let Some(folder) = to.parent()
-                && !trashed.contains(&MediaId::for_path(source))
             {
-                let arrives = pairs.iter().any(|(s, to)| s.parent() != to.parent());
+                let arrives = staying.iter().any(|(s, to)| s.parent() != to.parent());
                 let entry = into.entry(folder).or_default();
                 entry.0 |= arrives;
-                let from = if arrives { source.parent() } else { None };
-                entry
-                    .1
-                    .entry(from.unwrap_or(folder))
-                    .or_default()
-                    .push(Item::Group(group));
+                let from = lead
+                    .filter(|_| arrives)
+                    .and_then(|(source, _)| source.parent());
+                let kind = Tally::of(source);
+                let listed = entry.1.entry(from.unwrap_or(folder)).or_default();
+                listed.0.push(Item::Group(group));
+                listed.1 = listed.1.plus(kind);
                 if arrives {
-                    summary.moved += 1;
+                    summary.moved = summary.moved.plus(kind);
                 } else {
-                    summary.renamed += 1;
+                    summary.renamed = summary.renamed.plus(kind);
                 }
             }
             match action {
                 Action::Trash { files } if !files.is_empty() => {
-                    summary.trashed += 1;
+                    let sources: Vec<&Path> = files.iter().map(|s| s.path.as_path()).collect();
+                    let lead = sources[lead_and_extras(&sources).0];
+                    summary.trashed = summary.trashed.plus(Tally::of(lead));
                     self.trash.push(Item::Group(group));
                 }
                 Action::TrashDirectory(_) => {
@@ -302,7 +460,11 @@ impl Rows {
                     self.renamed_folders.push(group);
                 }
                 Action::CreateDirectory { path } => created.push(path.as_path()),
-                Action::RemoveEmptyDirectory { .. } => summary.cleanup.push(group),
+                Action::RemoveEmptyDirectory { leftovers, .. } => {
+                    summary.cleanup.push(group);
+                    // With leftovers in it, the folder goes to the Trash.
+                    summary.trashed_folders += usize::from(!leftovers.is_empty());
+                }
                 _ => {}
             }
             end += match action {
@@ -320,7 +482,11 @@ impl Rows {
                 turns: decision.turns % 4,
             };
             if decision.rejected {
-                summary.trashed += 1;
+                summary.trashed = summary.trashed.plus(Tally {
+                    photos: usize::from(!videos.contains(&id)),
+                    videos: usize::from(videos.contains(&id)),
+                    others: 0,
+                });
                 self.trash.push(item);
             } else if decision.rating.is_some() || decision.turns % 4 != 0 {
                 summary.updated += 1;
@@ -346,6 +512,10 @@ impl Rows {
                     .range::<&Path, _>(path..)
                     .next()
                     .is_some_and(|(folder, _)| folder.starts_with(path))
+                    && !passing
+                        .range::<&Path, _>(path..)
+                        .next()
+                        .is_some_and(|folder| folder.starts_with(path))
                     && !made
                         .range::<&Path, _>((
                             std::ops::Bound::Excluded(path),
@@ -365,13 +535,15 @@ impl Rows {
                 summary.destinations += 1;
                 summary.new_destinations += usize::from(new);
             }
+            let (groups, tallies) = sources
+                .into_iter()
+                .map(|(from, (items, tally))| ((from.to_path_buf(), items), tally))
+                .unzip();
             self.folders.push(Folder {
                 path: path.to_path_buf(),
                 new,
-                groups: sources
-                    .into_iter()
-                    .map(|(from, items)| (from.to_path_buf(), items))
-                    .collect(),
+                groups,
+                tallies,
                 arrivals,
             });
         }
@@ -379,11 +551,63 @@ impl Rows {
     fn len(&self) -> usize {
         self.ends.last().copied().unwrap_or(0)
     }
-    /// Nothing to show: no file operation and no staged choice.
+    /// The list made next is this one with a change taken back: it keeps
+    /// its scroll position instead of starting at the top.
+    fn hold_scroll(&mut self) {
+        self.keep_scroll.get_or_insert(self.generation);
+    }
+    /// The next list is a new one, from the top.
+    pub(super) fn release_scroll(&mut self) {
+        self.keep_scroll = None;
+    }
+    /// The files listed for the Trash, where they are now.
+    pub(super) fn trash_paths(&self) -> Vec<PathBuf> {
+        self.trash_paths.clone()
+    }
+    /// The folders "Tidying up" names as left empty by the Trash marks.
+    pub(super) fn emptied(&self) -> Vec<(PathBuf, Vec<String>)> {
+        self.emptied.clone()
+    }
+    /// Takes the file worker's answer: `plan` holds one removal per folder
+    /// the listed Trash marks leave empty.
+    pub(super) fn set_emptied(&mut self, plan: &Plan) {
+        let folders = plan
+            .actions
+            .iter()
+            .filter_map(|action| match action {
+                Action::RemoveEmptyDirectory {
+                    path, leftovers, ..
+                } => Some((path.clone(), leftovers.clone())),
+                _ => None,
+            })
+            .collect();
+        self.restore_emptied(folders);
+    }
+    /// Names `folders` in "Tidying up". One that holds leftovers goes to
+    /// the Trash with them, and counts as a folder sent there.
+    pub(super) fn restore_emptied(&mut self, folders: Vec<(PathBuf, Vec<String>)>) {
+        let trashed = |folders: &[(PathBuf, Vec<String>)]| {
+            folders.iter().filter(|(_, left)| !left.is_empty()).count()
+        };
+        self.summary.trashed_folders -= trashed(&self.emptied);
+        self.summary.trashed_folders += trashed(&folders);
+        self.emptied = folders;
+        // The line appears, changes or goes: laid out again, scroll kept.
+        self.layout.clear();
+    }
+    /// Every change listed, as the sentence counts them.
+    pub(super) fn total(&self) -> usize {
+        self.summary.total()
+    }
     /// The RAW and XMP files listed as going to the Trash with a staged mark.
     pub(super) fn follower_ids(&self) -> HashSet<MediaId> {
         self.follower_ids.clone()
     }
+    /// How many RAW files Apply asks about before it trashes their JPEG.
+    pub(super) fn wanted_raws(&self) -> usize {
+        self.wanted_raws
+    }
+    /// Nothing to show: no file operation and no staged choice.
     pub(super) fn is_empty(&self) -> bool {
         self.len() == 0
             && self.trash.is_empty()
@@ -395,11 +619,11 @@ impl Rows {
     pub(super) fn applied_sentence(&self) -> String {
         let summary = &self.summary;
         let mut parts = Vec::new();
-        if summary.moved > 0 {
-            parts.push(format!("moved {}", photos(summary.moved)));
+        if summary.moved.total() > 0 {
+            parts.push(format!("moved {}", summary.moved.text()));
         }
-        if summary.renamed > 0 {
-            parts.push(format!("renamed {}", photos(summary.renamed)));
+        if summary.renamed.total() > 0 {
+            parts.push(format!("renamed {}", summary.renamed.text()));
         }
         if summary.folder_renames > 0 {
             parts.push(format!(
@@ -420,8 +644,8 @@ impl Rows {
             parts.push(format!("rated {}", photos(summary.rated)));
         }
         let mut trash = Vec::new();
-        if summary.trashed > 0 {
-            trash.push(photos(summary.trashed));
+        if summary.trashed.total() > 0 {
+            trash.push(summary.trashed.text());
         }
         if summary.trashed_folders > 0 {
             trash.push(count(summary.trashed_folders, "folder", "folders"));
@@ -562,7 +786,7 @@ impl Rows {
                     thumbs(&mut place, list, len, true, true);
                 }
             }
-            if !self.summary.cleanup.is_empty() {
+            if !self.summary.cleanup.is_empty() || !self.emptied.is_empty() {
                 place(Block::Tidy, TIDY_HEIGHT, false, false);
             }
             self.layout = layout;
@@ -597,15 +821,18 @@ fn file_name(path: &Path) -> String {
         .to_string_lossy()
         .into()
 }
+fn is_sidecar(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("xmp"))
+}
 /// Which of a photo's files a person thinks of as the photo, and a short
 /// note for the rest: a RAW twin or XMP sidecar is "+ RAW, XMP".
 fn lead_and_extras(paths: &[&Path]) -> (usize, String) {
     let kind = |p: &Path| MediaKind::from_path(p);
-    let sidecar = |p: &Path| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("xmp"));
     let lead = paths
         .iter()
         .position(|p| matches!(kind(p), Some(MediaKind::Photo | MediaKind::Video)))
-        .or_else(|| paths.iter().position(|p| !sidecar(p)))
+        .or_else(|| paths.iter().position(|p| !is_sidecar(p)))
         .unwrap_or(0);
     let mut extras: Vec<String> = Vec::new();
     for (i, path) in paths.iter().enumerate() {
@@ -692,30 +919,101 @@ struct Thumb {
     extras: String,
     /// Quarter turns shown beside the photo as it is now, "before → after".
     turns: u8,
+    /// On a photo listed for the Trash that moves first: where to, or its
+    /// new name. Empty for every other photo.
+    first: String,
+    /// The same as a sentence: "Moves to 2024 / Lisbon first".
+    first_said: String,
 }
 
-/// The folders a plan removes afterwards if nothing is left in them, in one line.
-fn cleanup_text(plan: &Plan, index: &Rows, root: Option<&Path>, limit: usize) -> String {
-    let names: Vec<String> = index
+/// What a plan tidies away afterwards, in one line. Folders that still hold
+/// thumbnail folders or Finder leftovers come first: they go to the Trash
+/// with them, named up to `limit` each. Empty folders are simply removed;
+/// one inside another that is removed is not named apart from it.
+/// `every` names each leftover; otherwise the "._name" file macOS keeps
+/// beside a "name" that is listed is not named a second time.
+fn cleanup_text(
+    plan: &Plan,
+    index: &Rows,
+    root: Option<&Path>,
+    limit: usize,
+    every: bool,
+) -> String {
+    let (mut trashed, mut removed) = (Vec::new(), Vec::new());
+    // The folders the moves empty, then those the Trash marks empty.
+    let by_moves = index
         .summary
         .cleanup
         .iter()
         .filter_map(|&group| match &plan.actions[group] {
-            Action::RemoveEmptyDirectory { path, .. } => Some(folder_text(path, root)),
+            Action::RemoveEmptyDirectory {
+                path, leftovers, ..
+            } => Some((path, leftovers)),
             _ => None,
-        })
-        .collect();
-    let shown = limit.min(names.len());
-    let mut text = names
+        });
+    let by_marks = index.emptied.iter().map(|(path, left)| (path, left));
+    let folders: Vec<_> = by_moves.chain(by_marks).collect();
+    // Each folder once: an empty folder inside one that is removed goes
+    // with it, and naming it too would say its parent a second time.
+    let gone: HashSet<&Path> = folders
         .iter()
-        .take(shown)
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(", ");
-    if names.len() > shown {
-        text.push_str(&format!(" and {} more", names.len() - shown));
+        .filter(|(_, leftovers)| leftovers.is_empty())
+        .map(|(path, _)| path.as_path())
+        .collect();
+    for (path, leftovers) in folders {
+        if leftovers.is_empty() && path.ancestors().skip(1).any(|above| gone.contains(above)) {
+            continue;
+        }
+        let folder = folder_text(path, root);
+        let names: Vec<String> = leftovers
+            .iter()
+            .filter(|name| {
+                every
+                    || !name
+                        .strip_prefix("._")
+                        .is_some_and(|owner| leftovers.iter().any(|other| other == owner))
+            })
+            .cloned()
+            .collect();
+        if leftovers.is_empty() {
+            removed.push(folder);
+        } else if names.len() <= limit {
+            trashed.push(format!("{folder}, with {}", and_list(&names)));
+        } else {
+            trashed.push(format!("{folder}, with {} leftover items", leftovers.len()));
+        }
     }
-    text
+    let listed = |names: &[String], separator: &str| {
+        let shown = limit.min(names.len());
+        let mut text = names[..shown].join(separator);
+        if names.len() > shown {
+            text.push_str(&format!(" and {} more", names.len() - shown));
+        }
+        text
+    };
+    let mut parts = Vec::new();
+    if !trashed.is_empty() {
+        parts.push(format!("Sent to the Trash: {}", listed(&trashed, "; ")));
+    }
+    if !removed.is_empty() {
+        parts.push(format!(
+            "Folders left empty are removed: {}",
+            listed(&removed, ", ")
+        ));
+    }
+    parts.join(". ")
+}
+
+/// File `member` of plan group `group`, when that group moves or renames
+/// files: where it is and where it goes.
+fn plan_pair(plan: &Plan, group: usize, member: usize) -> Option<(&Path, &Path)> {
+    match plan.actions.get(group)? {
+        Action::Move { files } | Action::FinishMove { files } => files
+            .get(member)
+            .map(|(source, to)| (source.path.as_path(), to.as_path())),
+        Action::RenameFile { source, to } => Some((source.path.as_path(), to.as_path())),
+        _ => None,
+    }
 }
 
 /// A label that reads the same to assistive technology as it looks.
@@ -729,7 +1027,7 @@ impl PhotoSortApp {
         let summary = &rows.summary;
         let output = plan.output_root.as_deref().or(self.root.as_deref());
         let mut parts = Vec::new();
-        if summary.moved > 0 {
+        if summary.moved.total() > 0 {
             let mut destinations = rows
                 .folders
                 .iter()
@@ -755,10 +1053,10 @@ impl PhotoSortApp {
                 ),
                 _ => count(summary.destinations, "folder", "folders"),
             };
-            parts.push(format!("move {} into {into}", photos(summary.moved)));
+            parts.push(format!("move {} into {into}", summary.moved.text()));
         }
-        if summary.renamed > 0 {
-            parts.push(format!("rename {}", photos(summary.renamed)));
+        if summary.renamed.total() > 0 {
+            parts.push(format!("rename {}", summary.renamed.text()));
         }
         if summary.folder_renames > 0 {
             parts.push(format!(
@@ -776,8 +1074,8 @@ impl PhotoSortApp {
             parts.push(summary.updates_text(photos(summary.updated)));
         }
         let mut trash = Vec::new();
-        if summary.trashed > 0 {
-            trash.push(photos(summary.trashed));
+        if summary.trashed.total() > 0 {
+            trash.push(summary.trashed.text());
         }
         if summary.trashed_folders > 0 {
             trash.push(count(summary.trashed_folders, "folder", "folders"));
@@ -806,6 +1104,8 @@ impl PhotoSortApp {
             name,
             extras: String::new(),
             turns: 0,
+            first: String::new(),
+            first_said: String::new(),
         };
         match item {
             Item::Staged { id, rating, turns } => {
@@ -822,17 +1122,52 @@ impl PhotoSortApp {
                 } else if list == List::Rate {
                     thumb.caption = update_text(rating, None, false);
                     thumb.hover = format!("{}: {}", thumb.name, thumb.caption);
-                } else if let Some(extras) = rows.followers.get(&id) {
-                    thumb.extras = extras.clone();
+                } else {
+                    if let Some(extras) = rows.followers.get(&id) {
+                        thumb.extras = extras.clone();
+                    }
+                    // Moved first, then trashed from there: said on the tile.
+                    if let Some((source, to)) = rows
+                        .moves_first
+                        .get(&id)
+                        .and_then(|&(group, member)| plan_pair(plan, group, member))
+                    {
+                        let renamed = source.file_name() != to.file_name();
+                        let folder = to
+                            .parent()
+                            .filter(|folder| source.parent() != Some(*folder));
+                        let base = plan.output_root.as_deref().or(root);
+                        let line = match folder {
+                            Some(folder) if renamed => format!(
+                                "Moves to {} as {} first",
+                                folder_text(folder, base),
+                                file_name(to)
+                            ),
+                            Some(folder) => format!("Moves to {} first", folder_text(folder, base)),
+                            None => format!("Renamed {} first", file_name(to)),
+                        };
+                        thumb.first = file_name(folder.unwrap_or(to));
+                        thumb.hover = format!("{}\n{line}", thumb.hover);
+                        thumb.first_said = line;
+                    }
                 }
                 Some(thumb)
             }
             Item::Group(group) => match &plan.actions[group] {
                 Action::Move { files } | Action::FinishMove { files } if !files.is_empty() => {
-                    let sources: Vec<&Path> = files.iter().map(|(s, _)| s.path.as_path()).collect();
+                    // Files listed for the Trash are named there, not here.
+                    let staying: Vec<_> = files
+                        .iter()
+                        .filter(|(s, _)| {
+                            rows.going.is_empty()
+                                || !rows.going.contains(&MediaId::for_path(&s.path))
+                        })
+                        .collect();
+                    let sources: Vec<&Path> =
+                        staying.iter().map(|(s, _)| s.path.as_path()).collect();
                     let (lead, extras) = lead_and_extras(&sources);
-                    let (source, to) = (&files[lead].0.path, &files[lead].1);
-                    Some(self.moved_thumb(source, to, extras))
+                    let (source, to) = staying.get(lead).copied()?;
+                    Some(self.moved_thumb(&source.path, to, extras))
                 }
                 Action::RenameFile { source, to } => {
                     Some(self.moved_thumb(&source.path, to, String::new()))
@@ -932,6 +1267,8 @@ impl PhotoSortApp {
             hover,
             extras,
             turns: 0,
+            first: String::new(),
+            first_said: String::new(),
         }
     }
 
@@ -1044,14 +1381,14 @@ impl PhotoSortApp {
             }
             Block::SourceHead(i, g) => {
                 let folder = &rows.folders[i];
-                let (from, items) = &folder.groups[g];
+                let (from, _) = &folder.groups[g];
+                let listed = folder.tallies[g].text();
                 let text = if *from == folder.path {
-                    format!("Already here, with a new name · {}", photos(items.len()))
+                    format!("Already here, with a new name · {listed}")
                 } else {
                     format!(
-                        "From {} · {}",
-                        folder_text(from, self.root.as_deref()),
-                        photos(items.len())
+                        "From {} · {listed}",
+                        folder_text(from, self.root.as_deref())
                     )
                 };
                 ui.scope_builder(
@@ -1102,14 +1439,11 @@ impl PhotoSortApp {
                         ui.label(RichText::new("Tidying up").font(medium(13.0)).color(MUTED));
                         line_label(
                             ui,
-                            RichText::new(format!(
-                                "Folders left empty are removed: {}",
-                                cleanup_text(plan, rows, root, 3)
-                            ))
-                            .small()
-                            .color(MUTED),
+                            RichText::new(cleanup_text(plan, rows, root, 3, false))
+                                .small()
+                                .color(MUTED),
                         )
-                        .on_hover_text(cleanup_text(plan, rows, root, 40));
+                        .on_hover_text(cleanup_text(plan, rows, root, 40, true));
                     },
                 );
             }
@@ -1129,13 +1463,13 @@ impl PhotoSortApp {
             }
             _ => leaf,
         };
-        let n = folder.photos();
-        let one = n == 1;
+        let tally = folder.tally();
+        let one = tally.total() == 1;
+        let listed = tally.text();
         match folder.groups.as_slice() {
             [] => format!("{dest} is created and stays empty for now"),
             [(from, _)] if *from == folder.path => format!(
-                "{} in {dest} {}",
-                photos(n),
+                "{listed} in {dest} {}",
                 if one {
                     "gets a new name"
                 } else {
@@ -1143,14 +1477,12 @@ impl PhotoSortApp {
                 }
             ),
             [(from, _)] => format!(
-                "{} from {} {} to {dest}",
-                photos(n),
+                "{listed} from {} {} to {dest}",
                 folder_text(from, self.root.as_deref()),
                 if one { "moves" } else { "move" }
             ),
             groups => format!(
-                "{dest} gets {} from {}",
-                photos(n),
+                "{dest} gets {listed} from {}",
                 count(groups.len(), "folder", "folders")
             ),
         }
@@ -1272,6 +1604,25 @@ impl PhotoSortApp {
             painter.rect_filled(pill, 6.0, Color32::from_black_alpha(170));
             painter.galley(pill.min + egui::vec2(S1, 2.0), galley, INK);
         }
+        if !thumb.first.is_empty() {
+            // Top left, beside Undo: where the photo goes before the Trash.
+            let mut job = LayoutJob::single_section(
+                format!("{} {}", icon::ARROW_RIGHT, thumb.first),
+                TextFormat {
+                    font_id: egui::TextStyle::Small.resolve(ui.style()),
+                    color: INK,
+                    ..Default::default()
+                },
+            );
+            job.wrap = egui::text::TextWrapping::truncate_at_width(slot - 24.0 - 3.0 * S1 - S2);
+            let galley = painter.layout_job(job);
+            let pill = egui::Rect::from_min_size(
+                tile.left_top() + egui::vec2(S1, S1 + 2.0),
+                galley.size() + egui::vec2(S2, 4.0),
+            );
+            painter.rect_filled(pill, 6.0, Color32::from_black_alpha(170));
+            painter.galley(pill.min + egui::vec2(S1, 2.0), galley, INK);
+        }
         let mut job = LayoutJob::single_section(
             thumb.caption.clone(),
             TextFormat {
@@ -1285,11 +1636,14 @@ impl PhotoSortApp {
         painter.galley(egui::pos2(tile.left(), tile.bottom() + 4.0), galley, MUTED);
         let area = egui::Rect::from_min_size(tile.min, egui::vec2(slot, TILE.y + CAPTION));
         let response = ui.interact(area, ui.id().with(("thumb", key)), Sense::hover());
-        let spoken = if thumb.name.ends_with(&thumb.caption) {
+        let mut spoken = if thumb.name.ends_with(&thumb.caption) {
             thumb.name.clone()
         } else {
             format!("{}: {}", thumb.name, thumb.caption)
         };
+        if !thumb.first_said.is_empty() {
+            spoken = format!("{spoken}. {}", thumb.first_said);
+        }
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &spoken));
         response.on_hover_text(&thumb.hover);
         // The Review step's Undo, over the top-right corner of the photo's place.
@@ -1556,25 +1910,76 @@ impl PhotoSortApp {
         } else {
             Vec::new()
         };
-        self.plan_rows.replace(plan.as_ref(), &staged);
+        let follow = self.trash_followers(&staged);
+        // A RAW that goes to the Trash with its JPEG is listed there only:
+        // its rating or rotation is never written.
+        let listed: Vec<(MediaId, Decision)> = staged
+            .into_iter()
+            .filter(|(id, _)| !follow.ids.contains(id))
+            .collect();
+        let videos: HashSet<MediaId> = listed
+            .iter()
+            .filter(|(id, _)| {
+                self.index
+                    .get(id)
+                    .is_some_and(|i| self.media[*i].kind == MediaKind::Video)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        self.plan_rows
+            .replace(plan.as_ref(), &listed, &follow.ids, &videos);
+        // Where each file listed for the Trash is now, for "Tidying up".
+        self.plan_rows.trash_paths = listed
+            .iter()
+            .filter(|(_, decision)| decision.rejected)
+            .filter_map(|(id, _)| self.index.get(id))
+            .map(|i| self.media[*i].path.clone())
+            .chain(follow.paths)
+            .collect();
         self.plan_rows.editable = listing && plan.is_some();
         self.plan = plan;
-        self.note_trash_followers(&staged);
+        self.plan_rows.followers = follow.notes;
+        self.plan_rows.follower_ids = follow.ids;
+        self.plan_rows.wanted_raws = follow.wanted.len();
     }
 
-    /// Names, on each listed Trash mark, the files Apply sends to the Trash
-    /// with it: its XMP sidecar and RAW twin. A file with a mark of its own
-    /// is listed on its own.
-    fn note_trash_followers(&mut self, staged: &[(MediaId, Decision)]) {
+    /// The files Apply sends to the Trash with each listed Trash mark: its
+    /// XMP sidecars ("IMG.xmp", "IMG.JPG.xmp") and RAW twin, a video's XMP. A file with a mark of its own is listed on
+    /// its own. A RAW the user rated, rotated or chose to keep follows only
+    /// once they said so; kept, it keeps the XMP it shares with the photo.
+    fn trash_followers(&self, staged: &[(MediaId, Decision)]) -> Followers {
+        use crate::core::preferences::WantedRaw;
+        let mut found = Followers::default();
         let rejected: HashSet<MediaId> = staged
             .iter()
             .filter(|(_, d)| d.rejected)
             .map(|(id, _)| *id)
             .collect();
         let Some(catalog) = self.catalog.as_ref().filter(|_| !rejected.is_empty()) else {
-            return;
+            return found;
         };
         let index = catalog.companion_index();
+        let keep = self
+            .raw_answer
+            .or(self.preferences.limit_prompts.wanted_raw)
+            != Some(WantedRaw::Trash);
+        // Kept over another photo in Pick Best or Easy Delete. Only a RAW
+        // beside a JPEG follows, and only with companions on.
+        let mut chosen = HashSet::new();
+        if self.companions {
+            chosen.extend(self.pick_review.chosen(&self.decisions));
+            chosen.extend(self.delete_review.chosen(&self.decisions));
+        }
+        let is_xmp = |p: &Path| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("xmp"));
+        let wanted = |p: &Path| {
+            let id = MediaId::for_path(p);
+            MediaKind::from_path(p) == Some(MediaKind::Raw)
+                && (chosen.contains(&id)
+                    || self
+                        .decisions
+                        .get(&id)
+                        .is_some_and(|d| d.rating.is_some() || d.turns % 4 != 0))
+        };
         for id in &rejected {
             let Some(media) = self.index.get(id).map(|i| &self.media[*i]) else {
                 continue;
@@ -1588,26 +1993,53 @@ impl PhotoSortApp {
             .into_iter()
             .filter(|path| !rejected.contains(&MediaId::for_path(path)))
             .collect();
+            let kept: Vec<MediaId> = followers
+                .iter()
+                .filter(|p| wanted(p))
+                .map(|p| MediaId::for_path(p))
+                .collect();
+            if keep && !kept.is_empty() {
+                // A kept RAW keeps its own "IMG.CR2.xmp" and the "IMG.xmp" it
+                // shares. A sidecar naming a file that goes still goes.
+                let going: Vec<PathBuf> = std::iter::once(media.path.clone())
+                    .chain(followers.iter().cloned())
+                    .filter(|p| !is_xmp(p) && !kept.contains(&MediaId::for_path(p)))
+                    .collect();
+                followers.retain(|p| going.contains(p) || going.contains(&p.with_extension("")));
+            }
+            found.wanted.extend(kept);
             if followers.is_empty() {
                 continue;
             }
             // "+ RAW, XMP", whatever order the folder lists them in.
-            followers.sort_by_key(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("xmp")));
+            followers.sort_by_key(|p| is_xmp(p));
             let paths: Vec<&Path> = std::iter::once(media.path.as_path())
                 .chain(followers.iter().map(PathBuf::as_path))
                 .collect();
             let (_, extras) = lead_and_extras(&paths);
-            self.plan_rows.followers.insert(*id, extras);
-            self.plan_rows
-                .follower_ids
+            found.notes.insert(*id, extras);
+            found
+                .ids
                 .extend(followers.iter().map(|p| MediaId::for_path(p)));
+            found.paths.extend(followers);
         }
+        found
     }
 
     /// Takes back the change of one photo listed on the Review step.
     pub(super) fn undo_review_item(&mut self, list: List, item: Item) {
         if self.busy || self.scanning {
             return;
+        }
+        // Already out of date: it is listed again from scratch anyway.
+        let stale = self.review_stale;
+        // The list is made again without this photo, where it was scrolled to.
+        if matches!(
+            (list, item),
+            (List::Trash | List::Rotate | List::Rate, Item::Staged { .. })
+                | (List::Folder(..), Item::Group(_))
+        ) {
+            self.plan_rows.hold_scroll();
         }
         match (list, item) {
             (List::Trash, Item::Staged { id, .. }) => {
@@ -1644,8 +2076,14 @@ impl PhotoSortApp {
             }
             _ => return,
         }
-        // The planned moves stay; the list follows the staged choices.
-        self.set_review_plan(self.plan.clone());
+        // The planned moves stay as they are: a Trash mark, rating or turn
+        // never changes them. Only the staged choices are listed again, with
+        // what Apply compares against, so nothing is planned a second time.
+        // A choice staged by anything else still marks the list out of date.
+        if !stale && let Some(plan) = self.plan.take() {
+            self.review_stale = false;
+            self.list_review(plan);
+        }
     }
 
     pub(super) fn plan_review_dialog(&mut self, ctx: &egui::Context) {
@@ -1842,11 +2280,13 @@ impl PhotoSortApp {
                 ui.label("New base name (optional)");
                 ui.add(egui::TextEdit::singleline(&mut edit.stem).hint_text("Leave empty to keep reviewed names").desired_width(f32::INFINITY));
                 if let Some(Action::Move { files }) = plan.actions.get(edit.group) {
+                    let reviewed: Vec<&PathBuf> = files.iter().map(|(_, to)| to).collect();
+                    let renamed = crate::core::organize::renamed_file_names(&reviewed, edit.stem.as_ref());
                     egui::ScrollArea::both().id_salt("pending_names_preview").max_height(48.).show_rows(ui, ui.text_style_height(&egui::TextStyle::Monospace), files.len(), |ui, rows| {
                         for row in rows {
                             let old = &files[row].1;
                             let name = if edit.stem.is_empty() { old.file_name().unwrap_or_default().to_owned() }
-                                else { crate::core::organize::renamed_file_name(old, edit.stem.as_ref()) };
+                                else { renamed[row].clone() };
                             let to = base.join(&edit.folder).join(name);
                             path_label(ui, "To  ", &to, Some(base));
                         }

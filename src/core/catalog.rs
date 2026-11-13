@@ -38,6 +38,25 @@ pub(crate) fn is_system_folder(entry: &walkdir::DirEntry) -> bool {
         })
 }
 
+/// What does not keep a folder alive once Organize has moved its photos out:
+/// NAS thumbnail folders, folder view caches and AppleDouble files. Trash and
+/// volume folders are not in these lists; a folder holding one is a drive.
+const LEFTOVER_FOLDERS: [&str; 2] = ["@eaDir", ".@__thumb"];
+const LEFTOVER_FILES: [&str; 2] = [".DS_Store", "Thumbs.db"];
+
+/// True for a file or folder of that kind, by name.
+pub(crate) fn is_leftover(name: &std::ffi::OsStr, is_dir: bool) -> bool {
+    let known = |names: &[&str]| {
+        name.to_str()
+            .is_some_and(|name| names.iter().any(|known| name.eq_ignore_ascii_case(known)))
+    };
+    if is_dir {
+        known(&LEFTOVER_FOLDERS)
+    } else {
+        known(&LEFTOVER_FILES) || is_apple_double(Path::new(name))
+    }
+}
+
 /// True when the system itself keeps a file's "._name" sibling with it on the
 /// volume holding `path`. macOS does on volumes without extended attributes
 /// of their own (exFAT, FAT, most network shares): it moves and trashes the
