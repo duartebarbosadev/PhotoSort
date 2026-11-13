@@ -325,6 +325,44 @@ struct Message<T> {
     epoch: u64,
     work: T,
 }
+/// Thins a grouping worker's progress to steps of a quarter percent: its
+/// threads report far more often than the bar can show.
+#[derive(Default)]
+struct ProgressSteps(Option<usize>);
+impl ProgressSteps {
+    /// Whether `done` of `total` is worth an event.
+    fn due(&mut self, done: usize, total: usize) -> bool {
+        let step = (total / 400).max(1);
+        let due = match self.0 {
+            None => true,
+            Some(last) => done >= last + step || (done == total && last != total),
+        };
+        if due {
+            self.0 = Some(done);
+        }
+        due
+    }
+}
+/// Wakes the idle image worker as soon as someone has work for it. The worker
+/// takes requests from several queues and can only sleep on one thing, so
+/// every sender signals here; a missed signal costs one short idle wait.
+#[derive(Clone, Default)]
+struct Wake(Arc<(Mutex<bool>, std::sync::Condvar)>);
+impl Wake {
+    fn notify(&self) {
+        *self.0.0.lock().unwrap() = true;
+        self.0.1.notify_one();
+    }
+    /// Returns once notified, also when that happened before the call, or
+    /// after `timeout`.
+    fn wait(&self, timeout: Duration) {
+        let mut notified = self.0.0.lock().unwrap();
+        if !*notified {
+            notified = self.0.1.wait_timeout(notified, timeout).unwrap().0;
+        }
+        *notified = false;
+    }
+}
 #[derive(Clone)]
 struct Publisher {
     tx: SyncSender<Envelope>,
@@ -424,6 +462,7 @@ pub struct Runtime {
     io: SyncSender<Message<IoWork>>,
     images: SyncSender<Message<ImageWork>>,
     priority: SyncSender<Message<ImageWork>>,
+    image_wake: Wake,
     generation: Arc<AtomicU64>,
     analysis: Arc<RunGeneration>,
     metadata_generation: Arc<RunGeneration>,
@@ -463,6 +502,7 @@ impl Runtime {
         let cache_control = super::cache::Control::with_directory(cache.clone());
         let (duplicate_tx, duplicate_rx) = mpsc::sync_channel::<SimilarityJob>(1);
         let (evidence_tx, evidence_rx) = mpsc::sync_channel::<similarity::EvidenceRequest>(1);
+        let image_wake = Wake::default();
         let duplicate_thread = similarity::spawn(
             publisher.clone(),
             duplicate_rx,
@@ -487,6 +527,7 @@ impl Runtime {
         );
         let image_thread = images::spawn(images::Wiring {
             publisher,
+            previews: previews.throttle(),
             cache,
             cache_control: cache_control.clone(),
             processing: processing.clone(),
@@ -497,6 +538,7 @@ impl Runtime {
             images: image_rx,
             priority: priority_rx,
             evidence: evidence_rx,
+            wake: image_wake.clone(),
             similarity: duplicate_tx,
             subjects: subject_tx,
         });
@@ -514,6 +556,7 @@ impl Runtime {
             io,
             images,
             priority,
+            image_wake,
             generation,
             analysis,
             metadata_generation,
@@ -527,6 +570,7 @@ impl Runtime {
             .lock()
             .unwrap()
             .update(self.epoch(), requests);
+        self.image_wake.notify();
     }
     pub fn epoch(&self) -> u64 {
         self.generation.load(Ordering::Acquire)
@@ -671,7 +715,9 @@ impl Runtime {
                 epoch: self.epoch(),
                 work,
             })
-            .map_err(|_| "Image queue is full".into())
+            .map_err(|_| "Image queue is full")?;
+        self.image_wake.notify();
+        Ok(())
     }
 }
 impl Drop for Runtime {

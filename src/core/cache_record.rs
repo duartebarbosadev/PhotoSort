@@ -14,17 +14,21 @@ pub(crate) enum Kind {
     Subjects = 1,
     Measurements = 2,
     Aesthetic = 3,
-    Pair = 4,
+    // 4 was one same-subject pair per file; `Pairs` replaced it.
     Regional = 5,
     Faces = 6,
     Recognition = 7,
-    Duplicate = 8,
+    // 8 was one duplicate assessment per file; `Duplicates` replaced it.
     Rotation = 9,
     Metadata = 10,
     /// Each person's eyes, judged for Easy Delete (`core::eyes`).
     Eyes = 12,
     #[cfg(any(test, target_os = "macos"))]
     Compiled = 11,
+    /// One photo's same-subject verdicts with the photos after it.
+    Pairs = 13,
+    /// One photo's duplicate assessments with the photos after it.
+    Duplicates = 14,
 }
 pub(crate) fn encode(kind: Kind, value: &impl Serialize) -> Result<Vec<u8>> {
     let payload = postcard::to_allocvec(value)?;

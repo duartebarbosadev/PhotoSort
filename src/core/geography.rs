@@ -58,6 +58,23 @@ pub struct Geography {
     root: Option<usize>,
 }
 impl Geography {
+    /// The place index next to the app, loaded the first time a photo has a
+    /// GPS position and then shared by every pipeline of the process: it is
+    /// about 30 MB, and the image worker, each analysis helper, each preview
+    /// builder and every copy have a pipeline of their own. `None` when the
+    /// index is missing or cannot be read.
+    pub fn shared() -> Option<&'static Self> {
+        static SHARED: std::sync::OnceLock<Option<Geography>> = std::sync::OnceLock::new();
+        SHARED
+            .get_or_init(|| {
+                let path = super::models::resource_roots()
+                    .into_iter()
+                    .map(|root| root.join("locations.tsv"))
+                    .find(|path| path.is_file())?;
+                Self::load(&path).ok()
+            })
+            .as_ref()
+    }
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let mut places = Vec::new();
         for line in std::fs::read_to_string(path)?.lines() {

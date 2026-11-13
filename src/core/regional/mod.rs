@@ -3,9 +3,16 @@
 pub mod grouping;
 #[cfg(test)]
 mod tests;
+use crate::core::parallel;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{
+        Mutex,
+        atomic::{AtomicU32, AtomicUsize, Ordering},
+    },
+};
 
 pub const DEFAULT_EPS: f32 = 0.055;
 pub fn normalize_distance(value: f32) -> f32 {
@@ -143,15 +150,37 @@ impl Features {
         let mut sum = 0.;
         for (index, (a, b)) in self.rows.iter().zip(&other.rows).enumerate() {
             sum += dot(a, b);
-            let mut optimistic = sum;
-            for _ in index + 1..count {
-                optimistic += upper;
-            }
-            if (1. - optimistic / count as f32).clamp(0., 2.) > eps {
+            if hopeless(sum, count - index - 1, count, upper, eps) {
                 return Ok((false, index + 1));
             }
         }
         Ok((true, count))
+    }
+    /// True only when `within_distance` would reject this pair after its first
+    /// region, decided from a vectorized dot product of that region instead of
+    /// the exact one. The exact dot is at most `error` above the fast one, and
+    /// `hopeless` never rejects a larger sum where it accepts a smaller one, so
+    /// a pair hopeless at that upper bound is hopeless at its exact value too.
+    /// Everything else goes to `within_distance` unchanged.
+    fn surely_apart(&self, other: &Self, eps: f32, error: f64) -> bool {
+        let count = self.rows.len();
+        if count != other.rows.len() || count == 1 || self.rows[0].len() != other.rows[0].len() {
+            return false;
+        }
+        let fast = parallel::fast_dot(&self.rows[0], &other.rows[0]);
+        let most = ((f64::from(fast) + error) as f32).next_up();
+        let upper = self.dot_upper.max(other.dot_upper);
+        hopeless(0. + most, count - 1, count, upper, eps)
+    }
+    /// Bytes this descriptor holds in memory.
+    fn bytes(&self) -> u64 {
+        self.rows
+            .iter()
+            .map(|row| {
+                (std::mem::size_of_val(row.as_slice()) + std::mem::size_of::<Vec<f32>>()) as u64
+            })
+            .sum::<u64>()
+            + std::mem::size_of::<Self>() as u64
     }
     /// Ordered regions must correspond. Only incomplete/unequal records use the
     /// reference best-pair fallback; a matching background is not enough otherwise.
@@ -175,6 +204,16 @@ impl Features {
         };
         Ok((1. - similarity).clamp(0., 2.))
     }
+}
+/// Whether `count` regions cannot average within `eps` any more, when the
+/// regions seen so far sum to `sum` and each of the `remaining` ones is as
+/// similar as two descriptors can be.
+fn hopeless(sum: f32, remaining: usize, count: usize, upper: f32, eps: f32) -> bool {
+    let mut optimistic = sum;
+    for _ in 0..remaining {
+        optimistic += upper;
+    }
+    (1. - optimistic / count as f32).clamp(0., 2.) > eps
 }
 fn dot(a: &[f32], b: &[f32]) -> f32 {
     a.iter()
@@ -238,6 +277,64 @@ pub fn cluster(
     cluster_with(inputs, eps, load, cancelled, Features::within_distance)
 }
 
+/// The distinct descriptors of a library: `nodes` are the inputs that stand
+/// for them, `node_for` maps every input to its node, `weights` counts the
+/// inputs behind each node.
+struct Unique {
+    nodes: Vec<usize>,
+    node_for: Vec<usize>,
+    weights: Vec<usize>,
+    digests: Vec<[u8; 32]>,
+}
+
+/// Loads every input once and collapses identical admissible descriptors.
+/// `keep` is handed each distinct one and may end the pass by returning
+/// false. `None` when cancelled or ended.
+fn deduplicate(
+    inputs: &[Input],
+    eps: f32,
+    load: &mut impl FnMut(&str) -> Result<Features>,
+    cancelled: &impl Fn() -> bool,
+    stats: &mut Stats,
+    mut keep: impl FnMut(usize, Features) -> bool,
+) -> Result<Option<Unique>> {
+    let mut identities = HashMap::new();
+    let mut unique = Unique {
+        nodes: Vec::new(),
+        node_for: Vec::with_capacity(inputs.len()),
+        weights: Vec::new(),
+        digests: Vec::new(),
+    };
+    for (index, input) in inputs.iter().enumerate() {
+        if cancelled() {
+            return Ok(None);
+        }
+        let features = load(&input.key)?;
+        stats.evidence_loads += 1;
+        stats.peak_resident_records = 1;
+        let identity = (input.portrait, features.digest());
+        let mergeable = features.distance(&features)? <= eps;
+        if mergeable && let Some(&node) = identities.get(&identity) {
+            unique.node_for.push(node);
+            unique.weights[node] += 1;
+            continue;
+        }
+        let node = unique.nodes.len();
+        unique.nodes.push(index);
+        unique.digests.push(identity.1);
+        unique.weights.push(1);
+        unique.node_for.push(node);
+        if mergeable {
+            identities.insert(identity, node);
+        }
+        if !keep(index, features) {
+            return Ok(None);
+        }
+    }
+    stats.unique_records = unique.nodes.len();
+    Ok(Some(unique))
+}
+
 fn cluster_with(
     inputs: &[Input],
     eps: f32,
@@ -250,39 +347,14 @@ fn cluster_with(
         "Invalid clustering distance"
     );
     let mut stats = Stats::default();
-    let mut identities = HashMap::new();
-    let mut nodes = Vec::<usize>::new();
-    let mut node_for = Vec::with_capacity(inputs.len());
-    let mut weights = Vec::<usize>::new();
-    let mut digests = Vec::new();
-    for (index, input) in inputs.iter().enumerate() {
-        if cancelled() {
-            return Ok(None);
-        }
-        let features = load(&input.key)?;
-        stats.evidence_loads += 1;
-        stats.peak_resident_records = 1;
-        let identity = (input.portrait, features.digest());
-        let mergeable = features.distance(&features)? <= eps;
-        if mergeable && let Some(&node) = identities.get(&identity) {
-            node_for.push(node);
-            weights[node] += 1;
-            continue;
-        }
-        let node = nodes.len();
-        nodes.push(index);
-        digests.push(identity.1);
-        weights.push(1);
-        node_for.push(node);
-        if mergeable {
-            identities.insert(identity, node);
-        }
-    }
-    drop(identities);
-    stats.unique_records = nodes.len();
+    let Some(unique) = deduplicate(inputs, eps, &mut load, &cancelled, &mut stats, |_, _| true)?
+    else {
+        return Ok(None);
+    };
+    let nodes = &unique.nodes;
     let mut sets = Sets {
         parents: (0..nodes.len()).collect(),
-        sizes: weights,
+        sizes: unique.weights.clone(),
     };
     for orientation in [true, false] {
         let partition: Vec<_> = (0..nodes.len())
@@ -344,36 +416,51 @@ fn cluster_with(
             }
         }
     }
+    let roots = (0..nodes.len()).map(|node| sets.root(node)).collect();
+    label(inputs, unique, roots, &cancelled, stats)
+}
+
+/// Numbers the components. `roots` names each node's component by one of its
+/// nodes.
+fn label(
+    inputs: &[Input],
+    unique: Unique,
+    roots: Vec<usize>,
+    cancelled: &impl Fn() -> bool,
+    stats: Stats,
+) -> Result<Option<Groups>> {
+    let Unique {
+        nodes,
+        node_for,
+        weights,
+        digests,
+    } = unique;
     // One digest per unique node was already computed during deduplication.
     // The minimum digest identifies a component independently of union roots,
     // source/cache keys and the order in which edges were visited. No extra
     // descriptor loads or model calls are needed for stable folder numbering.
     let mut component_digests = vec![[u8::MAX; 32]; nodes.len()];
+    let mut sizes = vec![0; nodes.len()];
     for (node, digest) in digests.into_iter().enumerate() {
         if cancelled() {
             return Ok(None);
         }
-        let root = sets.root(node);
+        let root = roots[node];
         component_digests[root] = component_digests[root].min(digest);
+        sizes[root] += weights[node];
     }
     let mut ordered = BTreeMap::new();
     for (node, digest) in component_digests.into_iter().enumerate() {
         if cancelled() {
             return Ok(None);
         }
-        if sets.root(node) == node {
+        if roots[node] == node {
             let input = &inputs[nodes[node]];
             // Identical non-mergeable evidence (such as zero vectors) has no
             // content identity. Only that tie uses a cache key, then node index;
             // distinct valid components never depend on a path-derived key.
             ordered.insert(
-                (
-                    !input.portrait,
-                    sets.sizes[node] == 1,
-                    digest,
-                    &input.key,
-                    node,
-                ),
+                (!input.portrait, sizes[node] == 1, digest, &input.key, node),
                 node,
             );
         }
@@ -390,7 +477,190 @@ fn cluster_with(
         if cancelled() {
             return Ok(None);
         }
-        labels.push(root_labels[sets.root(node)]);
+        labels.push(root_labels[roots[node]]);
     }
     Ok((!cancelled()).then_some(Groups { labels, stats }))
+}
+
+/// Which descriptors are joined, shared by the comparing threads. A node
+/// only ever points at a lower one, so the links cannot form a loop whatever
+/// order the threads work in, and the components they describe do not depend
+/// on that order.
+struct Links(Vec<AtomicU32>);
+impl Links {
+    fn root(&self, mut node: u32) -> u32 {
+        loop {
+            let parent = self.0[node as usize].load(Ordering::Relaxed);
+            if parent == node {
+                return node;
+            }
+            let grand = self.0[parent as usize].load(Ordering::Relaxed);
+            // A shortcut another thread already made is as good.
+            let _ = self.0[node as usize].compare_exchange_weak(
+                parent,
+                grand,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
+            node = grand;
+        }
+    }
+    fn join(&self, a: u32, b: u32) {
+        loop {
+            let (a, b) = (self.root(a), self.root(b));
+            if a == b {
+                return;
+            }
+            let (high, low) = (a.max(b), a.min(b));
+            if self.0[high as usize]
+                .compare_exchange(high, low, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return;
+            }
+        }
+    }
+}
+
+/// Descriptors compared against at a time, so a block's own stay in the
+/// processor cache.
+const COLUMNS: usize = 128;
+
+/// `cluster` for a library whose descriptors fit in `budget` bytes: each is
+/// loaded once and stays in memory, and the pairs are compared on up to
+/// `threads` threads, most of them settled by `Features::surely_apart`. The
+/// labels are those of `cluster`. A library that does not fit, or mixes
+/// descriptor sizes, is left to `cluster`. `progress` hears the part done.
+pub fn cluster_resident(
+    inputs: &[Input],
+    eps: f32,
+    mut load: impl FnMut(&str) -> Result<Features>,
+    cancelled: impl Fn() -> bool,
+    threads: usize,
+    budget: u64,
+    mut progress: impl FnMut(f64),
+) -> Result<Option<Groups>> {
+    ensure!(
+        eps.is_finite() && eps > 0. && eps <= 2.,
+        "Invalid clustering distance"
+    );
+    // Loading is a small part of the work; the comparison takes the rest.
+    const LOADING: f64 = 0.1;
+    let mut stats = Stats::default();
+    let mut resident = Vec::<Features>::new();
+    let (mut held, mut fits) = (0u64, true);
+    let unique = deduplicate(
+        inputs,
+        eps,
+        &mut load,
+        &cancelled,
+        &mut stats,
+        |index, features| {
+            held += features.bytes();
+            fits = held <= budget
+                && resident
+                    .first()
+                    .is_none_or(|first| first.rows[0].len() == features.rows[0].len());
+            resident.push(features);
+            if index % 256 == 0 {
+                progress(LOADING * index as f64 / inputs.len() as f64);
+            }
+            fits
+        },
+    )?;
+    if !fits || u32::try_from(resident.len()).is_err() {
+        drop(resident);
+        return cluster(inputs, eps, load, cancelled);
+    }
+    let Some(unique) = unique else {
+        return Ok(None);
+    };
+    let nodes = &unique.nodes;
+    let width = resident.first().map_or(0, |first| first.rows[0].len());
+    let error = parallel::dot_error(width, 1.0001, 1.0001);
+    let links = Links((0..nodes.len() as u32).map(AtomicU32::new).collect());
+    let (comparisons, regions) = (AtomicUsize::new(0), AtomicUsize::new(0));
+    let failure = Mutex::new(None);
+    let pairs = |count: usize| count * count.saturating_sub(1) / 2;
+    let partitions = [true, false].map(|orientation| {
+        (0..nodes.len() as u32)
+            .filter(|node| inputs[nodes[*node as usize]].portrait == orientation)
+            .collect::<Vec<_>>()
+    });
+    let total = partitions
+        .iter()
+        .map(|p| pairs(p.len()))
+        .sum::<usize>()
+        .max(1);
+    let mut before = 0;
+    for partition in &partitions {
+        let count = partition.len();
+        let compared = parallel::blocks(
+            threads,
+            count.div_ceil(BLOCK),
+            &cancelled,
+            |blocks| {
+                // Blocks are taken in order, so the pairs still to compare
+                // are those among the photos after the finished blocks.
+                let left = pairs(count.saturating_sub(blocks * BLOCK));
+                let done = before + pairs(count) - left;
+                progress((LOADING + (1. - LOADING) * done as f64 / total as f64).min(1.));
+            },
+            |block, stop| {
+                let rows = block * BLOCK..((block + 1) * BLOCK).min(count);
+                let (mut compared, mut evaluated) = (0, 0);
+                for columns in (rows.start..count).step_by(COLUMNS) {
+                    if stop() {
+                        return None;
+                    }
+                    for i in rows.clone() {
+                        let a = partition[i];
+                        let first = &resident[a as usize];
+                        for &b in &partition[columns.max(i + 1)..(columns + COLUMNS).min(count)] {
+                            let second = &resident[b as usize];
+                            if first.surely_apart(second, eps, error) {
+                                compared += 1;
+                                evaluated += 1;
+                                continue;
+                            }
+                            if links.root(a) == links.root(b) {
+                                continue;
+                            }
+                            compared += 1;
+                            match first.within_distance(second, eps) {
+                                Ok((close, regions)) => {
+                                    evaluated += regions;
+                                    if close {
+                                        links.join(a, b);
+                                    }
+                                }
+                                Err(error) => {
+                                    *failure.lock().unwrap() = Some(error);
+                                    return None;
+                                }
+                            }
+                        }
+                    }
+                }
+                comparisons.fetch_add(compared, Ordering::Relaxed);
+                regions.fetch_add(evaluated, Ordering::Relaxed);
+                Some(())
+            },
+        );
+        if let Some(error) = failure.lock().unwrap().take() {
+            return Err(error);
+        }
+        if compared.is_none() {
+            return Ok(None);
+        }
+        before += pairs(count);
+    }
+    stats.comparisons = comparisons.into_inner();
+    stats.region_comparisons = regions.into_inner();
+    stats.peak_resident_records = resident.len().max(1);
+    drop(resident);
+    let roots = (0..nodes.len() as u32)
+        .map(|node| links.root(node) as usize)
+        .collect();
+    label(inputs, unique, roots, &cancelled, stats)
 }
