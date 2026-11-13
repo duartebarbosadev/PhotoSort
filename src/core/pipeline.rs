@@ -120,8 +120,8 @@ impl CachedMetadata {
 /// Owned by one imaging actor. Concurrent UI requests are coalesced before entering it.
 pub struct Pipeline {
     colors: super::color::Manager,
-    geography: Option<super::geography::Geography>,
-    geography_checked: bool,
+    /// Whether metadata gets its place name; see `skip_places`.
+    places: bool,
     cache: HashMap<String, Entry>,
     metadata: LruCache<String, Metadata>,
     details: HashMap<String, DetailEntry>,
@@ -151,8 +151,7 @@ impl Pipeline {
     pub fn new(budget: usize, disk: PathBuf) -> Self {
         Self {
             colors: super::color::Manager::default(),
-            geography: None,
-            geography_checked: false,
+            places: true,
             cache: HashMap::new(),
             metadata: LruCache::sparse(METADATA_CAPACITY),
             details: HashMap::new(),
@@ -180,11 +179,17 @@ impl Pipeline {
     pub fn limit_threads(&mut self, threads: usize) {
         self.threads = threads.max(1);
     }
+    /// Leaves the place name out of this pipeline's metadata. Preview
+    /// builders throw their metadata away and analysis helpers hand theirs to
+    /// the image worker, which names the place itself (`adopt_analysis`), so
+    /// neither needs the place index.
+    pub fn skip_places(&mut self) {
+        self.places = false;
+    }
     /// Whether another pipeline may prepare this photo next to the image
-    /// worker's. libvips formats render under one lock the screen needs, and
-    /// videos belong to the image worker, which owns playback.
+    /// worker's. Videos belong to the image worker, which owns playback.
     pub fn shared_decode(media: &Media) -> bool {
-        media.kind != MediaKind::Video && !native_raster(media)
+        media.kind != MediaKind::Video
     }
     pub fn standard() -> Self {
         Self::new(128 * 1024 * 1024, session::cache_dir())
@@ -318,28 +323,23 @@ impl Pipeline {
                 }
             }
         }
-        if let Some((lat, lon)) = meta.gps {
-            if !self.geography_checked {
-                self.geography_checked = true;
-                if let Some(path) = super::models::resource_roots()
-                    .into_iter()
-                    .map(|p| p.join("locations.tsv"))
-                    .find(|p| p.is_file())
-                {
-                    self.geography = super::geography::Geography::load(&path).ok();
-                }
-            }
-            if let Some(geo) = &self.geography {
-                meta.location = geo.nearest(lat, lon);
-            }
-        }
-
+        self.name_place(&mut meta);
         anyhow::ensure!(
             !cancelled() && Self::key(media)? == key,
             "Photo changed or metadata read cancelled"
         );
         self.metadata.put(key.into(), meta.clone());
         Ok(meta)
+    }
+    /// The nearest place to the photo's GPS position. Never persisted: the
+    /// place index can change between versions.
+    fn name_place(&self, meta: &mut Metadata) {
+        if self.places
+            && let Some((lat, lon)) = meta.gps
+            && let Some(places) = super::geography::Geography::shared()
+        {
+            meta.location = places.nearest(lat, lon);
+        }
     }
     fn render_info(&self, key: &str) -> Option<CachedRender> {
         if self.disk_budget == 0 {
@@ -491,7 +491,7 @@ impl Pipeline {
         cancelled: impl Fn() -> bool + Sync,
     ) -> Result<bool> {
         // libvips formats shrink while loading, so building them ahead gains
-        // little and would hold libvips' one render lock against the screen.
+        // little for the disk it takes.
         if self.disk_budget == 0 || media.kind == MediaKind::Video || native_raster(media) {
             return Ok(false);
         }
@@ -718,13 +718,15 @@ impl Pipeline {
     /// An analysis image another pipeline of this cache prepared for `media`
     /// (see `jobs::ahead`), kept as if this pipeline had prepared it: its
     /// metadata, with the geometry the decode found, and the image itself
-    /// for later model stages and duplicate review.
-    pub fn adopt_analysis(&mut self, media: &Media, asset: &Asset) -> Result<()> {
+    /// for later model stages and duplicate review. The other pipeline
+    /// leaves the place name out (`skip_places`); it is added here.
+    pub fn adopt_analysis(&mut self, media: &Media, mut asset: Asset) -> Result<Asset> {
         let source_key = Self::key(media)?;
         let memory_key = analysis_key(&source_key);
+        self.name_place(&mut asset.metadata);
         self.tick += 1;
-        self.remember(source_key, memory_key, asset);
-        Ok(())
+        self.remember(source_key, memory_key, &asset);
+        Ok(asset)
     }
     fn remember(&mut self, source_key: String, memory_key: String, asset: &Asset) {
         self.metadata.put(source_key, asset.metadata.clone());
@@ -842,15 +844,23 @@ impl Pipeline {
             if native_raster(media) {
                 self.stats.native_renders += 1;
                 super::playback::locate_runtime()?;
-                let rendered = photosort_imaging_vips::render(
-                    &media.path,
-                    photosort_imaging_vips::Request {
-                        edge: (!original).then_some(PROXY_EDGE),
-                        region: None,
-                        memory: Some(self.colors.allowance()),
-                    },
-                    cancelled,
-                )
+                let request = photosort_imaging_vips::Request {
+                    edge: (!original).then_some(PROXY_EDGE),
+                    region: None,
+                    memory: Some(self.colors.allowance()),
+                };
+                // Pipelines that run one per core (`limit_threads`) keep
+                // libvips to as many threads; the pixels are the same.
+                let rendered = if self.threads < 4 {
+                    photosort_imaging_vips::render_with_workers(
+                        &media.path,
+                        request,
+                        self.threads,
+                        cancelled,
+                    )
+                } else {
+                    photosort_imaging_vips::render(&media.path, request, cancelled)
+                }
                 .map_err(|error| vips_failure(error, meta))?;
                 let image = native_pixels(rendered.pixels, rendered.width, rendered.height)?;
                 (
@@ -1364,8 +1374,7 @@ fn native_pixels(
 const PREVIEW_QUALITY: u8 = 92;
 /// A cache image (see `encode_cached` for which are JPEG), marked as used.
 /// image-rs decodes it, not libvips: each libvips call has a fixed cost that
-/// dominates on small images, and image-rs needs none of libvips' one render
-/// lock, which the screen waits on. Median decode times on Windows: a 2048 px
+/// dominates on small images. Median decode times on Windows: a 2048 px
 /// preview 13–16 ms against 17–19 ms, a 320 px thumbnail 0.3–0.5 ms against
 /// 2.0–2.6 ms. Original photos are the opposite case; see `native_raster`.
 fn read_cached_image(disk: &Path, key: &str) -> Option<DynamicImage> {
@@ -1826,6 +1835,63 @@ mod metadata_cache_tests {
             .render_whole_cancellable(&media, 16, &|| false)
             .unwrap();
         assert_eq!(*rendered, *expected);
+    }
+
+    #[test]
+    fn a_helpers_photo_gets_its_place_name_when_the_image_worker_adopts_it() {
+        use image::ImageEncoder;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("lisbon.jpg");
+        // 38 deg 43' N, 9 deg 8' W.
+        let degrees = |degrees, minutes| {
+            exif::Value::Rational(
+                [degrees, minutes, 0]
+                    .map(|num| exif::Rational { num, denom: 1 })
+                    .to_vec(),
+            )
+        };
+        let letter = |letter: &[u8]| exif::Value::Ascii(vec![letter.to_vec()]);
+        let fields = [
+            (exif::Tag::GPSLatitudeRef, letter(b"N")),
+            (exif::Tag::GPSLatitude, degrees(38, 43)),
+            (exif::Tag::GPSLongitudeRef, letter(b"W")),
+            (exif::Tag::GPSLongitude, degrees(9, 8)),
+        ]
+        .map(|(tag, value)| exif::Field {
+            tag,
+            ifd_num: exif::In::PRIMARY,
+            value,
+        });
+        let mut writer = exif::experimental::Writer::new();
+        fields.iter().for_each(|field| writer.push_field(field));
+        let mut tiff = std::io::Cursor::new(Vec::new());
+        writer.write(&mut tiff, false).unwrap();
+        let mut file = std::fs::File::create(&path).unwrap();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut file);
+        encoder.set_exif_metadata(tiff.into_inner()).unwrap();
+        encoder.encode_image(&image::RgbImage::new(64, 48)).unwrap();
+        drop(file);
+        let media = Media {
+            id: MediaId::for_path(&path),
+            fingerprint: Fingerprint::read(&path).unwrap(),
+            kind: MediaKind::Photo,
+            path,
+        };
+        // Helpers and preview builders never load the place index.
+        let mut helper = Pipeline::new(0, directory.path().join("cache"));
+        helper.skip_places();
+        let prepared = helper.analysis(&media, || false).unwrap();
+        assert!(prepared.metadata.gps.is_some());
+        assert!(prepared.metadata.location.is_none());
+        // The image worker names the place of what it adopts, and that is
+        // the metadata it publishes from then on.
+        let mut worker = Pipeline::new(64 << 20, directory.path().join("cache"));
+        let adopted = worker.adopt_analysis(&media, prepared).unwrap();
+        let place = adopted.metadata.location.expect("place named on adoption");
+        assert_eq!(place.country, "Portugal");
+        let published = worker.metadata(&media).unwrap().location.unwrap();
+        assert_eq!(published.city, place.city);
+        assert_eq!(worker.stats.metadata_reads + worker.stats.decodes, 0);
     }
 
     #[test]

@@ -71,6 +71,14 @@ impl Machine {
     }
 }
 
+/// What similarity and duplicate grouping may hold in memory at once: an
+/// eighth of the memory, less while the system is short of it. Above it they
+/// read their evidence from disk in pieces instead.
+pub fn grouping_allowance() -> u64 {
+    let budget = usize::try_from(Machine::current().ram / 8).unwrap_or(usize::MAX);
+    Pressure::current().share(budget) as u64
+}
+
 /// How short the whole system is of memory right now, as the platform says.
 /// Caches shrink while it is high and grow back once it clears.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -83,10 +91,21 @@ pub enum Pressure {
     Critical,
 }
 static PRESSURE: AtomicU8 = AtomicU8::new(0);
+thread_local! {
+    /// What `Pressure::current` answers on this thread in a test build.
+    static PINNED: std::cell::Cell<Pressure> = const { std::cell::Cell::new(Pressure::Normal) };
+}
 impl Pressure {
     /// The current level. The first call starts a thread that checks the
     /// system every two seconds; a check costs one system call.
+    ///
+    /// Tests never read the system, or they would pass or fail with what
+    /// else the computer is doing: every thread sees Normal, but one that
+    /// pinned a level for itself with `pin`.
     pub fn current() -> Self {
+        if cfg!(any(test, feature = "test-isolation")) {
+            return PINNED.get();
+        }
         static MONITOR: OnceLock<()> = OnceLock::new();
         MONITOR.get_or_init(|| {
             let started = std::thread::Builder::new()
@@ -110,6 +129,14 @@ impl Pressure {
             1 => Self::Warn,
             _ => Self::Critical,
         }
+    }
+    /// The level the calling thread reads from now on. Only that thread:
+    /// tests running next to it, and the workers they start, are not
+    /// touched.
+    #[cfg(any(test, feature = "test-isolation"))]
+    #[doc(hidden)]
+    pub fn pin(self) {
+        PINNED.set(self);
     }
     /// What memory caches keep of their budgets: all, half or a quarter.
     pub fn share(self, budget: usize) -> usize {

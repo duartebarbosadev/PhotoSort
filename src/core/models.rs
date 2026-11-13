@@ -101,6 +101,16 @@ impl Models {
     pub fn cpu_threads(&self) -> usize {
         self.cpu_threads
     }
+    /// Whether models run on the CPU: it was chosen, or a prepared model
+    /// ended up there because no accelerator took it. Under Automatic this
+    /// is unknown, and false, until the first model is prepared.
+    pub fn on_cpu(&self) -> bool {
+        self.backend == Backend::Cpu
+            || self
+                .sessions
+                .values()
+                .any(|(_, _, _, backend)| *backend == Backend::Cpu)
+    }
     /// Called only by the image owner at the start of a new accepted run. Native
     /// sessions cannot change thread pools in place, so release them lazily here;
     /// decoded pixels, measurements and persisted model evidence stay reusable.

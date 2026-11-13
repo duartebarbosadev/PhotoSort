@@ -9,8 +9,8 @@
 //! Helpers only ever do what the image worker would have done itself, with
 //! the same recipe and decode allowance. Whatever they skip (cached
 //! measurements, a photo too large to decode next to others, memory
-//! pressure, libvips formats) or fail at is done by the image worker, so a
-//! result never depends on whether a photo was prepared ahead.
+//! pressure) or fail at is done by the image worker, so a result never
+//! depends on whether a photo was prepared ahead.
 use crate::core::{
     analysis::{self, Measurements, Thresholds},
     cache::{Limits, Writes},
@@ -18,7 +18,7 @@ use crate::core::{
     model::{Media, MediaKind, Metadata},
     operations,
     pipeline::{Asset, Pipeline},
-    processing::{Backend, RunConfig},
+    processing::RunConfig,
     subjects::store::Store,
 };
 use std::{
@@ -114,18 +114,41 @@ pub(super) struct Ahead {
     run: Option<Run>,
 }
 
-/// Helpers for a run: the processing threads the user allows, halved when
-/// models share the CPU with them, and no more than memory affords at about
+/// The threads a run keeps busy next to the image worker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Crew {
+    /// Helpers that decode ahead.
+    pub helpers: usize,
+    /// Preview builders that keep building during the run.
+    pub builders: usize,
+}
+
+/// The crew for a run on `cores` cores. `models_on_cpu` is where the models
+/// really run, not the setting: Automatic on a computer without a usable
+/// accelerator is the CPU.
+///
+/// With the models on an accelerator (or no models), helpers get the
+/// processing threads the user allows and one builder a core left over.
+/// Models on the CPU already use that many threads themselves (ONNX Runtime's
+/// pool, which the image worker is part of), so helpers get the cores left
+/// over, at most half the allowed threads, and a builder only a core after
+/// that. One helper always runs, and never more than memory affords at about
 /// a gigabyte each.
-pub(super) fn helpers(config: RunConfig, models: bool) -> usize {
+pub(super) fn crew(config: RunConfig, models_on_cpu: bool, cores: usize) -> Crew {
     let threads = config.threads.max(1);
-    let threads = if models && config.backend == Backend::Cpu {
-        threads / 2
+    let (helpers, spare) = if models_on_cpu {
+        let spare = cores.saturating_sub(threads);
+        let helpers = (threads / 2).min(spare).max(1);
+        (helpers, spare.saturating_sub(helpers))
     } else {
-        threads
+        // The image worker prepares model input and runs the accelerator.
+        (threads, cores.saturating_sub(threads + 1))
     };
     let memory = usize::try_from(Machine::current().quiet_allowance() / GIB).unwrap_or(usize::MAX);
-    threads.min(memory).clamp(1, MAX_HELPERS)
+    Crew {
+        helpers: helpers.min(memory).clamp(1, MAX_HELPERS),
+        builders: spare.min(1),
+    }
 }
 
 impl Ahead {
@@ -201,6 +224,14 @@ impl Ahead {
             busy: HashSet::new(),
             ready: HashMap::new(),
         });
+    }
+
+    /// Lowers the helpers of the run in progress, when its models turn out
+    /// to run on the CPU. Photos already handed out are finished.
+    pub(super) fn limit(&mut self, helpers: usize) {
+        if let Some(run) = &mut self.run {
+            run.helpers = run.helpers.min(helpers.max(1));
+        }
     }
 
     /// Stops preparing ahead. Helpers drop what they are on as soon as the
@@ -296,6 +327,10 @@ fn work(
     pipeline.share_writes(writes);
     // Helpers already run one per core.
     pipeline.limit_threads(1);
+    // The image worker names the place when it takes a helper's photo.
+    pipeline.skip_places();
+    // libvips asks to be told when a thread that rendered ends.
+    let _release = Release;
     loop {
         let job = queue.lock().unwrap().recv();
         let Ok(job) = job else {
@@ -325,6 +360,13 @@ fn work(
         if done.send(reply).is_err() {
             return;
         }
+    }
+}
+
+struct Release;
+impl Drop for Release {
+    fn drop(&mut self) {
+        photosort_imaging_vips::release_thread();
     }
 }
 
@@ -388,7 +430,6 @@ mod tests {
     use crate::core::model::{Fingerprint, MediaId};
     use std::{path::Path, sync::atomic::AtomicBool, time::Instant};
 
-    /// BMP decodes outside libvips in every build, so helpers take it.
     fn photos(dir: &Path, count: u8) -> Arc<Vec<Media>> {
         Arc::new(
             (0..count)
@@ -408,6 +449,42 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    #[test]
+    fn models_on_the_cpu_leave_helpers_and_builders_only_the_spare_cores() {
+        use crate::core::processing::Backend;
+        // Automatic, as on a new install: only where the models run counts.
+        let crew = |threads, on_cpu, cores| {
+            let config = RunConfig {
+                threads,
+                backend: Backend::Auto,
+            };
+            let crew = crew(config, on_cpu, cores);
+            (crew.helpers, crew.builders)
+        };
+        // Memory may allow fewer helpers than cores on a small computer.
+        let memory = usize::try_from(Machine::current().quiet_allowance() / GIB).unwrap();
+        let most = |helpers: usize| helpers.min(memory).max(1);
+        // On an accelerator: a helper per allowed thread, a builder if a
+        // core is left next to them and the image worker.
+        assert_eq!(crew(11, false, 14), (most(11), 1));
+        assert_eq!(crew(14, false, 14), (most(14), 0));
+        // On the CPU the models take the allowed threads themselves.
+        assert_eq!(crew(11, true, 14), (most(3), 0));
+        assert_eq!(crew(6, true, 8), (most(2), 0));
+        assert_eq!(crew(2, true, 14), (1, 1));
+        // Every core allowed to the models: one helper still decodes ahead.
+        assert_eq!(crew(14, true, 14), (1, 0));
+        for cores in 1..=32 {
+            for threads in 1..=cores {
+                let (helpers, builders) = crew(threads, true, cores);
+                assert!(
+                    threads + helpers + builders <= cores.max(threads + 1),
+                    "{threads} threads on {cores} cores: {helpers} helpers, {builders} builders"
+                );
+            }
+        }
     }
 
     #[test]
@@ -555,5 +632,23 @@ mod tests {
         }
         ahead.end();
         assert!(matches!(ahead.take(1), Taken::Absent));
+
+        // The system is short of memory: a helper decodes nothing, and
+        // takes the photo once that clears. The level is pinned for this
+        // thread only; helpers of tests running next to it read Normal.
+        let job = Job {
+            token: 1,
+            index: 1,
+            media: media[1].clone(),
+            store: Arc::new(Store::new(evidence.path().join("short"), true).unwrap()),
+            cancelled: Arc::new(|| false),
+            room: u64::MAX,
+        };
+        let mut helper = Pipeline::new(0, cache.path().into());
+        Pressure::Warn.pin();
+        assert!(prepare(&mut helper, &job).is_none());
+        assert_eq!(helper.stats.decodes + helper.stats.disk_hits, 0);
+        Pressure::Normal.pin();
+        assert!(prepare(&mut helper, &job).is_some());
     }
 }

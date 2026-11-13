@@ -244,6 +244,36 @@ fn owned(path: &Path) -> bool {
             || suffix.ends_with("tmp.png")
             || suffix.ends_with("tmp.jpg"))
 }
+/// What a trim removes first. Files of one kind go by how long they went
+/// unused; a kind goes only once nothing is left of the kinds before it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Kind {
+    /// Lossless images: the 1024 px input of an analysis, about a megabyte
+    /// each and rarely read again once the photo's evidence is stored. The
+    /// few previews with transparency or 16 bits are PNG too and go with
+    /// them, as do interrupted image writes.
+    Proxy,
+    /// Display previews. The photo decodes again when it is shown.
+    Preview,
+    /// Grid thumbnails: small, and read for every tile of a folder.
+    Thumbnail,
+    /// Metadata, render notes and AI evidence: the smallest files and the
+    /// slowest to make again, so the last to go.
+    Record,
+}
+impl Kind {
+    /// A grid thumbnail is a 320 px JPEG, well under this; a preview this
+    /// small costs as little to keep.
+    const THUMBNAIL_BYTES: u64 = 64 * 1024;
+    fn of(path: &Path, bytes: u64) -> Self {
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some("png") => Self::Proxy,
+            Some("jpg") if bytes > Self::THUMBNAIL_BYTES => Self::Preview,
+            Some("jpg") => Self::Thumbnail,
+            _ => Self::Record,
+        }
+    }
+}
 /// Marks a cache file as used now, so a trim removes what went unused the
 /// longest rather than what was written first. A file is touched at most once
 /// an hour, so reading a folder again writes almost nothing.
@@ -260,8 +290,10 @@ pub(crate) fn touch(path: &Path) {
             .and_then(|file| file.set_modified(now));
     }
 }
-/// Measures the cache and, with a limit, evicts the oldest previews and AI
-/// evidence above it. A zero limit clears everything, prepared models included.
+/// Measures the cache and, with a limit, evicts what is above it: analysis
+/// images first, then previews, thumbnails and last the records (`Kind`),
+/// the longest unused of each first. A zero limit clears everything,
+/// prepared models included.
 pub fn maintain(
     path: &Path,
     max_bytes: Option<u64>,
@@ -280,8 +312,10 @@ pub fn maintain_keeping_models(
     prune(path, max_bytes, false, None, cancelled)
 }
 /// A trim to `max_bytes` that keeps prepared models and counts what it
-/// removed of the files written since `since`: when that is not zero, the
-/// limit is smaller than what this session works with.
+/// removed of the previews, thumbnails and records written since `since`:
+/// when that is not zero, the limit is smaller than what this session works
+/// with. Analysis images are not counted: an analysis writes more of them
+/// than any limit is meant to keep, and losing one costs a decode at most.
 pub(crate) fn trim(
     path: &Path,
     max_bytes: u64,
@@ -346,13 +380,15 @@ fn prune(
         usage.files += 1;
         photo_bytes += metadata.len();
         if max_bytes.is_some() {
-            files.push((metadata.modified()?, metadata.len(), entry.path()));
+            let path = entry.path();
+            let kind = Kind::of(&path, metadata.len());
+            files.push((kind, metadata.modified()?, metadata.len(), path));
         }
     }
     if let Some(max) = max_bytes {
         // Only previews and AI evidence count against the limit.
-        files.sort_unstable_by_key(|f| f.0);
-        for (modified, bytes, file) in files {
+        files.sort_unstable_by_key(|f| (f.0, f.1));
+        for (kind, modified, bytes, file) in files {
             if photo_bytes <= max && max != 0 {
                 break;
             }
@@ -376,7 +412,7 @@ fn prune(
             }
             match std::fs::remove_file(file) {
                 Ok(()) => {
-                    if since.is_some_and(|since| modified >= since) {
+                    if kind != Kind::Proxy && since.is_some_and(|since| modified >= since) {
                         usage.evicted_recent_bytes += bytes;
                     }
                 }
@@ -477,7 +513,7 @@ mod tests {
     fn a_trim_reports_what_it_removed_of_this_sessions_files() {
         use std::time::{Duration, SystemTime};
         let dir = tempfile::tempdir().unwrap();
-        let name = |n: u8| dir.path().join(format!("{n:064x}.png"));
+        let name = |n: u8| dir.path().join(format!("{n:064x}.jpg"));
         let started = SystemTime::now() - Duration::from_secs(3600);
         for n in 1..=3 {
             std::fs::write(name(n), [0u8; 100]).unwrap();
@@ -531,5 +567,52 @@ mod tests {
         trim(dir.path(), 100, SystemTime::now(), || false).unwrap();
         assert!(name(1).exists());
         assert!(!name(2).exists());
+    }
+    #[test]
+    fn analysis_images_go_before_previews_and_evidence_goes_last() {
+        use std::time::{Duration, SystemTime};
+        let dir = tempfile::tempdir().unwrap();
+        let file = |n: u8, extension: &str| dir.path().join(format!("{n:064x}.{extension}"));
+        let started = SystemTime::now() - Duration::from_secs(3600);
+        let write = |n: u8, extension: &str, bytes: usize, minutes_ago: u64| {
+            let path = file(n, extension);
+            std::fs::write(&path, vec![0u8; bytes]).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(SystemTime::now() - Duration::from_secs(minutes_ago * 60))
+                .unwrap();
+        };
+        // Opening the folder made a preview, a thumbnail and metadata; the
+        // analysis after it made two analysis images and the evidence.
+        write(1, "jpg", 300_000, 30);
+        write(2, "jpg", 20_000, 30);
+        write(3, "bin", 200, 30);
+        write(4, "json", 43, 30);
+        write(5, "png", 900_000, 2);
+        write(6, "png", 900_000, 1);
+        write(7, "bin", 9_000, 1);
+        let left = |limit: u64| {
+            let usage = trim(dir.path(), limit, started, || false).unwrap();
+            let kept: Vec<u8> = (1..=7)
+                .filter(|&n| {
+                    ["jpg", "png", "bin", "json"]
+                        .iter()
+                        .any(|e| file(n, e).exists())
+                })
+                .collect();
+            (kept, usage.evicted_recent_bytes)
+        };
+        // Over the limit by one analysis image: the older one goes, although
+        // everything the folder made on opening went unused for longer. The
+        // session lost nothing it shows or would have to work out again.
+        assert_eq!(left(1_300_000), (vec![1, 2, 3, 4, 6, 7], 0));
+        // Then the other, then the preview, which the session does show.
+        assert_eq!(left(400_000), (vec![1, 2, 3, 4, 7], 0));
+        assert_eq!(left(30_000), (vec![2, 3, 4, 7], 300_000));
+        // The thumbnail outlives the preview, and records outlive both.
+        assert_eq!(left(9_500), (vec![3, 4, 7], 20_000));
+        assert_eq!(left(9_100), (vec![4, 7], 200));
     }
 }
