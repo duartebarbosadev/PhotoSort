@@ -135,8 +135,13 @@ pub(super) fn decode(
     let bytes = row_bytes
         .checked_mul(plane.height as usize)
         .context("HEIF size overflow")?;
+    // Memory was checked against the allowance above, from the header's size:
+    // a plane past the allowance is not the image the header described.
     ensure!(
-        plane.width > 0 && plane.height > 0 && bytes <= 400_000_000 && plane.stride >= row_bytes,
+        plane.width > 0
+            && plane.height > 0
+            && bytes as u64 <= allowance
+            && plane.stride >= row_bytes,
         "Invalid HEIF dimensions or stride"
     );
     let mut pixels = Vec::with_capacity(bytes);

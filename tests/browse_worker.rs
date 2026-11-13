@@ -119,6 +119,40 @@ fn worker_matches_shared_rating_sort_and_group_rules_without_filesystem_access()
         }
     }
 }
+/// A folder copied from an older Mac volume stores "é" as "e" and a
+/// combining accent; typed text has it as one character. Either finds both.
+#[test]
+fn a_search_finds_accented_names_stored_in_the_other_form() {
+    let (decomposed, composed) = ("Fe\u{301}rias", "F\u{e9}rias");
+    let mut catalog = Arc::into_inner(catalog(3)).unwrap();
+    for (media, path) in catalog.media.iter_mut().zip([
+        format!("/nonexistent/{decomposed}/a.jpg"),
+        format!("/nonexistent/{composed} 2/b.jpg"),
+        "/nonexistent/Ferias/c.jpg".to_owned(),
+    ]) {
+        media.path = path.into();
+    }
+    let worker = Worker::new(Arc::new(|| {}));
+    worker.reset(Some(Seed {
+        catalog: Arc::new(catalog),
+        updates: HashMap::new(),
+        decisions: HashMap::new(),
+    }));
+    for (text, expected) in [
+        (composed.to_uppercase(), vec![0, 1]),
+        (decomposed.to_owned(), vec![0, 1]),
+        (format!("{decomposed} 2"), vec![1]),
+        ("ferias".to_owned(), vec![2]),
+    ] {
+        let run = worker.request(Query {
+            text: text.clone(),
+            ..Default::default()
+        });
+        let mut found = receive(&worker, run).indices;
+        found.sort_unstable();
+        assert_eq!(found, expected, "{text:?}");
+    }
+}
 #[test]
 fn changed_records_and_staged_zero_reuse_sort_keys_and_update_every_filter() {
     let catalog = catalog(100);
@@ -278,6 +312,15 @@ fn latest_query_wins_and_new_folder_cannot_receive_old_indices() {
     let result = receive(&worker, run);
     assert_eq!(result.indices, vec![1]);
     assert_eq!(result.key_builds, 3);
+    // Folders inside the library are searched, the ones above it are not:
+    // every photo has those.
+    for (text, found) in [("FOLDER-1", 1), ("nonexistent", 0)] {
+        let run = worker.request(Query {
+            text: text.into(),
+            ..Default::default()
+        });
+        assert_eq!(receive(&worker, run).indices.len(), found, "{text}");
+    }
     worker.reset(None);
     worker.request(Query::default());
     worker.cancel();

@@ -142,7 +142,17 @@ impl Builder {
         self.shared.built.load(Ordering::Relaxed)
     }
     pub fn shutdown(&mut self) {
-        self.shared.stop.store(true, Ordering::Release);
+        {
+            // Under the queue's lock: a thread that has just seen `stop` unset
+            // and is about to wait would otherwise miss this wakeup, and the
+            // join below would never return.
+            let _queue = self
+                .shared
+                .queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.shared.stop.store(true, Ordering::Release);
+        }
         self.shared.work.notify_all();
         for thread in self.threads.drain(..) {
             let _ = thread.join();
@@ -190,6 +200,22 @@ fn run(shared: &Shared, cache: PathBuf, cap: u64, writes: Arc<Writes>) {
     pipeline.share_writes(writes);
     pipeline.limit_quiet_allowance(cap);
     pipeline.limit_threads(1);
+    serve(shared, |media, limits, look, stale| {
+        pipeline.configure_cache(limits);
+        pipeline.set_raw_look(look);
+        let before = pipeline.disk_written();
+        let built = pipeline.build_preview(media, stale);
+        (built, pipeline.disk_written().saturating_sub(before))
+    });
+}
+/// Whether the folder changed or the app is closing; a build checks it often.
+type Stale<'a> = &'a (dyn Fn() -> bool + Sync);
+/// Takes photos off the queue until told to stop. `build` makes one and
+/// answers whether it built it and the disk bytes it wrote.
+fn serve(
+    shared: &Shared,
+    mut build: impl FnMut(&Media, Limits, RawLook, Stale) -> (anyhow::Result<bool>, u64),
+) {
     while let Some((generation, media, limits, look)) = next(shared) {
         // The system is short of memory: wait instead of adding to it.
         while Pressure::current() > Pressure::Normal
@@ -206,10 +232,11 @@ fn run(shared: &Shared, cache: PathBuf, cap: u64, writes: Arc<Writes>) {
             done(shared);
             continue;
         }
-        pipeline.configure_cache(limits);
-        pipeline.set_raw_look(look);
-        let before = pipeline.disk_written();
-        match pipeline.build_preview(&media, stale) {
+        // A decoder that panics on one photo must not end this thread, nor
+        // leave the photo counted as being built for the rest of the session.
+        let (built, written) = crate::core::crash::catch(|| build(&media, limits, look, &stale))
+            .unwrap_or_else(|error| (Err(anyhow::anyhow!(error)), 0));
+        match built {
             Ok(true) => {
                 shared.built.fetch_add(1, Ordering::Relaxed);
             }
@@ -217,7 +244,6 @@ fn run(shared: &Shared, cache: PathBuf, cap: u64, writes: Arc<Writes>) {
             // The image worker reports failures when the photo is shown.
             Err(error) => tracing::debug!(path = ?media.path, %error, "preview not built"),
         }
-        let written = pipeline.disk_written() - before;
         {
             let mut queue = shared.queue.lock().unwrap();
             if shared.generation.load(Ordering::Acquire) == generation {
@@ -279,9 +305,31 @@ mod tests {
         }
         assert_eq!((reopened.stats.decodes, reopened.stats.disk_hits), (0, 6));
         // The same folder again builds nothing more.
-        builder.build(media, 0, Limits::default(), RawLook::Neutral);
+        builder.build(media.clone(), 0, Limits::default(), RawLook::Neutral);
         assert!(builder.wait_idle(patience));
         assert_eq!(builder.built(), built);
+        builder.shutdown();
+        // A decoder that panics on a photo costs that photo only: with two
+        // threads and three such photos, the rest are still built, nothing
+        // stays counted as being built, and closing joins both threads.
+        let shared = Arc::new(Shared::default());
+        let threads = (0..2)
+            .map(|_| {
+                let shared = shared.clone();
+                thread::spawn(move || {
+                    serve(&shared, |media, _, _, _| {
+                        let name = media.path.file_stem().unwrap().to_str().unwrap();
+                        assert!(name.parse::<u8>().unwrap() % 2 == 0, "decoder went bad");
+                        (Ok(true), 0)
+                    })
+                })
+            })
+            .collect();
+        let mut builder = Builder { shared, threads };
+        builder.build(media, 0, Limits::default(), RawLook::Neutral);
+        assert!(builder.wait_idle(patience));
+        assert_eq!(builder.built(), 3);
+        assert_eq!(builder.shared.queue.lock().unwrap().busy, 0);
         builder.shutdown();
     }
 }

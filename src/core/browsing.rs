@@ -181,6 +181,19 @@ pub struct Folder {
     pub path: std::path::PathBuf,
     pub label: String,
 }
+/// What a search reads for one photo: its path inside the library, in lower
+/// case and with composed accents. The folders above the library are left
+/// out, or a library at `/Users/maria/Pictures/Italy 2023` would match
+/// "maria" with every photo.
+pub fn search_text(root: &std::path::Path, path: &std::path::Path) -> String {
+    search_key(&path.strip_prefix(root).unwrap_or(path).to_string_lossy())
+}
+/// What is typed in the search, as [`search_text`] spells names: "férias"
+/// finds a folder whose "é" is stored as "e" and a combining accent, and the
+/// reverse.
+pub fn search_key(text: &str) -> String {
+    super::text::folded(text)
+}
 /// Unknown metadata is not an unrated photo; staged zero explicitly is.
 pub fn rating(
     id: MediaId,

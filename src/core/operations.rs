@@ -346,51 +346,88 @@ impl Report {
     }
 }
 
-/// Files that follow a trashed photo sharing their name: the XMP sidecar and,
-/// with companions on, RAW files beside a JPEG/HEIC/... Photos with the same
-/// name in other formats are separate shots and never follow. Followers stay
-/// while any of those photos is kept, so a kept photo keeps its RAW and XMP.
-fn trash_followers<'a>(
-    group: &'a [PathBuf],
-    companions: bool,
-    rejected: &'a HashSet<MediaId>,
-) -> impl Iterator<Item = PathBuf> + 'a {
-    let kind = |p: &Path| MediaKind::from_path(p);
-    let has_photo = group.iter().any(|p| kind(p) == Some(MediaKind::Photo));
-    let follows = move |p: &Path| {
-        p.extension().is_some_and(|e| e.eq_ignore_ascii_case("xmp"))
-            || (companions && has_photo && kind(p) == Some(MediaKind::Raw))
-    };
-    let all_trashed = group
-        .iter()
-        .filter(|p| !follows(p))
-        .all(|p| rejected.contains(&MediaId::for_path(p)));
-    group
-        .iter()
-        .filter(move |p| all_trashed && follows(p))
-        .cloned()
-}
-
-/// The files that go to the Trash with the photo at `path` when every photo
-/// in `rejected` is trashed, as Apply plans it: its XMP sidecar and, with
-/// companions on, a RAW twin. `index` is [`Catalog::companion_index`].
+/// The files that go to the Trash with the file at `path` when everything in
+/// `rejected` is trashed, as Apply plans it. `index` is
+/// [`Catalog::companion_index`].
+/// - A sidecar that names the file in full ("IMG.CR2.xmp", "clip.MOV.xmp")
+///   goes with that file.
+/// - With companions on, a RAW beside a JPEG/HEIC/... follows the photo, and
+///   takes its own sidecar along. Photos with the same name in other formats
+///   are separate shots and never follow.
+/// - "IMG.xmp" belongs to every photo of that name and follows once none of
+///   them is kept, so a kept photo keeps its RAW and XMP. Beside videos only,
+///   it follows once every video of that name is trashed.
 pub fn trash_followers_for(
     index: &HashMap<PathBuf, Vec<PathBuf>>,
     path: &Path,
     companions: bool,
     rejected: &HashSet<MediaId>,
 ) -> Vec<PathBuf> {
-    if !MediaKind::from_path(path).is_some_and(|kind| kind != MediaKind::Video) {
+    use super::catalog::sidecar_owner;
+    let kind = |p: &Path| MediaKind::from_path(p);
+    let (Some(own), Some(group)) = (kind(path), index.get(&path.with_extension(""))) else {
         return Vec::new();
-    }
-    index
-        .get(&path.with_extension(""))
-        .map(|group| {
-            trash_followers(group, companions, rejected)
-                .filter(|p| p != path)
-                .collect()
+    };
+    let is_rejected = |p: &Path| rejected.contains(&MediaId::for_path(p));
+    let still = |p: &Path| matches!(kind(p), Some(MediaKind::Photo | MediaKind::Raw));
+    let has_photo = group.iter().any(|p| kind(p) == Some(MediaKind::Photo));
+    let raw_follows = |p: &Path| companions && has_photo && kind(p) == Some(MediaKind::Raw);
+    // Whether the photos of this name all go, and their RAW and XMP with them.
+    let photos_go = own != MediaKind::Video
+        && group
+            .iter()
+            .filter(|p| still(p) && !raw_follows(p))
+            .all(|p| is_rejected(p));
+    let videos_only = !group.iter().any(|p| still(p));
+    let videos_go = group
+        .iter()
+        .filter(|p| kind(p) == Some(MediaKind::Video))
+        .all(|p| is_rejected(p));
+    group
+        .iter()
+        .filter(|p| p.as_path() != path)
+        .filter(|p| match (kind(p), sidecar_owner(group, p)) {
+            (Some(_), _) => photos_go && raw_follows(p),
+            // A RAW with a mark of its own takes its sidecar itself.
+            (None, Some(owner)) => {
+                owner == path || (photos_go && raw_follows(owner) && !is_rejected(owner))
+            }
+            (None, None) if videos_only => videos_go,
+            (None, None) => photos_go,
         })
-        .unwrap_or_default()
+        .cloned()
+        .collect()
+}
+
+/// The files Organize moves and renames as one with the file at `path`: its
+/// XMP sidecars and, with `companions`, the photos and RAW files of the same
+/// name with theirs. A video takes only its own sidecars, "clip.MOV.xmp" and,
+/// when no photo is called "clip", "clip.xmp". `index` is
+/// [`Catalog::companion_index`].
+fn move_cohort(
+    index: &HashMap<PathBuf, Vec<PathBuf>>,
+    path: &Path,
+    companions: bool,
+) -> Vec<PathBuf> {
+    use super::catalog::sidecar_owner;
+    let kind = |p: &Path| MediaKind::from_path(p);
+    let still = |p: &Path| matches!(kind(p), Some(MediaKind::Photo | MediaKind::Raw));
+    let group = match (kind(path), index.get(&path.with_extension(""))) {
+        (Some(_), Some(group)) if group.iter().any(|p| p == path) => group,
+        _ => return vec![path.to_path_buf()],
+    };
+    let together = companions && still(path);
+    let moves = |p: &Path| p == path || (together && still(p));
+    let videos_only = !group.iter().any(|p| still(p));
+    group
+        .iter()
+        .filter(|p| match (kind(p), sidecar_owner(group, p)) {
+            (Some(_), _) => moves(p),
+            (None, Some(owner)) => moves(owner),
+            (None, None) => still(path) || videos_only,
+        })
+        .cloned()
+        .collect()
 }
 
 /// Shared Trash expansion for staged decisions and explicit context-menu requests.
@@ -676,7 +713,13 @@ pub fn organize_changes_pending(
         let folder = folders
             .entry(label)
             .or_insert_with(|| folder_destination(output, label));
-        if path.parent() != Some(folder.as_path()) || renamed() {
+        // A label that spells an existing folder with other capital letters,
+        // or with its accents in the other form, names that folder where the
+        // volume ignores the difference: nothing moves.
+        let in_place = path
+            .parent()
+            .is_some_and(|parent| catalog.same_folder(parent, folder));
+        if !in_place || renamed() {
             return true;
         }
     }
@@ -749,12 +792,29 @@ pub fn organize_plan_with_layout_cancellable(
     let names =
         super::organize::resolve_file_names(&organize_files, names, companions, &cancelled)?;
     let mut seen = HashSet::new();
-    // Keyed without letter case: two planned names that differ only in case
-    // are one file on macOS and Windows, and the second move would fail.
+    // Keyed without letter case or the form of accents: two planned names
+    // that differ only in those are one file on macOS and Windows, and the
+    // second move would fail.
     let mut reserved = HashSet::new();
-    let reservation = |path: &Path| path.to_string_lossy().to_lowercase();
+    let reservation = |path: &Path| super::text::folded(&path.to_string_lossy());
     let mut actions = casing.actions.clone();
     let mut file_names = case_rename::FileNames::default();
+    // The library's folders as they will be spelled, keyed by what the
+    // volume ignores: letter case, the composed or decomposed form of
+    // accents, or both. Where it ignores neither, "anna" and "Anna" are two
+    // folders and nothing is looked up.
+    let one_folder = catalog.names_ignore_case || catalog.names_ignore_form;
+    let spelled: HashMap<String, PathBuf> = if one_folder {
+        catalog
+            .directories
+            .iter()
+            .map(|folder| casing.rebase(folder))
+            .filter_map(|folder| Some((catalog.name_key(folder.to_str()?).into_owned(), folder)))
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    let mut folders: HashMap<&str, PathBuf> = HashMap::new();
     for (id, path) in organize_files {
         anyhow::ensure!(!cancelled(), "Planning cancelled");
         if seen.contains(path) {
@@ -766,7 +826,12 @@ pub fn organize_plan_with_layout_cancellable(
             .map(|s| safe_component(s))
             .filter(|name| path.file_stem().and_then(|s| s.to_str()) != Some(name.as_str()));
         let dir = match labels.get(&id) {
-            Some(label) => folder_destination(&output, label),
+            Some(label) => folders
+                .entry(label)
+                .or_insert_with(|| {
+                    spelling_on_disk(folder_destination(&output, label), &spelled, catalog)
+                })
+                .clone(),
             // The grouping leaves it where it is: only its new name applies.
             None if new_name.is_some() => match casing.rebase(path).parent() {
                 Some(parent) => parent.to_path_buf(),
@@ -774,25 +839,18 @@ pub fn organize_plan_with_layout_cancellable(
             },
             None => continue,
         };
-        let has_companions =
-            MediaKind::from_path(path).is_some_and(|kind| kind != MediaKind::Video);
-        let sources = if companions && has_companions {
-            index
-                .get(&path.with_extension(""))
-                .cloned()
-                .unwrap_or_else(|| vec![path.to_path_buf()])
-        } else {
-            let mut sources = vec![path.to_path_buf()];
-            if has_companions && let Some(pair) = index.get(&path.with_extension("")) {
-                sources.extend(
-                    pair.iter()
-                        .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("xmp")))
-                        .cloned(),
-                );
-            }
-            sources
-        };
-        let sources: Vec<_> = sources.into_iter().filter(|p| !seen.contains(p)).collect();
+        let sources: Vec<_> = move_cohort(&index, path, companions)
+            .into_iter()
+            .filter(|p| !seen.contains(p))
+            .collect();
+        // "IMG.CR2.xmp" is named after "IMG.CR2", whatever that becomes.
+        let named_after: Vec<Option<usize>> = sources
+            .iter()
+            .map(|p| {
+                super::catalog::sidecar_owner(&sources, p)
+                    .and_then(|owner| sources.iter().position(|s| s == owner))
+            })
+            .collect();
         if new_name.is_none()
             && sources
                 .iter()
@@ -804,7 +862,7 @@ pub fn organize_plan_with_layout_cancellable(
         let mut suffix = 0u32;
         let destinations = loop {
             anyhow::ensure!(!cancelled(), "Planning cancelled");
-            let destinations: Vec<_> = sources
+            let mut destinations: Vec<_> = sources
                 .iter()
                 .map(|p| {
                     if new_name.is_none() && suffix == 0 {
@@ -820,6 +878,14 @@ pub fn organize_plan_with_layout_cancellable(
                     dir.join(super::organize::renamed_file_name(p, &name))
                 })
                 .collect();
+            for (i, owner) in named_after.iter().enumerate() {
+                if let Some(owner) = owner
+                    && let Some(name) = destinations[*owner].file_name()
+                {
+                    destinations[i] =
+                        dir.join(super::organize::renamed_file_name(&sources[i], name));
+                }
+            }
             let mut available = true;
             for (source, destination) in sources.iter().zip(&destinations) {
                 if reserved.contains(&reservation(destination))
@@ -887,6 +953,39 @@ pub fn organize_plan_with_layout_cancellable(
         output_root: Some(output),
         ..Default::default()
     })
+}
+/// `folder` as the library spells it. A generated label can name an existing
+/// folder with other capital letters ("Anna" for "anna"), or with composed
+/// accents where the folder's are decomposed; where the volume ignores that
+/// difference it is the same folder, and planning with the label's spelling
+/// would move every file already there onto itself and rename it "name_1".
+/// `spelled` maps the library's folders by [`Catalog::name_key`]. The
+/// deepest folder that exists decides, so "Anna/2024" becomes "anna/2024".
+fn spelling_on_disk(
+    folder: PathBuf,
+    spelled: &HashMap<String, PathBuf>,
+    catalog: &Catalog,
+) -> PathBuf {
+    if spelled.is_empty() {
+        return folder;
+    }
+    for ancestor in folder.ancestors() {
+        let Some(existing) = ancestor
+            .to_str()
+            .and_then(|path| spelled.get(catalog.name_key(path).as_ref()))
+        else {
+            continue;
+        };
+        // The key is only a hint: the volume says whether they are one.
+        if existing == ancestor || !super::catalog::one_folder_on_disk(ancestor, existing) {
+            break;
+        }
+        return match folder.strip_prefix(ancestor) {
+            Ok(rest) => existing.join(rest),
+            Err(_) => folder,
+        };
+    }
+    folder
 }
 pub(crate) fn folder_destination(output: &Path, label: &str) -> PathBuf {
     let mut path = output.to_path_buf();

@@ -1,6 +1,6 @@
 //! Bounded ISO-BMFF/QuickTime movie headers; never reads media payloads.
 //! See https://developer.apple.com/documentation/quicktime-file-format/movie_header_atom
-use chrono::{DateTime, Local};
+use chrono::{DateTime, FixedOffset, Local};
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
@@ -10,10 +10,17 @@ use std::{
 
 const UNIX_EPOCH: u64 = 2_082_844_800;
 const MAX_ATOMS: usize = 4096;
+/// Longest date text read from a file; real values are about 25 bytes.
+const MAX_DATE: usize = 64;
+const CREATION_KEY: &[u8] = b"com.apple.quicktime.creationdate";
 
 #[derive(Default)]
 pub(super) struct Header {
+    /// The header's creation instant. It is UTC and says nothing about the
+    /// place, so it is shown on this computer's clock.
     pub created: Option<DateTime<Local>>,
+    /// The camera's own clock time with its offset from UTC, when it wrote one.
+    pub written: Option<DateTime<FixedOffset>>,
     pub dimensions: Option<(u32, u32)>,
 }
 
@@ -72,10 +79,114 @@ fn read(
             .and_then(|header| geometry(reader, header, cancelled));
         break;
     }
+    if cancelled() {
+        return None;
+    }
+    // Cameras keep the date item in the movie's own metadata; files rewritten
+    // by other tools keep it, or the classic date text, in the user data.
+    let written = keyed_date(reader, movie.clone(), &mut remaining, cancelled).or_else(|| {
+        let user = find(reader, movie, b"udta", &mut remaining, cancelled)?;
+        keyed_date(reader, user.clone(), &mut remaining, cancelled)
+            .or_else(|| user_date(reader, user, &mut remaining, cancelled))
+    });
     (!cancelled()).then_some(Header {
         created,
+        written,
         dimensions,
     })
+}
+
+/// Apple's `com.apple.quicktime.creationdate` item: `keys` names the items of
+/// `ilst` by position.
+fn keyed_date(
+    reader: &mut (impl Read + Seek),
+    parent: Range<u64>,
+    remaining: &mut usize,
+    cancelled: &impl Fn() -> bool,
+) -> Option<DateTime<FixedOffset>> {
+    let mut meta = find(reader, parent, b"meta", remaining, cancelled)?;
+    // ISO files put four version and flag bytes before the first atom, the
+    // handler; QuickTime files start with the handler itself.
+    let mut first = [0; 8];
+    if meta.end - meta.start < 8 {
+        return None;
+    }
+    reader.seek(SeekFrom::Start(meta.start)).ok()?;
+    reader.read_exact(&mut first).ok()?;
+    if &first[4..] != b"hdlr" {
+        meta.start += 4;
+    }
+    let keys = find(reader, meta.clone(), b"keys", remaining, cancelled)?;
+    // Version and flags, the key count, then each key's size, namespace and name.
+    let mut offset = keys.start.checked_add(8)?;
+    let mut index = 0_u32;
+    loop {
+        if cancelled() || *remaining == 0 || keys.end.checked_sub(offset)? < 8 {
+            return None;
+        }
+        *remaining -= 1;
+        index += 1;
+        let mut entry = [0; 8];
+        reader.seek(SeekFrom::Start(offset)).ok()?;
+        reader.read_exact(&mut entry).ok()?;
+        let size = u64::from(u32::from_be_bytes(entry[..4].try_into().ok()?));
+        let end = offset.checked_add(size)?;
+        if size < 8 || end > keys.end {
+            return None;
+        }
+        if &entry[4..] == b"mdta" && size - 8 == CREATION_KEY.len() as u64 {
+            let mut name = [0; CREATION_KEY.len()];
+            reader.read_exact(&mut name).ok()?;
+            if name == CREATION_KEY {
+                break;
+            }
+        }
+        offset = end;
+    }
+    let items = find(reader, meta, b"ilst", remaining, cancelled)?;
+    let item = find(reader, items, &index.to_be_bytes(), remaining, cancelled)?;
+    let data = find(reader, item, b"data", remaining, cancelled)?;
+    // The value's type and locale come before its text.
+    date_text(reader, data.start.checked_add(8)?..data.end)
+}
+
+/// The classic `©day` user data text: a 16-bit length and language, then the date.
+fn user_date(
+    reader: &mut (impl Read + Seek),
+    user: Range<u64>,
+    remaining: &mut usize,
+    cancelled: &impl Fn() -> bool,
+) -> Option<DateTime<FixedOffset>> {
+    let day = find(reader, user, b"\xA9day", remaining, cancelled)?;
+    if day.end - day.start < 4 {
+        return None;
+    }
+    let mut length = [0; 2];
+    reader.seek(SeekFrom::Start(day.start)).ok()?;
+    reader.read_exact(&mut length).ok()?;
+    let start = day.start + 4;
+    let end = start.checked_add(u64::from(u16::from_be_bytes(length)))?;
+    if end > day.end {
+        return None;
+    }
+    date_text(reader, start..end)
+}
+
+/// A date and time with a numeric offset, "2024-02-03T04:10:06+0900". A date
+/// alone, or a time in UTC ("Z"), adds nothing to the header's instant.
+fn date_text(reader: &mut (impl Read + Seek), text: Range<u64>) -> Option<DateTime<FixedOffset>> {
+    let length = usize::try_from(text.end.checked_sub(text.start)?).ok()?;
+    let mut bytes = [0; MAX_DATE];
+    let bytes = bytes.get_mut(..length)?;
+    reader.seek(SeekFrom::Start(text.start)).ok()?;
+    reader.read_exact(bytes).ok()?;
+    let text = std::str::from_utf8(bytes).ok()?.trim_matches(['\0', ' ']);
+    if text.ends_with(['Z', 'z']) {
+        return None;
+    }
+    DateTime::parse_from_rfc3339(text)
+        .or_else(|_| DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f%z"))
+        .ok()
 }
 
 fn creation(

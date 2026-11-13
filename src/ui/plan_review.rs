@@ -854,10 +854,22 @@ impl PhotoSortApp {
                         format!("Folder {}", file_name(&folder.path)),
                     );
                     thumb.folder = true;
+                    let system: Vec<String> = folder
+                        .inventory
+                        .system_folders
+                        .iter()
+                        .flatten()
+                        .map(|path| folder_text(path, Some(&folder.path)))
+                        .collect();
                     thumb.hover = format!(
-                        "{}, with everything in it ({})",
+                        "{}, with everything in it ({}{})",
                         folder_text(&folder.path, root),
-                        count(folder.inventory.files.len(), "file", "files")
+                        count(folder.inventory.files.len(), "file", "files"),
+                        if system.is_empty() {
+                            String::new()
+                        } else {
+                            format!(", and {}", and_list(&system))
+                        }
                     );
                     Some(thumb)
                 }
