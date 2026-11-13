@@ -188,6 +188,10 @@ impl Inventory {
                 walk.skip_current_dir();
                 continue;
             }
+            // The scan never lists PhotoSort's own temporary files.
+            if entry.file_type().is_file() && is_temporary_name(entry.file_name()) {
+                continue;
+            }
             anyhow::ensure!(
                 !entry.file_type().is_symlink() && expected.remove(entry.path()),
                 "Folder contents changed since review: {}",

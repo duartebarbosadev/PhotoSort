@@ -136,7 +136,8 @@ fn rotation_cache_tracks_sidecars_photo_identity_and_model_replacements() {
     fn replace(path: &Path) {
         let old = fs::metadata(path).unwrap();
         let replacement = path.with_extension("replacement");
-        fs::copy(path, &replacement).unwrap();
+        // Written, not copied: an APFS clone keeps the original's birth time.
+        fs::write(&replacement, fs::read(path).unwrap()).unwrap();
         fs::File::options()
             .write(true)
             .open(&replacement)

@@ -330,7 +330,8 @@ fn corrupt_records_recompute_and_source_replacement_and_sidecar_edits_invalidate
     assert_eq!((value.width, value.height), (480, 640));
     let old = fs::metadata(&media[0].path).unwrap();
     let replacement = root.path().join("replacement.png");
-    fs::copy(&media[0].path, &replacement).unwrap();
+    // Written, not copied: an APFS clone keeps the original's birth time.
+    fs::write(&replacement, fs::read(&media[0].path).unwrap()).unwrap();
     fs::File::options()
         .write(true)
         .open(&replacement)

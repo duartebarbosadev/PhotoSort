@@ -161,7 +161,30 @@ impl Player {
     }
     pub fn toggle(&self) {
         let mut s = self.shared.0.lock().unwrap();
-        if s.request.media.is_none() || s.snapshot.error.is_some() {
+        if s.request.media.is_none() {
+            return;
+        }
+        if s.snapshot.error.is_some() {
+            // Asking again for a video that could not be opened tries it
+            // again: its drive may be back. `select` cannot do this, it is
+            // repeated every frame for the video on screen.
+            if self.stop.load(Ordering::Acquire) {
+                return;
+            }
+            s.request.playing = true;
+            s.request.seek = None;
+            s.request.revision += 1;
+            s.snapshot = Snapshot {
+                id: s.snapshot.id,
+                loading: true,
+                volume: s.request.volume,
+                ..Default::default()
+            };
+            // The owner opens the file again for a new generation.
+            self.generation.fetch_add(1, Ordering::AcqRel);
+            drop(s);
+            self.start();
+            self.shared.1.notify_one();
             return;
         }
         s.request.revision += 1;

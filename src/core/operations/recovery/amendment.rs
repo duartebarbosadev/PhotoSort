@@ -52,13 +52,18 @@ impl Store {
         if let Some(stem) = stem {
             crate::core::organize::validate_file_stem(stem)?;
         }
+        let renamed = stem.map(|stem| {
+            let reviewed: Vec<&PathBuf> = files.iter().map(|(_, to)| to).collect();
+            crate::core::organize::renamed_file_names(&reviewed, stem.as_ref())
+        });
         let revised: Vec<_> = files
             .iter()
-            .map(|(source, to)| {
+            .enumerate()
+            .map(|(i, (source, to))| {
                 Ok((
                     source.clone(),
-                    target.join(match stem {
-                        Some(stem) => crate::core::organize::renamed_file_name(to, stem.as_ref()),
+                    target.join(match &renamed {
+                        Some(names) => names[i].clone(),
                         None => to
                             .file_name()
                             .context("Destination has no filename")?
@@ -75,7 +80,7 @@ impl Store {
             "Choose a different destination folder or filename"
         );
         let mut destinations = HashSet::new();
-        let key = |p: &Path| p.to_string_lossy().to_lowercase();
+        let key = |p: &Path| crate::core::text::folded(&p.to_string_lossy());
         for (source, to) in &revised {
             ensure!(!cancelled(), "Destination edit cancelled");
             reject_symlink_components(&source.path)?;
@@ -93,8 +98,9 @@ impl Store {
         }
         // Do not leave a partly completed hard-link move behind under a new name.
         for (source, old) in files {
+            // The plan may be from before the drive was mounted again.
             ensure!(
-                Fingerprint::read(old).ok() != Some(source.fingerprint),
+                !Fingerprint::read(old).is_ok_and(|found| found.same_file(&source.fingerprint)),
                 "A reviewed destination already contains this file; resolve the partial move first"
             );
         }

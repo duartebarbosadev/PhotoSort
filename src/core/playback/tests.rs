@@ -352,3 +352,40 @@ fn portable_decoder_uses_one_owner_and_discards_old_frames_on_navigation() {
     player.shutdown();
     assert!(start.elapsed() < Duration::from_secs(2));
 }
+#[test]
+fn a_video_that_failed_to_open_opens_when_asked_again() {
+    let root = tempfile::tempdir().unwrap();
+    let m = media(root.path(), "a.mp4");
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let seen = attempts.clone();
+    let counts = Arc::new(Counts::default());
+    let player = Player::with_factory(
+        Arc::new(|| {}),
+        Arc::new(move |_, _| {
+            if seen.fetch_add(1, Ordering::Relaxed) == 0 {
+                anyhow::bail!("The drive is not connected");
+            }
+            Ok(Box::new(Fake {
+                counts: counts.clone(),
+                playing: false,
+                position: 0.0,
+                changed: true,
+                color: 0,
+            }))
+        }),
+    );
+    player.select(Some(&m));
+    let failed = wait(&player, |s| s.error.is_some());
+    assert!(!failed.loading);
+    // The video on screen is selected again every frame: that alone must not
+    // open it again and again.
+    player.select(Some(&m));
+    assert!(player.snapshot().error.is_some());
+    assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    // Space, Play or "Watch here" asks for it again.
+    player.toggle();
+    let playing = wait(&player, |s| s.playing);
+    assert!(playing.error.is_none());
+    assert_eq!(attempts.load(Ordering::Relaxed), 2);
+    player.shutdown();
+}

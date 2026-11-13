@@ -1,7 +1,7 @@
 //! Receipt recovery reads identities only. Removing staged source links always
 //! remains an explicit action on the normal file-operation worker.
 use super::*;
-use crate::core::operations::{Action, verify_staged_move};
+use crate::core::operations::{Action, Source, verify_staged_move};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -9,6 +9,15 @@ pub(in crate::core::operations) enum State {
     Completed,
     Staged,
     Untouched,
+}
+
+/// Whether the file at `path` is the reviewed `source` itself, under this
+/// name or another: a hard link or a rename keeps the inode, a copy does not.
+/// The journal may be read after a power cut and a reboot, or after the drive
+/// was attached again, so the saved device number is not compared
+/// ([`Fingerprint::same_file`]). An unreadable path is never the file.
+fn is_source(path: &Path, source: &Source) -> bool {
+    Fingerprint::read(path).is_ok_and(|found| found.same_file(&source.fingerprint))
 }
 
 /// Crash inference trusts only inode identity: cross-device copies and platforms
@@ -37,14 +46,14 @@ pub(in crate::core::operations) fn verify(
         }
         let source_missing = matches!(fs::symlink_metadata(&source.path), Err(e) if e.kind() == std::io::ErrorKind::NotFound);
         let state = if source_missing {
-            if Fingerprint::read(destination).ok() != Some(source.fingerprint) {
+            if !is_source(destination, source) {
                 return Ok(None);
             }
             State::Completed
         } else if verify_staged_move(source, destination).is_ok() {
             State::Staged
         } else if matches!(action, Action::Move { .. })
-            && Fingerprint::read(&source.path).ok() == Some(source.fingerprint)
+            && is_source(&source.path, source)
             && matches!(fs::symlink_metadata(destination), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
         {
             State::Untouched
@@ -60,6 +69,51 @@ pub(in crate::core::operations) fn verify(
         .iter()
         .any(|s| *s != State::Untouched)
         .then_some(states))
+}
+
+/// Whether a move recorded as started with a batch provably never ran: every
+/// reviewed source is still the same file and no destination exists. Only a
+/// filesystem identity can show that, as in [`verify`].
+pub(in crate::core::operations) fn unstarted(
+    action: &Action,
+    cancelled: &impl Fn() -> bool,
+) -> Result<bool> {
+    let Action::Move { files } = action else {
+        return Ok(false);
+    };
+    if files.is_empty() || !cfg!(unix) {
+        return Ok(false);
+    }
+    for (source, destination) in files {
+        ensure!(!cancelled(), "Recovery verification cancelled");
+        let untouched = source.fingerprint.identity[1] != 0
+            && source.path.is_absolute()
+            && destination.is_absolute()
+            && reject_symlink_components(&source.path).is_ok()
+            && reject_symlink_components(destination).is_ok()
+            && is_source(&source.path, source)
+            && matches!(fs::symlink_metadata(destination), Err(e) if e.kind() == std::io::ErrorKind::NotFound);
+        if !untouched {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Removes PhotoSort's own stale temporary files from the folders an
+/// interrupted move was writing to. Media and anything with content under a
+/// final name are never touched.
+pub(in crate::core::operations) fn sweep(action: &Action) {
+    let (Action::Move { files } | Action::FinishMove { files }) = action else {
+        return;
+    };
+    let folders: HashSet<_> = files
+        .iter()
+        .filter_map(|(_, destination)| destination.parent())
+        .collect();
+    for folder in folders {
+        crate::core::operations::sweep_temporaries(folder);
+    }
 }
 
 pub(in crate::core::operations) fn restore(
@@ -131,34 +185,23 @@ pub(in crate::core::operations) fn write(
     if states.iter().all(|s| *s == State::Completed) {
         let mut report = Report::default();
         restore(action, states, &mut report)?;
-        return super::super::write_record(
-            journal,
-            "recovered",
-            index,
-            action,
-            &report.relocated,
-            error,
-        );
+        return super::super::write_record(journal, "recovered", index, &report.relocated, error);
     }
     #[derive(Serialize)]
     struct Receipt<'a> {
         status: &'static str,
         index: usize,
-        action: &'a Action,
         move_states: &'a [State],
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<&'a str>,
     }
-    serde_json::to_writer(
-        &mut *journal,
+    super::super::write_line(
+        journal,
         &Receipt {
             status: "recovered-move",
             index,
-            action,
             move_states: states,
             error,
         },
-    )?;
-    journal.write_all(b"\n")?;
-    Ok(())
+    )
 }
