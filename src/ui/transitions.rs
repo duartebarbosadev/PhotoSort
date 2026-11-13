@@ -284,7 +284,12 @@ impl PhotoSortApp {
             modal(egui::Id::new("pending_changes")).show(ctx, |ui| {
                 ui.set_max_width(460.0);
                 ui.heading("Resolve staged changes");
-                ui.label(format!("{} photos have staged ratings, rotations or Trash marks.",self.staged_choice_count()));
+                let staged = self.staged_choice_tally();
+                ui.label(format!(
+                    "{} {} staged ratings, rotations or Trash marks.",
+                    staged.text(),
+                    if staged.total() == 1 { "has" } else { "have" }
+                ));
                 ui.label("Discard clears these staged choices. Your files remain unchanged until you apply them on the Review step.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancel").clicked() { action = 1; }

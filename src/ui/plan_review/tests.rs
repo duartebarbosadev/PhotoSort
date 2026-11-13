@@ -36,6 +36,16 @@ fn plan() -> Plan {
     }
 }
 
+/// Waits for the details of a list just made: the file worker's answers.
+fn listed(app: &mut PhotoSortApp) {
+    let until = std::time::Instant::now() + crate::test_support::worker_patience();
+    while app.busy {
+        assert!(std::time::Instant::now() < until, "worker did not finish");
+        app.poll(&egui::Context::default());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// The accessible texts of the review dialog after a few frames at `size`.
 fn dialog_texts(app: &mut PhotoSortApp, ctx: &egui::Context, size: egui::Vec2) -> Vec<String> {
     let mut output = None;
@@ -93,7 +103,8 @@ fn plain_view_counts_photos_and_groups_them_by_folder() {
     app.root = Some("/library".into());
     app.set_review_plan(Some(plan()));
     let rows = &app.plan_rows;
-    // A photo with its RAW and sidecar is one photo; renames in place keep their card.
+    // A photo with its RAW and sidecar is one photo, and a notes file is a
+    // file, never a photo; renames in place keep their card.
     assert_eq!(rows.folders.len(), 2);
     assert_eq!(
         rows.folders[0].groups,
@@ -104,7 +115,7 @@ fn plain_view_counts_photos_and_groups_them_by_folder() {
     let plan = app.plan.as_ref().unwrap();
     assert_eq!(
         app.card_sentence(plan, &rows.folders[0]),
-        "2 photos in library get new names"
+        "1 photo and 1 other file in library get new names"
     );
     assert_eq!(
         app.card_sentence(plan, &rows.folders[1]),
@@ -118,7 +129,7 @@ fn plain_view_counts_photos_and_groups_them_by_folder() {
     // The sentence and the button read the same counts.
     assert_eq!(
         app.review_sentence(app.plan.as_ref().unwrap(), rows),
-        "You're about to rename 2 photos, create 1 empty folder and send 1 photo to the Trash."
+        "You're about to rename 1 photo and 1 other file, create 1 empty folder and send 1 photo to the Trash."
     );
     assert_eq!(rows.summary.apply_label(), "Apply all changes");
     app.runtime.shutdown();
@@ -145,6 +156,7 @@ fn organize_plan() -> Plan {
             path: folder,
             root: root.into(),
             after: Vec::new(),
+            leftovers: Vec::new(),
         });
     }
     Plan {
@@ -185,13 +197,39 @@ fn organize_review_reads_as_plain_sentences_without_full_paths() {
         }
         if size.y > 600.0 {
             // Folder cleanup is one quiet, conditional line, never one row per folder.
-            assert!(texts.iter().any(|t| t.starts_with(
-                "Folders left empty are removed: 2025-10-25 / group-6, 2025-10-25 / group-2, 2025-10-25"
-            )), "{texts:?}");
+            assert!(
+                texts
+                    .iter()
+                    .any(|t| t.starts_with("Folders left empty are removed: 2025-10-25")),
+                "{texts:?}"
+            );
         }
         assert!(!texts.iter().any(|t| t.contains("Remove folder if empty")
             || t.contains("/library/")
             || t.starts_with("Apply")));
+    }
+    // A folder that keeps Finder or NAS leftovers is not "left empty": the
+    // list says it goes to the Trash and what goes with it.
+    let mut plan = organize_plan();
+    for action in &mut plan.actions {
+        if let Action::RemoveEmptyDirectory {
+            path, leftovers, ..
+        } = action
+            && path.ends_with("group-6")
+        {
+            *leftovers = [".DS_Store", "._.DS_Store", "._@eaDir", "@eaDir"]
+                .map(String::from)
+                .to_vec();
+        }
+    }
+    app.set_review_plan(Some(plan));
+    let texts = dialog_texts(&mut app, &ctx, egui::vec2(1280.0, 800.0));
+    for expected in [
+        "You're about to move 3 photos into a new folder \"h\" and send 1 folder to the Trash.",
+        "Sent to the Trash: 2025-10-25 / group-6, with .DS_Store and @eaDir. Folders left empty are removed: 2025-10-25",
+        "Apply all changes",
+    ] {
+        assert!(texts.iter().any(|t| t == expected), "{expected}: {texts:?}");
     }
     assert_eq!(app.stats.decodes, 0);
     app.runtime.shutdown();
@@ -219,9 +257,9 @@ fn plain_view_virtualizes_hundreds_of_thousands_of_photos() {
         ..Default::default()
     };
     let mut rows = Rows::default();
-    rows.replace(Some(&plan), &[]);
+    rows.replace(Some(&plan), &[], &HashSet::new(), &HashSet::new());
     assert_eq!(rows.folders.len(), 1);
-    assert_eq!(rows.folders[0].photos(), 100_000);
+    assert_eq!(rows.folders[0].tally().photos, 100_000);
     let mut scroll = None;
     for at_end in [false, true] {
         if at_end {
@@ -284,7 +322,7 @@ fn review_virtualization_reaches_last_file_without_materializing_other_rows() {
             .collect(),
     }];
     let mut index = Rows::default();
-    index.replace(Some(&plan), &[]);
+    index.replace(Some(&plan), &[], &HashSet::new(), &HashSet::new());
     assert_eq!(index.ends.len(), 1);
     let mut scroll = None;
     for at_end in [false, true] {
@@ -665,6 +703,7 @@ fn one_review_applies_moves_then_staged_choices_without_a_second_review() {
                     .into(),
             done: true,
             left_behind: None,
+            kept_folders: Vec::new(),
         })
     );
     app.runtime.shutdown();
@@ -821,7 +860,17 @@ fn the_review_step_lists_changes_from_every_step_and_undoes_one_at_a_time() {
     click_label(&mut app, &ctx, size, &format!("Keep {}", names[0]));
     assert!(!app.decision(ids[1]).rejected);
     assert_eq!(app.decision(ids[2]).rating, Some(4));
-    // The list is made again without it.
+    // The list is made again without it, from the moves already planned:
+    // nothing is sent to the file worker, and Apply applies what is left.
+    let planned = |app: &PhotoSortApp| app.plan.as_ref().map_or(0, |plan| plan.actions.len());
+    assert!(!app.review_stale && !app.busy && planned(&app) > 0);
+    frame(&mut app, &ctx, size, Vec::new());
+    assert!(!app.review_stale && !app.busy && planned(&app) > 0);
+    assert_eq!(
+        app.review_listed,
+        app.staged_choices().into_iter().collect::<HashMap<_, _>>()
+    );
+    assert!(!app.review_listed.contains_key(&ids[1]));
     let nodes = list(&mut app);
     assert!(!has(&nodes, &format!("Keep {}", names[0])));
     // Undo on a rename plans the folder changes again, without it.
@@ -842,11 +891,20 @@ fn the_review_step_lists_changes_from_every_step_and_undoes_one_at_a_time() {
 }
 
 /// A photo marked for Trash lists the files Apply sends to the Trash with
-/// it: its RAW twin and XMP sidecar.
+/// it: its RAW twin and XMP sidecar. A RAW the user kept stays out of them
+/// until Apply has asked.
 #[test]
 fn a_listed_trash_mark_names_the_raw_and_xmp_that_go_with_it() {
     let dir = tempfile::tempdir().unwrap();
-    for name in ["IMG_1.JPG", "IMG_1.CR2", "IMG_1.xmp", "IMG_2.JPG"] {
+    // Both sidecar spellings: "IMG_1.xmp" is shared, the others name one file.
+    for name in [
+        "IMG_1.JPG",
+        "IMG_1.CR2",
+        "IMG_1.xmp",
+        "IMG_1.JPG.xmp",
+        "IMG_1.CR2.xmp",
+        "IMG_2.JPG",
+    ] {
         std::fs::write(dir.path().join(name), name).unwrap();
     }
     let catalog = crate::core::catalog::Catalog::scan(dir.path(), || false, |_| {}).unwrap();
@@ -867,7 +925,13 @@ fn a_listed_trash_mark_names_the_raw_and_xmp_that_go_with_it() {
             .map(|m| m.id)
             .unwrap()
     };
-    let (jpeg, other) = (id("IMG_1.JPG"), id("IMG_2.JPG"));
+    let (jpeg, other, raw) = (id("IMG_1.JPG"), id("IMG_2.JPG"), id("IMG_1.CR2"));
+    let sidecar = |name: &str| MediaId::for_path(&app.root.as_ref().unwrap().join(name));
+    let (shared, of_jpeg, of_raw) = (
+        sidecar("IMG_1.xmp"),
+        sidecar("IMG_1.JPG.xmp"),
+        sidecar("IMG_1.CR2.xmp"),
+    );
     for photo in [jpeg, other] {
         app.decisions.insert(
             photo,
@@ -884,5 +948,521 @@ fn a_listed_trash_mark_names_the_raw_and_xmp_that_go_with_it() {
         Some("+ RAW, XMP")
     );
     assert!(!app.plan_rows.followers.contains_key(&other));
+    assert_eq!(
+        app.plan_rows.follower_ids(),
+        HashSet::from([raw, shared, of_jpeg, of_raw])
+    );
+    // A RAW nobody chose follows without a question.
+    assert_eq!(app.plan_rows.wanted_raws(), 0);
+    // Kept in Pick Best over its JPEG: it stays, with the XMP they share,
+    // until the user says otherwise.
+    let scores = HashMap::from([(raw, 0.9), (jpeg, 0.5)]);
+    app.pick_review
+        .replace(vec![crate::core::pick_review::Cluster::new(
+            0,
+            vec![raw, jpeg],
+            scores,
+        )]);
+    app.list_review(Plan::default());
+    assert_eq!(app.plan_rows.wanted_raws(), 1);
+    // The JPEG's own sidecar still goes with it; the RAW keeps the other two.
+    assert_eq!(
+        app.plan_rows.followers.get(&jpeg).map(String::as_str),
+        Some("+ XMP")
+    );
+    assert_eq!(app.plan_rows.follower_ids(), HashSet::from([of_jpeg]));
+    app.pick_review.replace(Vec::new());
+    // The same for a RAW with a rating of its own, which is listed.
+    app.decisions.entry(raw).or_default().rating = Some(4);
+    listed(&mut app);
+    app.list_review(Plan::default());
+    assert_eq!(app.plan_rows.follower_ids(), HashSet::from([of_jpeg]));
+    assert_eq!(app.plan_rows.ratings.len(), 1);
+    // Apply waits for the list's details, then asks first, and applies
+    // nothing without an answer.
+    listed(&mut app);
+    app.apply_review();
+    assert_eq!(
+        app.raw_question,
+        Some(review_step::RawQuestion {
+            count: 1,
+            quiet: false
+        })
+    );
+    app.answer_raw_question(None);
+    assert!(app.raw_question.is_none() && !app.busy && app.review_outcome.is_none());
+    // "Trash them" with "Don't ask again": the RAW and XMP are named on the
+    // mark, the rating is no longer listed or counted, and the answer is
+    // remembered. The plan is never polled, so nothing reaches the Trash.
+    app.apply_review();
+    app.raw_question.as_mut().unwrap().quiet = true;
+    app.answer_raw_question(Some(crate::core::preferences::WantedRaw::Trash));
+    assert_eq!(
+        app.plan_rows.followers.get(&jpeg).map(String::as_str),
+        Some("+ RAW, XMP")
+    );
+    assert_eq!(
+        app.plan_rows.follower_ids(),
+        HashSet::from([raw, shared, of_jpeg, of_raw])
+    );
+    assert!(app.plan_rows.ratings.is_empty());
+    assert_eq!(
+        app.review_outcome.as_ref().map(|o| o.sentence.as_str()),
+        Some("Sent 2 photos to the Trash.")
+    );
+    assert!(app.busy && app.raw_question.is_none());
+    assert_eq!(
+        app.preferences.limit_prompts.wanted_raw,
+        Some(crate::core::preferences::WantedRaw::Trash)
+    );
+    app.runtime.shutdown();
+}
+
+/// A photo marked for Trash that Organize also moves is listed once, under
+/// Trash, with where it moves first and the files that follow it. Keeping
+/// it lists it as an ordinary move again, from the moves already planned.
+#[test]
+fn a_photo_that_moves_and_goes_to_the_trash_is_listed_once_under_trash() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("Before")).unwrap();
+    for name in ["IMG_1.JPG", "IMG_1.CR2", "IMG_1.xmp", "IMG_2.JPG"] {
+        std::fs::write(root.join("Before").join(name), name).unwrap();
+    }
+    let catalog = crate::core::catalog::Catalog::scan(&root, || false, |_| {}).unwrap();
+    let mut app = PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, root.join("cache")), None);
+    app.root = Some(root.clone());
+    app.output = root.display().to_string();
+    app.media = catalog.media.clone();
+    app.catalog = Some(Arc::new(catalog));
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+    let id = |name: &str| MediaId::for_path(&root.join("Before").join(name));
+    let (jpeg, raw, other) = (id("IMG_1.JPG"), id("IMG_1.CR2"), id("IMG_2.JPG"));
+    app.step = Step::Organize;
+    app.organize_drafts.insert(
+        app.group_mode,
+        crate::core::organize::Draft::new(HashMap::from([
+            (jpeg, "Trips/Gone".to_owned()),
+            (raw, "Trips/Gone".to_owned()),
+            (other, "Kept".to_owned()),
+        ])),
+    );
+    app.decisions.entry(jpeg).or_default().rejected = true;
+    app.changed_item(jpeg);
+    let settle = |app: &mut PhotoSortApp| {
+        let until = std::time::Instant::now() + crate::test_support::worker_patience();
+        loop {
+            let expired = std::time::Instant::now() >= until;
+            app.poll(&egui::Context::default());
+            app.refresh_review();
+            if !app.busy && !app.scanning && app.metadata_run.is_none() && !app.review_stale {
+                break;
+            }
+            assert!(!expired, "worker did not finish");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    app.review_changes();
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    // What the Moving section shows: each photo's name and the files with it.
+    let moving = |app: &PhotoSortApp| -> Vec<(String, String)> {
+        let (plan, rows) = (app.plan.as_ref().unwrap(), &app.plan_rows);
+        let mut shown = Vec::new();
+        for (f, folder) in rows.folders.iter().enumerate() {
+            for (g, (_, items)) in folder.groups.iter().enumerate() {
+                for item in items {
+                    let thumb = app.thumb(plan, rows, *item, List::Folder(f, g)).unwrap();
+                    shown.push((thumb.file, thumb.extras));
+                }
+            }
+        }
+        shown
+    };
+    let sentence =
+        |app: &PhotoSortApp| app.review_sentence(app.plan.as_ref().unwrap(), &app.plan_rows);
+    // Once, under Trash: the plan moves it with its RAW and XMP all the same.
+    assert_eq!(moving(&app), [("IMG_2.JPG".to_owned(), String::new())]);
+    assert_eq!(
+        sentence(&app),
+        "You're about to move 1 photo into the folder \"Kept\" and send 1 photo to the Trash."
+    );
+    assert_eq!(app.plan_rows.apply_label(), "Move 1 and trash 1");
+    let moves = app
+        .plan
+        .as_ref()
+        .unwrap()
+        .actions
+        .iter()
+        .filter(|action| matches!(action, Action::Move { .. }))
+        .count();
+    assert_eq!(moves, 2);
+    let mark = app.plan_rows.trash[0];
+    let tile = app
+        .thumb(
+            app.plan.as_ref().unwrap(),
+            &app.plan_rows,
+            mark,
+            List::Trash,
+        )
+        .unwrap();
+    assert_eq!(
+        (
+            tile.file.as_str(),
+            tile.extras.as_str(),
+            tile.first.as_str()
+        ),
+        ("IMG_1.JPG", "+ RAW, XMP", "Gone")
+    );
+    assert!(
+        tile.hover.ends_with("Moves to Trips / Gone first"),
+        "{}",
+        tile.hover
+    );
+    assert_eq!(app.plan_rows.wanted_raws(), 0);
+    // A RAW the user rated stays until Apply has asked: it is listed as
+    // moving, with the XMP it keeps, and the question counts it.
+    app.decisions.entry(raw).or_default().rating = Some(4);
+    app.changed_item(raw);
+    settle(&mut app);
+    assert_eq!(app.plan_rows.wanted_raws(), 1);
+    assert_eq!(
+        moving(&app),
+        [
+            ("IMG_2.JPG".to_owned(), String::new()),
+            ("IMG_1.CR2".to_owned(), "+ XMP".to_owned())
+        ]
+    );
+    app.decisions.remove(&raw);
+    app.changed_item(raw);
+    settle(&mut app);
+    // Keep: an ordinary moving photo again, and nothing is planned again.
+    // The list stays where it was scrolled to: it is the same scroll area.
+    let scrolled = app.plan_rows.generation;
+    app.undo_review_item(List::Trash, mark);
+    assert_eq!(app.plan_rows.generation, scrolled);
+    assert!(!app.busy && !app.review_stale && app.plan.is_some());
+    assert!(app.plan_rows.trash.is_empty() && app.plan_rows.moves_first.is_empty());
+    assert_eq!(
+        moving(&app),
+        [
+            ("IMG_2.JPG".to_owned(), String::new()),
+            ("IMG_1.JPG".to_owned(), "+ RAW, XMP".to_owned())
+        ]
+    );
+    assert_eq!(
+        sentence(&app),
+        "You're about to move 2 photos into 2 folders."
+    );
+    assert_eq!(app.staged_change_count(), 2);
+    app.runtime.shutdown();
+}
+
+/// With no move at all: Trash marks that take the last photos out of a
+/// folder that was there before remove it too, and "Tidying up" names it
+/// first. A folder left with only Finder's leftovers goes to the Trash with
+/// them, a parent emptied by its only subfolder goes as well, and a folder
+/// that keeps a notes file or another photo stays, like the library folder.
+#[test]
+fn trash_marks_alone_remove_the_folders_they_empty_and_the_list_names_them_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let trash = tempfile::tempdir().unwrap();
+    crate::core::operations::trash_stand_in(&root, trash.path());
+    for name in [
+        "Solo/a.jpg",
+        "Solo/.DS_Store",
+        "Deep/Inner/b.jpg",
+        "Notes/c.jpg",
+        "Notes/notes.txt",
+        "Mixed/d.jpg",
+        "Mixed/e.jpg",
+    ] {
+        std::fs::create_dir_all(root.join(name).parent().unwrap()).unwrap();
+        std::fs::write(root.join(name), name).unwrap();
+    }
+    let catalog = crate::core::catalog::Catalog::scan(&root, || false, |_| {}).unwrap();
+    let mut app = PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, root.join("cache")), None);
+    app.root = Some(root.clone());
+    app.output = root.display().to_string();
+    app.media = catalog.media.clone();
+    app.catalog = Some(Arc::new(catalog));
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+    app.step = Step::Cull;
+    for name in [
+        "Solo/a.jpg",
+        "Deep/Inner/b.jpg",
+        "Notes/c.jpg",
+        "Mixed/d.jpg",
+    ] {
+        app.reject(MediaId::for_path(&root.join(name)));
+    }
+    let settle = |app: &mut PhotoSortApp| {
+        let until = std::time::Instant::now() + crate::test_support::worker_patience();
+        loop {
+            let expired = std::time::Instant::now() >= until;
+            app.poll(&egui::Context::default());
+            app.refresh_review();
+            if !app.busy && !app.scanning && app.metadata_run.is_none() && !app.review_stale {
+                break;
+            }
+            assert!(!expired, "worker did not finish");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    app.review_changes();
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let plan = app.plan.as_ref().unwrap();
+    assert!(plan.actions.is_empty(), "nothing moves");
+    assert_eq!(
+        cleanup_text(plan, &app.plan_rows, Some(&root), 3, false),
+        "Sent to the Trash: Solo, with .DS_Store. Folders left empty are removed: Deep"
+    );
+    // The folder that goes to the Trash is counted, as the sentence says.
+    assert_eq!(
+        app.review_sentence(plan, &app.plan_rows),
+        "You're about to send 4 photos and 1 folder to the Trash."
+    );
+    assert_eq!(app.staged_change_count(), 5);
+    // Nothing has changed on disk while the changes are only listed.
+    assert!(root.join("Solo/a.jpg").is_file() && root.join("Deep/Inner").is_dir());
+    app.apply_review();
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.retry_plan.is_none() && !app.review_applying());
+    assert_eq!(
+        app.review_outcome.as_ref().map(|o| o.sentence.as_str()),
+        Some("Sent 4 photos and 1 folder to the Trash.")
+    );
+    // What the list named is gone, and nothing else.
+    assert!(!root.join("Solo").exists() && !root.join("Deep").exists());
+    assert!(trash.path().join("Solo/.DS_Store").is_file());
+    assert!(root.join("Notes/notes.txt").is_file());
+    assert!(root.join("Mixed/e.jpg").is_file() && !root.join("Mixed/d.jpg").exists());
+    assert!(root.is_dir());
+    app.runtime.shutdown();
+}
+
+/// A photo renamed where it is leaves its folder as full as it was: the RAW
+/// with its XMP files, a plain JPEG, one beside a photo that moves away and
+/// one beside a photo marked for Trash. None of these folders is planned for
+/// removal or named in "Tidying up", and all are there after Apply. A folder
+/// whose only photo is renamed and marked for Trash does end up empty.
+#[test]
+fn a_folder_whose_photos_are_only_renamed_is_not_tidied_away() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let trash = tempfile::tempdir().unwrap();
+    crate::core::operations::trash_stand_in(&root, trash.path());
+    for name in [
+        "raw/R1.ARW",
+        "raw/R1.ARW.xmp",
+        "raw/R1.xmp",
+        "plain/P1.JPG",
+        "mix/M1.JPG",
+        "mix/M2.JPG",
+        "marks/K1.JPG",
+        "marks/K2.JPG",
+        "both/B1.JPG",
+        "gone/G1.JPG",
+    ] {
+        std::fs::create_dir_all(root.join(name).parent().unwrap()).unwrap();
+        std::fs::write(root.join(name), name).unwrap();
+    }
+    let catalog = Arc::new(crate::core::catalog::Catalog::scan(&root, || false, |_| {}).unwrap());
+    let mut app = PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, root.join("cache")), None);
+    app.root = Some(root.clone());
+    app.output = root.display().to_string();
+    app.media = catalog.media.clone();
+    app.catalog = Some(catalog.clone());
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+    let id = |name: &str| MediaId::for_path(&root.join(name));
+    app.step = Step::Organize;
+    for (name, stem) in [
+        ("raw/R1.ARW", "R1NEW"),
+        ("plain/P1.JPG", "P1NEW"),
+        ("mix/M1.JPG", "M1NEW"),
+        ("marks/K1.JPG", "K1NEW"),
+        ("both/B1.JPG", "B1NEW"),
+    ] {
+        crate::core::organize::set_file_name(
+            &catalog,
+            &mut app.file_names,
+            id(name),
+            stem,
+            app.companions,
+        )
+        .unwrap();
+    }
+    app.organize_drafts.insert(
+        app.group_mode,
+        crate::core::organize::Draft::new(
+            [("mix/M2.JPG", "plain"), ("gone/G1.JPG", "plain")]
+                .into_iter()
+                .map(|(name, folder)| (id(name), folder.to_owned()))
+                .collect(),
+        ),
+    );
+    let marked = [id("marks/K2.JPG"), id("both/B1.JPG")];
+    for mark in marked {
+        app.decisions.entry(mark).or_default().rejected = true;
+    }
+    app.changed_items(marked);
+    let settle = |app: &mut PhotoSortApp| {
+        let until = std::time::Instant::now() + crate::test_support::worker_patience();
+        loop {
+            let expired = std::time::Instant::now() >= until;
+            app.poll(&egui::Context::default());
+            app.refresh_review();
+            if !app.busy && !app.scanning && app.metadata_run.is_none() && !app.review_stale {
+                break;
+            }
+            assert!(!expired, "worker did not finish");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    app.review_changes();
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let plan = app.plan.as_ref().unwrap();
+    let removed: Vec<_> = plan
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::RemoveEmptyDirectory { path, .. } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(removed, [root.join("gone")]);
+    assert_eq!(
+        cleanup_text(plan, &app.plan_rows, Some(&root), 3, false),
+        "Folders left empty are removed: gone, both"
+    );
+    app.apply_review();
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.retry_plan.is_none() && !app.review_applying());
+    for kept in [
+        "raw/R1NEW.ARW",
+        "raw/R1NEW.ARW.xmp",
+        "raw/R1NEW.xmp",
+        "plain/P1NEW.JPG",
+        "plain/M2.JPG",
+        "plain/G1.JPG",
+        "mix/M1NEW.JPG",
+        "marks/K1NEW.JPG",
+    ] {
+        assert!(root.join(kept).is_file(), "{kept}");
+    }
+    assert!(!root.join("marks/K2.JPG").exists());
+    assert!(!root.join("gone").exists() && !root.join("both").exists());
+    app.runtime.shutdown();
+}
+
+/// The Review badge, the sentence and the Apply button say one number. A
+/// JPEG with its RAW and XMP is one photo wherever it is counted, a notes
+/// file that follows its renamed folder is a file and not a photo, and
+/// "Tidying up" names only the folder that really ends up empty.
+#[test]
+fn the_review_badge_says_the_number_the_sentence_and_the_button_say() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    for name in [
+        "trip/EX_1.JPG",
+        "trip/EX_2.JPG",
+        "trip/EX_2.ARW",
+        "trip/notes.txt",
+        "raw/EXR_1.JPG",
+        "raw/EXR_1.ARW",
+        "raw/EXR_1.xmp",
+        "raw/EXR_2.JPG",
+        "raw/EXR_2.ARW",
+        "raw/EXR_2.xmp",
+    ] {
+        std::fs::create_dir_all(root.join(name).parent().unwrap()).unwrap();
+        std::fs::write(root.join(name), name).unwrap();
+    }
+    let catalog = crate::core::catalog::Catalog::scan(&root, || false, |_| {}).unwrap();
+    let mut app = PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, root.join("cache")), None);
+    app.root = Some(root.clone());
+    app.output = root.display().to_string();
+    app.media = catalog.media.clone();
+    app.catalog = Some(Arc::new(catalog));
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+    let id = |name: &str| MediaId::for_path(&root.join(name));
+    // "trip" is renamed "trip2" with everything in it, one photo is dragged
+    // there with its RAW, and the other photo of "raw" is marked for Trash.
+    app.step = Step::Organize;
+    let labels = [
+        ("trip/EX_1.JPG", "trip2"),
+        ("trip/EX_2.JPG", "trip2"),
+        ("trip/EX_2.ARW", "trip2"),
+        ("trip/notes.txt", "trip2"),
+        ("raw/EXR_2.JPG", "trip2"),
+        ("raw/EXR_2.ARW", "trip2"),
+        ("raw/EXR_1.JPG", "raw"),
+        ("raw/EXR_1.ARW", "raw"),
+    ];
+    app.organize_drafts.insert(
+        app.group_mode,
+        crate::core::organize::Draft::new(
+            labels
+                .into_iter()
+                .map(|(name, folder)| (id(name), folder.to_owned()))
+                .collect(),
+        ),
+    );
+    let marked = id("raw/EXR_1.JPG");
+    app.decisions.entry(marked).or_default().rejected = true;
+    app.changed_item(marked);
+    app.review_changes();
+    let until = std::time::Instant::now() + crate::test_support::worker_patience();
+    loop {
+        let expired = std::time::Instant::now() >= until;
+        app.poll(&egui::Context::default());
+        app.refresh_review();
+        if !app.busy && !app.scanning && app.metadata_run.is_none() && !app.review_stale {
+            break;
+        }
+        assert!(!expired, "worker did not finish");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let plan = app.plan.as_ref().unwrap();
+    assert_eq!(
+        app.review_sentence(plan, &app.plan_rows),
+        "You're about to move 3 photos and 1 other file into the folder \"trip2\" and send 1 photo to the Trash."
+    );
+    assert_eq!(app.plan_rows.apply_label(), "Move 4 and trash 1");
+    assert_eq!(app.plan_rows.total(), 5);
+    assert_eq!(app.staged_change_count(), 5);
+    assert_eq!(app.plan_rows.followers[&marked], "+ RAW, XMP");
+    // The moves empty "trip"; the marked photo, with its RAW and XMP, is
+    // the last thing in "raw", so the Trash mark empties that one.
+    assert_eq!(
+        cleanup_text(plan, &app.plan_rows, Some(&root), 3, false),
+        "Folders left empty are removed: trip, raw"
+    );
     app.runtime.shutdown();
 }

@@ -52,6 +52,12 @@ pub enum Action {
         path: PathBuf,
         root: PathBuf,
         after: Vec<PathBuf>,
+        /// What the review listed as still in the folder once its files have
+        /// moved out, by name: thumbnail folders and Finder leftovers. They
+        /// go to the Trash with the folder. Empty when the folder is expected
+        /// to be empty. A folder that keeps anything else is never planned.
+        #[serde(default)]
+        leftovers: Vec<String>,
     },
     Move {
         files: Vec<(Source, PathBuf)>,
@@ -100,6 +106,15 @@ impl Action {
                 rename.to.display()
             ),
             Self::CreateDirectory { path } => format!("Create folder {}", path.display()),
+            Self::RemoveEmptyDirectory {
+                path, leftovers, ..
+            } if !leftovers.is_empty() => {
+                format!(
+                    "Move to Trash with {}: {}",
+                    leftovers.join(", "),
+                    path.display()
+                )
+            }
             Self::RemoveEmptyDirectory { path, .. } => {
                 format!("Remove only if empty: {}", path.display())
             }
@@ -222,6 +237,9 @@ pub struct Report {
     pub remaining: Plan,
     /// Verified identity transitions; embedded edits retain their path ID.
     pub relocated: Vec<(MediaId, MediaId, Fingerprint)>,
+    /// Folders the review sent to the Trash with their leftovers that are
+    /// still there: the drive has no Trash, or the system refused.
+    pub kept_folders: Vec<PathBuf>,
     /// Folders this run made, parents included: a destination that was not
     /// there before its first photo arrived, or a folder the plan creates.
     pub created_folders: Vec<PathBuf>,
@@ -289,6 +307,11 @@ impl Report {
             Action::CreateDirectory { path } => {
                 self.remaining.completed_dependencies.insert(path.clone());
             }
+            // A folder made for them is removed once they are in the Trash.
+            Action::Trash { files } => self
+                .remaining
+                .completed_dependencies
+                .extend(files.iter().map(|source| source.path.clone())),
             _ => {}
         }
         self.completed.push(action.clone());
@@ -706,6 +729,201 @@ pub fn decisions_plan_with_followers(
     })
 }
 
+/// What the review announces before an Apply: the folders that were there
+/// before and hold nothing, or only leftovers, once `moves` are done and the
+/// files of `trashed` (named where they are now) are in the Trash. The
+/// moves plan already names the folders its moves alone empty; these are the
+/// ones the Trash marks finish emptying, with their parents when nothing
+/// else is in them, deepest first. Never the library folder, a folder that
+/// keeps or receives anything else, or one the moves rename or make.
+///
+/// The result is a plan of `RemoveEmptyDirectory` actions for the review to
+/// list. Nothing in it is applied as it is: the Trash marks are planned
+/// after the moves, by [`remove_folders_emptied_by_trash`], which removes
+/// only folders listed here.
+pub fn folders_emptied_by_trash(
+    catalog: &Catalog,
+    moves: &Plan,
+    trashed: &[PathBuf],
+    cancelled: impl Fn() -> bool,
+) -> Result<Plan> {
+    let going_to_trash: HashSet<&Path> = trashed.iter().map(PathBuf::as_path).collect();
+    // Every file that leaves its folder, by a move or to the Trash.
+    let mut leaving: HashSet<PathBuf> = trashed.iter().cloned().collect();
+    // The files a move takes to another folder.
+    let mut moved_out = HashSet::<&Path>::new();
+    // Folders something stays in or arrives at, or that change their name.
+    let mut kept = BTreeSet::<&Path>::new();
+    // Folders the moves rename: everything in them has another path by the
+    // time the Trash marks apply, so nothing in them is listed here.
+    let mut renamed = Vec::<&Path>::new();
+    // Folders the moves alone empty: gone by the time the Trash marks apply.
+    let mut going = HashSet::<PathBuf>::new();
+    let mut candidates = BTreeSet::<&Path>::new();
+    for action in &moves.actions {
+        anyhow::ensure!(!cancelled(), "File planning cancelled");
+        match action {
+            Action::Move { files } | Action::FinishMove { files } => {
+                for (source, to) in files {
+                    let (from, into) = (source.path.parent(), to.parent());
+                    if from != into {
+                        leaving.insert(source.path.clone());
+                        moved_out.insert(&source.path);
+                    }
+                    if let Some(into) = into {
+                        if going_to_trash.contains(source.path.as_path()) {
+                            // It moves first and goes to the Trash from there.
+                            candidates.insert(into);
+                        } else {
+                            kept.insert(into);
+                        }
+                    }
+                }
+            }
+            Action::RenameDirectory(rename) => {
+                kept.insert(&rename.from);
+                kept.insert(&rename.to);
+                renamed.push(&rename.from);
+            }
+            Action::CreateDirectory { path } => {
+                kept.insert(path);
+            }
+            Action::RemoveEmptyDirectory { path, .. } => {
+                going.insert(path.clone());
+            }
+            _ => {}
+        }
+    }
+    for path in trashed {
+        if let Some(folder) = path
+            .parent()
+            .filter(|_| !moved_out.contains(path.as_path()))
+        {
+            candidates.insert(folder);
+        }
+    }
+    // With every folder above them, up to the library folder.
+    let mut folders = BTreeSet::<&Path>::new();
+    for folder in candidates {
+        for path in folder.ancestors() {
+            if path == catalog.root || !path.starts_with(&catalog.root) || !folders.insert(path) {
+                break;
+            }
+        }
+    }
+    let mut folders: Vec<&Path> = folders.into_iter().collect();
+    folders.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    let mut plan = Plan {
+        description: "Folders left empty by the Trash marks".into(),
+        ..Default::default()
+    };
+    for path in folders {
+        anyhow::ensure!(!cancelled(), "File planning cancelled");
+        // Paths order by component, so what is inside a folder sorts right
+        // after it.
+        if going.contains(path)
+            || renamed.iter().any(|folder| path.starts_with(folder))
+            || kept
+                .range::<&Path, _>(path..)
+                .next()
+                .is_some_and(|folder| folder.starts_with(path))
+        {
+            continue;
+        }
+        if let Some(leftovers) =
+            leftovers_after(path, &leaving, &going, catalog.system_moves_apple_double)
+        {
+            going.insert(path.to_path_buf());
+            plan.actions.push(Action::RemoveEmptyDirectory {
+                path: path.to_path_buf(),
+                root: catalog.root.clone(),
+                after: Vec::new(),
+                leftovers,
+            });
+        }
+    }
+    Ok(plan)
+}
+
+/// The second half of an Apply: `plan` sends the photos marked for Trash
+/// there, after the moves of the same Apply, if it had any. Two kinds of
+/// folder are removed after them, by the same plan, deepest first:
+///
+/// - a folder of `created`, made by those moves a moment ago, that holds
+///   nothing at all once the photos are gone. One that keeps anything, a
+///   system file included, stays.
+/// - a folder of `listed`, which the review named as left empty by the
+///   Trash marks, with the leftovers it listed for it. It goes when it
+///   holds nothing, or to the Trash when it holds only those leftovers.
+///   Anything else in it keeps it.
+///
+/// Every other folder stays, and so does the library's own. Each removal
+/// waits for the Trash actions that empty the folder: where one fails or is
+/// stopped, the folder stays and is retried with it.
+pub fn remove_folders_emptied_by_trash(
+    plan: &mut Plan,
+    catalog: &Catalog,
+    created: &[PathBuf],
+    listed: &[(PathBuf, Vec<String>)],
+    cancelled: impl Fn() -> bool,
+) -> Result<()> {
+    let inside = |path: &&Path| *path != catalog.root && path.starts_with(&catalog.root);
+    // Each folder with the leftovers that may go with it: none for a folder
+    // the moves made.
+    let mut allowed: HashMap<&Path, &[String]> = created
+        .iter()
+        .map(PathBuf::as_path)
+        .filter(inside)
+        .map(|path| (path, &[][..]))
+        .collect();
+    for (path, leftovers) in listed {
+        if inside(&path.as_path()) {
+            allowed.insert(path, leftovers);
+        }
+    }
+    if allowed.is_empty() {
+        return Ok(());
+    }
+    let mut trashed = HashSet::new();
+    let mut emptied = BTreeMap::<&Path, Vec<PathBuf>>::new();
+    for action in &plan.actions {
+        let Action::Trash { files } = action else {
+            continue;
+        };
+        for source in files {
+            anyhow::ensure!(!cancelled(), "File planning cancelled");
+            trashed.insert(source.path.clone());
+            for folder in source.path.ancestors().skip(1) {
+                if let Some((folder, _)) = allowed.get_key_value(folder) {
+                    emptied.entry(folder).or_default().push(source.path.clone());
+                }
+            }
+        }
+    }
+    // Deepest first: a folder is gone for its parent once it is known to go.
+    let mut folders: Vec<_> = emptied.into_iter().collect();
+    folders.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
+    let mut going = HashSet::new();
+    for (path, after) in folders {
+        anyhow::ensure!(!cancelled(), "File planning cancelled");
+        let Some(left) = leftovers_after(path, &trashed, &going, catalog.system_moves_apple_double)
+        else {
+            continue;
+        };
+        // Only what the review listed may go with the folder.
+        if left.iter().all(|name| allowed[path].contains(name)) {
+            going.insert(path.to_path_buf());
+            plan.actions.push(Action::RemoveEmptyDirectory {
+                path: path.to_path_buf(),
+                root: catalog.root.clone(),
+                after,
+                leftovers: left,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Clean a name PhotoSort creates (a generated grouping or a typed name) for
 /// this platform. Never apply it to a name read from the library.
 pub fn safe_component(value: &str) -> String {
@@ -1055,13 +1273,33 @@ fn add_directory_actions(
         .map(|(_, p)| folder_destination(output, p))
         .collect();
     let known: HashSet<_> = catalog.directories.iter().map(PathBuf::as_path).collect();
+    // Folders a file ends up in: one that arrives from another folder, or
+    // one that stays where it is under a new name. Such a folder keeps
+    // something, and so does every folder above it.
+    let receiving: BTreeSet<PathBuf> = actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::Move { files } => Some(files),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|(_, to)| to.parent().map(Path::to_path_buf))
+        .collect();
+    // Paths order by component, so what is inside a folder sorts right
+    // after it.
+    let receives = |path: &Path| {
+        receiving
+            .range::<Path, _>((std::ops::Bound::Included(path), std::ops::Bound::Unbounded))
+            .next()
+            .is_some_and(|folder| folder.starts_with(path))
+    };
     let mut cleanup = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
     let mut candidate = |folder: &Path, dependency: &Path| {
         for path in folder.ancestors() {
             if path == catalog.root || !path.starts_with(&catalog.root) {
                 break;
             }
-            if !required.contains(path) {
+            if !required.contains(path) && !receives(path) {
                 cleanup
                     .entry(path.into())
                     .or_default()
@@ -1114,16 +1352,107 @@ fn add_directory_actions(
             .cmp(&a.components().count())
             .then_with(|| a.cmp(b))
     });
+    // Deepest first: a folder is gone for its parent once it is known to be
+    // empty or to hold only leftovers after the moves.
+    let moving: HashSet<PathBuf> = actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::Move { files } => Some(files.iter().map(|(source, _)| source.path.clone())),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let mut going = HashSet::<PathBuf>::new();
     for (path, after) in cleanup {
         anyhow::ensure!(!cancelled(), "Planning cancelled");
+        // A folder that keeps anything else stays, and is not planned: the
+        // review lists every folder planned here as going.
+        let Some(leftovers) =
+            leftovers_after(&path, &moving, &going, catalog.system_moves_apple_double)
+        else {
+            continue;
+        };
+        going.insert(path.clone());
         actions.push(Action::RemoveEmptyDirectory {
             path,
             root: catalog.root.clone(),
             after: after.into_iter().collect(),
+            leftovers,
         });
     }
     Ok(())
 }
+
+/// What stays in `folder` once the plan's moves are done, when all of it is
+/// leftovers (see `catalog::is_leftover`): their names, for the review to
+/// list. `None` when anything else stays, so the folder does too.
+fn leftovers_after(
+    folder: &Path,
+    moving: &HashSet<PathBuf>,
+    going: &HashSet<PathBuf>,
+    system_moves_apple_double: bool,
+) -> Option<Vec<String>> {
+    let mut names = Vec::new();
+    for entry in fs::read_dir(folder).ok()? {
+        let entry = entry.ok()?;
+        let kind = entry.file_type().ok()?;
+        let (path, name) = (entry.path(), entry.file_name());
+        if kind.is_dir() {
+            if going.contains(&path) {
+                continue;
+            }
+        } else if kind.is_file() {
+            // The system takes a "._name" file along with "name", a file
+            // that moves or a folder that goes.
+            let follows = system_moves_apple_double
+                && name
+                    .as_encoded_bytes()
+                    .strip_prefix(b"._")
+                    .and_then(|owner| std::str::from_utf8(owner).ok())
+                    .map(|owner| folder.join(owner))
+                    .is_some_and(|owner| moving.contains(&owner) || going.contains(&owner));
+            if follows || moving.contains(&path) {
+                continue;
+            }
+        } else {
+            return None;
+        }
+        if !super::catalog::is_leftover(&name, kind.is_dir()) {
+            return None;
+        }
+        names.push(name.to_str()?.to_owned());
+    }
+    names.sort();
+    Some(names)
+}
+
+/// True when everything in `folder` now is a leftover the review listed.
+fn holds_only_listed(folder: &Path, listed: &[String]) -> bool {
+    let Ok(entries) = fs::read_dir(folder) else {
+        return false;
+    };
+    entries.into_iter().all(|entry| {
+        entry.is_ok_and(|entry| {
+            let name = entry.file_name();
+            entry.file_type().is_ok_and(|kind| {
+                (kind.is_dir() || kind.is_file())
+                    && super::catalog::is_leftover(&name, kind.is_dir())
+                    && listed.iter().any(|known| name == known.as_str())
+            })
+        })
+    })
+}
+
+/// A reviewed folder with leftovers that could not go to the Trash. It
+/// stays as it is; the result says so instead of failing the whole apply.
+#[derive(Debug)]
+struct FolderKept;
+impl std::fmt::Display for FolderKept {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Could not move the folder to the Trash")
+    }
+}
+impl std::error::Error for FolderKept {}
 
 fn normalized_destination(path: &Path) -> Result<PathBuf> {
     anyhow::ensure!(
@@ -1343,6 +1672,15 @@ fn execute_logged(
                     moves_prove_themselves = proven;
                 }
             }
+            Err(error) if error.is::<FolderKept>() => {
+                // The tidy step is over either way: the folder stays, a retry
+                // would only fail the same way. The result names it.
+                if let Action::RemoveEmptyDirectory { path, .. } = action {
+                    report.kept_folders.push(path.clone());
+                }
+                report.complete(action, &[]);
+                write_record(journal, "completed", i, &[], None)?;
+            }
             Err(error) if error.is::<MoveCancelled>() => {
                 report.cancelled = true;
                 report
@@ -1380,6 +1718,8 @@ fn execute_logged(
                     Action::CreateDirectory { path } => {
                         unfinished_dependencies.insert(path.clone());
                     }
+                    Action::Trash { files } => unfinished_dependencies
+                        .extend(files.iter().map(|source| source.path.clone())),
                     _ => {}
                 }
                 let detail = format!("{e:#}");
@@ -1568,7 +1908,12 @@ fn apply(
             reject_symlink_components(path)?;
             staging.create_folder(path)?;
         }
-        Action::RemoveEmptyDirectory { path, root, .. } => {
+        Action::RemoveEmptyDirectory {
+            path,
+            root,
+            leftovers,
+            ..
+        } => {
             anyhow::ensure!(
                 path.is_absolute() && root.is_absolute() && path != root && path.starts_with(root),
                 "Cleanup must stay below the library root"
@@ -1576,11 +1921,17 @@ fn apply(
             reject_symlink_components(path)?;
             match fs::remove_dir(path) {
                 Ok(()) => {}
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
-                    ) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) if e.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+                    // Only what the review listed goes to the Trash with the
+                    // folder. Anything else in it keeps the folder, as before.
+                    if !leftovers.is_empty() && holds_only_listed(path, leftovers) {
+                        move_to_trash(path).map_err(|error| {
+                            tracing::warn!(%error, "could not trash a folder left with only system files");
+                            anyhow::Error::new(FolderKept)
+                        })?;
+                    }
+                }
                 Err(e) => return Err(e.into()),
             }
         }

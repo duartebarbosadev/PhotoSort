@@ -343,11 +343,19 @@ pub struct PhotoSortApp {
     /// The plan on its way only tells the Review step how its ratings and
     /// rotations would be written.
     review_targets: bool,
+    /// The plan being made answers which folders the listed Trash marks
+    /// leave empty, for the Review step's "Tidying up" line.
+    review_tidy: bool,
     /// Organize's folder changes cannot be listed yet, and why: the Review
     /// step says so instead of listing forever.
     review_blocked: Option<review_step::Blocked>,
     /// What the Review step's last Apply did, shown once nothing is left.
     review_outcome: Option<review_step::Outcome>,
+    /// The Review step's Apply waits for an answer: what to do with the
+    /// RAW files the user kept whose JPEG goes to the Trash.
+    raw_question: Option<review_step::RawQuestion>,
+    /// That answer, for the one Apply it was given to.
+    raw_answer: Option<crate::core::preferences::WantedRaw>,
     /// An Undo or link clicked in the Review step's list this frame.
     review_action: Option<plan_review::ReviewAction>,
     /// The step the Review step was opened from, for its Back button.
@@ -641,8 +649,11 @@ impl PhotoSortApp {
             review_preview: false,
             review_stale: false,
             review_outcome: None,
+            raw_question: None,
+            raw_answer: None,
             review_listed: HashMap::new(),
             review_targets: false,
+            review_tidy: false,
             review_blocked: None,
             review_action: None,
             review_from: Step::Cull,
@@ -765,6 +776,8 @@ impl PhotoSortApp {
         self.review_after_moves = None;
         self.review_outcome = None;
         self.review_targets = false;
+        self.review_tidy = false;
+        self.raw_question = None;
         self.scan_folder(folder);
         // Another spelling of the same folder (a link, say) is only known to
         // be the same once the scan resolves it; it then gets its views back.
@@ -797,6 +810,7 @@ impl PhotoSortApp {
         self.trash_last = None;
         self.review_blocked = None;
         self.review_targets = false;
+        self.review_tidy = false;
         self.metadata.clear();
         self.browse = Default::default();
         self.browse_groups.clear();
@@ -1402,10 +1416,14 @@ impl PhotoSortApp {
     }
     /// Plans these Trash marks, ratings and rotations, to apply them.
     /// With `followers`, only those files may go to the Trash with a mark.
+    /// `created` are folders the moves of the same Apply made: one the marks
+    /// leave empty is removed with them.
     pub(super) fn plan_decisions(
         &mut self,
         decisions: HashMap<MediaId, Decision>,
         followers: Option<HashSet<MediaId>>,
+        created: Vec<PathBuf>,
+        tidy: Vec<(PathBuf, Vec<String>)>,
     ) {
         if self.review_remaining_operations() {
             return;
@@ -1413,16 +1431,24 @@ impl PhotoSortApp {
         self.rotation_plan = false;
         if let Some(catalog) = self.catalog.clone() {
             self.save_session();
-            match self
-                .runtime
-                .image(crate::core::jobs::ImageWork::PlanDecisions {
-                    catalog,
-                    decisions,
-                    companions: self.companions,
-                    followers,
-                    policy: self.preferences.metadata_writes,
-                }) {
-                Ok(()) => self.busy = true,
+            // On the file worker, which the image worker never holds up, and
+            // with a flag, so the wait can be cancelled from the bar.
+            let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            match self.runtime.io(IoWork::PlanDecisions {
+                catalog,
+                decisions,
+                companions: self.companions,
+                followers,
+                created,
+                tidy,
+                policy: self.preferences.metadata_writes,
+                cancelled: cancelled.clone(),
+            }) {
+                Ok(()) => {
+                    self.busy = true;
+                    self.plan_stop = Some(cancelled);
+                    self.set_status("Checking the files your changes touch…".into());
+                }
                 Err(e) => {
                     self.after_apply = None;
                     self.error = Some(e);
@@ -1740,6 +1766,7 @@ impl PhotoSortApp {
             || self.browse_filters_open
             || self.pending_location_layout.is_some()
             || self.pending_faceless.is_some()
+            || self.raw_question.is_some()
             || self.board.confirm_reset
             || self.organize_departure.is_some()
             || self.help

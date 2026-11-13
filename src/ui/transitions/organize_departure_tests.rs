@@ -182,6 +182,92 @@ fn choices_staged_after_the_review_lists_are_never_applied_with_it() {
     assert_eq!(trash(&app), 1);
     assert!(app.review_outcome.as_ref().is_some_and(|o| o.done));
 }
+/// A photo marked for Trash that Organize also moves is moved first, then
+/// trashed from its new folder. A folder this Apply made only for such
+/// photos is not left behind empty. A folder that was there before and that
+/// the moves and the marks empty together is named by the list first, then
+/// removed too.
+#[test]
+fn a_folder_made_only_for_photos_that_go_to_the_trash_is_not_left_behind() {
+    let (dir, mut app) = fixture();
+    let root = dir.path().canonicalize().unwrap();
+    let trash = tempfile::tempdir().unwrap();
+    crate::core::operations::trash_stand_in(&root, trash.path());
+    for name in ["c.jpg", "d.jpg"] {
+        std::fs::write(root.join("Before").join(name), name).unwrap();
+    }
+    let catalog = Catalog::scan(&root, || false, |_| {}).unwrap();
+    app.media = catalog.media.clone();
+    app.catalog = Some(Arc::new(catalog));
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+    let id = |name: &str| MediaId::for_path(&root.join(name));
+    let (a, c, d) = (id("Before/a.jpg"), id("Before/c.jpg"), id("Before/d.jpg"));
+    // "Gone/2024" gets only a photo marked for Trash, "Kept" one that stays.
+    // The third is marked where it is, in a folder that was already there.
+    app.step = Step::Organize;
+    app.organize_drafts.insert(
+        app.group_mode,
+        Draft::new(HashMap::from([
+            (a, "Gone/2024".to_owned()),
+            (c, "Kept".to_owned()),
+            (d, "Before".to_owned()),
+        ])),
+    );
+    for marked in [a, d] {
+        app.decisions.entry(marked).or_default().rejected = true;
+    }
+    app.changed_items([a, d]);
+    app.review_changes();
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    // The list counts it once, under Trash, and the plan still moves it.
+    let plan = app.plan.as_ref().unwrap();
+    assert_eq!(
+        app.review_sentence(plan, &app.plan_rows),
+        "You're about to move 1 photo into the folder \"Kept\" and send 2 photos to the Trash."
+    );
+    assert_eq!(app.plan_rows.apply_label(), "Move 1 and trash 2");
+    assert!(plan.actions.iter().any(|action| matches!(
+        action,
+        Action::Move { files } if files[0].1 == root.join("Gone/2024/a.jpg")
+    )));
+    // "Before" still holds the photo marked where it is once the moves are
+    // done, so the moves do not remove it. The Trash marks finish emptying
+    // it, and the list names it before anything is applied.
+    assert!(!plan.actions.iter().any(|action| matches!(
+        action,
+        Action::RemoveEmptyDirectory { path, .. } if *path == root.join("Before")
+    )));
+    assert_eq!(
+        app.plan_rows.emptied(),
+        [(root.join("Before"), Vec::<String>::new())]
+    );
+    app.apply_review();
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.retry_plan.is_none() && !app.review_applying());
+    assert_eq!(
+        app.review_outcome.as_ref().map(|o| o.sentence.as_str()),
+        Some("Moved 1 photo and sent 2 photos to the Trash.")
+    );
+    // Moved first, so both went to the Trash from where the list said.
+    let trashed = |name: &str| trash.path().join(name).is_file();
+    assert!(trashed("a.jpg") && trashed("d.jpg"));
+    assert!(root.join("Kept/c.jpg").is_file());
+    assert!(
+        !root.join("Gone").exists(),
+        "made by this Apply and empty once its photo is in the Trash"
+    );
+    // As the list said: emptied by the moves and the marks together.
+    assert!(!root.join("Before").exists());
+    assert!(root.is_dir());
+    assert!(app.decisions.values().all(Decision::is_empty));
+}
 /// The Review step's Apply finishes in the folder it listed: opening another
 /// folder waits for it, and a folder opened anyway never gets its choices.
 #[test]

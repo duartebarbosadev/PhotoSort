@@ -8,9 +8,7 @@ use super::{
 };
 use crate::core::{
     analysis::{self, Analysis, Thresholds, VisualGroups},
-    cache,
-    catalog::Catalog,
-    dates, eyes, face_groups, faces, inspection, manual_groups, memory,
+    cache, dates, eyes, face_groups, faces, inspection, manual_groups, memory,
     model::*,
     model_assets, models, near_duplicates, operations,
     pipeline::{self, Pipeline},
@@ -18,7 +16,7 @@ use crate::core::{
 };
 use anyhow::Context;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -665,20 +663,6 @@ impl ImageWorker {
         }
         self.enter_epoch(epoch);
         match message.work {
-            ImageWork::PlanDecisions {
-                catalog,
-                decisions,
-                companions,
-                followers,
-                policy,
-            } => self.plan_decisions(
-                epoch,
-                &catalog,
-                &decisions,
-                companions,
-                followers.as_ref(),
-                policy,
-            ),
             ImageWork::IndexMetadata { run, media } => {
                 self.metadata_index = Some(MetadataIndex {
                     epoch,
@@ -717,38 +701,6 @@ impl ImageWorker {
             ImageWork::Asset(media, preview) => self.load_asset(epoch, &media, preview),
         }
         true
-    }
-
-    fn plan_decisions(
-        &mut self,
-        epoch: u64,
-        catalog: &Catalog,
-        decisions: &HashMap<MediaId, Decision>,
-        companions: bool,
-        followers: Option<&HashSet<MediaId>>,
-        policy: crate::core::metadata::WritePolicy,
-    ) {
-        let plan = operations::decisions_plan_with_followers(
-            catalog,
-            decisions,
-            companions,
-            followers,
-            policy,
-            |media| {
-                self.pipeline
-                    .metadata_cancellable(media, &|| self.publisher.cancelled(epoch))
-            },
-            || self.publisher.cancelled(epoch),
-        );
-        if !self.publisher.cancelled(epoch) {
-            self.publisher.send(
-                epoch,
-                match plan {
-                    Ok(plan) => Event::Planned(plan),
-                    Err(error) => Event::Error(format!("Could not plan file edits: {error:#}")),
-                },
-            );
-        }
     }
 
     fn load_asset(&mut self, epoch: u64, media: &Media, preview: bool) {

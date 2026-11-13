@@ -171,6 +171,36 @@ impl Files<'_> {
                 self.discard_recovery(&root, &ticket);
                 Ok(())
             }
+            IoWork::PlanDecisions {
+                catalog,
+                decisions,
+                companions,
+                followers,
+                created,
+                tidy,
+                policy,
+                cancelled,
+            } => self.plan_decisions(
+                &catalog,
+                &decisions,
+                (companions, followers.as_ref(), &created),
+                &tidy,
+                policy,
+                &cancelled,
+            ),
+            IoWork::PlanTidy {
+                catalog,
+                moves,
+                trashed,
+                cancelled,
+            } => {
+                let result =
+                    operations::folders_emptied_by_trash(&catalog, &moves, &trashed, || {
+                        self.stopped(&cancelled)
+                    })
+                    .map_err(|error| error.context("Could not check which folders are left empty"));
+                self.send_plan(result, &cancelled)
+            }
             IoWork::Apply(plan) => self.apply(&plan),
             IoWork::SavePreferences { path, preferences } => {
                 self.save_preferences(&path, &preferences);
@@ -318,6 +348,45 @@ impl Files<'_> {
             directories,
             || self.stopped(cancelled),
         );
+        self.send_plan(result, cancelled)
+    }
+
+    /// Reads each photo's own metadata from its file, so the plan never
+    /// waits for the image worker, which a model can hold for minutes.
+    fn plan_decisions(
+        &self,
+        catalog: &Catalog,
+        decisions: &HashMap<MediaId, Decision>,
+        (companions, followers, created): (
+            bool,
+            Option<&std::collections::HashSet<MediaId>>,
+            &[PathBuf],
+        ),
+        tidy: &[(PathBuf, Vec<String>)],
+        policy: crate::core::metadata::WritePolicy,
+        cancelled: &AtomicBool,
+    ) -> anyhow::Result<()> {
+        let stopped = || self.stopped(cancelled);
+        let result = operations::decisions_plan_with_followers(
+            catalog,
+            decisions,
+            companions,
+            followers,
+            policy,
+            |media| {
+                // A photo that is gone stops the plan, as it always did.
+                Fingerprint::read(&media.path)?;
+                crate::core::metadata::read_cancellable(&media.path, &stopped)
+            },
+            stopped,
+        )
+        .and_then(|mut plan| {
+            operations::remove_folders_emptied_by_trash(
+                &mut plan, catalog, created, tidy, stopped,
+            )?;
+            Ok(plan)
+        })
+        .map_err(|error| error.context("Could not plan file edits"));
         self.send_plan(result, cancelled)
     }
 

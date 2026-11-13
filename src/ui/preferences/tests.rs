@@ -423,6 +423,16 @@ fn settings_preserve_live_history_and_render_compactly_without_image_or_analysis
         .filter(|s| s.pending(&draft, &app.preferences))
         .collect();
     assert_eq!(pending, [Section::Storage]);
+    // "Show again" for prompts turned off is a change to save on its own.
+    app.preferences.limit_prompts.wanted_raw = Some(crate::core::preferences::WantedRaw::Keep);
+    let mut draft = app.preferences.clone();
+    assert!(draft.limit_prompts.any() && !pages::has_pending(&draft, &app.preferences));
+    draft.limit_prompts = Default::default();
+    let pending: Vec<_> = Section::ALL
+        .into_iter()
+        .filter(|s| s.pending(&draft, &app.preferences))
+        .collect();
+    assert_eq!(pending, [Section::Performance]);
 }
 #[test]
 fn clearing_shared_caches_preserves_every_workflows_review_and_bookmark_state() {
