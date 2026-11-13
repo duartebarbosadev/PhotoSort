@@ -17,6 +17,9 @@ pub(super) struct Outcome {
     /// Listed photos that stayed in the folder they were listed in while
     /// the rest moved to another: their choices are still staged there.
     pub left_behind: Option<(usize, PathBuf)>,
+    /// Folders the list sent to the Trash with their leftover files that
+    /// could not go there, and so are still on disk.
+    pub kept_folders: Vec<PathBuf>,
 }
 
 /// Why the Review step lists nothing and waits for Organize instead.
@@ -40,10 +43,27 @@ pub(super) struct Chain {
     /// The RAW and XMP files listed as going to the Trash with those marks,
     /// by id after the moves. Nothing else follows a mark there.
     pub followers: HashSet<MediaId>,
+    /// The folders the moves made: one left empty by the Trash marks is
+    /// removed with them. Set once the moves are applied.
+    pub created: Vec<PathBuf>,
+    /// The folders listed as left empty by the Trash marks, each with the
+    /// leftovers listed for it: removed after the marks are applied.
+    pub tidy: Vec<(PathBuf, Vec<String>)>,
     /// The folder the moves were listed in.
     pub source: PathBuf,
     /// The folder read again after the moves; set once they are applied.
     pub root: Option<PathBuf>,
+}
+
+/// Asked by the Review step's Apply, before anything changes on disk: RAW
+/// files the user rated, rotated or chose to keep would go to the Trash
+/// with the JPEG that shares their name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RawQuestion {
+    /// How many RAW files it is about.
+    pub count: usize,
+    /// "Don't ask again" is ticked: the answer is remembered.
+    pub quiet: bool,
 }
 
 /// The same folder, however it is spelled: the scan resolves links, and a
@@ -111,6 +131,7 @@ impl PhotoSortApp {
         }
         self.review_stale = false;
         self.review_targets = false;
+        self.review_tidy = false;
         self.review_blocked = None;
         // Organize's folders need every photo's metadata; Organize says
         // which files could not be read and reads them again.
@@ -168,13 +189,47 @@ impl PhotoSortApp {
             && !self.organize_drafts.contains_key(&self.group_mode)
     }
 
+    /// The changes the Review step lists right now, added up as its
+    /// sentence says them. `None` while there is no current list: on another
+    /// step, while it is being made again, or during an Apply.
+    pub(super) fn review_listed_count(&self) -> Option<usize> {
+        (self.step == Step::Review
+            && self.plan.is_some()
+            && self.plan_rows.editable
+            && !self.review_stale
+            && !self.busy
+            && !self.review_applying()
+            && self.retry_plan.is_none())
+        .then(|| self.plan_rows.total())
+    }
+
     /// How many photos `staged_choices` lists, without listing them: what
-    /// the Review badge and the folder and Close guards count.
+    /// the Review badge counts off the Review step, and the folder and
+    /// Close guards.
     pub(super) fn staged_choice_count(&self) -> usize {
         self.decisions
             .iter()
             .filter(|(id, d)| !d.is_empty() && self.index.contains_key(id))
             .count()
+    }
+
+    /// The same count in words, for the folder and Close guards: "1 photo",
+    /// "3 photos and 1 video".
+    pub(super) fn staged_choice_tally(&self) -> super::plan_review::Tally {
+        let mut tally = super::plan_review::Tally::default();
+        for (id, decision) in &self.decisions {
+            match self.index.get(id) {
+                Some(i) if !decision.is_empty() => {
+                    if self.media[*i].kind == MediaKind::Video {
+                        tally.videos += 1;
+                    } else {
+                        tally.photos += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        tally
     }
 
     /// The staged Trash marks, ratings and rotations of photos in this
@@ -190,11 +245,57 @@ impl PhotoSortApp {
         staged
     }
 
-    /// Lists Organize's `plan` with every staged choice, then asks which
-    /// rotations would re-save the image, to say so on their tiles.
+    /// Lists Organize's `plan` with every staged choice. Two details come
+    /// from the file worker a moment later, with the list already shown:
+    /// which folders the Trash marks leave empty, and which rotations would
+    /// re-save the image.
     pub(super) fn list_review(&mut self, plan: Plan) {
         self.set_review_plan(Some(plan));
         self.review_listed = self.staged_choices().into_iter().collect();
+        if !self.ask_review_tidy() {
+            self.ask_review_targets();
+        }
+    }
+
+    /// Asks which folders that were there before hold nothing once the
+    /// listed moves and Trash marks are applied, so "Tidying up" can name
+    /// them before anything changes. True when the question was sent.
+    fn ask_review_tidy(&mut self) -> bool {
+        let trashed = self.plan_rows.trash_paths();
+        let (Some(catalog), Some(plan)) = (self.catalog.clone(), &self.plan) else {
+            return false;
+        };
+        // Marks on photos organized into another folder are applied there,
+        // to folders this Apply makes.
+        let elsewhere = plan
+            .output_root
+            .as_ref()
+            .is_some_and(|output| *output != catalog.root);
+        if trashed.is_empty() || elsewhere {
+            return false;
+        }
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let asked = self
+            .runtime
+            .io(IoWork::PlanTidy {
+                catalog,
+                moves: plan.clone(),
+                trashed,
+                cancelled: cancelled.clone(),
+            })
+            .is_ok();
+        if asked {
+            self.busy = true;
+            self.review_tidy = true;
+            // Cancelling leaves the list as it is: no folder is removed.
+            self.plan_stop = Some(cancelled);
+        }
+        asked
+    }
+
+    /// Asks which listed rotations would re-save the image, to say so on
+    /// their tiles.
+    pub(super) fn ask_review_targets(&mut self) {
         let policy = self.preferences.metadata_writes;
         let updates: HashMap<MediaId, Decision> = self
             .review_listed
@@ -209,19 +310,26 @@ impl PhotoSortApp {
         let Some(catalog) = self.catalog.clone() else {
             return;
         };
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
         if self
             .runtime
-            .image(crate::core::jobs::ImageWork::PlanDecisions {
+            .io(IoWork::PlanDecisions {
                 catalog,
                 decisions: updates,
                 companions: self.companions,
                 followers: None,
+                created: Vec::new(),
+                tidy: Vec::new(),
                 policy,
+                cancelled: cancelled.clone(),
             })
             .is_ok()
         {
             self.busy = true;
             self.review_targets = true;
+            // Cancelling leaves the list as it is, without this detail.
+            self.plan_stop = Some(cancelled);
+            self.set_status("Checking how the rotations are saved…".into());
         }
     }
 
@@ -229,7 +337,12 @@ impl PhotoSortApp {
     /// folder is read again, the Trash marks, ratings and rotations of the
     /// moved photos, with no second review.
     pub(super) fn apply_review(&mut self) {
-        if self.busy || self.scanning || self.review_stale || self.retry_plan.is_some() {
+        if self.busy
+            || self.scanning
+            || self.review_stale
+            || self.retry_plan.is_some()
+            || self.raw_question.is_some()
+        {
             return;
         }
         let Some(plan) = &self.plan else {
@@ -245,20 +358,39 @@ impl PhotoSortApp {
             self.review_stale = true;
             return;
         }
+        // RAW files the user kept would follow their JPEG to the Trash:
+        // that is theirs to say, once, unless they answered for good.
+        let wanted = self.plan_rows.wanted_raws();
+        if wanted > 0
+            && self.raw_answer.is_none()
+            && self.preferences.limit_prompts.wanted_raw.is_none()
+        {
+            self.raw_question = Some(RawQuestion {
+                count: wanted,
+                quiet: false,
+            });
+            return;
+        }
         let listed = live;
         let moves = !plan.actions.is_empty();
         // Apply's own plan is never taken for the list's write targets.
         self.review_targets = false;
+        self.review_tidy = false;
+        // Only the folders "Tidying up" names are removed after the marks.
+        let tidy = self.plan_rows.emptied();
         self.review_outcome = Some(review_step::Outcome {
             sentence: self.plan_rows.applied_sentence(),
             done: false,
             left_behind: None,
+            kept_folders: Vec::new(),
         });
         self.error = None;
         if moves {
             self.review_after_moves = (!listed.is_empty()).then(|| Chain {
                 decisions: listed,
                 followers: self.plan_rows.follower_ids(),
+                created: Vec::new(),
+                tidy,
                 source: self.root.clone().unwrap_or_default(),
                 root: None,
             });
@@ -270,11 +402,98 @@ impl PhotoSortApp {
         } else if !listed.is_empty() {
             self.apply_planned = true;
             let followers = self.plan_rows.follower_ids();
-            self.plan_decisions(listed, Some(followers));
+            self.plan_decisions(listed, Some(followers), Vec::new(), tidy);
             if !self.busy {
                 self.apply_planned = false;
                 self.review_outcome = None;
             }
+        }
+    }
+
+    /// Ends the RAW question. With an answer, the changes are listed with
+    /// it and applied, and "Don't ask again" remembers it; without one,
+    /// nothing is applied.
+    pub(super) fn answer_raw_question(
+        &mut self,
+        answer: Option<crate::core::preferences::WantedRaw>,
+    ) {
+        let Some(question) = self.raw_question.take() else {
+            return;
+        };
+        let Some(answer) = answer else {
+            return;
+        };
+        if question.quiet {
+            self.preferences.limit_prompts.wanted_raw = Some(answer);
+            self.save_preferences();
+        }
+        // The list, and the result said once applied, follow the answer. The
+        // folders already named in "Tidying up" stay named: the answer only
+        // adds files to the Trash, and no folder goes that was not listed.
+        self.raw_answer = Some(answer);
+        let tidy = self.plan_rows.emptied();
+        self.set_review_plan(self.plan.clone());
+        self.plan_rows.restore_emptied(tidy);
+        self.apply_review();
+        self.raw_answer = None;
+    }
+
+    /// The RAW question, over the Review step until it is answered.
+    pub(super) fn raw_question_dialog(&mut self, ctx: &egui::Context) {
+        use crate::core::preferences::WantedRaw;
+        let Some(question) = &mut self.raw_question else {
+            return;
+        };
+        let one = question.count == 1;
+        let mut answer = None;
+        let mut cancel = false;
+        let response = modal(egui::Id::new("wanted_raw")).show(ctx, |ui| {
+            ui.set_max_width(440.0_f32.min((ctx.content_rect().width() - 60.0).max(180.0)));
+            ui.heading(if one {
+                "Trash the RAW file you kept?"
+            } else {
+                "Trash the RAW files you kept?"
+            });
+            let body = if one {
+                "1 RAW file that you rated, rotated or chose to keep shares its name with a photo marked for Trash. RAW and JPEG files stay together, so it would go to the Trash too.".to_owned()
+            } else {
+                format!(
+                    "{} RAW files that you rated, rotated or chose to keep share their names with photos marked for Trash. RAW and JPEG files stay together, so they would go to the Trash too.",
+                    question.count
+                )
+            };
+            ui.add(egui::Label::new(body).wrap());
+            ui.add(egui::Label::new(RichText::new("Nothing has changed yet.").color(MUTED)).wrap());
+            ui.add_space(S1);
+            ui.checkbox(&mut question.quiet, "Don't ask again")
+                .on_hover_text("Remembers your answer. Settings can bring the question back.");
+            ui.add_space(S1);
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+                if ui
+                    .button(if one { "Trash it too" } else { "Trash them too" })
+                    .on_hover_text("Each goes to the Trash with its JPEG")
+                    .clicked()
+                {
+                    answer = Some(WantedRaw::Trash);
+                }
+                if ui
+                    .add(primary(if one {
+                        "Keep the RAW file"
+                    } else {
+                        "Keep the RAW files"
+                    }))
+                    .on_hover_text("Only the JPEGs go to the Trash")
+                    .clicked()
+                {
+                    answer = Some(WantedRaw::Keep);
+                }
+            });
+        });
+        if answer.is_some() || cancel || response.should_close() {
+            self.answer_raw_question(answer);
         }
     }
 
@@ -285,6 +504,7 @@ impl PhotoSortApp {
         self.review_after_moves = None;
         self.apply_planned = false;
         self.review_targets = false;
+        self.review_tidy = false;
         self.review_outcome = None;
     }
 
@@ -380,7 +600,10 @@ impl PhotoSortApp {
             });
             return;
         }
-        if self.review_stale || self.busy {
+        // The list stays on screen while only a detail of it is being
+        // checked: an Undo answers at once, Apply waits for the detail.
+        let detail = self.review_tidy || self.review_targets;
+        if self.review_stale || (self.busy && !detail) {
             state_frame(ui, |ui| {
                 ui.add(egui::Spinner::new().size(28.0).color(ACCENT));
                 ui.add_space(S3);
@@ -540,17 +763,35 @@ impl PhotoSortApp {
 
 /// "2 photos stayed in Holidays, still staged there."
 fn left_behind_text(outcome: &Outcome) -> Option<String> {
-    let (n, folder) = outcome.left_behind.as_ref()?;
-    let name = folder
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| folder.display().to_string());
-    Some(format!(
-        "{n} {} in {name}, still staged there.",
-        if *n == 1 {
-            "photo stayed"
-        } else {
-            "photos stayed"
-        },
-    ))
+    let name = |folder: &Path| {
+        folder
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| folder.display().to_string())
+    };
+    let mut lines = Vec::new();
+    if let Some((n, folder)) = &outcome.left_behind {
+        lines.push(format!(
+            "{n} {} in {}, still staged there.",
+            if *n == 1 {
+                "photo stayed"
+            } else {
+                "photos stayed"
+            },
+            name(folder)
+        ));
+    }
+    match outcome.kept_folders.as_slice() {
+        [] => {}
+        [folder] => lines.push(format!(
+            "{} could not be moved to the Trash, so it is still there with its leftover files.",
+            name(folder)
+        )),
+        folders => lines.push(format!(
+            "{} folders could not be moved to the Trash, so they are still there with their leftover files: {}.",
+            folders.len(),
+            folders.iter().map(|f| name(f)).collect::<Vec<_>>().join(", ")
+        )),
+    }
+    (!lines.is_empty()).then(|| lines.join(" "))
 }

@@ -308,7 +308,7 @@ impl PhotoSortApp {
             }
             if !decisions.is_empty() {
                 self.apply_planned = true;
-                self.plan_decisions(decisions, Some(chain.followers));
+                self.plan_decisions(decisions, Some(chain.followers), chain.created, chain.tidy);
                 if !self.busy {
                     self.apply_planned = false;
                 }
@@ -775,6 +775,17 @@ impl PhotoSortApp {
             plan.description = "Apply confirmed rotation corrections".into();
         }
         self.busy = false;
+        // The folders the Review step's Trash marks leave empty, for its
+        // "Tidying up" line; then how its rotations would be written.
+        if std::mem::take(&mut self.review_tidy) {
+            // An answer for a list that was left is dropped: Review lists
+            // again when it is opened.
+            if self.step == Step::Review {
+                self.plan_rows.set_emptied(&plan);
+                self.ask_review_targets();
+            }
+            return;
+        }
         // How the Review step's ratings and rotations would be written.
         if std::mem::take(&mut self.review_targets) {
             self.plan_rows.set_targets(&plan);
@@ -926,12 +937,28 @@ impl PhotoSortApp {
                 .into_iter()
                 .map(|id| moved.get(&id).copied().unwrap_or(id))
                 .collect();
+            chain.created = report.created_folders.clone();
             chain.root = self.root.clone().map(|root| output.clone().unwrap_or(root));
         }
         let retry = (!report.remaining.actions.is_empty()).then_some(report.remaining);
+        // A folder that was to go to the Trash with its leftover files and
+        // could not: the result says it is still there.
+        let kept = match report.kept_folders.len() {
+            0 => String::new(),
+            1 => " · 1 folder could not be moved to the Trash and is still there".into(),
+            n => format!(" · {n} folders could not be moved to the Trash and are still there"),
+        };
+        if let Some(outcome) = &mut self.review_outcome {
+            outcome.kept_folders.extend(report.kept_folders);
+        }
         let message = format!(
-            "{} changes applied{}",
+            "{} {} applied{}{kept}",
             report.completed.len(),
+            if report.completed.len() == 1 {
+                "change"
+            } else {
+                "changes"
+            },
             if staged_kept {
                 " · unfinished operations retained · Trash marks, ratings and rotations are still staged"
             } else if incomplete {

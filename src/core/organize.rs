@@ -748,8 +748,11 @@ pub fn include_inventory(catalog: &super::catalog::Catalog, labels: &mut HashMap
     }
 }
 
+/// What a file is counted and named with: a photo, its RAW and its JPEG
+/// share a key while `companions` keeps them together. A video and any
+/// other file has its own.
 // A photo cohort is distinct from an extensionless supporting file at that path.
-fn name_key(path: &std::path::Path, companions: bool) -> (std::path::PathBuf, bool) {
+pub(crate) fn name_key(path: &std::path::Path, companions: bool) -> (std::path::PathBuf, bool) {
     let cohort = companions && MediaKind::from_path(path).is_some_and(|k| k != MediaKind::Video);
     (
         if cohort {
