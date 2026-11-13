@@ -36,6 +36,48 @@ struct Queue {
     look: RawLook,
     /// Disk bytes all threads wrote for this folder.
     written: u64,
+    /// The most photos built at a time, while an analysis run needs the
+    /// cores; see `Throttle`.
+    limit: Option<usize>,
+}
+impl Queue {
+    /// The next photo to build now, if there is one and a thread may take it.
+    fn take(&mut self) -> Option<Media> {
+        // Stop well before the limit: building more would only push out
+        // previews made a moment ago.
+        let room = u64::from(self.limits.disk_mib) * crate::core::cache::MIB / 4 * 3;
+        if self.next < self.order.len() && self.written >= room {
+            // Out of room: the rest counts as looked at.
+            self.next = self.order.len();
+        }
+        if self.next >= self.order.len() || self.limit.is_some_and(|limit| self.busy >= limit) {
+            return None;
+        }
+        let media = self.media[self.order[self.next]].clone();
+        self.next += 1;
+        self.busy += 1;
+        Some(media)
+    }
+}
+/// Holds the builders back while an analysis run is using the cores, and
+/// lets them go again after. Owned by the image worker.
+#[derive(Clone)]
+pub struct Throttle(Arc<Shared>);
+impl Throttle {
+    /// At most `builders` photos are built at a time from now on; a photo
+    /// being built is finished. `None` lifts the limit.
+    pub fn limit(&self, builders: Option<usize>) {
+        let mut queue = self
+            .0
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if queue.limit != builders {
+            queue.limit = builders;
+            drop(queue);
+            self.0.work.notify_all();
+        }
+    }
 }
 #[derive(Default)]
 struct Shared {
@@ -93,6 +135,9 @@ impl Builder {
             .collect();
         Self { shared, threads }
     }
+    pub fn throttle(&self) -> Throttle {
+        Throttle(self.shared.clone())
+    }
     /// Builds what is missing for `media`, outward from `start` (the photo on
     /// screen). The same folder again (same photos) keeps its progress;
     /// anything else starts over.
@@ -110,7 +155,7 @@ impl Builder {
             return;
         }
         self.shared.generation.fetch_add(1, Ordering::AcqRel);
-        let busy = queue.busy;
+        let (busy, limit) = (queue.busy, queue.limit);
         *queue = Queue {
             order: outward(media.len(), start),
             media,
@@ -119,6 +164,7 @@ impl Builder {
             limits,
             look,
             written: 0,
+            limit,
         };
         self.shared.work.notify_all();
     }
@@ -171,13 +217,7 @@ fn next(shared: &Shared) -> Option<(u64, Media, Limits, RawLook)> {
         if shared.stop.load(Ordering::Acquire) {
             return None;
         }
-        // Stop well before the limit: building more would only push out
-        // previews made a moment ago.
-        let room = u64::from(queue.limits.disk_mib) * crate::core::cache::MIB / 4 * 3;
-        if queue.next < queue.order.len() && queue.written < room {
-            let media = queue.media[queue.order[queue.next]].clone();
-            queue.next += 1;
-            queue.busy += 1;
+        if let Some(media) = queue.take() {
             return Some((
                 shared.generation.load(Ordering::Acquire),
                 media,
@@ -185,11 +225,7 @@ fn next(shared: &Shared) -> Option<(u64, Media, Limits, RawLook)> {
                 queue.look,
             ));
         }
-        // Out of room: the rest counts as looked at.
-        if queue.next < queue.order.len() {
-            queue.next = queue.order.len();
-        }
-        if queue.busy == 0 {
+        if queue.busy == 0 && queue.next >= queue.order.len() {
             shared.idle.notify_all();
         }
         queue = shared.work.wait(queue).unwrap();
@@ -200,6 +236,8 @@ fn run(shared: &Shared, cache: PathBuf, cap: u64, writes: Arc<Writes>) {
     pipeline.share_writes(writes);
     pipeline.limit_quiet_allowance(cap);
     pipeline.limit_threads(1);
+    // A builder keeps no metadata.
+    pipeline.skip_places();
     serve(shared, |media, limits, look, stale| {
         pipeline.configure_cache(limits);
         pipeline.set_raw_look(look);
@@ -331,5 +369,74 @@ mod tests {
         assert_eq!(builder.built(), 3);
         assert_eq!(builder.shared.queue.lock().unwrap().busy, 0);
         builder.shutdown();
+    }
+    #[test]
+    fn a_builder_waits_while_the_system_is_short_of_memory() {
+        let path = PathBuf::from("/photos/0.bmp");
+        let media = Arc::new(vec![Media {
+            id: MediaId::for_path(&path),
+            fingerprint: Fingerprint::default(),
+            path,
+            kind: MediaKind::Photo,
+        }]);
+        // The level is pinned for the builder's thread only: builders of
+        // tests running next to this one read Normal.
+        let shared = Arc::new(Shared::default());
+        let thread = {
+            let shared = shared.clone();
+            thread::spawn(move || {
+                Pressure::Warn.pin();
+                serve(&shared, |_, _, _, _| (Ok(true), 0));
+            })
+        };
+        let mut builder = Builder {
+            shared,
+            threads: vec![thread],
+        };
+        builder.build(media, 0, Limits::default(), RawLook::Neutral);
+        assert!(!builder.wait_idle(Duration::from_millis(300)));
+        // Closing does not wait for the memory, and the photo is not built.
+        builder.shutdown();
+        assert_eq!(builder.built(), 0);
+        assert_eq!(builder.shared.queue.lock().unwrap().busy, 0);
+    }
+    #[test]
+    fn an_analysis_run_holds_the_builders_back_and_lets_them_go_after() {
+        let media: Arc<Vec<Media>> = Arc::new(
+            (0..4)
+                .map(|n| {
+                    let path = PathBuf::from(format!("/photos/{n}.bmp"));
+                    Media {
+                        id: MediaId::for_path(&path),
+                        fingerprint: Fingerprint::default(),
+                        path,
+                        kind: MediaKind::Photo,
+                    }
+                })
+                .collect(),
+        );
+        // No threads: the queue alone decides who may build.
+        let builder = Builder::new(PathBuf::new(), 0, Arc::default());
+        let throttle = builder.throttle();
+        let take = || builder.shared.queue.lock().unwrap().take().is_some();
+        // The run leaves no core over: nothing is started.
+        throttle.limit(Some(0));
+        builder.build(media.clone(), 0, Limits::default(), RawLook::Neutral);
+        assert!(!take());
+        // One core over: one photo at a time, also for another folder.
+        throttle.limit(Some(1));
+        assert!(take() && !take());
+        builder.build(
+            Arc::new(media[..3].to_vec()),
+            0,
+            Limits::default(),
+            RawLook::Neutral,
+        );
+        assert!(!take(), "the photo being built still counts");
+        done(&builder.shared);
+        assert!(take() && !take());
+        // The run ended: every thread builds again.
+        throttle.limit(None);
+        assert!(take() && take() && !take(), "three photos, all taken");
     }
 }

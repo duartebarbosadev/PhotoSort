@@ -55,7 +55,30 @@ fn group(
     if cancelled() {
         return;
     }
-    match subjects::grouping::group(job.inputs, &job.store, job.strictness, cancelled) {
+    // The grouping reports its own progress: on a large library the neighbor
+    // search, the pair checks and the merging of long bursts each take a while.
+    let mut steps = super::ProgressSteps::default();
+    let grouped = subjects::grouping::group_with(
+        job.inputs,
+        &job.store,
+        job.strictness,
+        job.stats.model_threads,
+        cancelled,
+        |done, total| {
+            if steps.due(done, total) {
+                publisher.send_checked(
+                    job.epoch,
+                    Event::Progress {
+                        run: job.run,
+                        done,
+                        total,
+                    },
+                    cancelled,
+                )
+            }
+        },
+    );
+    match grouped {
         Ok(Some(groups)) if !cancelled() => {
             publisher.send_checked(
                 job.epoch,

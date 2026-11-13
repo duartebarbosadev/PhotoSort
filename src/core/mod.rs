@@ -17,6 +17,7 @@ pub mod model;
 pub mod models;
 pub mod names;
 pub mod operations;
+mod parallel;
 pub mod pipeline;
 pub mod raw_look;
 mod replace;

@@ -32,6 +32,7 @@ use std::{
 /// Everything the worker thread takes over from `Runtime::with_cache`.
 pub(super) struct Wiring {
     pub(super) publisher: Publisher,
+    pub(super) previews: super::previews::Throttle,
     pub(super) cache: PathBuf,
     pub(super) cache_control: cache::Control,
     pub(super) processing: processing::Control,
@@ -42,6 +43,8 @@ pub(super) struct Wiring {
     pub(super) images: Receiver<Message<ImageWork>>,
     pub(super) priority: Receiver<Message<ImageWork>>,
     pub(super) evidence: Receiver<EvidenceRequest>,
+    /// Signalled by everyone who queues work for this worker.
+    pub(super) wake: super::Wake,
     pub(super) similarity: SyncSender<SimilarityJob>,
     pub(super) subjects: SyncSender<SubjectJob>,
 }
@@ -218,6 +221,10 @@ struct ImageWorker {
     images: Receiver<Message<ImageWork>>,
     priority: Receiver<Message<ImageWork>>,
     evidence: Receiver<EvidenceRequest>,
+    wake: super::Wake,
+    /// The last turn answered an evidence request, so this one goes to the
+    /// other queues first.
+    served_evidence: bool,
     similarity: SyncSender<SimilarityJob>,
     subjects: SyncSender<SubjectJob>,
     subject_root: PathBuf,
@@ -242,8 +249,12 @@ struct ImageWorker {
     models: models::Models,
     orientation_model: Option<rotation::Detector>,
     ahead: Ahead,
-    /// Helpers for the next run, from its processing settings.
-    helpers: usize,
+    /// The processing settings of the run in progress.
+    run_config: processing::RunConfig,
+    previews: super::previews::Throttle,
+    /// The preview builders the run in progress leaves running; `None`
+    /// between runs, when all of them build.
+    builders: Option<usize>,
     /// Source decodes helpers made for analysis runs.
     ahead_decodes: u64,
 }
@@ -252,6 +263,7 @@ impl ImageWorker {
     fn new(wiring: Wiring) -> Self {
         let Wiring {
             publisher,
+            previews,
             cache,
             cache_control,
             processing,
@@ -262,14 +274,18 @@ impl ImageWorker {
             images,
             priority,
             evidence,
+            wake,
             similarity,
             subjects,
         } = wiring;
         let subject_root = cache.clone();
+        // Working sets a crash or force quit left behind.
+        subjects::store::sweep_stale_working_sets(subject_root.clone());
         let ahead = Ahead::new(cache.clone(), cache_control.writes());
         let mut pipeline = Pipeline::new(128 * 1024 * 1024, cache);
         pipeline.share_writes(cache_control.writes());
         processing.remember_timings(subject_root.join("model-prepare-times.json"));
+        let run_config = processing.snapshot_run();
         let mut models = models::Models::with_processing(processing);
         models.configure_compiled_cache(subject_root.clone(), false);
         Self {
@@ -282,6 +298,8 @@ impl ImageWorker {
             images,
             priority,
             evidence,
+            wake,
+            served_evidence: false,
             similarity,
             subjects,
             subject_root,
@@ -311,7 +329,9 @@ impl ImageWorker {
             models,
             orientation_model: None,
             ahead,
-            helpers: 1,
+            run_config,
+            previews,
+            builders: None,
             ahead_decodes: 0,
         }
     }
@@ -329,12 +349,16 @@ impl ImageWorker {
             self.pipeline.set_raw_look(self.raw_look.get());
             self.pipeline.apply_pressure(memory::Pressure::current());
             let ok = publisher.guard(super::Worker::Images, || {
-                if self.handle_cache_request()
-                    || self.handle_inspection()
-                    || self.handle_evidence()
-                    || self.handle_work()
-                    || self.step_analysis()
-                {
+                self.pace();
+                if self.handle_cache_request() || self.handle_inspection() {
+                    return;
+                }
+                // Duplicate review asks for evidence back to back. The
+                // requests of the window get every other turn, so a review
+                // cannot keep a preview waiting.
+                let evidence = !std::mem::take(&mut self.served_evidence) && self.handle_evidence();
+                self.served_evidence = evidence;
+                if evidence || self.handle_work() || self.step_analysis() {
                     return;
                 }
                 self.step_metadata_index();
@@ -361,6 +385,35 @@ impl ImageWorker {
             model_initializations: self.models.initializations,
             model_inferences: self.models.inferences,
             model_threads: self.models.cpu_threads(),
+        }
+    }
+
+    /// The decode helpers and preview builders a run of these settings
+    /// keeps busy, by where its models run now.
+    fn crew(&self) -> ahead::Crew {
+        let models = self.orientation_model.is_some()
+            || self.selection.profile != AnalysisProfile::Technical;
+        ahead::crew(
+            self.run_config,
+            models && self.models.on_cpu(),
+            processing::available(),
+        )
+    }
+
+    /// Keeps the threads of an analysis run within the cores. Where a model
+    /// runs is only known once it is prepared, on the run's first photos, so
+    /// this is looked at again on every turn: helpers are lowered when a
+    /// model turned out to run on the CPU, and the preview builders are held
+    /// back for the run and let go after it.
+    fn pace(&mut self) {
+        let builders = self.pending.is_some().then(|| {
+            let crew = self.crew();
+            self.ahead.limit(crew.helpers);
+            crew.builders
+        });
+        if builders != self.builders {
+            self.builders = builders;
+            self.previews.limit(builders);
         }
     }
 
@@ -477,40 +530,48 @@ impl ImageWorker {
             Pipeline::key(media)? == request.input.source,
             "Photo changed during duplicate review"
         );
+        // Eyes judged before need no pixels and no faces: on a library seen
+        // before, the closed-eyes scan reads one small record per photo.
+        let eyes_key = request.people.then(|| {
+            subjects::store::Store::eyes_key(
+                &request.input.source,
+                &format!("{}:{}", eyes::RECIPE, models::face_signature()),
+            )
+        });
+        if let Some(people) = eyes_key.as_ref().and_then(|key| request.store.eyes(key)) {
+            return Ok((None, None, Some(people), self.stats()));
+        }
         let asset = self.pipeline.analysis(media, || scope.cancelled())?;
         let faces = if request.faces {
             self.evidence_faces(request, &asset, scope)?
         } else {
             None
         };
-        let people = match (&faces, request.people) {
-            (Some(faces), true) => Some(self.evidence_people(request, &asset, faces, scope)?),
+        let people = match (&faces, eyes_key) {
+            (Some(faces), Some(key)) => {
+                Some(self.evidence_people(request, &key, &asset, faces, scope)?)
+            }
             _ => None,
         };
         anyhow::ensure!(
             !scope.cancelled() && Pipeline::key(media)? == request.input.source,
             "Photo changed during duplicate review"
         );
-        Ok((asset, faces, people, self.stats()))
+        Ok((Some(asset), faces, people, self.stats()))
     }
 
-    /// Each person's eyes for Easy Delete, from the cache when judged
-    /// before. Faces too small to judge on the analysis image are measured
-    /// again on the display image, decoded only when one needs it.
+    /// Each person's eyes for Easy Delete, kept under `key` for next time
+    /// (`evidence_reply` answers from there). Faces too small to judge on the
+    /// analysis image are measured again on the display image, decoded only
+    /// when one needs it.
     fn evidence_people(
         &mut self,
         request: &EvidenceRequest,
+        key: &str,
         asset: &pipeline::Asset,
         faces: &[faces::Face],
         scope: &Scope,
     ) -> anyhow::Result<Vec<eyes::Person>> {
-        let key = subjects::store::Store::eyes_key(
-            &request.input.source,
-            &format!("{}:{}", eyes::RECIPE, models::face_signature()),
-        );
-        if let Some(people) = request.store.eyes(&key) {
-            return Ok(people);
-        }
         let (width, height) = asset.pixels.dimensions();
         let media = &request.input.media;
         let (pipeline, models) = (&mut self.pipeline, &mut self.models);
@@ -540,7 +601,7 @@ impl ImageWorker {
         anyhow::ensure!(!scope.cancelled(), "Duplicate review cancelled");
         // A display image that failed to decode may decode next time.
         if !failed {
-            request.store.put_eyes(&key, &people)?;
+            request.store.put_eyes(key, &people)?;
         }
         Ok(people)
     }
@@ -575,12 +636,21 @@ impl ImageWorker {
     }
 
     fn handle_work(&mut self) -> bool {
-        let message = self.priority.try_recv().ok().or_else(|| {
+        let queued = |worker: &Self| {
+            worker
+                .priority
+                .try_recv()
+                .ok()
+                .or_else(|| worker.images.try_recv().ok())
+        };
+        let message = queued(self).or_else(|| {
             if self.pending.is_some() || self.metadata_index.is_some() {
-                self.images.try_recv().ok()
-            } else {
-                self.images.recv_timeout(Duration::from_millis(15)).ok()
+                return None;
             }
+            // Idle. Every sender signals, so a request is taken up at once;
+            // the timeout only bounds what is polled (cache requests, stop).
+            self.wake.wait(Duration::from_millis(15));
+            queued(self)
         });
         let Some(message) = message else {
             return false;
@@ -743,10 +813,7 @@ impl ImageWorker {
             return;
         }
         self.begin_models(&scope, model_config);
-        self.helpers = ahead::helpers(
-            model_config,
-            selection.profile != AnalysisProfile::Technical,
-        );
+        self.run_config = model_config;
         if retire_stale_results(
             &mut self.results,
             (&mut self.model_signature, models::analysis_signature()),
@@ -795,6 +862,7 @@ impl ImageWorker {
             return;
         }
         self.begin_models(&scope, model_config);
+        self.run_config = model_config;
         self.orientation_model = Some(detector);
         self.start(scope, media);
     }
@@ -851,7 +919,7 @@ impl ImageWorker {
                     media.clone(),
                     store.clone(),
                     Arc::new(move || cancelled.cancelled()),
-                    self.helpers,
+                    self.crew().helpers,
                 );
             }
             _ => self.ahead.end(),
@@ -949,6 +1017,7 @@ impl ImageWorker {
             profile: self.selection.profile,
             store: self.subject_store.as_ref().unwrap().clone(),
             stats,
+            wake: self.wake.clone(),
         };
         if self.similarity.try_send(job).is_err() {
             scope.send(Event::Error(
@@ -1183,8 +1252,8 @@ impl ImageWorker {
             self.technical_measurements += 1;
             self.quality_measurements += 1;
             self.content_hashes += 1;
-            self.pipeline.adopt_analysis(it.media, &measured.asset)?;
-            it.prepared = Prepared(Some(measured.asset));
+            let asset = self.pipeline.adopt_analysis(it.media, measured.asset)?;
+            it.prepared = Prepared(Some(asset));
             store.put_measurements(&key, &measured.measurements)?;
             return Ok(measured.measurements);
         }

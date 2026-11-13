@@ -1,7 +1,7 @@
 //! Shared same-subject evidence and decisions. Model ownership stays in Models;
 //! persistence is isolated in store and pure decisions in policy/geometry.
 mod candidates;
-pub use candidates::candidates;
+pub use candidates::{candidates, candidates_with};
 mod extraction;
 mod geometry;
 pub mod grouping;
@@ -45,7 +45,12 @@ pub(super) fn cosine(a: &[f32], b: &[f32]) -> Option<f64> {
     if a.len() != b.len() || a.is_empty() || a.iter().chain(b).any(|v| !v.is_finite()) {
         return None;
     }
-    let denominator = length(a) * length(b);
+    cosine_of(a, b, length(a), length(b))
+}
+/// `cosine` of finite vectors of one width whose lengths are already known:
+/// a pair of photos compares each region with sixteen others.
+pub(super) fn cosine_of(a: &[f32], b: &[f32], length_a: f32, length_b: f32) -> Option<f64> {
+    let denominator = length_a * length_b;
     if denominator == 0.0 || !denominator.is_finite() {
         return None;
     }
@@ -54,7 +59,7 @@ pub(super) fn cosine(a: &[f32], b: &[f32]) -> Option<f64> {
         .is_finite()
         .then(|| f64::from(similarity.clamp(-1.0, 1.0)))
 }
-fn length(values: &[f32]) -> f32 {
+pub(super) fn length(values: &[f32]) -> f32 {
     values.iter().map(|v| v * v).sum::<f32>().sqrt()
 }
 pub(crate) fn normalized(values: &[f32]) -> Vec<f32> {
@@ -75,54 +80,154 @@ pub fn clusters(
     pairs: &BTreeMap<(usize, usize), Pair>,
     cancelled: impl Fn() -> bool,
 ) -> Option<Vec<usize>> {
-    if cancelled() {
-        return None;
+    let mut links = Links::new(count);
+    for (&pair, verdict) in pairs {
+        links.add(pair, verdict.accepted, verdict.confidence);
     }
-    let mut owners: Vec<_> = (0..count).collect();
-    let mut members: Vec<_> = (0..count).map(|i| vec![i]).collect();
-    let mut edges: Vec<_> = pairs
-        .iter()
-        .filter(|((a, b), p)| p.accepted && *a < count && *b < count && p.confidence.is_finite())
-        .map(|(&key, p)| (key, p.confidence))
-        .collect();
-    edges.sort_by(|(a, ac), (b, bc)| bc.total_cmp(ac).then_with(|| a.cmp(b)));
-    for ((a, b), _) in edges {
+    // No group is small enough to have its missing pairs judged.
+    links
+        .clusters(0, cancelled, |_, _| {}, |_| Ok(Judged::Accepted))
+        .ok()
+        .flatten()
+}
+
+/// What judging the missing pairs of one merge found.
+pub(super) enum Judged {
+    Accepted,
+    /// This pair is rejected; the others may not have been judged.
+    Rejected(usize, usize),
+    Cancelled,
+}
+
+/// The verdicts as merging needs them: the accepted pairs, strongest first,
+/// and for each photo who it is accepted and who it is rejected with.
+pub(super) struct Links {
+    edges: Vec<((usize, usize), f64)>,
+    accepted: Vec<Vec<u32>>,
+    rejected: Vec<Vec<u32>>,
+}
+impl Links {
+    pub(super) fn new(count: usize) -> Self {
+        Self {
+            edges: Vec::new(),
+            accepted: vec![Vec::new(); count],
+            rejected: vec![Vec::new(); count],
+        }
+    }
+    /// The verdict of one pair, looked up as (lower, higher) when merging.
+    pub(super) fn add(&mut self, (a, b): (usize, usize), accepted: bool, confidence: f64) {
+        let count = self.accepted.len();
+        if a >= count || b >= count {
+            return;
+        }
+        if accepted && confidence.is_finite() {
+            self.edges.push(((a, b), confidence));
+        }
+        if a < b {
+            let known = if accepted {
+                &mut self.accepted
+            } else {
+                &mut self.rejected
+            };
+            known[a].push(b as u32);
+            known[b].push(a as u32);
+        }
+    }
+    /// Complete-link groups, numbered from 1 in the order of their first
+    /// photo. Two groups merge when every pair across them is accepted. Where
+    /// some of those pairs were never compared and the merged group would
+    /// have at most `limit` photos, `judge` is given them; larger groups stay
+    /// apart, as they do for a rejected pair. `progress` hears how many of
+    /// the accepted pairs have been tried.
+    pub(super) fn clusters(
+        mut self,
+        limit: usize,
+        cancelled: impl Fn() -> bool,
+        mut progress: impl FnMut(usize, usize),
+        mut judge: impl FnMut(Vec<(usize, usize)>) -> anyhow::Result<Judged>,
+    ) -> anyhow::Result<Option<Vec<usize>>> {
         if cancelled() {
-            return None;
+            return Ok(None);
         }
-        let (a, b) = (owners[a], owners[b]);
-        if a == b {
-            continue;
-        }
-        let mut accepted = true;
-        for &left in &members[a] {
+        let count = self.accepted.len();
+        let mut owners: Vec<_> = (0..count).collect();
+        let mut members: Vec<_> = (0..count).map(|i| vec![i]).collect();
+        let mut edges = std::mem::take(&mut self.edges);
+        edges.sort_by(|(a, ac), (b, bc)| bc.total_cmp(ac).then_with(|| a.cmp(b)));
+        // marks[other] == left: `other` is accepted with the photo `left`.
+        let mut marks = vec![usize::MAX; count];
+        let total = edges.len();
+        for (tried, ((a, b), _)) in edges.into_iter().enumerate() {
             if cancelled() {
-                return None;
+                return Ok(None);
             }
-            if members[b].iter().any(|&right| {
-                !pairs
-                    .get(&(left.min(right), left.max(right)))
-                    .is_some_and(|p| p.accepted)
+            progress(tried, total);
+            let (a, b) = (owners[a], owners[b]);
+            if a == b {
+                continue;
+            }
+            // Groups only grow, so one rejected pair keeps them apart for good.
+            let (small, large) = if members[a].len() <= members[b].len() {
+                (a, b)
+            } else {
+                (b, a)
+            };
+            if members[small].iter().any(|&photo| {
+                self.rejected[photo]
+                    .iter()
+                    .any(|&other| owners[other as usize] == large)
             }) {
-                accepted = false;
-                break;
+                continue;
             }
-        }
-        if accepted {
+            let judged = members[a].len() + members[b].len() <= limit;
+            let mut missing = Vec::new();
+            let mut complete = true;
+            'cross: for &left in &members[a] {
+                if cancelled() {
+                    return Ok(None);
+                }
+                for &other in &self.accepted[left] {
+                    marks[other as usize] = left;
+                }
+                for &right in &members[b] {
+                    if marks[right] != left {
+                        if !judged {
+                            complete = false;
+                            break 'cross;
+                        }
+                        missing.push((left.min(right), left.max(right)));
+                    }
+                }
+            }
+            if !complete {
+                continue;
+            }
+            if !missing.is_empty() {
+                match judge(missing)? {
+                    Judged::Accepted => {}
+                    Judged::Rejected(x, y) => {
+                        self.rejected[x].push(y as u32);
+                        self.rejected[y].push(x as u32);
+                        continue;
+                    }
+                    Judged::Cancelled => return Ok(None),
+                }
+            }
             let moved = std::mem::take(&mut members[b]);
             for &id in &moved {
                 owners[id] = a;
             }
             members[a].extend(moved);
         }
-    }
-    let mut nonempty: Vec<_> = members.into_iter().filter(|m| !m.is_empty()).collect();
-    nonempty.sort_by_key(|m| *m.iter().min().unwrap());
-    let mut result = vec![0; count];
-    for (n, group) in nonempty.into_iter().enumerate() {
-        for id in group {
-            result[id] = n + 1;
+        progress(total, total);
+        let mut nonempty: Vec<_> = members.into_iter().filter(|m| !m.is_empty()).collect();
+        nonempty.sort_by_key(|m| *m.iter().min().unwrap());
+        let mut result = vec![0; count];
+        for (n, group) in nonempty.into_iter().enumerate() {
+            for id in group {
+                result[id] = n + 1;
+            }
         }
+        Ok((!cancelled()).then_some(result))
     }
-    (!cancelled()).then_some(result)
 }

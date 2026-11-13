@@ -1,5 +1,5 @@
 //! Workflow-independent publication of general groups and date/group folder labels.
-use super::{Features, Input, cluster};
+use super::{Features, Input, cluster_resident};
 use crate::core::{model::MediaId, subjects::store::Store};
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, HashMap};
@@ -21,6 +21,20 @@ pub fn group(
     eps: f32,
     cancelled: impl Fn() -> bool,
 ) -> Result<Option<Output>> {
+    group_with(records, store, mixed, eps, 1, cancelled, |_, _| {})
+}
+
+/// `group` comparing on up to `threads` threads. `progress` hears how many
+/// of the records are grouped, counting a part of the bucket under way.
+pub fn group_with(
+    records: &[Record],
+    store: &Store,
+    mixed: bool,
+    eps: f32,
+    threads: usize,
+    cancelled: impl Fn() -> bool,
+    mut progress: impl FnMut(usize, usize),
+) -> Result<Option<Output>> {
     let mut buckets = BTreeMap::<Option<&str>, Vec<&Record>>::new();
     for record in records {
         if cancelled() {
@@ -40,10 +54,13 @@ pub fn group(
         folders: HashMap::new(),
     };
     let mut next = 0;
+    let mut finished = 0;
     for (date, bucket) in buckets {
         if cancelled() {
             return Ok(None);
         }
+        let before = finished;
+        finished += bucket.len();
         if mixed && date.is_none() {
             for record in bucket {
                 output.folders.insert(record.id, "undated".into());
@@ -58,7 +75,9 @@ pub fn group(
                 portrait: r.portrait,
             })
             .collect();
-        let Some(result) = cluster(
+        // Descriptors are read once and stay in memory while they fit in
+        // what grouping may hold; a larger bucket reads them in blocks.
+        let Some(result) = cluster_resident(
             &inputs,
             eps,
             |key| {
@@ -70,6 +89,14 @@ pub fn group(
                 )
             },
             &cancelled,
+            threads,
+            crate::core::memory::grouping_allowance(),
+            |part| {
+                progress(
+                    before + (part * inputs.len() as f64) as usize,
+                    records.len(),
+                )
+            },
         )?
         else {
             return Ok(None);
