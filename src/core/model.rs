@@ -14,6 +14,34 @@ impl MediaId {
     }
 }
 
+/// A value a snapshot shares instead of copying: cloning copies a pointer,
+/// and the first change made while a snapshot still holds it copies the
+/// value once. Reads, writes and the saved form are those of the value.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Shared<T>(std::sync::Arc<T>);
+impl<T> From<T> for Shared<T> {
+    fn from(value: T) -> Self {
+        Self(std::sync::Arc::new(value))
+    }
+}
+impl<T> std::ops::Deref for Shared<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+impl<T: Clone> std::ops::DerefMut for Shared<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+}
+impl<T: FromIterator<A>, A> FromIterator<A> for Shared<T> {
+    fn from_iter<I: IntoIterator<Item = A>>(iter: I) -> Self {
+        Self::from(T::from_iter(iter))
+    }
+}
+
 /// Apply verified identity changes simultaneously, including swaps and chains.
 /// Detach original values before inserting targets that may also be old keys.
 pub(crate) fn remap_media_ids<T>(

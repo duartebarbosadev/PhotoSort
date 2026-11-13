@@ -8,11 +8,113 @@ use crate::core::delete_review::{self, Category, Entry, FormatChoice, Review};
 /// How the star on a suggested keeper explains itself.
 pub(super) const SUGGESTED: &str = "Suggested by PhotoSort.";
 
+/// On a photo PhotoSort suggests moving to Trash and left unmarked: every
+/// other photo of its Pick Best group is going there already.
+pub(super) const LAST_KEPT: &str = "Only photo kept from its group";
+
 /// The long side, in pixels, a closed-eyes card's zoomed eyes are cut at.
 const EYE_EDGE: f32 = 480.0;
 
 fn count(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// What Easy Delete's grid is drawn from, kept between frames: a frame in
+/// which nothing changed reads it instead of working it out for every card.
+#[derive(Default)]
+pub(super) struct Deck {
+    /// The review the cards were worked out from.
+    review: u64,
+    /// What the grid asks of each card to place it, by subject. Kept across
+    /// tabs and searches, for as long as the review is.
+    cards: HashMap<MediaId, DeckCard>,
+    /// The metadata the cards were last checked against.
+    metadata: (usize, u64),
+    /// Changes whenever a card's shape, facts line or place may have: the
+    /// grid asks its cards again.
+    stamp: u64,
+    /// The list the cards shown were taken from.
+    listed: Option<(u64, usize)>,
+    shown: std::rc::Rc<Shown>,
+    /// The decisions the counts were taken from.
+    counted: Option<u64>,
+    counts: Counts,
+    /// The Pick Best groups and the decisions `last_kept` was taken from.
+    kept: Option<(u64, u64)>,
+    /// The last photo still kept of each Pick Best group. A suggestion
+    /// never marks one: its card says so and stays as it is.
+    last_kept: HashSet<MediaId>,
+    /// A card was drawn with a facts line the grid did not expect, or
+    /// without one it did.
+    redrawn: bool,
+}
+
+impl Deck {
+    /// Notes whether a card just drawn had facts to show. They come from
+    /// more than the review and the metadata (the analysis, the files'
+    /// sizes), so what was worked out before can be out of date: the card
+    /// on screen settles it.
+    fn drew(&mut self, subject: MediaId, facts: bool) {
+        if let Some(card) = self.cards.get_mut(&subject)
+            && card.facts != facts
+        {
+            card.facts = facts;
+            self.stamp = crate::core::revision::next();
+            self.redrawn = true;
+        }
+    }
+}
+
+/// A photo's size, orientation and capture time, if known.
+type Seen = Option<(u32, u32, u8, Option<i64>)>;
+
+/// What the grid asks of one card to place it.
+struct DeckCard {
+    /// Each photo of the card, and its metadata when this was worked out.
+    seen: Vec<(MediaId, Seen)>,
+    /// Each photo's width over its height.
+    aspects: Vec<f32>,
+    /// It shows a line of facts.
+    facts: bool,
+    titled: bool,
+}
+
+/// The cards the grid shows, in order.
+#[derive(Default)]
+pub(super) struct Shown {
+    subjects: Vec<MediaId>,
+    /// Each subject's place among them.
+    places: HashMap<MediaId, usize>,
+    /// Each group shown and how many cards it has.
+    sections: Vec<(Category, usize)>,
+    /// Each group's first card.
+    starts: Vec<usize>,
+    lengths: Vec<usize>,
+}
+
+/// The numbers over the grid.
+#[derive(Default)]
+struct Counts {
+    /// Photos going to Trash, and their bytes.
+    trash: usize,
+    freed: u64,
+    /// Cards Accept all suggestions would change.
+    changed: usize,
+    sections: Vec<SectionCounts>,
+}
+
+/// The numbers in one group's header.
+#[derive(Clone, Default)]
+struct SectionCounts {
+    /// Cards its Accept all acts on, how many it would change and what the
+    /// suggestions free.
+    acts_on: usize,
+    changed: usize,
+    frees: u64,
+    /// For two formats of one shot: what each choice frees, and the choice
+    /// every card has, if they agree.
+    formats: [u64; 3],
+    choice: Option<FormatChoice>,
 }
 
 impl PhotoSortApp {
@@ -69,7 +171,7 @@ impl PhotoSortApp {
         }
         let marked = self
             .delete_review
-            .stage_new_suggestions(&mut self.decisions);
+            .stage_new_suggestions_sparing(&self.pick_review, &mut self.decisions);
         if !marked.is_empty() {
             self.note_trash_steps(&marked, Step::EasyDelete);
             self.changed_items(marked);
@@ -109,6 +211,21 @@ impl PhotoSortApp {
     pub(super) fn delete_review_ids(&self) -> Vec<MediaId> {
         self.filtered.iter().map(|i| self.media[*i].id).collect()
     }
+    /// Why a card suggests what it does. The sentence names the better shot
+    /// as the file was called when the suggestions were made: with a new
+    /// name staged in Organize, it says that name, like every other view.
+    fn delete_reason(&self, entry: &Entry) -> String {
+        let media = entry
+            .companion
+            .and_then(|id| self.index.get(&id))
+            .map(|&i| &self.media[i]);
+        match media {
+            Some(media) if self.file_names.contains_key(&media.id) => {
+                entry.reason.replace(&media.name(), &self.shown_name(media))
+            }
+            _ => entry.reason.clone(),
+        }
+    }
     fn delete_enabled(&self) -> bool {
         !self.busy && self.delete_run.is_none()
     }
@@ -125,18 +242,46 @@ impl PhotoSortApp {
         {
             self.delete_review
                 .toggle(review, candidate, &mut self.decisions);
+            self.by_hand.insert(candidate);
             self.active = Some(candidate);
             self.focused_slot = side as u64;
             self.changed_items([candidate]);
         }
     }
-    /// Puts cards back to PhotoSort's suggestion.
+    /// Left and Right decide the whole card shown beside the grid. Keep
+    /// keeps every photo on it; Trash sends all but its keeper to Trash, so
+    /// neither can leave a pair with both photos marked.
+    pub(super) fn decide_delete_card(&mut self, trash: bool) {
+        if !self.delete_enabled() {
+            return;
+        }
+        if let Some(id) = self.delete_current {
+            if trash {
+                self.delete_review.trash(id, &mut self.decisions);
+            } else {
+                self.delete_review.keep(id, &mut self.decisions);
+            }
+            let decided = self.delete_candidates(&[id]);
+            self.by_hand.extend(decided.iter().copied());
+            self.changed_items(decided);
+        }
+    }
+    /// Accept all suggestions, for these cards: every photo not decided by
+    /// hand takes its suggestion, and a choice made by hand stays as it is.
+    /// A photo that would be the last one kept of its card or of its Pick
+    /// Best group is left as it is, so none ever ends with no photo kept.
     fn accept_delete_suggestions(&mut self, ids: &[MediaId]) {
         if !self.delete_enabled() {
             return;
         }
-        self.delete_review.accept(ids, &mut self.decisions);
-        self.changed_items(self.delete_candidates(ids));
+        let changed = self.delete_review.accept_sparing(
+            ids,
+            &self.pick_review,
+            &mut self.decisions,
+            &self.by_hand,
+        );
+        self.accepted_status(changed.len());
+        self.changed_items(changed);
     }
     /// The photos of the cards of `ids`, each once: an Eyes closed card's
     /// better shot can be on another card too.
@@ -148,10 +293,19 @@ impl PhotoSortApp {
             .filter(|id| seen.insert(*id))
             .collect()
     }
-    /// Undoes the user's changes to the current card.
+    /// Undoes the user's changes to the current card. One card, asked for
+    /// by hand: its suggestion applies in full, and its photos count as
+    /// undecided again.
     pub(super) fn undo_delete(&mut self) {
-        if let Some(id) = self.delete_current {
-            self.accept_delete_suggestions(&[id]);
+        if let Some(id) = self.delete_current
+            && self.delete_enabled()
+        {
+            self.delete_review.accept(&[id], &mut self.decisions);
+            let photos = self.delete_candidates(&[id]);
+            for photo in &photos {
+                self.by_hand.remove(photo);
+            }
+            self.changed_items(photos);
         }
     }
     /// Every card shown back to its suggestion.
@@ -178,6 +332,17 @@ impl PhotoSortApp {
         }
         self.delete_review
             .choose_formats(ids, choice, &mut self.decisions);
+        // Only the two-format cards were decided, by hand.
+        let pairs: Vec<MediaId> = ids
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.delete_review
+                    .entry(*id)
+                    .is_some_and(|e| e.category == Category::Formats)
+            })
+            .collect();
+        self.by_hand.extend(self.delete_candidates(&pairs));
         self.changed_items(self.delete_candidates(ids));
     }
     /// The group tabs, with their counts. Only groups with suggestions get one.
@@ -264,7 +429,7 @@ impl PhotoSortApp {
         };
         ui.horizontal(|ui| {
             ui.label(RichText::new(&entry.tag).font(semibold(13.0)).color(INK))
-                .on_hover_text(&entry.reason);
+                .on_hover_text(self.delete_reason(&entry));
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 if icon_button(ui, icon::X, "Close · Esc").clicked() {
                     self.delete_panel = false;
@@ -308,17 +473,17 @@ impl PhotoSortApp {
     /// opens its photos large in a panel beside the grid. The keyboard acts
     /// on the current card in both.
     pub(super) fn delete_grid(&mut self, ui: &mut egui::Ui) {
-        let subjects = self.delete_review_ids();
-        self.delete_summary(ui, &subjects);
+        let shown = self.delete_deck();
+        self.delete_summary(ui);
         ui.add_space(S2);
         // The grid takes its final width at once and the panel slides over
         // the room it leaves, in or out: one reflow per open or close, never
         // one per frame of the slide. The grid keeps room for one card.
         let area = ui.available_rect_before_wrap();
-        let shown = self.delete_panel && self.delete_current.is_some();
+        let panel_shown = self.delete_panel && self.delete_current.is_some();
         let slide = ui
             .ctx()
-            .animate_bool_responsive(egui::Id::new("delete_panel_slide"), shown);
+            .animate_bool_responsive(egui::Id::new("delete_panel_slide"), panel_shown);
         let widest = (area.width() - 460.0).max(360.0);
         self.delete_panel_width = self
             .delete_panel_width
@@ -326,32 +491,16 @@ impl PhotoSortApp {
             .clamp(360.0, widest)
             .into();
         let panel_width = self.delete_panel_width.unwrap_or(360.0);
-        let grid = if shown {
+        let grid = if panel_shown {
             area.with_max_x(area.right() - panel_width - S3)
         } else {
             area
         };
-        let mut sections: Vec<(Category, usize)> = Vec::new();
-        for id in &subjects {
-            let category = self.delete_review.entry(*id).map(|e| e.category);
-            match (sections.last_mut(), category) {
-                (Some((last, n)), Some(c)) if *last == c => *n += 1,
-                (_, Some(c)) => sections.push((c, 1)),
-                _ => {}
-            }
-        }
-        let starts: Vec<usize> = sections
-            .iter()
-            .scan(0, |start, (_, n)| {
-                let at = *start;
-                *start += n;
-                Some(at)
-            })
-            .collect();
         let current = self
             .delete_current
-            .and_then(|id| subjects.iter().position(|other| *other == id));
-        let lengths: Vec<usize> = sections.iter().map(|(_, n)| *n).collect();
+            .and_then(|id| shown.places.get(&id).copied());
+        let stamp = self.grids.delete.stamp;
+        let subjects = &shown.subjects;
         let clicked = ui
             .scope_builder(
                 egui::UiBuilder::new()
@@ -361,28 +510,45 @@ impl PhotoSortApp {
                     self.sectioned_card_grid(
                         ui,
                         "delete",
-                        &lengths,
-                        |app, i| app.delete_card_aspects(subjects[i]),
-                        |app, i| app.delete_card_has_facts(subjects[i]),
+                        &shown.lengths,
+                        stamp,
+                        |app, i, shapes| {
+                            if let Some(card) = app.grids.delete.cards.get(&subjects[i]) {
+                                shapes.extend_from_slice(&card.aspects);
+                            }
+                        },
                         |app, i| {
-                            app.delete_review
-                                .entry(subjects[i])
-                                .is_some_and(|e| !card_title(e).is_empty())
+                            app.grids
+                                .delete
+                                .cards
+                                .get(&subjects[i])
+                                .is_some_and(|card| card.facts)
                         },
-                        |app, ui, section| {
-                            let (category, n) = sections[section];
-                            let ids = &subjects[starts[section]..starts[section] + n];
-                            app.delete_section_header(ui, category, ids);
+                        |app, i| {
+                            app.grids
+                                .delete
+                                .cards
+                                .get(&subjects[i])
+                                .is_some_and(|card| card.titled)
                         },
+                        |app, ui, section| app.delete_section_header(ui, &shown, section),
                         |app, i| {
                             let entry = app.delete_review.entry(subjects[i])?.clone();
-                            Some(app.delete_card(&entry))
+                            let card = app.delete_card(&entry);
+                            let facts = card.photos.iter().any(|photo| !photo.facts.is_empty());
+                            app.grids.delete.drew(subjects[i], facts);
+                            Some(card)
                         },
                         current,
                     )
                 },
             )
             .inner;
+        // A card drawn with a facts line its row has no room for, or without
+        // the one it keeps room for: its rows are laid out again next frame.
+        if std::mem::take(&mut self.grids.delete.redrawn) {
+            ui.ctx().request_repaint();
+        }
         if slide > 0.0 {
             self.delete_side_panel(ui, area, panel_width, slide);
         }
@@ -391,6 +557,195 @@ impl PhotoSortApp {
             Some(GridClick::Card(i, event)) => self.delete_card_event(subjects[i], event),
             Some(GridClick::Background) => self.deselect_delete_card(),
             None => {}
+        }
+    }
+
+    /// What the grid is drawn from, brought up to date: the cards shown
+    /// when the list was built again, each card's shape and facts line when
+    /// the review was replaced or one of its photos' details arrived, and
+    /// the counts and the photos held back when a decision or Pick Best's
+    /// groups changed. A frame in which none of that happened looks up the
+    /// stamps.
+    fn delete_deck(&mut self) -> std::rc::Rc<Shown> {
+        let mut deck = std::mem::take(&mut self.grids.delete);
+        let review = self.delete_review.revision();
+        if deck.review != review {
+            deck.review = review;
+            deck.cards.clear();
+            deck.listed = None;
+        }
+        let listed = (self.grids.listed, self.filtered.len());
+        let metadata = self.metadata_stamp();
+        if deck.listed != Some(listed) {
+            let shown = self.delete_shown();
+            for subject in &shown.subjects {
+                if !deck.cards.contains_key(subject)
+                    && let Some(card) = self.delete_deck_card(*subject)
+                {
+                    deck.cards.insert(*subject, card);
+                }
+            }
+            deck.shown = std::rc::Rc::new(shown);
+            deck.listed = Some(listed);
+            deck.counted = None;
+            deck.stamp = crate::core::revision::next();
+        }
+        if deck.metadata != metadata {
+            // Only the cards one of whose photos' details changed.
+            for (subject, card) in &mut deck.cards {
+                if card
+                    .seen
+                    .iter()
+                    .any(|(id, seen)| self.delete_seen(*id) != *seen)
+                    && let Some(again) = self.delete_deck_card(*subject)
+                {
+                    *card = again;
+                    deck.stamp = crate::core::revision::next();
+                }
+            }
+            deck.metadata = metadata;
+        }
+        let decisions = self.decisions.revision();
+        let kept = (self.pick_review.revision(), decisions);
+        if deck.kept != Some(kept) {
+            deck.last_kept = self.pick_review.last_kept(&self.decisions);
+            deck.kept = Some(kept);
+            deck.counted = None;
+        }
+        if deck.counted != Some(decisions) {
+            deck.counts = self.delete_counts(&deck.shown, &deck.last_kept);
+            deck.counted = Some(decisions);
+        }
+        let shown = deck.shown.clone();
+        self.grids.delete = deck;
+        shown
+    }
+
+    /// The cards shown, in order, and the groups they fall in.
+    fn delete_shown(&self) -> Shown {
+        let subjects = self.delete_review_ids();
+        let mut sections: Vec<(Category, usize)> = Vec::new();
+        for id in &subjects {
+            let category = self.delete_review.entry(*id).map(|e| e.category);
+            match (sections.last_mut(), category) {
+                (Some((last, n)), Some(c)) if *last == c => *n += 1,
+                (_, Some(c)) => sections.push((c, 1)),
+                _ => {}
+            }
+        }
+        let starts = sections
+            .iter()
+            .scan(0, |start, (_, n)| {
+                let at = *start;
+                *start += n;
+                Some(at)
+            })
+            .collect();
+        Shown {
+            places: subjects
+                .iter()
+                .enumerate()
+                .map(|(place, id)| (*id, place))
+                .collect(),
+            lengths: sections.iter().map(|(_, n)| *n).collect(),
+            subjects,
+            sections,
+            starts,
+        }
+    }
+
+    /// What the grid asks of `subject`'s card to place it.
+    fn delete_deck_card(&self, subject: MediaId) -> Option<DeckCard> {
+        let entry = self.delete_review.entry(subject)?;
+        Some(DeckCard {
+            seen: entry
+                .candidates()
+                .into_iter()
+                .map(|id| (id, self.delete_seen(id)))
+                .collect(),
+            aspects: self.delete_card_aspects(subject),
+            facts: self.delete_card_has_facts(subject),
+            titled: !card_title(entry).is_empty(),
+        })
+    }
+
+    /// What a card's shape and facts take from a photo's metadata.
+    fn delete_seen(&self, id: MediaId) -> Seen {
+        self.metadata
+            .get(&id)
+            .map(|m| (m.width, m.height, m.orientation, m.captured_ms))
+    }
+
+    /// The numbers over the grid and in its groups' headers.
+    fn delete_counts(&self, shown: &Shown, last_kept: &HashSet<MediaId>) -> Counts {
+        let trash: Vec<MediaId> = self
+            .delete_candidates(&shown.subjects)
+            .into_iter()
+            .filter(|id| self.decisions.get(id).is_some_and(|d| d.rejected))
+            .collect();
+        let changed = |ids: &[MediaId]| {
+            ids.iter()
+                .filter(|id| {
+                    self.delete_review
+                        .pending(**id, &self.decisions, last_kept, &self.by_hand)
+                })
+                .count()
+        };
+        // Every card Accept all would change, counted with its group.
+        let mut differ = 0;
+        let sections = shown
+            .sections
+            .iter()
+            .zip(&shown.starts)
+            .map(|((category, n), start)| {
+                let ids = &shown.subjects[*start..start + n];
+                if *category == Category::Formats {
+                    differ += changed(ids);
+                    return SectionCounts {
+                        formats: FormatChoice::ALL
+                            .map(|choice| self.format_trash_bytes(ids, choice)),
+                        choice: self.delete_review.format_choice(ids, &self.decisions),
+                        ..Default::default()
+                    };
+                }
+                let acts_on = self.delete_section_ids(*category, ids);
+                let counts = SectionCounts {
+                    acts_on: acts_on.len(),
+                    changed: changed(&acts_on),
+                    frees: self.suggested_trash_bytes(&acts_on),
+                    ..Default::default()
+                };
+                differ += if acts_on.len() == ids.len() {
+                    counts.changed
+                } else {
+                    changed(ids)
+                };
+                counts
+            })
+            .collect();
+        Counts {
+            trash: trash.len(),
+            freed: trash.iter().map(|id| self.delete_bytes(*id)).sum(),
+            changed: differ,
+            sections,
+        }
+    }
+
+    /// The cards of a group its Accept all acts on. Only closed-eyes shots
+    /// with a better one have a suggestion to act on; the others are kept
+    /// and stay kept.
+    fn delete_section_ids(&self, category: Category, ids: &[MediaId]) -> Vec<MediaId> {
+        if category == Category::EyesClosed {
+            ids.iter()
+                .copied()
+                .filter(|id| {
+                    self.delete_review
+                        .entry(*id)
+                        .is_some_and(|e| !e.informational())
+                })
+                .collect()
+        } else {
+            ids.to_vec()
         }
     }
 
@@ -434,15 +789,9 @@ impl PhotoSortApp {
 
     /// One line over the grid: what is staged, the photo size, and Accept
     /// all suggestions.
-    fn delete_summary(&mut self, ui: &mut egui::Ui, subjects: &[MediaId]) {
-        let candidates = self.delete_candidates(subjects);
-        let trash: Vec<MediaId> = candidates
-            .iter()
-            .copied()
-            .filter(|id| self.decision(*id).rejected)
-            .collect();
-        let freed: u64 = trash.iter().map(|id| self.delete_bytes(*id)).sum();
-        let changed = self.delete_review.changed_count(subjects, &self.decisions);
+    fn delete_summary(&mut self, ui: &mut egui::Ui) {
+        let counts = &self.grids.delete.counts;
+        let (trash, freed, changed) = (counts.trash, counts.freed, counts.changed);
         ui.horizontal(|ui| {
             // Accept all and the size slider are placed first, from the
             // right; the summary then gets only the room left and truncates.
@@ -465,7 +814,7 @@ impl PhotoSortApp {
                         ui,
                         &format!(
                             "{} going to Trash · frees {}",
-                            count(trash.len(), "photo", "photos"),
+                            count(trash, "photo", "photos"),
                             size_text(freed),
                         ),
                     );
@@ -476,7 +825,17 @@ impl PhotoSortApp {
 
     /// A group's header: its name, and the action for all of it. The tab
     /// over the grid has its size.
-    fn delete_section_header(&mut self, ui: &mut egui::Ui, category: Category, ids: &[MediaId]) {
+    fn delete_section_header(&mut self, ui: &mut egui::Ui, shown: &Shown, section: usize) {
+        let (category, n) = shown.sections[section];
+        let ids = &shown.subjects[shown.starts[section]..shown.starts[section] + n];
+        let counts = self
+            .grids
+            .delete
+            .counts
+            .sections
+            .get(section)
+            .cloned()
+            .unwrap_or_default();
         ui.label(
             RichText::new(category.heading())
                 .font(semibold(14.0))
@@ -489,14 +848,11 @@ impl PhotoSortApp {
                 // format is smaller depends on the camera and its settings.
                 let segments: Vec<Segment> = FormatChoice::ALL
                     .into_iter()
-                    .map(|choice| {
+                    .zip(counts.formats)
+                    .map(|(choice, frees)| {
                         let shown = match choice {
                             FormatChoice::Both => choice.title().to_owned(),
-                            _ => format!(
-                                "{} · frees {}",
-                                choice.title(),
-                                size_text(self.format_trash_bytes(ids, choice))
-                            ),
+                            _ => format!("{} · frees {}", choice.title(), size_text(frees)),
                         };
                         Segment {
                             name: shown.clone(),
@@ -505,9 +861,8 @@ impl PhotoSortApp {
                         }
                     })
                     .collect();
-                let selected = self
-                    .delete_review
-                    .format_choice(ids, &self.decisions)
+                let selected = counts
+                    .choice
                     .and_then(|c| FormatChoice::ALL.iter().position(|o| *o == c));
                 ui.add_enabled_ui(enabled, |ui| {
                     if let Some(clicked) = segmented(
@@ -522,22 +877,7 @@ impl PhotoSortApp {
                 });
                 return;
             }
-            // Only shots with a better one have a suggestion to act on; the
-            // others are kept and stay kept.
-            let ids: Vec<MediaId> = if category == Category::EyesClosed {
-                ids.iter()
-                    .copied()
-                    .filter(|id| {
-                        self.delete_review
-                            .entry(*id)
-                            .is_some_and(|e| !e.informational())
-                    })
-                    .collect()
-            } else {
-                ids.to_vec()
-            };
-            let ids = ids.as_slice();
-            if ids.is_empty() {
+            if counts.acts_on == 0 {
                 ui.label(RichText::new("No better shots · kept").color(MUTED));
                 return;
             }
@@ -548,18 +888,15 @@ impl PhotoSortApp {
                 Category::Blur | Category::Dark | Category::Bright => "Trashes every photo here",
                 Category::Formats => unreachable!(),
             };
-            let changed = self.delete_review.changed_count(ids, &self.decisions);
-            let label = format!(
-                "Accept all · frees {}",
-                size_text(self.suggested_trash_bytes(ids))
-            );
+            let label = format!("Accept all · frees {}", size_text(counts.frees));
             if ui
-                .add_enabled(enabled && changed > 0, egui::Button::new(label))
+                .add_enabled(enabled && counts.changed > 0, egui::Button::new(label))
                 .on_hover_text(hover)
                 .on_disabled_hover_text(hover)
                 .clicked()
             {
-                self.accept_delete_suggestions(ids);
+                let ids = self.delete_section_ids(category, ids);
+                self.accept_delete_suggestions(&ids);
             }
         });
     }
@@ -755,7 +1092,7 @@ impl PhotoSortApp {
                 .iter()
                 .map(|id| {
                     let ms = meta(id)?.captured_ms?;
-                    let time = chrono::DateTime::from_timestamp_millis(ms)?;
+                    let time = crate::core::dates::clock(ms)?;
                     Some(time.format("%H:%M:%S").to_string())
                 })
                 .collect();
@@ -853,7 +1190,22 @@ impl PhotoSortApp {
         let subject = entry.subject;
         let enabled = self.delete_enabled();
         let leaders = entry.candidates();
-        let facts = self.delete_facts(entry, &leaders);
+        let mut facts = self.delete_facts(entry, &leaders);
+        // A suggestion held back says why, first, where it is not cut off.
+        for held in self
+            .delete_review
+            .held(subject, &self.grids.delete.last_kept)
+        {
+            if let Some(side) = leaders.iter().position(|id| *id == held) {
+                facts[side].insert(
+                    0,
+                    Fact {
+                        text: LAST_KEPT.into(),
+                        better: false,
+                    },
+                );
+            }
+        }
         let mut insets: Vec<Option<Inset>> = leaders
             .iter()
             .map(|id| self.delete_eye_inset(entry, *id))
@@ -874,7 +1226,7 @@ impl PhotoSortApp {
                     suggested_hover: keeps_for(entry, *id)
                         .then(|| keep_why_text(entry))
                         .flatten(),
-                    caption: media.map(Media::name).unwrap_or_default(),
+                    caption: media.map(|m| self.shown_name(m)).unwrap_or_default(),
                     name: media
                         .map(|m| m.path.display().to_string())
                         .unwrap_or_default(),
@@ -902,7 +1254,7 @@ impl PhotoSortApp {
             photos,
             buttons: Vec::new(),
             shown: self.delete_panel && self.delete_current == Some(subject),
-            title_hover: Some(entry.reason.clone()),
+            title_hover: Some(self.delete_reason(entry)),
             undo: (enabled && self.delete_review.changed(subject, &self.decisions))
                 .then(|| (self.delete_undo_label().to_owned(), String::new())),
         }
@@ -1035,19 +1387,26 @@ mod tests {
         app.decision(MediaId(n)).rejected
     }
     fn key(app: &mut PhotoSortApp, key: egui::Key, modifiers: egui::Modifiers) {
+        hold(app, key, modifiers, 0);
+    }
+    /// A key press, then `repeats` more of it with no release between, as
+    /// a held key sends them: egui marks those as repeats itself.
+    fn hold(app: &mut PhotoSortApp, key: egui::Key, modifiers: egui::Modifiers, repeats: usize) {
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        let input = egui::RawInput {
-            events: vec![egui::Event::Key {
-                key,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers,
-            }],
-            ..Default::default()
-        };
-        let _ = ctx.run_test(input, |ui| app.update_workspace(ui, false));
+        for _ in 0..=repeats {
+            let input = egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                ..Default::default()
+            };
+            let _ = ctx.run_test(input, |ui| app.update_workspace(ui, false));
+        }
     }
     #[test]
     fn suggestions_are_the_staged_decisions_and_survive_leaving_and_coming_back() {
@@ -1262,17 +1621,18 @@ mod tests {
         assert!(!shown.contains("Undo"), "{shown}");
     }
     #[test]
-    fn bulk_actions_apply_to_their_group_and_accept_all_restores_every_card() {
+    fn accept_all_fills_in_what_is_undecided_and_never_changes_a_choice_made_by_hand() {
         let mut app = app();
+        // Nothing decided yet for the copy and the dark photo, as when
+        // suggestions are not applied on their own.
         for id in [1, 3] {
-            app.delete_current = Some(MediaId(id));
-            app.toggle_delete_candidate(0);
+            app.decisions.remove(&MediaId(id));
         }
         assert!(!trashed(&app, 1) && !trashed(&app, 3));
         // "Trash all N exact copies" is the Exact group's suggestion only.
         app.accept_delete_suggestions(&[MediaId(1)]);
         assert!(trashed(&app, 1) && !trashed(&app, 3));
-        // One choice for every JPEG + HEIC pair.
+        // One choice for every JPEG + HEIC pair, made by hand.
         app.choose_delete_formats(&app.delete_review_ids(), FormatChoice::Heic);
         assert!(trashed(&app, 4) && !trashed(&app, 5));
         assert_eq!(
@@ -1280,15 +1640,59 @@ mod tests {
                 .format_choice(&app.delete_review_ids(), &app.decisions),
             Some(FormatChoice::Heic)
         );
-        // Accept all suggestions: back to every suggestion, both formats kept.
+        // By hand: the copy is kept and the photo it copies goes instead.
+        app.delete_current = Some(MediaId(1));
+        app.toggle_delete_candidate(0);
+        app.toggle_delete_candidate(1);
+        assert!(!trashed(&app, 1) && trashed(&app, 2));
+        // Accept all suggestions marks the dark photo, which nobody decided,
+        // and leaves both choices made by hand: the pair's and the formats'.
         app.accept_delete_defaults();
-        assert!(trashed(&app, 1) && trashed(&app, 3));
-        assert!(!trashed(&app, 4) && !trashed(&app, 5));
-        assert_eq!(
-            app.delete_review
-                .changed_count(&app.delete_review_ids(), &app.decisions),
-            0
-        );
+        assert!(trashed(&app, 3));
+        assert!(!trashed(&app, 1) && trashed(&app, 2));
+        assert!(trashed(&app, 4) && !trashed(&app, 5));
+        assert_eq!(app.status, "Accepted 1 suggestion");
+        // The card's own Undo is asked for by hand: its suggestion in full.
+        app.undo_delete();
+        assert!(trashed(&app, 1) && !trashed(&app, 2));
+        // The copy undecided again and the photo it copies marked by hand:
+        // the suggestion would send the pair's last photo to Trash, so it
+        // is skipped and the copy stays undecided.
+        app.decisions.remove(&MediaId(1));
+        app.toggle_delete_candidate(1);
+        app.accept_delete_defaults();
+        assert!(!trashed(&app, 1) && trashed(&app, 2));
+        // Accept all has nothing left to do, and says so.
+        assert!(app.status.starts_with("No suggestion left to accept"));
+        app.delete_deck();
+        assert_eq!(app.grids.delete.counts.changed, 0);
+    }
+    #[test]
+    fn suggestions_hold_back_the_last_photo_kept_of_a_pick_best_group_and_say_so() {
+        use super::super::review_card::render_grid;
+        let mut app = app();
+        // Pick Best keeps the dark photo 3 over 1, which is going to Trash.
+        app.delete_current = Some(MediaId(3));
+        app.toggle_delete_candidate(0);
+        app.pick_review
+            .replace(vec![crate::core::pick_review::Cluster::new(
+                1,
+                vec![MediaId(1), MediaId(3)],
+                HashMap::from([(MediaId(1), 10.), (MediaId(3), 20.)]),
+            )]);
+        // Staged on their own or accepted all at once, suggestions leave it.
+        app.delete_review.restore_suggested(Default::default());
+        app.stage_delete_suggestions();
+        app.accept_delete_defaults();
+        assert!(trashed(&app, 1) && !trashed(&app, 3));
+        // Its card says why, and Accept all has nothing left to do.
+        let shown = render_grid(&mut app);
+        assert!(shown.contains(LAST_KEPT), "{shown}");
+        assert_eq!(app.grids.delete.counts.changed, 0);
+        // Marked by hand, it goes, and the note with it.
+        app.toggle_delete_candidate(0);
+        assert!(trashed(&app, 3));
+        assert!(!render_grid(&mut app).contains(LAST_KEPT));
     }
     #[test]
     fn eyes_closed_cards_show_the_eyes_zoomed_and_only_trash_shots_with_a_better_one() {
@@ -1494,6 +1898,14 @@ mod tests {
         assert_eq!(text(&facts[0]), vec!["JPEG", "4.0 MB"]);
         assert_eq!(text(&facts[1]), vec!["HEIC", "5.0 MB"]);
         assert!(facts[0][1].better && !facts[1][1].better);
+        // Copies taken a second apart show the capture clock, as Details does.
+        let noon = crate::core::dates::timestamp("2024:07:01 12:34:56").unwrap();
+        for (n, ms) in [(1, noon), (2, noon + 1000)] {
+            app.metadata.get_mut(&MediaId(n)).unwrap().captured_ms = Some(ms);
+        }
+        let facts = app.delete_facts(&exact, &exact.candidates());
+        assert_eq!(text(&facts[0]), vec!["2025", "12:34:56"]);
+        assert_eq!(text(&facts[1]), vec!["2025/sorted", "12:34:57"]);
         // A single photo keeps its deciding fact first, then what it is.
         app.analysis.insert(
             MediaId(3),
@@ -1507,6 +1919,48 @@ mod tests {
             text(&app.delete_facts(&dark, &dark.candidates())[0]),
             vec!["Brightness 9/255", "JPEG", "3.0 MB", "4000×3000"]
         );
+    }
+    #[test]
+    fn a_cards_facts_and_the_counts_follow_what_arrives_and_what_is_decided() {
+        use super::super::review_card::render_grid;
+        let mut app = app();
+        // Identical copies of one size in one folder: nothing tells them
+        // apart, so their card has no line of facts.
+        app.media[1].fingerprint.bytes = app.media[0].fingerprint.bytes;
+        let shown = render_grid(&mut app);
+        assert!(shown.contains("2 photos going to Trash · frees 4.0 MB"));
+        assert!(!shown.contains("Sharpness"));
+        // An analysis tells them apart. The grid does not watch it: the
+        // card on screen notices, and its row has the line a frame later.
+        for (n, sharpness) in [(1, 120.0), (2, 80.0)] {
+            app.analysis.insert(
+                MediaId(n),
+                Analysis {
+                    sharpness,
+                    ..Default::default()
+                },
+            );
+        }
+        render_grid(&mut app);
+        let shown = render_grid(&mut app);
+        assert!(shown.contains("Sharpness 120") && shown.contains("Sharpness 80"));
+        // Their sizes arrive: the card says so in the same frame.
+        for (n, width) in [(1, 4000), (2, 2000)] {
+            app.metadata.insert(
+                MediaId(n),
+                Metadata {
+                    width,
+                    height: width * 3 / 4,
+                    ..Default::default()
+                },
+            );
+        }
+        let shown = render_grid(&mut app);
+        assert!(shown.contains("4000×3000") && shown.contains("2000×1500"));
+        // A decision made anywhere is counted in the next frame.
+        app.decisions.entry(MediaId(5)).or_default().rejected = true;
+        let shown = render_grid(&mut app);
+        assert!(shown.contains("3 photos going to Trash · frees 9.0 MB"));
     }
     #[test]
     fn saved_groups_other_than_one_tab_open_on_all_and_tabs_select_one_group() {
@@ -1878,26 +2332,51 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_switches_photos_moves_on_with_enter_and_undoes_with_r() {
+    fn keyboard_decides_cards_switches_photos_moves_on_with_enter_and_undoes_with_r() {
         let mut app = app();
         app.delete_card_event(MediaId(1), CardEvent::Select(0));
         app.review = false;
-        key(&mut app, egui::Key::Num2, egui::Modifiers::NONE);
-        assert!(trashed(&app, 2), "2 switches the second photo");
-        key(&mut app, egui::Key::ArrowLeft, egui::Modifiers::NONE);
-        assert!(!trashed(&app, 1), "Left switches the first photo");
-        key(&mut app, egui::Key::R, egui::Modifiers::NONE);
+        let none = egui::Modifiers::NONE;
+        // Left keeps the pair and Right sends only its copy to Trash,
+        // however often either is pressed.
+        for _ in 0..2 {
+            key(&mut app, egui::Key::ArrowLeft, none);
+            assert!(!trashed(&app, 1) && !trashed(&app, 2), "Left keeps both");
+        }
+        for _ in 0..2 {
+            key(&mut app, egui::Key::ArrowRight, none);
+            assert!(
+                trashed(&app, 1) && !trashed(&app, 2),
+                "Right spares the keeper"
+            );
+        }
+        // A held key decides once: its repeats never switch the photo back.
+        hold(&mut app, egui::Key::Num2, none, 3);
+        assert!(trashed(&app, 2), "2 switches the second photo once");
+        key(&mut app, egui::Key::ArrowRight, none);
+        assert!(
+            trashed(&app, 1) && !trashed(&app, 2),
+            "Right keeps the keeper"
+        );
+        key(&mut app, egui::Key::ArrowLeft, none);
+        key(&mut app, egui::Key::R, none);
         assert!(trashed(&app, 1) && !trashed(&app, 2), "R undoes the card");
-        key(&mut app, egui::Key::Enter, egui::Modifiers::NONE);
+        key(&mut app, egui::Key::Enter, none);
         assert_eq!(app.delete_current, Some(MediaId(4)), "Enter moves on");
-        key(&mut app, egui::Key::ArrowDown, egui::Modifiers::NONE);
+        // Two formats of one shot: Right keeps the HEIC.
+        key(&mut app, egui::Key::ArrowRight, none);
+        assert!(trashed(&app, 4) && !trashed(&app, 5));
+        // A photo alone on its card: Left keeps it and Right marks it.
+        key(&mut app, egui::Key::ArrowDown, none);
         assert_eq!(app.delete_current, Some(MediaId(3)));
-        key(&mut app, egui::Key::ArrowUp, egui::Modifiers::NONE);
+        key(&mut app, egui::Key::ArrowLeft, none);
+        assert!(!trashed(&app, 3));
+        key(&mut app, egui::Key::ArrowRight, none);
+        assert!(trashed(&app, 3));
+        key(&mut app, egui::Key::ArrowUp, none);
         assert_eq!(app.delete_current, Some(MediaId(4)));
-        key(&mut app, egui::Key::Num1, egui::Modifiers::NONE);
-        assert!(trashed(&app, 4));
-        key(&mut app, egui::Key::A, egui::Modifiers::NONE);
-        assert!(!trashed(&app, 4), "A accepts every suggestion");
+        key(&mut app, egui::Key::A, none);
+        assert!(trashed(&app, 4), "A leaves a choice made by hand");
     }
     #[test]
     fn cancelled_duplicate_pass_preserves_review_and_rejects_late_pairs() {

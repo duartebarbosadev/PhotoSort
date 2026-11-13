@@ -116,7 +116,8 @@ pub struct Session {
     #[serde(default)]
     pub organize: Option<super::organize::Intent>,
     pub decisions: HashMap<MediaId, Decision>,
-    pub fingerprints: HashMap<MediaId, Fingerprint>,
+    /// Shared with the open catalog's own map, so a save copies none of it.
+    pub fingerprints: Shared<HashMap<MediaId, Fingerprint>>,
     /// Photos whose Easy Delete suggestion was already staged. A later analysis
     /// never stages it again, so a photo the user chose to keep stays kept.
     /// Discarding staged choices forgets it, so the suggestions return.
@@ -133,6 +134,10 @@ pub struct Session {
     /// The step each Trash mark was made in; other steps show it dimmed.
     #[serde(default)]
     pub trash_steps: HashMap<MediaId, super::model::Step>,
+    /// Photos whose Keep or Trash was chosen by hand, in any step. Accept
+    /// all suggestions leaves them as they are.
+    #[serde(default, rename = "decided_by_hand")]
+    pub by_hand: HashSet<MediaId>,
 }
 pub(crate) fn session_path(root: &Path) -> PathBuf {
     // Equivalent trailing separators must not create different session stores.
@@ -205,6 +210,7 @@ impl Session {
                 &mut self.suggested,
                 &mut self.pick_suggested,
                 &mut self.rotations_staged,
+                &mut self.by_hand,
             ] {
                 if staged.remove(old) {
                     staged.insert(*new);
@@ -236,7 +242,9 @@ impl Session {
         self.suggested.extend(other.suggested);
         self.pick_suggested.extend(other.pick_suggested);
         self.rotations_staged.extend(other.rotations_staged);
-        self.fingerprints.extend(other.fingerprints);
+        self.by_hand.extend(other.by_hand);
+        self.fingerprints
+            .extend(other.fingerprints.iter().map(|(id, f)| (*id, *f)));
     }
     pub fn reconcile(&mut self, media: &[Media]) {
         self.reconcile_files(media, &HashMap::new());
@@ -257,11 +265,13 @@ impl Session {
                     .is_some_and(|(saved, current)| current.unchanged(saved))
             });
         }
-        // An edited file is a new photo: its suggestion may be staged again.
+        // An edited file is a new photo: its suggestion may be staged again,
+        // and a choice made by hand was about the photo it was.
         for staged in [
             &mut self.suggested,
             &mut self.pick_suggested,
             &mut self.rotations_staged,
+            &mut self.by_hand,
         ] {
             staged.retain(|id| {
                 self.fingerprints
@@ -285,7 +295,7 @@ impl Session {
                 .zip(fingerprints.get(id))
                 .is_some_and(|(saved, current)| current.unchanged(saved))
         });
-        self.fingerprints = fingerprints;
+        self.fingerprints = fingerprints.into();
     }
 }
 

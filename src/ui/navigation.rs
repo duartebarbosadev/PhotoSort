@@ -184,7 +184,8 @@ impl PhotoSortApp {
         if let Some(listed) = self.review_listed_count() {
             return listed;
         }
-        self.staged_choice_count() + self.organize_change_count()
+        (self.staged_choice_count() + self.organize_change_count())
+            .saturating_sub(self.moved_to_trash_count())
     }
     pub(super) fn switch_step(&mut self, step: Step) {
         if self.step != step && self.preferences.visible(step) {
@@ -573,7 +574,7 @@ impl PhotoSortApp {
                         )
                     });
                     if open.clicked() {
-                        self.select_folder();
+                        self.select_folder(ui.ctx());
                     }
                     ui.add_space(S2);
                     ui.label(RichText::new("or drop a folder here").small().color(FAINT));
@@ -818,6 +819,11 @@ mod cull_navigation_tests {
         app.navigate_axis(1, false, false, true);
         assert_eq!(app.active, Some(MediaId(2)));
         app.filter_dirty = false;
+        // New metadata or analysis results never hold a key press back.
+        app.browse_data_changed();
+        app.navigate_axis(1, false, false, true);
+        assert_eq!(app.active, Some(MediaId(3)));
+        assert!(!app.filter_dirty && app.navigation_notice.is_none());
         app.active = Some(MediaId(4));
         app.inspection_view.zoom = 3.0;
         app.navigate_axis(1, false, false, true);

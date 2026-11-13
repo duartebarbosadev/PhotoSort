@@ -12,8 +12,11 @@ impl PhotoSortApp {
             return;
         };
         let media = self.media[index].clone();
-        ui.add(egui::Label::new(RichText::new(media.name()).font(semibold(15.0))).truncate())
-            .on_hover_text(media.path.display().to_string());
+        ui.add(
+            egui::Label::new(RichText::new(self.shown_name(&media)).font(semibold(15.0)))
+                .truncate(),
+        )
+        .on_hover_text(media.path.display().to_string());
         self.reveal_button(ui, id);
         ui.add_space(10.0);
         ui.separator();
@@ -43,7 +46,7 @@ impl PhotoSortApp {
             && let Some(&index) = self.index.get(original)
         {
             ui.colored_label(RED, "Exact duplicate");
-            ui.label(self.media[index].name());
+            ui.label(self.shown_name(&self.media[index]));
         }
         if let Some(other) = self.near_duplicates.get(&id).copied() {
             ui.label(RichText::new("Similar frame").color(ACCENT));
@@ -185,11 +188,14 @@ impl PhotoSortApp {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = S2;
                 number_badge(ui, n);
-                ui.add(egui::Label::new(media.name()).truncate())
+                ui.add(egui::Label::new(self.shown_name(media)).truncate())
                     .on_hover_text(media.path.display().to_string());
             });
         }
-        let names: Vec<String> = items.iter().map(|(media, _)| media.name()).collect();
+        let names: Vec<String> = items
+            .iter()
+            .map(|(media, _)| self.shown_name(media))
+            .collect();
         // Decided once from the panel width, before any cell is laid out, so
         // long values wrap inside their column and never widen the panel.
         let column = table_column_width(ui.available_width() - 2.0 * CARD_MARGIN_X, names.len());

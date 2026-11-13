@@ -237,6 +237,18 @@ impl PhotoSortApp {
             || self.organize_departure.is_some()
             || self.departure.is_some()
         {
+            // A plan being made has changed nothing on disk. Closing the
+            // window cancels it, and closing goes on, through the guards
+            // below, as soon as the worker has let go of it.
+            if matches!(destination, Destination::Close)
+                && !self.plan_open
+                && self.organize_departure.is_none()
+                && self.departure.is_none()
+                && let Some(stop) = &self.plan_stop
+            {
+                stop.store(true, std::sync::atomic::Ordering::Release);
+                self.close_after_planning = true;
+            }
             return;
         }
         // The Review step's Apply finishes in the folder it listed, on the

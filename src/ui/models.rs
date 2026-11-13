@@ -465,7 +465,7 @@ impl PhotoSortApp {
             ui.add_enabled_ui(editable, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if ui.small_button("Import prepared model…").clicked() {
-                        self.import_model(row.id);
+                        self.import_model(ui.ctx(), row.id);
                     }
                     if row.bundled.is_some()
                         && ui
@@ -523,12 +523,11 @@ impl PhotoSortApp {
             }
         }
     }
-    fn import_model(&mut self, id: model_assets::Id) {
-        if let Some(path) = rfd::FileDialog::new()
+    fn import_model(&mut self, ctx: &egui::Context, id: model_assets::Id) {
+        let dialog = rfd::FileDialog::new()
             .set_title(format!("Import {}", id.asset().name))
-            .add_filter("ONNX", &["onnx"])
-            .pick_file()
-        {
+            .add_filter("ONNX", &["onnx"]);
+        if let Some(path) = native_dialog::pick(ctx, dialog, rfd::FileDialog::pick_file) {
             self.start_model_operation(Work::Import(id, path));
         }
     }

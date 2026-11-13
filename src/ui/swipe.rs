@@ -189,6 +189,13 @@ impl PhotoSortApp {
         let Some(swipe) = self.swipe.clone() else {
             return;
         };
+        // One photo shown whole is the photo D acts on.
+        if let Some(photo) = swipe.solo
+            && self.selection_compared()
+            && self.focused_comparison_photo() != Some(swipe.ids[photo])
+        {
+            self.swipe_pick(photo);
+        }
         let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
         ui.painter().rect_filled(rect, R_SURFACE, CHROME);
         let content = egui::Rect::from_min_max(
@@ -252,6 +259,7 @@ impl PhotoSortApp {
             slices
                 .iter()
                 .position(|(from, to)| pointer.x >= x(*from) && pointer.x < x(*to))
+                .filter(|_| area.contains(pointer))
         };
         // Dragging the photos pans them all; scrolling zooms them all.
         let mut view = self.view_for(0);
@@ -271,11 +279,14 @@ impl PhotoSortApp {
                 self.set_view(0, view);
             }
         }
-        if response.clicked()
-            && swipe.solo.is_none()
-            && let Some(photo) = response.interact_pointer_pos().and_then(under)
-        {
-            self.swipe_pick(photo);
+        if response.clicked() && swipe.solo.is_none() {
+            match response.interact_pointer_pos().and_then(under) {
+                Some(photo) => self.swipe_pick(photo),
+                // A click beside the photos lets go of a clicked one, as one
+                // between the photos of the normal comparison does: D marks
+                // them all again.
+                None => self.comparison_focus = None,
+            }
         }
         if response.hovered() {
             let (delta, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
@@ -289,36 +300,22 @@ impl PhotoSortApp {
             }
         }
         let view = self.view_for(0);
-        let paint = |app: &mut Self, ui: &egui::Ui, id: MediaId, clip: egui::Rect| {
-            let texture = app.texture(id, true).or_else(|| app.texture(id, false));
-            if let (Some(texture), Some(source)) = (texture, app.swipe_source(id)) {
-                super::review::paint_region_clipped(
-                    ui,
-                    &texture,
-                    content,
-                    clip,
-                    source,
-                    inspection::Region::full(source[0], source[1]),
-                    view,
-                    app.preview_turns(id),
-                );
-            }
-        };
         let name = |app: &Self, photo: usize| {
             let id = swipe.ids[photo];
             app.index
                 .get(&id)
-                .map_or_else(String::new, |i| app.media[*i].name())
+                .map_or_else(String::new, |i| app.shown_name(&app.media[*i]))
         };
         let painter = ui.painter().with_clip_rect(rect);
         if let Some(photo) = swipe.solo {
-            paint(self, ui, swipe.ids[photo], content);
+            self.swipe_photo(ui, photo, swipe.ids[photo], content, content, area, view);
         } else {
             for (photo, (from, to)) in slices.iter().enumerate() {
                 let mut clip = content;
                 clip.min.x = x(*from);
                 clip.max.x = x(*to);
-                paint(self, ui, swipe.ids[photo], clip);
+                let slice = clip.intersect(area);
+                self.swipe_photo(ui, photo, swipe.ids[photo], content, clip, slice, view);
             }
             let hover = response.hover_pos().and_then(under);
             for split in &swipe.splits {
@@ -422,7 +419,7 @@ impl PhotoSortApp {
                     } else {
                         (photo + 1).to_string()
                     };
-                    let on = self.active == Some(swipe.ids[photo]);
+                    let on = self.swipe_lit(swipe.ids[photo]);
                     label(ui, at, Some(photo), text, on, &mut picked);
                 }
             }
@@ -478,6 +475,166 @@ impl PhotoSortApp {
             "Swipe compare: drag the dividers"
         };
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, text));
+    }
+    /// Whether D acts on `id`, which lights its label: the photo clicked or
+    /// picked by number, otherwise every compared selected photo, as the
+    /// normal comparison outlines them. Photos compared without being the
+    /// selection follow the active one, the photo D marks there.
+    fn swipe_lit(&self, id: MediaId) -> bool {
+        if self.selection_compared() {
+            self.focused_comparison_photo()
+                .is_none_or(|focus| focus == id)
+        } else {
+            self.active == Some(id)
+        }
+    }
+    /// Paints compared photo `photo` (from 0) inside `clip`: its preview
+    /// and, zoomed past what the preview holds, the original pixels of the
+    /// part of the canvas in view, asked for as [`Self::photo_canvas`] does
+    /// and labelled the same while they load. `slice` is the part of the
+    /// photo this slice shows: it carries the labels and, for a photo going
+    /// to Trash, the red edge and pill of the normal comparison.
+    #[allow(clippy::too_many_arguments)]
+    fn swipe_photo(
+        &mut self,
+        ui: &mut egui::Ui,
+        photo: usize,
+        id: MediaId,
+        content: egui::Rect,
+        clip: egui::Rect,
+        slice: egui::Rect,
+        view: InspectionView,
+    ) {
+        let slot = photo as u64;
+        let texture = self.texture(id, true).or_else(|| self.texture(id, false));
+        let Some(source) = self.swipe_source(id) else {
+            return;
+        };
+        let turns = self.preview_turns(id);
+        if let Some(texture) = &texture {
+            super::review::paint_region_clipped(
+                ui,
+                texture,
+                content,
+                clip,
+                source,
+                inspection::Region::full(source[0], source[1]),
+                view,
+                turns,
+            );
+        }
+        let ppp = ui.ctx().pixels_per_point();
+        let viewport = [content.width(), content.height()];
+        let preview = texture
+            .as_ref()
+            .map(|t| [t.size()[0] as u32, t.size()[1] as u32]);
+        // As in `photo_canvas`: only a size read from metadata can show the
+        // preview is complete, and 1:1 always loads the source pixels.
+        let known_size = self
+            .metadata
+            .get(&id)
+            .is_some_and(|m| m.width > 0 && m.height > 0);
+        let complete = !view.actual_size
+            && known_size
+            && preview.is_some_and(|preview| InspectionView::preview_is_complete(source, preview));
+        let needs_original =
+            !complete && view.needs_original(source, preview, viewport, turns, ppp);
+        let labels = ui.painter().with_clip_rect(slice);
+        let corner = slice.left_bottom() + egui::vec2(10.0, -8.0);
+        let mut detail = false;
+        // The whole canvas' region, not the slice's, so dragging a divider
+        // never asks for new pixels. One request per photo and slot: at
+        // most the nine the inspection queue keeps.
+        if needs_original
+            && (view.actual_size
+                || view.zoom > 1.0
+                || self.view_started.elapsed() >= Duration::from_millis(300))
+            && let Some(region) = view.visible_region(source, viewport, turns, ppp)
+            && let Some(index) = self.index.get(&id).copied()
+        {
+            let scale = view.scale(source, viewport, turns, ppp);
+            let request = InspectionRequest {
+                slot,
+                media: self.media[index].clone(),
+                region,
+                output_edge: (region.width.max(region.height) as f32 * scale * ppp)
+                    .ceil()
+                    .clamp(1.0, 4096.0) as u32,
+                allow_large: self.limits.open_large.contains(&id),
+            };
+            let mut refused = None;
+            if let Some(frame) = self
+                .inspection_frames
+                .get(&slot)
+                .filter(|frame| frame.request == request)
+            {
+                if let Some(texture) = &frame.texture {
+                    super::review::paint_region_clipped(
+                        ui, texture, content, clip, source, region, view, turns,
+                    );
+                    detail = true;
+                }
+                refused = frame.too_large;
+                if let Some(error) = frame.error.as_ref().filter(|_| refused.is_none()) {
+                    let text = labels.text(
+                        corner,
+                        Align2::LEFT_BOTTOM,
+                        "Detail unavailable · preview retained",
+                        FontId::proportional(11.0),
+                        RED,
+                    );
+                    ui.interact(
+                        text.intersect(slice),
+                        ui.id().with(("swipe-detail-error", photo)),
+                        Sense::hover(),
+                    )
+                    .on_hover_text(error);
+                }
+            } else {
+                self.detail_loading_label_in(&labels, slice, slot, id);
+            }
+            if let Some(too_large) = refused {
+                // Under its slice, kept inside the canvas.
+                let width = content.width().min(400.0);
+                let left = slice
+                    .left()
+                    .min(content.right() - width)
+                    .max(content.left());
+                let card = egui::Rect::from_min_max(
+                    egui::pos2(left, content.bottom() - 150.0),
+                    egui::pos2(left + width, content.bottom()),
+                );
+                let mut ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .id_salt(("swipe-large-photo", photo))
+                        .max_rect(card)
+                        .layout(egui::Layout::bottom_up(Align::Min)),
+                );
+                self.large_photo_card(&mut ui, id, too_large);
+            }
+            self.inspection_wanted.push(request);
+        } else if needs_original {
+            ui.ctx().request_repaint_after(Duration::from_millis(300));
+        }
+        if detail {
+            labels.text(
+                corner,
+                Align2::LEFT_BOTTOM,
+                if view.actual_size && view.zoom == 1.0 {
+                    "Original · 1:1"
+                } else {
+                    "Original detail"
+                },
+                FontId::proportional(10.0),
+                ACCENT,
+            );
+        }
+        // Going to Trash: edged in red with the Trash pill, once the photo's
+        // own pixels are there, as in the normal comparison.
+        if (texture.is_some() || detail) && self.decision(id).rejected {
+            labels.rect_stroke(slice, 0.0, Stroke::new(TRASH_EDGE, RED), StrokeKind::Inside);
+            super::review::decision_pill(&labels, slice, false);
+        }
     }
     /// A photo's size as shown, turned upright, for swipe compare.
     fn swipe_source(&mut self, id: MediaId) -> Option<[u32; 2]> {

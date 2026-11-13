@@ -123,7 +123,8 @@ Each step shows its keys in the status bar. **Menu → Keyboard Shortcuts** has 
 | Open a folder | Ctrl/Cmd+O |
 | Switch step | Ctrl/Cmd+Alt+1–6 |
 | Run this step's analysis | Ctrl/Cmd+S |
-| Keep / trash the shown photo (Easy Delete, Pick Best) | 1 / 2 |
+| Keep / trash the shown card (Easy Delete) | Left / Right |
+| Switch a shown photo between Keep and Trash (Easy Delete, Pick Best) | 1–9 |
 | Move to the next or previous photo (Cull) | Left / Right |
 | Mark or unmark for Trash (Cull) | D |
 | Rate, or clear the rating with 0 | Ctrl/Cmd+0–5 |

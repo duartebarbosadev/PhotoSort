@@ -108,26 +108,57 @@ fn fill_height(tiles: &[Tile], width: f32, gap: f32) -> f32 {
 /// is scaled to fill the width. A tile wider than the grid on its own is
 /// shrunk to fit.
 pub(super) fn justify(tiles: &[Tile], width: f32, target: f32, gap: f32) -> Vec<PhotoRow> {
-    let width = width.max(1.0);
-    let target = target.max(1.0);
-    // A tile never asks to be wider than the grid.
-    let tiles: Vec<Tile> = tiles
-        .iter()
-        .map(|t| Tile {
-            min_width: t.min_width.min(width),
-            ..*t
-        })
-        .collect();
-    let at_target = |range: Range<usize>| {
-        tiles[range.clone()]
-            .iter()
-            .map(|t| t.width(target))
-            .sum::<f32>()
-            + gap * (range.len() - 1) as f32
-    };
+    let layout = Justifier::new(tiles.to_vec(), width, target, gap);
     let mut rows = Vec::new();
     let mut start = 0;
     while start < tiles.len() {
+        let row = layout.row(start);
+        start = row.range.end;
+        rows.push(row);
+    }
+    rows
+}
+
+/// [`justify`] one row at a time. A row depends only on its own tiles and
+/// the one after them, so the rows around a tile whose shape changed can
+/// be laid out again without the rest.
+pub(super) struct Justifier {
+    tiles: Vec<Tile>,
+    width: f32,
+    target: f32,
+    gap: f32,
+}
+
+impl Justifier {
+    pub fn new(mut tiles: Vec<Tile>, width: f32, target: f32, gap: f32) -> Self {
+        let width = width.max(1.0);
+        // A tile never asks to be wider than the grid.
+        for tile in &mut tiles {
+            tile.min_width = tile.min_width.min(width);
+        }
+        Self {
+            tiles,
+            width,
+            target: target.max(1.0),
+            gap,
+        }
+    }
+    /// The row that starts at tile `start`.
+    pub fn row(&self, start: usize) -> PhotoRow {
+        let Self {
+            tiles,
+            width,
+            target,
+            gap,
+        } = self;
+        let (width, target, gap) = (*width, *target, *gap);
+        let at_target = |range: Range<usize>| {
+            tiles[range.clone()]
+                .iter()
+                .map(|t| t.width(target))
+                .sum::<f32>()
+                + gap * (range.len() - 1) as f32
+        };
         let mut end = start + 1;
         while end < tiles.len() && at_target(start..end + 1) <= width {
             end += 1;
@@ -165,14 +196,12 @@ pub(super) fn justify(tiles: &[Tile], width: f32, target: f32, gap: f32) -> Vec<
                 at
             })
             .collect();
-        rows.push(PhotoRow {
+        PhotoRow {
             range: start..end,
             height,
             tiles: placed,
-        });
-        start = end;
+        }
     }
-    rows
 }
 
 #[cfg(test)]

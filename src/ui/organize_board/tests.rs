@@ -50,6 +50,120 @@ fn board_groups_items_by_destination_folder_in_view_order() {
 }
 
 #[test]
+fn a_mark_leaves_the_board_as_arranged_unless_the_filter_shows_marks() {
+    let (_temp, mut app) = organize();
+    let arranged = app.board.arranged;
+    let id = app.media[app.filtered[0]].id;
+    // Every photo shown: a Trash mark or a rating moves and hides nothing.
+    app.reject(id);
+    app.stage_manual([id], crate::core::decisions::Change::Rating(4));
+    app.check_board();
+    app.refilter();
+    assert!(app.decision(id).rejected);
+    assert_eq!(app.board.arranged, arranged);
+    // So does a search: it does not read the marks either.
+    app.query = "photo".into();
+    app.filter_dirty = true;
+    app.refilter();
+    let arranged = app.board.arranged;
+    app.reject(id);
+    app.check_board();
+    app.refilter();
+    assert_eq!(app.board.arranged, arranged);
+    // Only the photos marked for Trash shown: taking the mark back hides it.
+    app.reject(id);
+    app.filter = Filter::Rejected;
+    app.filter_dirty = true;
+    app.refilter();
+    assert_eq!(app.filtered.len(), 1);
+    let arranged = app.board.arranged;
+    app.reject(id);
+    app.check_board();
+    app.refilter();
+    assert_eq!(app.board.arranged, arranged + 1);
+    assert!(app.filtered.is_empty());
+    app.runtime.shutdown();
+}
+
+#[test]
+fn metadata_read_in_batches_rearranges_the_board_a_few_times_a_second() {
+    let (_temp, mut app) = organize();
+    // Nine photos taken on nine days, none read yet.
+    let ids: Vec<MediaId> = app.media.iter().map(|m| m.id).collect();
+    let read: Vec<Metadata> = (0..ids.len())
+        .map(|day| Metadata {
+            captured: format!("2024:03:{:02} 10:00:00", day + 1),
+            ..app.metadata[&ids[day]].clone()
+        })
+        .collect();
+    app.metadata.clear();
+    app.group_mode = GroupMode::Date;
+    app.filter_dirty = true;
+    app.refilter();
+    let run = 5;
+    app.metadata_run = Some(run);
+    let batch = |app: &mut PhotoSortApp, photo: usize| {
+        let _ = app.handle_event(
+            &egui::Context::default(),
+            Event::MetadataBatch {
+                run,
+                items: vec![(ids[photo], Ok(read[photo].clone()))],
+                done: photo + 1,
+                total: ids.len(),
+                stats: Default::default(),
+            },
+        );
+        app.check_board();
+        app.refilter();
+    };
+    let days = |app: &PhotoSortApp| {
+        app.board
+            .sections
+            .iter()
+            .filter(|s| s.path.as_deref().is_some_and(|p| p.starts_with("2024-03")))
+            .count()
+    };
+    // The board has only just caught up: batches after it wait.
+    let just_now = Instant::now() + Duration::from_secs(3600);
+    app.board.refresh.last = Some(just_now);
+    let arranged = app.board.arranged;
+    for photo in 0..4 {
+        batch(&mut app, photo);
+    }
+    assert_eq!((app.board.arranged, days(&app)), (arranged, 0));
+    assert!(app.board_refresh_wait().is_some_and(|wait| !wait.is_zero()));
+    // A while later one arrangement shows all four.
+    app.board.refresh.last = Instant::now().checked_sub(Duration::from_secs(1));
+    app.check_board();
+    app.refilter();
+    assert_eq!((app.board.arranged, days(&app)), (arranged + 1, 4));
+    // The batch that ends the read is shown at once.
+    app.board.refresh.last = Some(just_now);
+    for photo in 4..ids.len() {
+        batch(&mut app, photo);
+    }
+    assert!(app.metadata_run.is_none());
+    assert_eq!((app.board.arranged, days(&app)), (arranged + 2, 9));
+    // It is the board an arrangement from nothing gives.
+    let board = |app: &PhotoSortApp| {
+        let sections: Vec<_> = app
+            .board
+            .sections
+            .iter()
+            .map(|s| (s.path.clone(), s.range.clone()))
+            .collect();
+        (sections, app.filtered.clone(), app.board.changes)
+    };
+    let caught_up = board(&app);
+    app.board.inputs = None;
+    app.board.proposal = None;
+    app.filter_dirty = true;
+    app.refilter();
+    assert_eq!(caught_up, board(&app));
+    app.runtime.shutdown();
+}
+
+#[test]
 fn returning_from_another_step_mid_frame_draws_the_current_board() {
     let (_temp, mut app) = organize();
     assert_eq!(app.board.sections[1].range, 4..9);
@@ -198,6 +312,110 @@ fn the_comparison_follows_board_order_and_stops_past_nine() {
     app.select_library(ids[1], true, false);
     app.step = Step::Cull;
     assert_eq!(app.comparison_ids(), vec![ids[1]]);
+    app.runtime.shutdown();
+}
+
+#[test]
+fn a_new_folder_steps_past_a_name_taken_in_another_letter_case() {
+    let (_temp, mut app) = organize();
+    // An empty "NEW FOLDER" on disk, which a generated grouping does not list.
+    let root = app.catalog.as_ref().unwrap().root.clone();
+    std::fs::create_dir(root.join("NEW FOLDER")).unwrap();
+    app.catalog = Some(Arc::new(Catalog::scan(&root, || false, |_| {}).unwrap()));
+    app.group_mode = GroupMode::Camera;
+    app.check_board();
+    app.refilter();
+    assert!(!app.board.folders.iter().any(|f| f.path == "NEW FOLDER"));
+    let naming = |app: &PhotoSortApp| app.board.editing.as_ref().map(|(path, _)| path.clone());
+    app.board_new_folder("", &[]);
+    assert_eq!(app.navigation_notice, None);
+    assert_eq!(naming(&app).as_deref(), Some("New folder 2"));
+    // The same beside a folder of the plan, when one is put inside a new one.
+    app.board.editing = Some(("New folder 2".into(), "new FOLDER 2".into()));
+    app.board_finish_edit();
+    app.board_folder_action(FolderAction::Wrap("new FOLDER 2".into()));
+    assert_eq!(app.navigation_notice, None);
+    assert_eq!(naming(&app).as_deref(), Some("New folder 3"));
+    app.runtime.shutdown();
+}
+
+#[test]
+fn moving_the_photo_at_the_top_of_the_view_leaves_the_board_where_it_was() {
+    use super::super::compact_cull_tests::{fixture_with, frame, rendered};
+    let (_temp, mut app) = fixture_with(60);
+    app.step = Step::Organize;
+    app.review = false;
+    app.output = app.root.as_ref().unwrap().display().to_string();
+    app.filter_dirty = true;
+    app.refilter();
+    // A folder below every other: nothing above the view changes.
+    new_folder(&mut app, "", "Z");
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let size = egui::vec2(1400.0, 900.0);
+    let name = app.media[app.filtered[0]].name();
+    let nodes = rendered(&mut app, &ctx, size);
+    let over = nodes
+        .iter()
+        .filter(|(label, _)| *label == name)
+        .max_by(|a, b| a.1.area().total_cmp(&b.1.area()))
+        .unwrap_or_else(|| panic!("{name} missing: {nodes:?}"))
+        .1
+        .center();
+    for _ in 0..4 {
+        frame(
+            &mut app,
+            &ctx,
+            size,
+            vec![
+                egui::Event::PointerMoved(over),
+                egui::Event::MouseWheel {
+                    phase: egui::TouchPhase::Move,
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -120.0),
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+    }
+    for _ in 0..10 {
+        rendered(&mut app, &ctx, size);
+    }
+    let scrolled = app.library_offset;
+    assert!(scrolled > 200.0, "the board scrolled only {scrolled}");
+    // The first photo of the row at the top of the view goes to the folder
+    // at the bottom of the board, alone and then with its new neighbours.
+    let top_left = |app: &PhotoSortApp| {
+        let anchor = egui::Id::new(("organize-board-anchor", app.group_mode, &app.root));
+        ctx.data(|d| d.get_temp::<Option<(MediaId, f32)>>(anchor))
+            .flatten()
+            .expect("a photo at the top of the view")
+            .0
+    };
+    let first = top_left(&app);
+    app.board_move(&[first], "Z");
+    rendered(&mut app, &ctx, size);
+    assert_eq!(section_of(&app, first).as_deref(), Some("Z"));
+    assert!(
+        (app.library_offset - scrolled).abs() < 1.0,
+        "the board went from {scrolled} to {}",
+        app.library_offset
+    );
+    let next = top_left(&app);
+    assert_ne!(next, first);
+    let position = app.filtered.iter().position(|&i| app.media[i].id == next);
+    let several: Vec<MediaId> = app.filtered[position.unwrap()..][..2]
+        .iter()
+        .map(|&i| app.media[i].id)
+        .collect();
+    app.board_move(&several, "Z");
+    rendered(&mut app, &ctx, size);
+    assert!(
+        (app.library_offset - scrolled).abs() < 1.0,
+        "the board went from {scrolled} to {}",
+        app.library_offset
+    );
     app.runtime.shutdown();
 }
 
@@ -1075,6 +1293,18 @@ fn f2_renames_the_current_photo_in_place_and_counts_as_a_change() {
     );
     assert!(app.board.renaming.is_none());
     assert!(app.media.iter().all(|m| m.path.exists()));
+    // Every other view says the staged name at once, not the one on disk:
+    // the cards of the guided steps, and Cull with its Details panel.
+    let on_disk = app.media[app.index[&ids[0]]].name();
+    assert_eq!(app.rotation_card(ids[0]).photos[0].caption, "Holiday.png");
+    app.set_step(Step::Cull);
+    app.inspector = true;
+    rendered(&mut app, &ctx, size);
+    let nodes = rendered(&mut app, &ctx, size);
+    assert!(
+        shows(&nodes, "Holiday.png") && !shows(&nodes, &on_disk),
+        "{nodes:?}"
+    );
     app.runtime.shutdown();
 }
 
@@ -1182,6 +1412,14 @@ fn a_narrow_board_opens_the_preview_and_folders_from_its_header() {
     let nodes = rendered(&mut app, &ctx, size);
     assert!(found(&nodes, "Close preview").is_empty());
     assert!(found(&nodes, "New folder").is_empty());
+    // The folded-away sidebar has no folder to scroll to: the board is
+    // still, and the folder waits for the sidebar to be shown.
+    let asked = ctx.repaint_causes();
+    assert!(
+        !asked.iter().any(|cause| cause.file.ends_with("grid.rs")),
+        "an idle board keeps repainting: {asked:?}"
+    );
+    assert!(app.board.reveal_current);
     // The preview opens over the board and closes again.
     click_label(&mut app, &ctx, size, "Show preview");
     let nodes = rendered(&mut app, &ctx, size);
@@ -1207,6 +1445,7 @@ fn a_narrow_board_opens_the_preview_and_folders_from_its_header() {
     click_label(&mut app, &ctx, size, "Folders");
     let nodes = rendered(&mut app, &ctx, size);
     assert_eq!(found(&nodes, "New folder").len(), 1);
+    assert!(!app.board.reveal_current, "shown, they reveal the folder");
     // A wider window brings the sidebar back and closes the popover.
     rendered(&mut app, &ctx, egui::vec2(1000.0, 800.0));
     assert!(app.board.layout.sidebar && !app.board.folders_open);
@@ -1415,6 +1654,56 @@ fn one_top_bar_holds_every_step_and_fits_every_width() {
             "{menu} at {width}"
         );
     }
+    app.runtime.shutdown();
+}
+
+#[test]
+fn choosing_another_folder_closes_the_organize_into_menu_even_when_cancelled() {
+    use super::super::compact_cull_tests::{click_label, frame, rendered};
+    let (_temp, mut app) = organize();
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let size = egui::vec2(1440.0, 800.0);
+    click_label(&mut app, &ctx, size, "Organize into this folder");
+    assert!(egui::Popup::is_any_open(&ctx));
+    // The picker opens and is cancelled: tests show no window.
+    click_label(&mut app, &ctx, size, "Another folder…");
+    assert_eq!(native_dialog::shown(), 1);
+    let nodes = rendered(&mut app, &ctx, size);
+    assert!(!shows(&nodes, "Another folder…"), "the menu stayed open");
+    assert!(!egui::Popup::is_any_open(&ctx));
+    assert_eq!(app.output, app.root.as_ref().unwrap().display().to_string());
+    // Nothing is left open to keep the next shortcut from the app.
+    frame(
+        &mut app,
+        &ctx,
+        size,
+        key(egui::Key::O, egui::Modifiers::COMMAND),
+    );
+    assert_eq!(native_dialog::shown(), 2);
+    // A narrow bar keeps the grouping's options in a popover that owns its
+    // open state: a choice there that asks a question closes it as well.
+    let size = egui::vec2(640.0, 800.0);
+    app.group_mode = GroupMode::Faces;
+    app.organize_drafts
+        .insert(GroupMode::Faces, crate::core::organize::Draft::default());
+    click_label(&mut app, &ctx, size, "More grouping options");
+    assert!(shows(
+        &rendered(&mut app, &ctx, size),
+        "Photos without people"
+    ));
+    assert_eq!(
+        app.preferences.faceless,
+        crate::core::preferences::Faceless::Stay
+    );
+    app.change_faceless(crate::core::preferences::Faceless::Folder);
+    assert!(app.pending_faceless.is_some());
+    let nodes = rendered(&mut app, &ctx, size);
+    assert!(
+        !shows(&nodes, "Photos without people"),
+        "the popover stayed open over the question"
+    );
     app.runtime.shutdown();
 }
 
@@ -2778,6 +3067,17 @@ fn show_original_waits_for_a_plan_that_differs_from_disk() {
     assert!(!app.organize_planned() && !app.organize_resettable());
     assert!(!hold(&mut app), "the key does nothing");
     assert!(!held_button(&mut app), "the button is disabled");
+    // Organizing into another folder moves every photo there, and both
+    // work at once; back into this folder, nothing is planned again.
+    let root = app.root.clone().unwrap();
+    app.set_output(&root.with_file_name("elsewhere"));
+    rendered(&mut app, &ctx, size);
+    assert_eq!(app.board.changes, ids.len());
+    assert!(app.organize_planned() && app.organize_resettable());
+    assert!(hold(&mut app));
+    app.set_output(&root);
+    rendered(&mut app, &ctx, size);
+    assert!(!app.organize_planned() && !app.organize_resettable());
     // A move makes a difference, and both work.
     app.board_move(&ids[..1], "B");
     rendered(&mut app, &ctx, size);

@@ -469,6 +469,7 @@ fn embedded_rotation_preserves_unapplied_ratings_and_saved_focus_across_reload()
         pick_suggested: Default::default(),
         rotations_staged: Default::default(),
         trash_steps: Default::default(),
+        by_hand: Default::default(),
         organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),
@@ -479,7 +480,7 @@ fn embedded_rotation_preserves_unapplied_ratings_and_saved_focus_across_reload()
                 ..Default::default()
             },
         )]),
-        fingerprints: HashMap::from([(m.id, m.fingerprint)]),
+        fingerprints: HashMap::from([(m.id, m.fingerprint)]).into(),
     };
     let mut views = Saved::default();
     views.bookmarks.insert(

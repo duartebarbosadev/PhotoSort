@@ -116,6 +116,23 @@ impl PhotoSortApp {
             }
         }
     }
+    /// Whether the canvases drawn so far this frame already wait for as much
+    /// detail as the decoder queues at once. The focused photo goes first
+    /// whenever it is drawn, so it has a place either way.
+    fn detail_queue_full(&self) -> bool {
+        let others = self
+            .inspection_wanted
+            .iter()
+            .filter(|request| {
+                request.slot != self.focused_slot
+                    && self
+                        .inspection_frames
+                        .get(&request.slot)
+                        .is_none_or(|frame| frame.request != **request)
+            })
+            .count();
+        others + 1 >= inspection::Queue::WAITING
+    }
     pub(super) fn view_for(&self, slot: u64) -> InspectionView {
         if self.sync_views {
             self.inspection_view
@@ -388,8 +405,9 @@ impl PhotoSortApp {
                 }
                 if matches!(self.step, Step::EasyDelete | Step::PickBest) {
                     // A Keep/Trash switch per photo, labelled with its number
-                    // key.
-                    for (side, id) in ids.iter().enumerate() {
+                    // key. A long burst has more photos than keys: the rest
+                    // are switched by a click on the photo, as these are too.
+                    for (side, id) in ids.iter().enumerate().take(9) {
                         let keep = !self.decision(*id).rejected;
                         let name = format!(
                             "Photo {}: {}",
@@ -468,8 +486,12 @@ impl PhotoSortApp {
             self.review_view_controls(ui);
             return;
         }
-        // A comparison rates each photo from its own stars on the canvas.
-        if matches!(self.step, Step::Cull | Step::Organize) && self.comparison_ids().len() > 1 {
+        // A comparison rates each photo from its own stars on the canvas. An
+        // Easy Delete or Pick Best card of several has no stars: it shows no
+        // photo as the one they would rate.
+        if (matches!(self.step, Step::Cull | Step::Organize) && self.comparison_ids().len() > 1)
+            || self.unmarked_active()
+        {
             self.review_view_controls(ui);
             return;
         }
@@ -601,7 +623,7 @@ impl PhotoSortApp {
             let active = Some(self.media[index].id) == self.active;
             let color = if active { INK } else { MUTED };
             let mut job = egui::text::LayoutJob::simple_singleline(
-                self.media[index].name(),
+                self.shown_name(&self.media[index]),
                 FontId::proportional(10.0),
                 color,
             );
@@ -821,7 +843,7 @@ impl PhotoSortApp {
             let best = self
                 .index
                 .get(&best)
-                .map_or_else(String::new, |i| self.media[*i].name());
+                .map_or_else(String::new, |i| self.shown_name(&self.media[*i]));
             go = shown;
             if shown {
                 (
@@ -1170,6 +1192,43 @@ impl PhotoSortApp {
                         .clamp(1.0, 4096.0) as u32,
                     allow_large: self.limits.open_large.contains(&id),
                 };
+                // The decoder takes a few requests at a time, in order: the
+                // focused photo and the one under the pointer go first, the
+                // others as drawn. One past its queue gets its turn in a
+                // later frame, as earlier ones complete.
+                let first = slot == self.focused_slot || response.hovered();
+                let frame = self
+                    .inspection_frames
+                    .get(&slot)
+                    .filter(|frame| frame.request == request);
+                let failed = frame.is_some_and(|frame| frame.texture.is_none());
+                let queued = frame.is_none() && !first && self.detail_queue_full();
+                // More than four photos show thumbnails, too small to stand
+                // in for detail. The 2048 px preview does: loaded when the
+                // detail failed, and only if already in memory while the
+                // detail waits behind the other photos'.
+                if count > 4 && (failed || queued) {
+                    let preview = if failed {
+                        self.texture(id, true)
+                    } else {
+                        let tick = self.tick;
+                        self.textures.get_mut(&(id, true)).map(|texture| {
+                            texture.used = tick;
+                            texture.handle.clone()
+                        })
+                    };
+                    if let Some(preview) = preview {
+                        paint_region(
+                            ui,
+                            &preview,
+                            content,
+                            source,
+                            inspection::Region::full(source[0], source[1]),
+                            view,
+                            turns,
+                        );
+                    }
+                }
                 let mut refused = None;
                 if let Some(frame) = self
                     .inspection_frames
@@ -1191,7 +1250,7 @@ impl PhotoSortApp {
                         );
                         response.clone().on_hover_text(error);
                     }
-                } else {
+                } else if !queued {
                     self.detail_loading_label(ui, rect, slot, id);
                 }
                 if let Some(too_large) = refused {
@@ -1206,7 +1265,11 @@ impl PhotoSortApp {
                         |ui| self.large_photo_card(ui, id, too_large),
                     );
                 }
-                self.inspection_wanted.push(request);
+                if first {
+                    self.inspection_wanted.insert(0, request);
+                } else {
+                    self.inspection_wanted.push(request);
+                }
             } else if needs_original {
                 ui.ctx().request_repaint_after(Duration::from_millis(300));
             }
@@ -1264,7 +1327,7 @@ impl PhotoSortApp {
                     slot + 1,
                     self.index
                         .get(&id)
-                        .map(|index| self.media[*index].name())
+                        .map(|index| self.shown_name(&self.media[*index]))
                         .unwrap_or_default(),
                     if detail { "Original detail" } else { "Preview" }
                 ),
@@ -1566,7 +1629,7 @@ mod tests;
 
 /// The Keep/Trash state of a compared photo, pinned to the slot's top-right
 /// corner where it stays readable on any image.
-fn decision_pill(painter: &egui::Painter, slot: egui::Rect, keep: bool) -> egui::Rect {
+pub(super) fn decision_pill(painter: &egui::Painter, slot: egui::Rect, keep: bool) -> egui::Rect {
     use egui_phosphor::regular as icon;
     let (text, fill) = if keep {
         (format!("{}  Keep", icon::CHECK), GREEN)

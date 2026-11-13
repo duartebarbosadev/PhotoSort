@@ -435,6 +435,29 @@ fn settings_preserve_live_history_and_render_compactly_without_image_or_analysis
     assert_eq!(pending, [Section::Performance]);
 }
 #[test]
+fn recent_folders_are_checked_in_the_background_and_missing_ones_leave_the_list() {
+    let (dir, mut app) = fixture();
+    let missing = dir.path().join("Unplugged SSD");
+    app.preferences.recent_folders = vec![dir.path().to_path_buf(), missing.clone()];
+    let (woke, wakes) = std::sync::mpsc::channel();
+    app.check_recent_folders(move || {
+        let _ = woke.send(());
+    });
+    // Nothing was looked up yet on this thread: the answer arrives later.
+    assert!(app.missing_recent.is_empty());
+    wakes.recv_timeout(worker_patience()).unwrap();
+    app.poll_recent_folders();
+    assert_eq!(app.missing_recent, HashSet::from([missing]));
+    // The check ends by itself once every folder has answered.
+    let until = Instant::now() + worker_patience();
+    while app.recent_check.is_some() {
+        app.poll_recent_folders();
+        assert!(Instant::now() < until, "recent folder check did not end");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(app.missing_recent.len(), 1);
+}
+#[test]
 fn clearing_shared_caches_preserves_every_workflows_review_and_bookmark_state() {
     let (_dir, mut app) = fixture();
     for step in Step::ALL {

@@ -28,7 +28,7 @@ impl PhotoSortApp {
         if ids.is_empty() || self.board_draft().is_none() {
             return;
         }
-        let initial = self.organize_labels();
+        let initial = self.proposed_labels();
         let title = if target.is_empty() {
             self.board_root_name()
         } else {
@@ -68,6 +68,7 @@ impl PhotoSortApp {
         } else {
             format!("Moved {} to {title}", what(ids.len()))
         });
+        self.board_hold_view();
     }
     /// Leaves items in the folders they are in now: they join "Not moving".
     pub(in crate::ui::workspace) fn board_keep_in_place(&mut self, ids: &[MediaId]) {
@@ -86,6 +87,7 @@ impl PhotoSortApp {
                 "items stay"
             },
         ));
+        self.board_hold_view();
     }
     pub(super) fn board_finish_edit(&mut self) {
         let Some((path, name)) = self.board.editing.take() else {
@@ -226,8 +228,12 @@ impl PhotoSortApp {
     /// moves `ids` into it and starts renaming it in place, as Finder does.
     /// Nothing is made on disk until the changes are reviewed and applied.
     pub(in crate::ui::workspace) fn board_new_folder(&mut self, parent: &str, ids: &[MediaId]) {
+        // The draft first: it knows every folder on disk, shown or not.
+        if self.board_draft().is_none() {
+            return;
+        }
         let name = self.unused_folder_name(parent);
-        let Some(draft) = self.board_draft() else {
+        let Some(draft) = self.organize_drafts.get_mut(&self.group_mode) else {
             return;
         };
         match draft.create_folder(parent, &name) {
@@ -241,8 +247,11 @@ impl PhotoSortApp {
         }
     }
     /// "New folder", or "New folder 2" and so on when that name is taken
-    /// inside `parent`.
+    /// inside `parent`. A name is taken in any letter case and either form
+    /// of its accents, as it is when the folder is made: "New Folder" and
+    /// "New folder" are one folder on macOS and Windows.
     fn unused_folder_name(&self, parent: &str) -> String {
+        let draft = self.organize_drafts.get(&self.group_mode);
         (1..)
             .map(|n| {
                 if n == 1 {
@@ -252,15 +261,25 @@ impl PhotoSortApp {
                 }
             })
             .find(|name| {
-                let path = join(parent, name);
+                let folded = crate::core::text::folded(&join(parent, name));
+                let taken = |path: &str| crate::core::text::folded(path) == folded;
                 // Hidden empty folders still take their names.
-                !self.board.folders.iter().any(|f| f.path == path)
-                    && !self
-                        .organize_drafts
-                        .get(&self.group_mode)
-                        .is_some_and(|d| d.folders().contains(&path))
+                !self.board.folders.iter().any(|f| taken(&f.path))
+                    && !draft.is_some_and(|d| d.folders().iter().any(|f| taken(f)))
             })
             .unwrap_or_default()
+    }
+    /// A photo's name as its tile, the strip and the preview's title show
+    /// it: the new name staged for it in Organize, or the one on disk.
+    pub(in crate::ui::workspace) fn shown_name(&self, media: &Media) -> String {
+        match self.file_names.get(&media.id) {
+            Some(stem) if !stem.trim().is_empty() => {
+                crate::core::organize::renamed_file_name(&media.path, std::ffi::OsStr::new(stem))
+                    .to_string_lossy()
+                    .into_owned()
+            }
+            _ => media.name(),
+        }
     }
     /// Starts renaming a photo in the preview's title. Its RAW, JPEG and
     /// edit files take the same name when they move together.
@@ -399,8 +418,11 @@ impl PhotoSortApp {
             }
             FolderAction::Wrap(source) => {
                 let parent = source.rsplit_once('/').map_or("", |(p, _)| p).to_owned();
+                if self.board_draft().is_none() {
+                    return;
+                }
                 let name = self.unused_folder_name(&parent);
-                let Some(draft) = self.board_draft() else {
+                let Some(draft) = self.organize_drafts.get_mut(&self.group_mode) else {
                     return;
                 };
                 match draft.create_parent(&source, &name) {
@@ -432,7 +454,7 @@ impl PhotoSortApp {
                 });
             }
             FolderAction::Remove(path) => {
-                let initial = self.organize_labels();
+                let initial = self.proposed_labels();
                 let Some(draft) = self.board_draft() else {
                     return;
                 };

@@ -76,10 +76,17 @@ pub struct Review {
     index: HashMap<MediaId, usize>,
     /// Photos whose suggestion was staged once; see `Session::pick_suggested`.
     suggested: HashSet<MediaId>,
+    /// The stamp of the last change to the review itself.
+    revision: u64,
 }
 impl Review {
     pub fn clusters(&self) -> &[Cluster] {
         &self.clusters
+    }
+    /// Changes whenever the review does, never with the decisions: what
+    /// was worked out from its groups stays good while this is the same.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
     /// The group a photo belongs to.
     pub fn group_of(&self, id: MediaId) -> Option<usize> {
@@ -103,12 +110,14 @@ impl Review {
             .flat_map(|(i, c)| c.ordered.iter().map(move |id| (*id, i)))
             .collect();
         self.clusters = clusters;
+        self.revision = super::revision::next();
     }
     pub fn suggested(&self) -> &HashSet<MediaId> {
         &self.suggested
     }
     pub fn restore_suggested(&mut self, ids: HashSet<MediaId>) {
         self.suggested = ids;
+        self.revision = super::revision::next();
     }
     /// Stages the suggested Trash marks of photos seen for the first time.
     /// Never unmarks anything, and never repeats for a photo: a later
@@ -130,6 +139,7 @@ impl Review {
             }
         }
         update_trash(decisions, marked.iter().map(|id| (*id, true)));
+        self.revision = super::revision::next();
         marked
     }
     pub fn keeps(decisions: &HashMap<MediaId, Decision>, id: MediaId) -> bool {
@@ -170,7 +180,89 @@ impl Review {
             update_trash(decisions, cluster.ordered.iter().map(|o| (*o, *o != id)));
         }
     }
-    /// Puts each group back to its suggestion.
+    /// The one photo still kept in each group whose others are all marked
+    /// for Trash: marking it too would send the whole group there.
+    pub fn last_kept(&self, decisions: &HashMap<MediaId, Decision>) -> HashSet<MediaId> {
+        self.clusters
+            .iter()
+            .filter_map(|c| {
+                let mut kept = c.ordered.iter().copied().filter(|id| kept(decisions, *id));
+                let only = kept.next()?;
+                kept.next().is_none().then_some(only)
+            })
+            .collect()
+    }
+    /// For suggestions applied in bulk, here or in Easy Delete: drops from
+    /// `marks` (a photo, and whether it goes to Trash) what would leave a
+    /// group with every photo marked. The best of the photos about to be
+    /// marked stays as it is. Only the groups the marks touch are read.
+    pub fn spare(&self, decisions: &HashMap<MediaId, Decision>, marks: &mut Vec<(MediaId, bool)>) {
+        let after: HashMap<MediaId, bool> = marks.iter().copied().collect();
+        let trashed = |id: &MediaId| after.get(id).copied().unwrap_or(!kept(decisions, *id));
+        let groups: HashSet<usize> = marks
+            .iter()
+            .filter(|(id, trash)| *trash && kept(decisions, *id))
+            .filter_map(|(id, _)| self.group_of(*id))
+            .collect();
+        let spared: HashSet<MediaId> = groups
+            .into_iter()
+            .map(|g| &self.clusters[g].ordered)
+            .filter(|ordered| ordered.iter().all(trashed))
+            .filter_map(|ordered| ordered.iter().copied().find(|id| kept(decisions, *id)))
+            .collect();
+        marks.retain(|(id, trash)| !(*trash && spared.contains(id)));
+    }
+    /// Whether Accept all acts on a group: a photo not decided by hand
+    /// differs from its suggestion, and the group's suggested photo is not
+    /// marked for Trash. A group whose suggested photo is marked is left as
+    /// it is, as when suggestions are staged.
+    pub fn pending(
+        &self,
+        group: usize,
+        decisions: &HashMap<MediaId, Decision>,
+        by_hand: &HashSet<MediaId>,
+    ) -> bool {
+        self.clusters
+            .get(group)
+            .is_some_and(|c| !Self::undecided_marks(c, decisions, by_hand).is_empty())
+    }
+    /// What Accept all sets in one group: the suggestion of each photo not
+    /// decided by hand that differs from it. Nothing where the suggested
+    /// photo is marked for Trash: its suggestions assume that photo stays,
+    /// and the group would be left with no photo kept.
+    fn undecided_marks(
+        cluster: &Cluster,
+        decisions: &HashMap<MediaId, Decision>,
+        by_hand: &HashSet<MediaId>,
+    ) -> Vec<(MediaId, bool)> {
+        if !kept(decisions, cluster.best()) {
+            return Vec::new();
+        }
+        cluster
+            .suggestion()
+            .filter(|(id, keep)| !by_hand.contains(id) && kept(decisions, *id) != *keep)
+            .map(|(id, keep)| (id, !keep))
+            .collect()
+    }
+    /// Accept all: every photo not decided by hand takes its suggestion. A
+    /// choice made by hand stays, and so does every group whose suggested
+    /// photo is marked for Trash, so no group is left with no photo kept.
+    /// Returns the photos changed.
+    pub fn accept_undecided(
+        &self,
+        decisions: &mut HashMap<MediaId, Decision>,
+        by_hand: &HashSet<MediaId>,
+    ) -> Vec<MediaId> {
+        let marks: Vec<_> = self
+            .clusters
+            .iter()
+            .flat_map(|c| Self::undecided_marks(c, decisions, by_hand))
+            .collect();
+        update_trash(decisions, marks.iter().copied());
+        marks.into_iter().map(|(id, _)| id).collect()
+    }
+    /// Puts each group back to its suggestion in full: one group, asked for
+    /// by hand.
     pub fn accept(&self, groups: &[usize], decisions: &mut HashMap<MediaId, Decision>) {
         let marks: Vec<_> = groups
             .iter()
@@ -474,8 +566,53 @@ mod tests {
         assert!(review.stage_new_suggestions(&mut decisions).is_empty());
         assert_eq!(trashed(&decisions), vec![2]);
         assert!(review.changed(0, &decisions));
-        // Accepting keeps the best photo.
+        // Accept all leaves it alone too; the group's own Undo keeps the
+        // best photo.
+        assert!(!review.pending(0, &decisions, &HashSet::new()));
         review.accept(&[0], &mut decisions);
+        assert_eq!(trashed(&decisions), vec![1, 3]);
+    }
+
+    #[test]
+    fn easy_delete_suggestions_never_trash_the_last_photo_kept_of_a_group() {
+        use crate::core::delete_review::{self, Category, Entry};
+        let soft = |n: u64| Entry {
+            subject: MediaId(n),
+            companion: None,
+            category: Category::Blur,
+            tag: String::new(),
+            reason: String::new(),
+            keep_why: String::new(),
+            eyes: Vec::new(),
+            extra: Vec::new(),
+        };
+        // Pick Best keeps 2 of its group; Easy Delete finds all three soft.
+        let mut pick = review();
+        let mut delete = delete_review::Review::default();
+        delete.replace(vec![soft(1), soft(2), soft(3)]);
+        let cards = [MediaId(1), MediaId(2), MediaId(3)];
+        let mut decisions = HashMap::new();
+        pick.stage_new_suggestions(&mut decisions);
+        // Staged on its own or accepted all at once, 2 stays.
+        let staged = delete.stage_new_suggestions_sparing(&pick, &mut decisions);
+        assert!(!staged.contains(&MediaId(2)));
+        delete.accept_sparing(&cards, &pick, &mut decisions, &HashSet::new());
+        assert_eq!(trashed(&decisions), vec![1, 3]);
+        // Its card can say so, and Accept all has nothing left to do.
+        let last = pick.last_kept(&decisions);
+        assert_eq!(delete.held(MediaId(2), &last), vec![MediaId(2)]);
+        assert!(
+            cards
+                .iter()
+                .all(|id| !delete.pending(*id, &decisions, &last, &HashSet::new()))
+        );
+        // Marked by hand, it goes.
+        delete.toggle(MediaId(2), MediaId(2), &mut decisions);
+        assert_eq!(trashed(&decisions), vec![1, 2, 3]);
+        // Easy Delete first, with nothing marked yet: the best of the
+        // group is the one left.
+        let mut decisions = HashMap::new();
+        delete.accept_sparing(&cards, &pick, &mut decisions, &HashSet::new());
         assert_eq!(trashed(&decisions), vec![1, 3]);
     }
 }
