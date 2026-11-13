@@ -93,7 +93,7 @@ impl Intent {
             self.fingerprints
                 .get(id)
                 .zip(current.get(id))
-                .is_some_and(|(a, b)| a == b)
+                .is_some_and(|(saved, current)| current.unchanged(saved))
         };
         self.names.retain(|id, _| valid(id));
         let directory_identities = Self::directory_identities(catalog);
@@ -101,7 +101,13 @@ impl Intent {
             self.directory_identities
                 .get(source)
                 .zip(directory_identities.get(source))
-                .is_some_and(|(old, current)| old == current && *old != [0; 4])
+                .is_some_and(|(old, current)| {
+                    // The saved identity may come from an earlier mount of the
+                    // drive: the birth time alone then says it is the same folder.
+                    let stable = super::model::Fingerprint::stable_identity;
+                    (old == current && *old != [0; 4])
+                        || (stable(*old) == stable(*current) && stable(*old) != [0; 4])
+                })
         };
         let current_labels = catalog
             .organize_files()

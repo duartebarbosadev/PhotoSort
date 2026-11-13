@@ -28,6 +28,19 @@ pub(super) fn spawn(publisher: Publisher, rx: Receiver<Message<IoWork>>) -> thre
 }
 
 fn run(publisher: &Publisher, rx: &Receiver<Message<IoWork>>) {
+    // Once per start, on the thread that applies file plans, so it never runs
+    // beside one of this window's own operations.
+    match operations::recovery::Store::standard().prune() {
+        Ok(pruned) if pruned.journals > 0 => tracing::info!(
+            journals = pruned.journals,
+            bytes = pruned.bytes,
+            "removed finished operation journals"
+        ),
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(error = %format!("{error:#}"), "operation journals were not pruned")
+        }
+    }
     loop {
         // Explicit-root saves own already accepted review decisions.
         // Drain those on shutdown even if a scan was interrupted.
@@ -237,19 +250,27 @@ impl Files<'_> {
                 return Ok(());
             }
         };
-        let restored =
-            operations::recovery::Store::standard().restore(&root, &|| self.cancelled())?;
+        let (restored, unresumable) = operations::recovery::Store::standard()
+            .restore_or_set_aside(&root, &|| self.cancelled())?;
         let catalog = Catalog::scan(
             &root,
             || self.cancelled(),
             |batch| self.send(Event::Batch(batch)),
         )?;
         let (mut session, damaged) = Session::load_or_set_aside(&catalog.root)?;
+        // One line holds the notice, so two problems are told together.
+        let mut notices = Vec::new();
+        if let Some(lost) = unresumable {
+            notices.push(unresumable_notice(&lost));
+        }
         if let Some(kept) = damaged {
-            self.send(Event::ViewError(format!(
+            notices.push(format!(
                 "Staged choices for this folder could not be read and start empty. The damaged file was kept at {}",
                 kept.display()
-            )));
+            ));
+        }
+        if !notices.is_empty() {
+            self.send(Event::ViewError(notices.join(" ")));
         }
         session.reconcile_catalog(&catalog);
         let mut views = views::Saved::load(&catalog.root).unwrap_or_else(|e| {
@@ -424,9 +445,133 @@ impl Files<'_> {
     }
 }
 
+/// The plan is gone or could not be read, so the folders it touched cannot be
+/// named: the user is told what may have happened and where to look.
+fn unresumable_notice(lost: &operations::recovery::Unresumable) -> String {
+    if lost.left_in_place {
+        // Nothing was dropped. Apply refuses to run over a plan it has not
+        // restored, so the user must know why until a later open reads it.
+        let record = match &lost.kept {
+            Some(kept) => format!(" Its record is unchanged at {}.", kept.display()),
+            None => String::new(),
+        };
+        return format!(
+            "An interrupted file operation in this folder could not be read this time ({}).{record} PhotoSort will try again the next time this folder is opened; until then nothing can be applied here. Some files may already have been moved, renamed or sent to the Trash.",
+            lost.reason
+        );
+    }
+    let record = match &lost.kept {
+        Some(kept) => format!(
+            "its record could not be read and was kept at {}",
+            kept.display()
+        ),
+        None => "its record is missing".to_owned(),
+    };
+    format!(
+        "An interrupted file operation in this folder could not be resumed: {record}. Some files may already have been moved, renamed or sent to the Trash. Check this folder and any folder you were organizing into."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_library_whose_interrupted_operation_cannot_be_read_still_opens_and_says_so() {
+        use operations::recovery::{Context, Store};
+        let library = tempfile::tempdir().unwrap();
+        let root = library.path().canonicalize().unwrap();
+        std::fs::write(root.join("a.jpg"), b"photo").unwrap();
+        let context = Context {
+            root: root.clone(),
+            rotation_only: false,
+            media: vec![],
+            session: Session::default(),
+            views: Default::default(),
+        };
+        let plan = Plan {
+            actions: vec![operations::Action::CreateDirectory {
+                path: root.join("2024"),
+            }],
+            ..Default::default()
+        };
+        // Stopped before its first action: an unfinished plan with a journal.
+        let report = Store::standard()
+            .execute_stoppable(&context, &plan, None, || false, || true, |_, _| {})
+            .unwrap();
+        let journal = operations::journal_dir().join(report.recovery.unwrap().journal);
+
+        let (tx, events) = std::sync::mpsc::sync_channel(64);
+        let publisher = Publisher {
+            tx,
+            generation: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            stop: Arc::new(AtomicBool::new(false)),
+            wake: Arc::new(|| {}),
+        };
+        let (work, rx) = std::sync::mpsc::channel();
+        let worker = spawn(publisher.clone(), rx);
+        let scan = |notice: &mut Option<String>| {
+            work.send(Message {
+                epoch: 1,
+                work: IoWork::Scan(root.clone()),
+            })
+            .unwrap();
+            loop {
+                match events.recv_timeout(Duration::from_secs(30)).unwrap().event {
+                    Event::ViewError(message) => *notice = Some(message),
+                    Event::Opened(catalog, ..) => return catalog.media.len(),
+                    Event::Error(error) => panic!("the library did not open: {error}"),
+                    _ => {}
+                }
+            }
+        };
+        // A journal that cannot be read right now (here: no permission) is
+        // not damaged. It stays, the plan stays pending, and the user is told.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let allow = |mode| {
+                std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(mode)).unwrap()
+            };
+            let saved = std::fs::read(&journal).unwrap();
+            allow(0o000);
+            // An administrator reads the file anyway: nothing to see then.
+            if std::fs::File::open(&journal).is_err() {
+                let mut notice = None;
+                assert_eq!(scan(&mut notice), 1);
+                let notice = notice.expect("the user is told the operation is still pending");
+                assert!(
+                    notice.contains("try again") && notice.contains(&journal.display().to_string()),
+                    "{notice}"
+                );
+                assert!(Store::standard().has_pending(&root));
+            }
+            allow(0o600);
+            assert_eq!(std::fs::read(&journal).unwrap(), saved);
+        }
+        // The user tidied the data folder by hand, or the disk damaged the file.
+        std::fs::write(&journal, b"{\"version\":1,\"context\":{tru").unwrap();
+        let mut notice = None;
+        assert_eq!(scan(&mut notice), 1);
+        let notice = notice.expect("the user is told the operation could not be resumed");
+        assert!(notice.contains("could not be resumed"), "{notice}");
+        // Renamed, not deleted, and the notice says where it is.
+        let kept: Vec<_> = std::fs::read_dir(operations::journal_dir())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| std::fs::read(path).is_ok_and(|bytes| bytes.ends_with(b"{tru")))
+            .collect();
+        assert_eq!(kept.len(), 1);
+        assert!(!journal.exists() && notice.contains(&kept[0].display().to_string()));
+        // The plan is dropped: the next open is quiet and nothing was run.
+        assert!(!Store::standard().has_pending(&root));
+        let mut again = None;
+        assert_eq!(scan(&mut again), 1);
+        assert!(again.is_none() && !root.join("2024").exists());
+        publisher.stop.store(true, Ordering::Release);
+        worker.join().unwrap();
+    }
 
     #[test]
     fn a_failed_save_after_a_folder_change_still_reaches_the_user_without_cancelling_work() {

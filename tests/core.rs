@@ -320,6 +320,50 @@ fn stale_sources_are_rejected_before_any_move() {
     assert!(!dest.exists());
     assert_eq!(fs::read(m.path).unwrap(), b"changed");
 }
+#[cfg(unix)]
+#[test]
+fn a_saved_plan_runs_after_its_drive_is_mounted_again_but_not_on_a_replaced_file() {
+    let d = TempDir::new().unwrap();
+    let output = TempDir::new().unwrap();
+    let to = output.path().canonicalize().unwrap();
+    let kept = photo(d.path(), "a.png");
+    let replaced = photo(d.path(), "b.png");
+    // Reviewed under an earlier mount: another device number, other inodes.
+    let saved = |m: &Media| {
+        let mut source = Source::capture(m.path.clone()).unwrap();
+        source.fingerprint.identity[0] += 12;
+        source.fingerprint.identity[1] += 1000;
+        source
+    };
+    let (first, second) = (saved(&kept), saved(&replaced));
+    // Another file of the same size and modified time takes b.png's place.
+    let modified = fs::metadata(&replaced.path).unwrap().modified().unwrap();
+    let other = d.path().join("other");
+    fs::write(&other, vec![0; replaced.fingerprint.bytes as usize]).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&other)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    fs::rename(&other, &replaced.path).unwrap();
+    let plan = Plan {
+        actions: vec![
+            Action::Move {
+                files: vec![(first, to.join("a.png"))],
+            },
+            Action::Move {
+                files: vec![(second, to.join("b.png"))],
+            },
+        ],
+        ..Default::default()
+    };
+    let result = operations::execute(&plan, output.path(), || false, |_, _| {}).unwrap();
+    assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+    assert!(result.errors[0].contains("File changed since review"));
+    assert!(to.join("a.png").exists() && !kept.path.exists());
+    assert!(replaced.path.exists() && !to.join("b.png").exists());
+}
 #[test]
 fn late_destination_collision_is_never_overwritten() {
     let d = TempDir::new().unwrap();
@@ -426,6 +470,46 @@ fn session_drops_stale_decisions() {
     changed.fingerprint.bytes += 1;
     s.reconcile(&[changed]);
     assert!(s.decisions.is_empty());
+}
+#[cfg(unix)]
+#[test]
+fn session_keeps_choices_when_only_the_device_and_inode_numbers_changed() {
+    // As saved by the version that compared all of the identity, which is
+    // [device, inode, birth seconds, birth nanoseconds].
+    let mut s: Session = serde_json::from_str(
+        r#"{"decisions":{"1":{"rejected":true,"rating":null,"turns":0},
+                         "2":{"rejected":false,"rating":4,"turns":1}},
+            "staged_suggestions":[1],
+            "fingerprints":{
+                "1":{"bytes":10,"modified_ns":5,"identity":[16777237,9,1794395126,7]},
+                "2":{"bytes":20,"modified_ns":6,"identity":[16777237,11,1794395126,8]}}}"#,
+    )
+    .unwrap();
+    let seen = |id, bytes, modified_ns, identity| Media {
+        id: MediaId(id),
+        path: format!("/missing/{id}.jpg").into(),
+        kind: MediaKind::Photo,
+        fingerprint: Fingerprint {
+            bytes,
+            modified_ns,
+            identity,
+        },
+    };
+    // The drive was plugged in again: a new device number and other inodes.
+    let mut now = vec![
+        seen(1, 10, 5, [16777249, 40, 1794395126, 7]),
+        seen(2, 20, 6, [16777249, 41, 1794395126, 8]),
+    ];
+    s.reconcile(&now);
+    assert!(s.decisions[&MediaId(1)].rejected);
+    assert_eq!(s.decisions[&MediaId(2)].rating, Some(4));
+    assert!(s.suggested.contains(&MediaId(1)));
+    assert_eq!(s.fingerprints[&MediaId(1)], now[0].fingerprint);
+    // Same size and modified time, born at another moment: a different file.
+    now[0].fingerprint.identity[3] += 1;
+    s.reconcile(&now);
+    assert!(!s.decisions.contains_key(&MediaId(1)) && !s.suggested.contains(&MediaId(1)));
+    assert_eq!(s.decisions[&MediaId(2)].rating, Some(4));
 }
 #[test]
 fn blur_detection_prefers_detailed_over_uniform_images() {

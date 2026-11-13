@@ -1325,7 +1325,7 @@ fn seven_sample_move_recovery(partial: bool) {
         assert_eq!(files.len(), 2);
         for (source, to) in files {
             fs::create_dir_all(to.parent().unwrap()).unwrap();
-            super::super::copy_exclusive(&source.path, to, &|| false).unwrap();
+            fs::hard_link(&source.path, to).unwrap();
         }
         fs::remove_file(&first.path).unwrap();
     } else {
@@ -1333,6 +1333,7 @@ fn seven_sample_move_recovery(partial: bool) {
             &plan.actions[0],
             &|| false,
             &mut super::super::case_rename::FileNames::default(),
+            &mut Default::default(),
         )
         .unwrap();
     }
@@ -2511,4 +2512,523 @@ fn trash_group_that_fails_partway_retries_only_the_files_still_present() {
         .unwrap();
     assert!(retried.errors.is_empty() && retried.remaining.actions.is_empty());
     assert!(!b.exists());
+}
+
+/// A power cut loses every journal record written since the last sync. The
+/// executor may only skip a sync where reopening still sorts each action into
+/// done, never started or, for at most one, interrupted.
+#[test]
+#[cfg(unix)]
+fn power_cut_after_unsynced_completions_resumes_exactly_the_moves_that_did_not_run() {
+    use super::super::JOURNAL_SYNCS;
+    let names = [
+        "a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg", "f.jpg", "g.jpg", "h.jpg",
+    ];
+    // (moves finished, then a power cut or the Stop button)
+    for (cut_after, stop) in [(1, false), (4, false), (3, true), (names.len(), false)] {
+        let (_temp, store, context, mut plan) = fixture();
+        let sorted = context.root.join("Sorted");
+        for name in &names[2..] {
+            fs::write(context.root.join(name), name).unwrap();
+        }
+        plan.actions = names
+            .iter()
+            .map(|name| Action::Move {
+                files: vec![(
+                    Source::capture(context.root.join(name)).unwrap(),
+                    sorted.join(name),
+                )],
+            })
+            .collect();
+        JOURNAL_SYNCS.with_borrow_mut(Vec::clear);
+        let stopped = Cell::new(false);
+        let run = catch_unwind(AssertUnwindSafe(|| {
+            store.execute(
+                &context,
+                &plan,
+                None,
+                || stopped.get(),
+                |done, total| {
+                    stopped.set(stop && done == cut_after);
+                    assert!(stop || done != cut_after || done == total, "power cut");
+                },
+            )
+        }));
+        let syncs = JOURNAL_SYNCS.with_borrow(Vec::clone);
+        if stop {
+            // The batched moves that never ran are recorded as such, so the
+            // journal reads the same after a restart as the report did.
+            let report = run.unwrap().unwrap();
+            assert!(report.cancelled && report.errors.is_empty());
+            assert_eq!(report.completed.len(), cut_after);
+            let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
+            assert_eq!(report.recovery, Some(restored.ticket));
+            assert_eq!(restored.uncertain, 0);
+            assert_eq!(
+                serde_json::to_value(&restored.plan.actions).unwrap(),
+                serde_json::to_value(&plan.actions[cut_after..]).unwrap()
+            );
+            continue;
+        }
+        if cut_after == names.len() {
+            // One sync for the first move, one for the seven that follow it,
+            // one at the end: three where there were sixteen.
+            assert!(run.unwrap().unwrap().remaining.actions.is_empty());
+            assert_eq!(syncs.len(), 3);
+            assert!(store.restore(&context.root, &|| false).unwrap().is_none());
+            continue;
+        }
+        assert!(run.is_err());
+        // Only what the last sync covered survives: the completion of the
+        // moves that ran since then was written but never reached the disk.
+        let journal = store
+            .directory
+            .join(store.read_pointer(&context.root).unwrap().unwrap().journal);
+        let written = fs::metadata(&journal).unwrap().len();
+        let durable = *syncs.last().unwrap();
+        assert!(durable < written, "nothing was left unsynced to lose");
+        File::options()
+            .write(true)
+            .open(&journal)
+            .unwrap()
+            .set_len(durable)
+            .unwrap();
+        let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
+        assert_eq!(restored.uncertain, 0, "cut after {cut_after}");
+        assert!(restored.errors.is_empty());
+        assert_eq!(
+            serde_json::to_value(&restored.plan.actions).unwrap(),
+            serde_json::to_value(&plan.actions[cut_after..]).unwrap(),
+            "cut after {cut_after}"
+        );
+        // The finished moves count although their completion was never
+        // recorded: the rating followed the photo.
+        let moved = MediaId::for_path(&sorted.join("a.jpg"));
+        let session = Session::load(&context.root).unwrap();
+        assert_eq!(session.decisions[&moved].rating, Some(4));
+        let next = Context {
+            session,
+            views: views::Saved::load(&context.root).unwrap(),
+            ..context.clone()
+        };
+        let retry = store
+            .execute(
+                &next,
+                &restored.plan,
+                Some(&restored.ticket),
+                || false,
+                |_, _| {},
+            )
+            .unwrap();
+        assert!(retry.errors.is_empty(), "{:?}", retry.errors);
+        assert!(retry.remaining.actions.is_empty());
+        assert_eq!(retry.completed.len(), names.len() - cut_after);
+        for name in names {
+            assert!(!context.root.join(name).exists());
+            assert!(sorted.join(name).exists());
+        }
+        assert_eq!(fs::read(sorted.join("b.jpg")).unwrap(), b"second photo");
+        assert!(store.restore(&context.root, &|| false).unwrap().is_none());
+    }
+}
+
+/// A drive that was detached comes back under another device number, with the
+/// same inode numbers, sizes and dates. What an interrupted batch did is still
+/// read from the disk. The remount is simulated: the saved fingerprints carry
+/// the device number of the earlier mount.
+#[test]
+#[cfg(unix)]
+fn a_batch_interrupted_before_its_drive_was_mounted_again_is_still_sorted_from_the_disk() {
+    let (_temp, store, context, mut plan) = fixture();
+    let sorted = context.root.join("Sorted");
+    fs::create_dir(&sorted).unwrap();
+    let names = ["a.jpg", "b.jpg", "c.jpg", "d.jpg"];
+    for name in &names[2..] {
+        fs::write(context.root.join(name), name).unwrap();
+    }
+    plan.actions = names
+        .iter()
+        .map(|name| {
+            let mut source = Source::capture(context.root.join(name)).unwrap();
+            source.fingerprint.identity[0] += 12;
+            Action::Move {
+                files: vec![(source, sorted.join(name))],
+            }
+        })
+        .collect();
+    // a.jpg was renamed, b.jpg was linked and its source not removed yet,
+    // c.jpg never ran. d.jpg is gone and another file with its size and
+    // dates, as a copy has them, holds its destination name.
+    fs::rename(context.root.join("a.jpg"), sorted.join("a.jpg")).unwrap();
+    fs::hard_link(context.root.join("b.jpg"), sorted.join("b.jpg")).unwrap();
+    let lost = context.root.join("d.jpg");
+    fs::copy(&lost, sorted.join("d.jpg")).unwrap();
+    File::options()
+        .write(true)
+        .open(sorted.join("d.jpg"))
+        .unwrap()
+        .set_modified(fs::metadata(&lost).unwrap().modified().unwrap())
+        .unwrap();
+    fs::remove_file(&lost).unwrap();
+    let tail: String = (0..names.len())
+        .map(|index| format!("{{\"status\":\"pending\",\"index\":{index},\"batched\":true}}\n"))
+        .collect();
+    prepared(&store, &context, &plan, tail.as_bytes());
+
+    let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
+    // Only the move whose destination is some other file stays unknown.
+    assert_eq!(restored.uncertain, 1);
+    let remaining = |files: &[(Source, PathBuf)], name: &str| {
+        files.len() == 1 && files[0].0.path == context.root.join(name)
+    };
+    assert!(
+        matches!(
+            &restored.plan.actions[..],
+            [
+                Action::FinishMove { files: staged },
+                Action::Move { files: unstarted },
+                Action::Move { files: unknown },
+            ] if remaining(staged, "b.jpg") && remaining(unstarted, "c.jpg") && remaining(unknown, "d.jpg")
+        ),
+        "{:?}",
+        restored.plan.actions
+    );
+    let session = Session::load(&context.root).unwrap();
+    assert_eq!(
+        session.decisions[&MediaId::for_path(&sorted.join("a.jpg"))].rating,
+        Some(4)
+    );
+    // The retry removes the staged source and runs the move that never did.
+    let next = Context {
+        session,
+        views: views::Saved::load(&context.root).unwrap(),
+        ..context.clone()
+    };
+    let retry = store
+        .execute(
+            &next,
+            &restored.plan,
+            Some(&restored.ticket),
+            || false,
+            |_, _| {},
+        )
+        .unwrap();
+    assert_eq!(retry.errors.len(), 1, "{:?}", retry.errors);
+    assert_eq!(retry.completed.len(), 2);
+    for name in ["b.jpg", "c.jpg"] {
+        assert!(!context.root.join(name).exists() && sorted.join(name).exists());
+    }
+    assert_eq!(fs::read(sorted.join("b.jpg")).unwrap(), b"second photo");
+    assert_eq!(fs::read(sorted.join("d.jpg")).unwrap(), b"d.jpg");
+}
+
+/// exFAT, FAT and most network shares have no hard links. A move there is a
+/// rename that never replaces a file, not a copy, and a cohort interrupted
+/// between two renames is read back member by member.
+#[test]
+#[cfg(unix)]
+fn volume_without_hard_links_renames_without_replacing_and_resumes_an_interrupted_cohort() {
+    use super::super::{NO_EXCLUSIVE_RENAME, NO_HARD_LINKS, Staging};
+    // macOS has no atomic exclusive rename on exFAT and FAT either: there the
+    // name is reserved first.
+    for reserved in [false, true] {
+        let (_temp, store, context, mut plan) = fixture();
+        let Action::Move { files: second } = plan.actions.remove(1) else {
+            unreachable!()
+        };
+        let Action::Move { files } = &mut plan.actions[0] else {
+            unreachable!()
+        };
+        files.extend(second);
+        let files = files.clone();
+        let sorted = context.root.join("Sorted");
+        fs::create_dir(&sorted).unwrap();
+        NO_HARD_LINKS.set(true);
+        NO_EXCLUSIVE_RENAME.set(reserved);
+        let mut staging = Staging::default();
+        fs::write(&files[0].1, b"someone else's photo").unwrap();
+        assert!(staging.rename(&files[0].0.path, &files[0].1).is_err());
+        assert_eq!(fs::read(&files[0].1).unwrap(), b"someone else's photo");
+        files[0].0.verify().unwrap();
+        fs::remove_file(&files[0].1).unwrap();
+        // The app dies after the first photo of the pair was renamed and,
+        // where names are reserved, while it held the second one's name.
+        staging.rename(&files[0].0.path, &files[0].1).unwrap();
+        if reserved {
+            fs::write(sorted.join(".photosort-0123456789abcdef.b.jpg.tmp"), b"").unwrap();
+            fs::write(&files[1].1, b"").unwrap();
+        }
+        prepared(
+            &store,
+            &context,
+            &plan,
+            b"{\"status\":\"pending\",\"index\":0}\n",
+        );
+        let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
+        assert_eq!(restored.uncertain, 0, "reserved: {reserved}");
+        assert!(matches!(
+            &restored.plan.actions[..],
+            [Action::Move { files: rest }] if rest.len() == 1 && rest[0].0.path == files[1].0.path
+        ));
+        let session = Session::load(&context.root).unwrap();
+        assert_eq!(
+            session.decisions[&MediaId::for_path(&files[0].1)].rating,
+            Some(4)
+        );
+        let next = Context {
+            session,
+            views: views::Saved::load(&context.root).unwrap(),
+            ..context.clone()
+        };
+        let retry = store
+            .execute(
+                &next,
+                &restored.plan,
+                Some(&restored.ticket),
+                || false,
+                |_, _| {},
+            )
+            .unwrap();
+        NO_HARD_LINKS.set(false);
+        NO_EXCLUSIVE_RENAME.set(false);
+        assert!(retry.errors.is_empty(), "{:?}", retry.errors);
+        assert!(retry.remaining.actions.is_empty());
+        for (source, destination) in &files {
+            assert!(!source.path.exists());
+            // The same file under its new name, not a copy of it.
+            assert_eq!(Fingerprint::read(destination).unwrap(), source.fingerprint);
+        }
+        assert_eq!(fs::read(&files[1].1).unwrap(), b"second photo");
+        assert!(
+            fs::read_dir(&sorted)
+                .unwrap()
+                .flatten()
+                .all(|entry| !super::super::is_temporary_name(&entry.file_name())),
+            "a temporary file was left behind"
+        );
+    }
+}
+
+#[test]
+fn records_name_actions_by_index_and_journals_that_repeated_them_still_resume() {
+    let (temp, store, context, plan) = fixture();
+    // As written before: every record carried its whole action again.
+    let tail = format!(
+        "{}\n{}\n{}\n",
+        serde_json::json!({"status":"pending","index":0,"action":plan.actions[0],"relocated":[]}),
+        serde_json::json!({"status":"failed","index":0,"action":plan.actions[0],"relocated":[],"error":"Disk full"}),
+        serde_json::json!({"status":"pending","index":1,"action":plan.actions[1],"relocated":[]}),
+    );
+    prepared(&store, &context, &plan, tail.as_bytes());
+    let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
+    assert_eq!(restored.plan.actions.len(), 2);
+    assert_eq!(restored.uncertain, 1);
+    assert!(restored.errors[0].ends_with("Disk full"));
+
+    // The retry moves the first photo and fails on the second, so its journal
+    // holds a start, a completion and a failure.
+    let held = temp.path().join("held.jpg");
+    fs::rename(context.root.join("b.jpg"), &held).unwrap();
+    let report = store
+        .execute(
+            &context,
+            &restored.plan,
+            Some(&restored.ticket),
+            || false,
+            |_, _| {},
+        )
+        .unwrap();
+    assert_eq!(report.errors.len(), 1);
+    let ticket = report.recovery.as_ref().unwrap();
+    let journal = fs::read_to_string(store.directory.join(&ticket.journal)).unwrap();
+    let records: Vec<serde_json::Value> = journal
+        .lines()
+        .skip(1)
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let statuses: Vec<_> = records
+        .iter()
+        .map(|r| (r["status"].as_str().unwrap(), r["index"].as_u64().unwrap()))
+        .collect();
+    assert_eq!(
+        statuses,
+        [
+            ("pending", 0),
+            ("completed", 0),
+            ("pending", 1),
+            ("failed", 1)
+        ]
+    );
+    assert!(records.iter().all(|record| record.get("action").is_none()));
+    assert_eq!(records[1]["relocated"].as_array().unwrap().len(), 1);
+
+    // The slim journal resumes like the old one did.
+    fs::rename(&held, context.root.join("b.jpg")).unwrap();
+    let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
+    assert_eq!(restored.plan.actions.len(), 1);
+    let retry = store
+        .execute(
+            &context,
+            &restored.plan,
+            Some(&restored.ticket),
+            || false,
+            |_, _| {},
+        )
+        .unwrap();
+    assert!(retry.errors.is_empty() && retry.remaining.actions.is_empty());
+    assert_eq!(
+        fs::read(context.root.join("Sorted/b.jpg")).unwrap(),
+        b"second photo"
+    );
+}
+
+/// Opening a library drops an unfinished plan only when its record is known
+/// to be unusable. A record that cannot be read for another reason is left
+/// exactly as it is and read again on the next open.
+#[test]
+fn a_journal_that_cannot_be_read_this_time_is_kept_for_the_next_open() {
+    let (_temp, store, context, plan) = fixture();
+    let log = prepared(&store, &context, &plan, b"");
+    let index = store.pointer(&context.root);
+    let journal = fs::read(&log).unwrap();
+    let pointer = fs::read(&index).unwrap();
+    let open = || {
+        store
+            .restore_or_set_aside(&context.root, &|| false)
+            .unwrap()
+    };
+    let left = |unreadable: &[u8]| {
+        let (restored, unresumable) = open();
+        let unresumable = unresumable.expect("the caller is told");
+        assert!(restored.is_none() && unresumable.left_in_place);
+        assert_eq!(unresumable.kept.as_deref(), Some(log.as_path()));
+        assert_eq!(fs::read(&index).unwrap(), pointer);
+        assert_eq!(fs::read(&log).unwrap_or_default(), unreadable);
+    };
+    // The disk refuses the read: no permission, for one.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&log, fs::Permissions::from_mode(0o000)).unwrap();
+        // An administrator reads the file anyway.
+        if File::open(&log).is_err() {
+            left(b"");
+        }
+        fs::set_permissions(&log, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(fs::read(&log).unwrap(), journal);
+    }
+    // A plan saved by a later version: this build cannot read it, that one can.
+    let newer =
+        String::from_utf8(journal.clone())
+            .unwrap()
+            .replacen("\"version\":1", "\"version\":2", 1);
+    fs::write(&log, &newer).unwrap();
+    left(newer.as_bytes());
+    // The plan is still pending, so nothing is applied over it meanwhile.
+    assert!(store.has_pending(&context.root));
+    assert!(
+        store
+            .execute(&context, &plan, None, || false, |_, _| {})
+            .is_err()
+    );
+    assert!(context.root.join("a.jpg").exists() && !context.root.join("Sorted").exists());
+    // Readable again: the plan resumes as if nothing had happened.
+    fs::write(&log, &journal).unwrap();
+    let (restored, unresumable) = open();
+    assert!(unresumable.is_none());
+    assert_eq!(restored.unwrap().plan.actions.len(), 2);
+    // A journal that is gone can never be read: that plan is dropped.
+    fs::remove_file(&log).unwrap();
+    let (restored, unresumable) = open();
+    let dropped = unresumable.unwrap();
+    assert!(restored.is_none() && !dropped.left_in_place && dropped.kept.is_none());
+    assert!(!store.has_pending(&context.root));
+}
+
+#[test]
+fn finished_journals_are_removed_once_old_and_never_one_a_plan_still_needs() {
+    let (_temp, store, context, plan) = fixture();
+    let day = std::time::Duration::from_secs(24 * 60 * 60);
+    let now = std::time::SystemTime::now();
+    let journals = |store: &Store| -> HashSet<String> {
+        fs::read_dir(&store.directory)
+            .unwrap()
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| name.ends_with(".jsonl"))
+            .collect()
+    };
+    // One Apply that finished, one that was stopped and can still be resumed,
+    // and one journal set aside as unreadable.
+    let mut first = plan.clone();
+    first.actions.truncate(1);
+    let report = store
+        .execute(&context, &first, None, || false, |_, _| {})
+        .unwrap();
+    assert!(report.remaining.actions.is_empty() && report.recovery.is_none());
+    let finished = journals(&store);
+    assert_eq!(finished.len(), 1);
+    let mut second = plan.clone();
+    second.actions.remove(0);
+    let stopped = store
+        .execute_stoppable(&context, &second, None, || false, || true, |_, _| {})
+        .unwrap();
+    let needed = stopped.recovery.unwrap().journal;
+    let aside = "operations-gone.damaged-1.jsonl";
+    fs::write(store.directory.join(aside), b"{tru").unwrap();
+
+    // Just written: nothing goes, however little is to be kept.
+    let strict = Store {
+        keep_finished_bytes: 0,
+        ..Store::new(store.directory.clone())
+    };
+    assert_eq!(strict.prune_at(now).unwrap(), Pruned::default());
+    // Within the week the newest finished journal stays, older ones go once
+    // the kept ones reach the limit.
+    for (name, age) in [
+        ("operations-older.jsonl", 3),
+        ("operations-oldest.jsonl", 5),
+    ] {
+        fs::write(store.directory.join(name), b"0123456789").unwrap();
+        File::options()
+            .write(true)
+            .open(store.directory.join(name))
+            .unwrap()
+            .set_modified(now - day * age)
+            .unwrap();
+    }
+    let small = Store {
+        keep_finished_bytes: 1,
+        ..Store::new(store.directory.clone())
+    };
+    assert_eq!(store.prune_at(now + day).unwrap(), Pruned::default());
+    assert_eq!(small.prune_at(now + day).unwrap().journals, 2);
+    assert_eq!(
+        journals(&store),
+        finished
+            .iter()
+            .cloned()
+            .chain([needed.clone(), aside.to_owned()])
+            .collect()
+    );
+    // After a week the finished one goes too. The unfinished plan's journal
+    // and the one set aside stay, and the plan still resumes.
+    let pruned = store.prune_at(now + day * 8).unwrap();
+    assert_eq!(pruned.journals, 1);
+    assert_eq!(journals(&store), HashSet::from([needed, aside.to_owned()]));
+    let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
+    let retry = store
+        .execute(
+            &context,
+            &restored.plan,
+            Some(&restored.ticket),
+            || false,
+            |_, _| {},
+        )
+        .unwrap();
+    assert!(retry.errors.is_empty() && retry.remaining.actions.is_empty());
+    // An index that cannot be read might name any journal: nothing is removed.
+    fs::write(store.pointer(&context.root), b"{tru").unwrap();
+    assert!(store.prune_at(now + day * 30).is_err());
+    assert_eq!(journals(&store).len(), 3);
 }

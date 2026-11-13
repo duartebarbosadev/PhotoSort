@@ -216,23 +216,26 @@ impl Saved {
         media: &HashMap<MediaId, Fingerprint>,
         supporting: &HashMap<MediaId, Fingerprint>,
     ) {
+        let same = |current: Option<&Fingerprint>, saved: &Fingerprint| {
+            current.is_some_and(|current| current.unchanged(saved))
+        };
         let valid = |id| {
             self.fingerprints
                 .get(&id)
-                .is_some_and(|f| media.get(&id) == Some(f))
+                .is_some_and(|f| same(media.get(&id), f))
         };
         let valid_file = |id| {
             valid(id)
                 || self
                     .fingerprints
                     .get(&id)
-                    .is_some_and(|f| supporting.get(&id) == Some(f))
+                    .is_some_and(|f| same(supporting.get(&id), f))
         };
         for view in self.bookmarks.values_mut() {
             view.reconcile(&valid, &valid_file);
         }
         self.fingerprints
-            .retain(|id, f| media.get(id).or_else(|| supporting.get(id)) == Some(f));
+            .retain(|id, f| same(media.get(id).or_else(|| supporting.get(id)), f));
     }
     /// Checkpoints reuse the scan's supporting-file identities. No UI-thread IO.
     pub fn capture_catalog_fingerprints(

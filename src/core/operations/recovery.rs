@@ -17,6 +17,48 @@ use std::{
 // input buffer. Enforce the same header budget before any file action begins.
 const MAX_HEADER: u64 = 512 * 1024 * 1024;
 const MAX_RECORD: u64 = MAX_HEADER * 4;
+/// Marks a journal or index that was set aside as unreadable, in its name:
+/// `operations-abc.damaged-<time>.jsonl`. Such a file is never read again
+/// and never removed by PhotoSort.
+const DAMAGED: &str = "damaged-";
+/// A journal no unfinished plan needs is kept this long, for support.
+const KEEP_FINISHED: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
+/// Such journals are kept, newest first, until they hold this much. A large
+/// library writes hundreds of megabytes per Apply; the newest always stays.
+const KEEP_FINISHED_BYTES: u64 = 256 * 1024 * 1024;
+/// A journal written this recently is never removed: its operation may not
+/// have published the index that names it yet.
+const SETTLED_AFTER: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+/// Attached to an error that proves a journal or its index can never be
+/// read: the journal is gone, or what the file holds does not parse or does
+/// not add up. Only such a record is set aside when a library is opened. A
+/// failure without it (an I/O or permission error, a record written by a
+/// newer PhotoSort, a cancelled read) may pass, so the record stays.
+#[derive(Debug)]
+struct Damaged;
+impl std::fmt::Display for Damaged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("The record of the operation is damaged")
+    }
+}
+impl std::error::Error for Damaged {}
+/// `ensure!` for a check on what a journal or index holds: failing it is
+/// proof of damage.
+macro_rules! valid {
+    ($condition:expr, $($message:tt)+) => {
+        if !$condition {
+            return Err(anyhow::anyhow!($($message)+).context(Damaged));
+        }
+    };
+}
+/// A journal that is not there cannot become readable again. Any other error
+/// opening it might.
+fn missing_is_damage(error: std::io::Error) -> anyhow::Error {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => anyhow::Error::new(error).context(Damaged),
+        _ => error.into(),
+    }
+}
 struct Cancellable<'a> {
     file: File,
     cancelled: &'a dyn Fn() -> bool,
@@ -65,22 +107,31 @@ impl Records<'_> {
         drop(stream);
         let value = match item {
             None => {
-                ensure!(
+                valid!(
                     self.bytes.saturating_sub(self.offset) <= limit,
                     "Recovery record exceeds the supported size"
                 );
                 return Ok(None);
             }
             Some(Err(error)) if error.is_eof() => {
-                ensure!(
+                valid!(
                     self.bytes.saturating_sub(self.offset) <= limit,
                     "Recovery record exceeds the supported size"
                 );
                 return Ok(None); // A torn final record cannot prove completion.
             }
-            Some(value) => value.context("Invalid recovery journal record")?,
+            // The disk failing under the parser says nothing about the record.
+            Some(Err(error)) if error.is_io() => {
+                return Err(error).context("Could not read the recovery journal");
+            }
+            Some(Err(error)) => {
+                return Err(anyhow::Error::new(error)
+                    .context("Invalid recovery journal record")
+                    .context(Damaged));
+            }
+            Some(Ok(value)) => value,
         };
-        ensure!(used <= limit, "Recovery record exceeds the supported size");
+        valid!(used <= limit, "Recovery record exceeds the supported size");
         let end = self
             .offset
             .checked_add(used)
@@ -91,7 +142,7 @@ impl Records<'_> {
         self.reader.seek(SeekFrom::Start(end))?;
         let mut newline = [0];
         self.reader.read_exact(&mut newline)?;
-        ensure!(
+        valid!(
             newline == *b"\n",
             "Recovery record has no newline delimiter"
         );
@@ -216,6 +267,20 @@ pub struct Restored {
     pub uncertain: usize,
     pub errors: Vec<String>,
 }
+/// An unfinished plan that could not be restored when its library was opened.
+#[derive(Clone, Debug)]
+pub struct Unresumable {
+    /// Where the unreadable journal, or its index, is: renamed aside when the
+    /// plan was dropped, untouched when it was left. `None` when the journal
+    /// was already gone.
+    pub kept: Option<PathBuf>,
+    pub reason: String,
+    /// The record is not known to be damaged, only unreadable this time, so
+    /// nothing was renamed or removed: the plan is still pending, the next
+    /// open reads it again, and until then nothing can be applied in the
+    /// library. `false` when the plan was dropped.
+    pub left_in_place: bool,
+}
 #[derive(Serialize, Deserialize)]
 struct Pointer {
     journal: String,
@@ -240,9 +305,15 @@ struct Entry {
     /// Files a failed Trash group had already moved to the OS Trash.
     #[serde(default)]
     trashed: usize,
+    /// A start that shared its journal sync with other moves, so it may
+    /// never have run.
+    #[serde(default)]
+    batched: bool,
 }
 struct Loaded {
     pending: Vec<usize>,
+    /// Pending moves recorded as started in a batch.
+    batched: HashSet<usize>,
     valid_bytes: u64,
     header: Header,
     report: Report,
@@ -250,10 +321,18 @@ struct Loaded {
     uncertain: usize,
 }
 /// The injected directory owns both unique audit journals and small active-plan
-/// indexes. Old unindexed journals remain audit records; they are never guessed.
+/// indexes. Old unindexed journals remain audit records; they are never guessed,
+/// and [`Store::prune`] removes them once they are old.
 pub struct Store {
     directory: PathBuf,
     max_header: u64,
+    keep_finished_bytes: u64,
+}
+/// What [`Store::prune`] removed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Pruned {
+    pub journals: usize,
+    pub bytes: u64,
 }
 /// Scope ownership must release the lock explicitly: closing one descriptor
 /// need not release it while a duplicated/inherited handle still exists.
@@ -271,6 +350,7 @@ impl Store {
         Self {
             directory,
             max_header: MAX_HEADER,
+            keep_finished_bytes: KEEP_FINISHED_BYTES,
         }
     }
     pub fn standard() -> Self {
@@ -314,19 +394,23 @@ impl Store {
         Ok(LibraryLock { file })
     }
     fn read_pointer(&self, root: &Path) -> Result<Option<Pointer>> {
-        let path = self.pointer(root);
-        reject_symlink_components(&path)?;
-        match fs::symlink_metadata(&path) {
+        Self::read_pointer_at(&self.pointer(root))
+    }
+    fn read_pointer_at(path: &Path) -> Result<Option<Pointer>> {
+        reject_symlink_components(path)?;
+        match fs::symlink_metadata(path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
-            Ok(meta) => ensure!(
+            Ok(meta) => valid!(
                 meta.is_file() && meta.len() <= 4096,
                 "Invalid recovery index"
             ),
         }
-        let pointer: Pointer = serde_json::from_slice(&fs::read(&path)?)?;
+        let bytes = fs::read(path)?;
+        let pointer: Pointer = serde_json::from_slice(&bytes)
+            .map_err(|error| anyhow::Error::new(error).context(Damaged))?;
         let name = Path::new(&pointer.journal);
-        ensure!(
+        valid!(
             name.components().count() == 1
                 && pointer.journal.starts_with("operations-")
                 && pointer.journal.ends_with(".jsonl"),
@@ -347,19 +431,27 @@ impl Store {
     ) -> Result<Loaded> {
         let path = self.directory.join(&pointer.journal);
         reject_symlink_components(&path)?;
-        let fingerprint = Fingerprint::read(&path)?;
+        let fingerprint = Fingerprint::read(&path).map_err(missing_is_damage)?;
         let mut records = Records {
             reader: BufReader::new(Cancellable {
-                file: File::open(&path)?,
+                file: File::open(&path).map_err(missing_is_damage)?,
                 cancelled,
             }),
             offset: 0,
             bytes: fingerprint.bytes,
         };
-        let header: Header = records
-            .next(self.max_header)?
-            .context("No complete recovery plan was saved; retain the journal for inspection")?;
+        let Some(header) = records.next::<Header>(self.max_header)? else {
+            return Err(anyhow::anyhow!(
+                "No complete recovery plan was saved; retain the journal for inspection"
+            )
+            .context(Damaged));
+        };
+        // A later format is not damage: the build that wrote it can read it.
         ensure!(
+            header.version <= 1,
+            "This operation was saved by a newer version of PhotoSort"
+        );
+        valid!(
             header.version == 1 && header.context.root == root,
             "Recovery plan version or library does not match"
         );
@@ -375,20 +467,24 @@ impl Store {
         let mut completed = HashSet::new();
         let mut partial = HashMap::new();
         let mut pending = HashSet::new();
+        let mut batched = HashSet::new();
         let mut seen = HashSet::new();
         while let Some(entry) = records.next::<Entry>(MAX_RECORD)? {
             let plan = &header.plan;
-            ensure!(
+            valid!(
                 entry.index < plan.actions.len(),
                 "Recovery action index is outside the plan"
             );
             match entry.status.as_str() {
                 "pending" => {
-                    ensure!(seen.insert(entry.index), "Duplicate recovery action start");
+                    valid!(seen.insert(entry.index), "Duplicate recovery action start");
                     pending.insert(entry.index);
+                    if entry.batched {
+                        batched.insert(entry.index);
+                    }
                 }
                 "completed" | "recovered" => {
-                    ensure!(
+                    valid!(
                         entry.status != "recovered"
                             || matches!(
                                 plan.actions[entry.index],
@@ -396,7 +492,7 @@ impl Store {
                             ),
                         "Only verified moves can have recovered receipts"
                     );
-                    ensure!(
+                    valid!(
                         pending.remove(&entry.index) && completed.insert(entry.index),
                         "Completion without a pending action"
                     );
@@ -408,15 +504,13 @@ impl Store {
                     }
                 }
                 "recovered-move" => {
-                    ensure!(
+                    valid!(
                         pending.remove(&entry.index) && !partial.contains_key(&entry.index),
                         "Move recovery without a pending action"
                     );
-                    let remainder = moves::restore(
-                        &plan.actions[entry.index],
-                        &entry.move_states,
-                        &mut report,
-                    )?;
+                    let remainder =
+                        moves::restore(&plan.actions[entry.index], &entry.move_states, &mut report)
+                            .map_err(|error| error.context(Damaged))?;
                     partial.insert(entry.index, remainder);
                     if !entry.error.is_empty() {
                         report
@@ -425,14 +519,15 @@ impl Store {
                     }
                 }
                 "failed" | "cancelled" => {
-                    ensure!(
+                    valid!(
                         pending.remove(&entry.index),
                         "Failure without a pending action"
                     );
                     if entry.trashed > 0 {
                         let (done, rest) =
                             super::split_trash(&plan.actions[entry.index], entry.trashed)
-                                .context("Invalid partial Trash record")?;
+                                .context("Invalid partial Trash record")
+                                .map_err(|error| error.context(Damaged))?;
                         report.complete(&done, &[]);
                         partial.insert(entry.index, vec![rest]);
                     }
@@ -443,8 +538,10 @@ impl Store {
                     }
                 }
                 "skipped" => {
-                    ensure!(seen.insert(entry.index), "Duplicate skipped action");
+                    valid!(seen.insert(entry.index), "Duplicate skipped action");
                 }
+                // Well formed but unknown: more likely a newer PhotoSort's
+                // record than damage, so this is not proof of it.
                 _ => anyhow::bail!("Unknown recovery journal record"),
             }
         }
@@ -468,6 +565,11 @@ impl Store {
         Ok(Loaded {
             valid_bytes: records.offset,
             uncertain: pending.len(),
+            batched: pending
+                .iter()
+                .copied()
+                .filter(|index| batched.contains(index))
+                .collect(),
             pending,
             header,
             report,
@@ -491,13 +593,21 @@ impl Store {
             return Ok(loaded);
         }
         let mut verified = Vec::new();
+        // Moves whose start was recorded with a batch and that never ran.
+        let mut unstarted = Vec::new();
         for &index in &loaded.pending {
-            if let Some(identities) = moves::verify(&loaded.header.plan.actions[index], cancelled)?
-            {
+            let action = &loaded.header.plan.actions[index];
+            // A crash may have left a partial copy, or an empty file holding a
+            // final name, in a destination folder. Clear PhotoSort's own
+            // temporary files there before reading what the move achieved.
+            moves::sweep(action);
+            if let Some(identities) = moves::verify(action, cancelled)? {
                 verified.push((index, identities));
+            } else if loaded.batched.contains(&index) && moves::unstarted(action, cancelled)? {
+                unstarted.push(index);
             }
         }
-        if verified.is_empty() {
+        if verified.is_empty() && unstarted.is_empty() {
             return Ok(loaded);
         }
         let old_path = self.directory.join(&pointer.journal);
@@ -528,6 +638,14 @@ impl Store {
             );
             moves::write(checkpoint.as_file_mut(), *index, action, identities, None)?;
         }
+        for &index in &unstarted {
+            let action = &loaded.header.plan.actions[index];
+            ensure!(
+                moves::unstarted(action, cancelled)?,
+                "Moved files changed during recovery; reopen the library"
+            );
+            super::write_record(checkpoint.as_file_mut(), "cancelled", index, &[], None)?;
+        }
         checkpoint.as_file().sync_all()?;
         ensure!(!cancelled(), "Recovery cancelled before publication");
         let (_, path) = checkpoint.keep().map_err(|error| error.error)?;
@@ -555,30 +673,236 @@ impl Store {
         }
         Ok(())
     }
+    /// Journals are PhotoSort's own bookkeeping and were never removed: about
+    /// 30 MB per Organize of 10 000 photos, for ever. A journal is removed
+    /// here, at startup, only when all of this holds:
+    /// - no library's index names it, so no unfinished plan needs it (if any
+    ///   index cannot be read, nothing is removed at all);
+    /// - it was last written more than an hour ago;
+    /// - it is older than seven days, or the newer journals kept under this
+    ///   rule already hold 256 MB.
+    ///
+    /// An index only ever names a journal created a moment earlier, so one
+    /// that is old and unnamed can never be needed again. Journals set aside
+    /// as unreadable are kept for the user.
+    pub fn prune(&self) -> Result<Pruned> {
+        self.prune_at(std::time::SystemTime::now())
+    }
+    fn prune_at(&self, now: std::time::SystemTime) -> Result<Pruned> {
+        let absent = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
+        let journals = match fs::read_dir(&self.directory) {
+            Ok(journals) => journals,
+            // Nothing was ever applied.
+            Err(e) if absent(&e) => return Ok(Pruned::default()),
+            Err(e) => return Err(e.into()),
+        };
+        let mut needed = HashSet::new();
+        match fs::read_dir(self.directory.join("active")) {
+            Ok(indexes) => {
+                for index in indexes {
+                    let path = index?.path();
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    // Not an index: one set aside, or one still being written,
+                    // which names a journal too new to be removed.
+                    if !name.ends_with(".json") || name.contains(DAMAGED) {
+                        continue;
+                    }
+                    if let Some(pointer) = Self::read_pointer_at(&path).context(
+                        "An unfinished plan's index cannot be read; no journal is removed",
+                    )? {
+                        needed.insert(pointer.journal);
+                    }
+                }
+            }
+            Err(e) if absent(&e) => {}
+            Err(e) => return Err(e.into()),
+        }
+        let mut finished = Vec::new();
+        for journal in journals {
+            let journal = journal?;
+            let name = journal.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if !name.starts_with("operations-")
+                || !name.ends_with(".jsonl")
+                || name.contains(DAMAGED)
+                || needed.contains(name)
+            {
+                continue;
+            }
+            // `DirEntry::metadata` does not follow links: only plain files count.
+            let Ok(meta) = journal.metadata() else {
+                continue;
+            };
+            let Ok(written) = meta.modified() else {
+                continue;
+            };
+            if meta.is_file() {
+                finished.push((written, meta.len(), journal.path()));
+            }
+        }
+        finished.sort_by_key(|journal| std::cmp::Reverse(journal.0));
+        let mut pruned = Pruned::default();
+        let mut kept_bytes = 0u64;
+        for (written, bytes, path) in finished {
+            // A time in the future is a wrong clock, not an old journal.
+            let age = now.duration_since(written).unwrap_or_default();
+            if age > SETTLED_AFTER
+                && (age > KEEP_FINISHED || kept_bytes >= self.keep_finished_bytes)
+            {
+                match fs::remove_file(&path) {
+                    Ok(()) => {
+                        pruned.journals += 1;
+                        pruned.bytes += bytes;
+                    }
+                    Err(e) if absent(&e) => {}
+                    Err(error) => {
+                        tracing::warn!(path = %path.display(), %error, "finished operation journal could not be removed");
+                    }
+                }
+            } else {
+                kept_bytes = kept_bytes.saturating_add(bytes);
+            }
+        }
+        Ok(pruned)
+    }
     pub fn restore(&self, root: &Path, cancelled: &impl Fn() -> bool) -> Result<Option<Restored>> {
+        Ok(self.restore_with(root, cancelled, false)?.0)
+    }
+    /// A missing or damaged journal must never lock the user out of their
+    /// library, and Discard cannot help: it reads the journal too. The
+    /// journal is renamed aside, kept for inspection, the unfinished plan is
+    /// dropped, and the caller is told so it can say so. Nothing is deleted
+    /// but the small index that named the journal.
+    ///
+    /// That is only for a record known to be unusable ([`Damaged`]). When
+    /// reading fails for any other reason the library opens as well, but the
+    /// journal and its index stay exactly as they are and the caller is told
+    /// the plan is still pending ([`Unresumable::left_in_place`]).
+    pub fn restore_or_set_aside(
+        &self,
+        root: &Path,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(Option<Restored>, Option<Unresumable>)> {
+        self.restore_with(root, cancelled, true)
+    }
+    fn restore_with(
+        &self,
+        root: &Path,
+        cancelled: &impl Fn() -> bool,
+        set_aside: bool,
+    ) -> Result<(Option<Restored>, Option<Unresumable>)> {
         // Opening a library without recovery state needs no lock files or directory writes.
         match fs::symlink_metadata(self.pointer(root)) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((None, None)),
             Err(e) => return Err(e.into()),
             Ok(_) => {}
         }
         let _lock = self.lock(root)?;
-        let Some(mut pointer) = self.read_pointer(root)? else {
-            return Ok(None);
+        // Only what cannot be read is set aside or left. A cancelled read, moved
+        // files that changed meanwhile or a session that cannot be saved stay
+        // errors: the journal is intact and the next open can resume it.
+        let mut pointer = match self.read_pointer(root) {
+            Ok(None) => return Ok((None, None)),
+            Ok(Some(pointer)) => pointer,
+            Err(error) if set_aside && !cancelled() => {
+                return Ok((None, Some(self.unresumable(root, None, &error)?)));
+            }
+            Err(error) => return Err(error),
         };
-        let loaded = self.read(root, &pointer, cancelled)?;
+        let loaded = match self.read(root, &pointer, cancelled) {
+            Ok(loaded) => loaded,
+            Err(error) if set_aside && !cancelled() => {
+                return Ok((None, Some(self.unresumable(root, Some(&pointer), &error)?)));
+            }
+            Err(error) => return Err(error),
+        };
         let loaded = self.recover_moves(root, &mut pointer, loaded, cancelled)?;
         self.settle(&loaded, &mut pointer)?;
         if loaded.report.remaining.actions.is_empty() {
             fs::remove_file(self.pointer(root))?;
         }
-        Ok(Some(Restored {
-            ticket: loaded.ticket,
-            plan: loaded.report.remaining,
-            rotation_only: loaded.header.context.rotation_only,
-            uncertain: loaded.uncertain,
-            errors: loaded.report.errors,
-        }))
+        Ok((
+            Some(Restored {
+                ticket: loaded.ticket,
+                plan: loaded.report.remaining,
+                rotation_only: loaded.header.context.rotation_only,
+                uncertain: loaded.uncertain,
+                errors: loaded.report.errors,
+            }),
+            None,
+        ))
+    }
+    /// What becomes of a plan whose index (`pointer` is `None`) or journal
+    /// could not be read. Proof of damage drops it ([`Self::set_aside`]).
+    /// Without that proof nothing is touched: the failure may be gone by the
+    /// next open, and a dropped plan can never be resumed.
+    fn unresumable(
+        &self,
+        root: &Path,
+        pointer: Option<&Pointer>,
+        error: &anyhow::Error,
+    ) -> Result<Unresumable> {
+        if error.downcast_ref::<Damaged>().is_some() {
+            return self.set_aside(root, pointer, error);
+        }
+        let kept = match pointer {
+            Some(pointer) => self.directory.join(&pointer.journal),
+            None => self.pointer(root),
+        };
+        let reason = format!("{error:#}");
+        tracing::warn!(
+            root = %root.display(),
+            kept = %kept.display(),
+            %reason,
+            "an unfinished file plan could not be read this time and was left as it is"
+        );
+        Ok(Unresumable {
+            kept: Some(kept),
+            reason,
+            left_in_place: true,
+        })
+    }
+    /// With a readable index the journal it names is renamed and the index
+    /// removed; an unreadable index is itself renamed. Either way the library
+    /// has no unfinished plan afterwards.
+    fn set_aside(
+        &self,
+        root: &Path,
+        pointer: Option<&Pointer>,
+        error: &anyhow::Error,
+    ) -> Result<Unresumable> {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let aside = |path: PathBuf, extension: &str| -> Result<Option<PathBuf>> {
+            let kept = path.with_extension(format!("{DAMAGED}{stamp}.{extension}"));
+            match fs::rename(&path, &kept) {
+                Ok(()) => Ok(Some(kept)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        };
+        let kept = match pointer {
+            Some(pointer) => {
+                let kept = aside(self.directory.join(&pointer.journal), "jsonl")?;
+                fs::remove_file(self.pointer(root))?;
+                kept
+            }
+            None => aside(self.pointer(root), "json")?,
+        };
+        let reason = format!("{error:#}");
+        tracing::warn!(
+            root = %root.display(),
+            kept = ?kept,
+            %reason,
+            "dropped an unfinished file plan whose journal could not be read"
+        );
+        Ok(Unresumable {
+            kept,
+            reason,
+            left_in_place: false,
+        })
     }
     fn prepare(
         &self,
