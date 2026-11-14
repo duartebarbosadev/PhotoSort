@@ -56,18 +56,10 @@ pub(super) fn same_folder(a: &Path, b: &Path) -> bool {
         )
         || same_directory(a, b)
 }
-#[cfg(unix)]
+/// One folder on disk under two spellings, links followed. The volume
+/// answers (device and inode, or volume and file index on Windows).
 fn same_directory(a: &Path, b: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    matches!(
-        (std::fs::metadata(a), std::fs::metadata(b)),
-        (Ok(a), Ok(b)) if a.is_dir() && a.dev() == b.dev() && a.ino() == b.ino()
-    )
-}
-/// Windows resolves a path to its spelling on disk, case included.
-#[cfg(not(unix))]
-fn same_directory(_: &Path, _: &Path) -> bool {
-    false
+    a.is_dir() && same_file::is_same_file(a, b).unwrap_or(false)
 }
 
 /// The widest the Review step's column gets, so lines stay readable.

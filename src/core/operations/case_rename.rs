@@ -258,45 +258,29 @@ pub(super) fn apply_file(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
-fn rename_exclusive(from: &Path, to: &Path) -> Result<()> {
+/// Renames `from` to `to` unless the name `to` is taken: the kernel refuses
+/// (EEXIST) and replaces nothing. `renameatx_np` with RENAME_EXCL on macOS,
+/// `renameat2` with RENAME_NOREPLACE on Linux. The error keeps the system's
+/// code: callers tell a taken name from a volume that has no such rename.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(super) fn rename_exclusive(from: &Path, to: &Path) -> Result<()> {
+    use rustix::fs::{CWD, RenameFlags, renameat_with};
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
-    unsafe extern "C" {
-        fn renamex_np(
-            from: *const std::ffi::c_char,
-            to: *const std::ffi::c_char,
-            flags: u32,
-        ) -> i32;
-    }
     let from = CString::new(from.as_os_str().as_bytes())?;
     let to = CString::new(to.as_os_str().as_bytes())?;
     // RENAME_EXCL permits a spelling change of the same entry, never replacement.
-    if unsafe { renamex_np(from.as_ptr(), to.as_ptr(), 4) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    Ok(())
-}
-#[cfg(target_os = "linux")]
-fn rename_exclusive(from: &Path, to: &Path) -> Result<()> {
-    use std::{ffi::CString, os::unix::ffi::OsStrExt};
-    unsafe extern "C" {
-        fn renameat2(
-            fromfd: i32,
-            from: *const std::ffi::c_char,
-            tofd: i32,
-            to: *const std::ffi::c_char,
-            flags: u32,
-        ) -> i32;
-    }
-    let from = CString::new(from.as_os_str().as_bytes())?;
-    let to = CString::new(to.as_os_str().as_bytes())?;
-    if unsafe { renameat2(-100, from.as_ptr(), -100, to.as_ptr(), 1) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
+    renameat_with(
+        CWD,
+        from.as_c_str(),
+        CWD,
+        to.as_c_str(),
+        RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)?;
     Ok(())
 }
 #[cfg(target_os = "windows")]
-fn rename_exclusive(from: &Path, to: &Path) -> Result<()> {
+pub(super) fn rename_exclusive(from: &Path, to: &Path) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -314,7 +298,7 @@ fn rename_exclusive(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn rename_exclusive(_from: &Path, _to: &Path) -> Result<()> {
+pub(super) fn rename_exclusive(_from: &Path, _to: &Path) -> Result<()> {
     anyhow::bail!("Exclusive renaming is unavailable on this platform")
 }
 

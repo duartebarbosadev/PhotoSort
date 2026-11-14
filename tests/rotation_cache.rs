@@ -134,16 +134,8 @@ fn rotation_cache_tracks_sidecars_photo_identity_and_model_replacements() {
     fs::remove_file(metadata::sidecar(&media.path)).unwrap();
     assert_eq!(first, detector.cache_key(&media).unwrap());
     fn replace(path: &Path) {
-        let old = fs::metadata(path).unwrap();
-        let replacement = path.with_extension("replacement");
-        fs::copy(path, &replacement).unwrap();
-        fs::File::options()
-            .write(true)
-            .open(&replacement)
-            .unwrap()
-            .set_times(fs::FileTimes::new().set_modified(old.modified().unwrap()))
-            .unwrap();
-        fs::rename(replacement, path).unwrap();
+        // Written, not copied: an APFS clone keeps the original's birth time.
+        crate::test_support::replace_keeping_modified_time(path, &fs::read(path).unwrap());
     }
     replace(&media.path);
     assert_ne!(

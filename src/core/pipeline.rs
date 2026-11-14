@@ -190,8 +190,11 @@ impl Pipeline {
         Self::new(128 * 1024 * 1024, session::cache_dir())
     }
     pub fn key(media: &Media) -> Result<String> {
-        let fingerprint = Fingerprint::read(&media.path)?;
-        let sidecar = Fingerprint::read(&metadata::sidecar(&media.path)).unwrap_or_default();
+        // No device or inode: the key must survive the drive being mounted again.
+        let fingerprint = Fingerprint::read(&media.path)?.stable();
+        let sidecar = Fingerprint::read(&metadata::sidecar(&media.path))
+            .unwrap_or_default()
+            .stable();
         let mut hash = blake3::Hasher::new();
         hash.update(media.path.as_os_str().as_encoded_bytes());
         hash.update(

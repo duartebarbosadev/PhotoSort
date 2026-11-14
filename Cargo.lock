@@ -3445,6 +3445,7 @@ dependencies = [
  "reqwest",
  "rfd",
  "rustfft",
+ "rustix 1.1.6",
  "same-file",
  "semver",
  "serde",

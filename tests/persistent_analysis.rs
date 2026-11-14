@@ -328,16 +328,8 @@ fn corrupt_records_recompute_and_source_replacement_and_sidecar_edits_invalidate
         .measurements(&Store::measurements_key(&Pipeline::key(&media[0]).unwrap()))
         .unwrap();
     assert_eq!((value.width, value.height), (480, 640));
-    let old = fs::metadata(&media[0].path).unwrap();
-    let replacement = root.path().join("replacement.png");
-    fs::copy(&media[0].path, &replacement).unwrap();
-    fs::File::options()
-        .write(true)
-        .open(&replacement)
-        .unwrap()
-        .set_times(fs::FileTimes::new().set_modified(old.modified().unwrap()))
-        .unwrap();
-    fs::rename(replacement, &media[0].path).unwrap();
+    // Written, not copied: an APFS clone keeps the original's birth time.
+    test_support::replace_keeping_modified_time(&media[0].path, &fs::read(&media[0].path).unwrap());
     let (replaced, _) = run(
         &rt,
         scan(root.path()),

@@ -295,6 +295,60 @@ fn folder_trash_draft_relocation_replacement_and_completed_organize_are_reconcil
     assert!(old_session.organize.is_none());
 }
 
+#[cfg(unix)]
+#[test]
+fn folder_trash_staged_organize_work_survives_the_drive_being_mounted_again() {
+    // Unix only: Windows identities hold no device or inode number to change.
+    use photosort::core::{model::Step, views};
+    let (_dir, c) = fixture();
+    let mut saved = session(&c);
+    let kept = MediaId::for_path(&c.root.join("A-1/b.jpg"));
+    let intent = saved.organize.as_mut().unwrap();
+    let draft = intent.drafts.get_mut(&GroupMode::Current).unwrap();
+    draft.rename_folder("A/empty/deep", "DEEP").unwrap();
+    let mut bookmarks = views::Saved {
+        bookmarks: HashMap::from([(
+            Step::Cull,
+            views::Bookmark {
+                active: Some(kept),
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+    let index = c.media.iter().enumerate().map(|(i, m)| (m.id, i)).collect();
+    bookmarks.capture_catalog_fingerprints(&c, &index);
+    // The same files as the next mount shows them: another device number, and
+    // inode numbers that some filesystems make up per mount.
+    let mut after = Catalog::scan(&c.root, || false, |_| {}).unwrap();
+    let remount = |identity: &mut [u64; 4]| {
+        identity[0] += 12;
+        identity[1] += 1000;
+    };
+    for m in &mut after.media {
+        remount(&mut m.fingerprint.identity);
+    }
+    for fingerprint in after.supporting_fingerprints.values_mut() {
+        remount(&mut fingerprint.identity);
+    }
+    after.directory_identities.values_mut().for_each(remount);
+    saved.reconcile_catalog(&after);
+    bookmarks.reconcile_catalog(&after);
+    let intent = saved.organize.as_ref().unwrap();
+    let draft = &intent.drafts[&GroupMode::Current];
+    assert_eq!(saved.decisions[&kept].rating, Some(5));
+    assert_eq!(intent.names[&kept], "Favourite");
+    assert_eq!(draft.labels()[&kept], "Picks");
+    assert!(
+        draft
+            .directory_edits()
+            .renamed
+            .iter()
+            .any(|(source, _)| source == "A/empty/deep")
+    );
+    assert_eq!(bookmarks.bookmarks[&Step::Cull].active, Some(kept));
+}
+
 #[test]
 fn folder_trash_intent_capture_is_offline_and_new_files_stay_in_place() {
     let (_dir, c) = fixture();
