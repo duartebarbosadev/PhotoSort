@@ -218,19 +218,11 @@ impl Pipeline {
             hash.update(b"movie-source-geometry-v2");
         }
         #[cfg(target_os = "macos")]
-        if media
-            .path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("heic") || e.eq_ignore_ascii_case("heif"))
-        {
+        if is_heif(&media.path) {
             hash.update(b"imageio-bounded-straight-alpha-v2");
         }
         #[cfg(not(target_os = "macos"))]
-        if media
-            .path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("heic") || e.eq_ignore_ascii_case("heif"))
-        {
+        if is_heif(&media.path) {
             hash.update(
                 concat!(
                     "heif-rgba-color-container-v1:",
@@ -267,7 +259,7 @@ impl Pipeline {
         // names are derived separately and must never become persisted EXIF.
         let record_key = blake3::hash(
             format!(
-                "metadata-v6-subsec:heif=true:os={}:{key}",
+                "metadata-v7-capture-clock:heif=true:os={}:{key}",
                 std::env::consts::OS
             )
             .as_bytes(),
@@ -1496,11 +1488,7 @@ fn decode(
         return video_thumbnail(&media.path, cancelled)
             .map(|image| Decoded::full(image, metadata.orientation, false));
     }
-    if media
-        .path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("heic") || e.eq_ignore_ascii_case("heif"))
-    {
+    if is_heif(&media.path) {
         #[cfg(not(target_os = "macos"))]
         return super::heif::decode(
             &media.path,
@@ -1696,12 +1684,7 @@ fn decode_heif(path: &Path, edge: Option<u32>, allowance: u64) -> Result<Decoded
 }
 
 fn apple_heif(media: &Media) -> bool {
-    cfg!(target_os = "macos")
-        && media.kind == MediaKind::Photo
-        && media
-            .path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("heic") || e.eq_ignore_ascii_case("heif"))
+    cfg!(target_os = "macos") && media.kind == MediaKind::Photo && is_heif(&media.path)
 }
 
 /// A full-size libvips render refused for memory says what it needs.

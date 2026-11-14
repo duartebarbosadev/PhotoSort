@@ -334,3 +334,106 @@ fn trash_takes_only_raw_and_xmp_with_a_photo_never_same_name_photos() {
         HashSet::from([c.root.join("pair.jpg"), c.root.join("pair.xmp")])
     );
 }
+
+/// darktable and digiKam name a sidecar after the whole file ("IMG.CR2.xmp"),
+/// and a video can have one too. Each goes where its file goes; one that
+/// names nothing follows its folder.
+#[test]
+fn sidecars_named_after_the_whole_file_or_beside_a_video_follow_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let rated = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="3"/></rdf:RDF></x:xmpmeta>"#;
+    fs::create_dir(dir.path().join("Old")).unwrap();
+    for name in [
+        "IMG_1.CR2",
+        "IMG_1.CR2.xmp",
+        "IMG_1.xmp",
+        "solo.NEF",
+        "solo.NEF.xmp",
+        "clip.MOV",
+        "clip.MOV.xmp",
+        "clip.xmp",
+        "gone.NEF.xmp",
+    ] {
+        fs::write(dir.path().join("Old").join(name), rated).unwrap();
+    }
+    let c = Catalog::scan(dir.path(), || false, |_| {}).unwrap();
+    let names = |paths: Vec<PathBuf>| -> BTreeSet<String> {
+        paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    };
+    let set =
+        |names: &[&str]| -> BTreeSet<String> { names.iter().map(|n| n.to_string()).collect() };
+    // Only the sidecar that names nothing is a file of its own.
+    assert_eq!(
+        names(
+            c.organize_files()
+                .iter()
+                .map(|(_, p)| p.to_path_buf())
+                .collect()
+        ),
+        set(&["IMG_1.CR2", "solo.NEF", "clip.MOV", "gone.NEF.xmp"])
+    );
+    // The rating is read from the sidecar that is there.
+    let solo = c.root.join("Old/solo.NEF");
+    assert_eq!(metadata::sidecar(&solo), c.root.join("Old/solo.NEF.xmp"));
+    assert_eq!(metadata::read(&solo).rating, 3);
+
+    // Trash: both spellings go with the RAW, and a video's with the video.
+    let rejected: HashMap<MediaId, Decision> = ["Old/IMG_1.CR2", "Old/clip.MOV"]
+        .iter()
+        .map(|name| {
+            (
+                id(&c, name),
+                Decision {
+                    rejected: true,
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    let plan = operations::decisions_plan(&c, &rejected, false).unwrap();
+    assert_eq!(
+        names(paths(&plan).into_iter().collect()),
+        set(&[
+            "IMG_1.CR2",
+            "IMG_1.CR2.xmp",
+            "IMG_1.xmp",
+            "clip.MOV",
+            "clip.MOV.xmp",
+            "clip.xmp"
+        ])
+    );
+
+    // Move and rename, companions off: "solo.NEF.xmp" becomes "Lisbon.NEF.xmp".
+    let labels: HashMap<MediaId, String> = c
+        .organize_files()
+        .into_iter()
+        .map(|(id, _)| (id, "New".to_string()))
+        .collect();
+    let renamed = HashMap::from([(id(&c, "Old/solo.NEF"), "Lisbon".to_string())]);
+    let plan = operations::organize_plan_with_names(&c, &labels, &renamed, &c.root, false).unwrap();
+    let journal = tempfile::tempdir().unwrap();
+    let report = operations::execute(&plan, journal.path(), || false, |_, _| {}).unwrap();
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    let moved = fs::read_dir(c.root.join("New"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(
+        names(moved),
+        set(&[
+            "IMG_1.CR2",
+            "IMG_1.CR2.xmp",
+            "IMG_1.xmp",
+            "Lisbon.NEF",
+            "Lisbon.NEF.xmp",
+            "clip.MOV",
+            "clip.MOV.xmp",
+            "clip.xmp",
+            "gone.NEF.xmp"
+        ])
+    );
+    assert!(!c.root.join("Old").exists());
+}

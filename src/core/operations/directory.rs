@@ -40,6 +40,16 @@ impl DirectoryStamp {
 pub struct Inventory {
     pub files: Vec<Source>,
     pub(super) directories: Vec<(PathBuf, DirectoryStamp)>,
+    /// Thumbnail and index folders inside (see `catalog::is_system_folder`).
+    /// The scan leaves them out; they go where the folder goes, so the review
+    /// names them and nothing else of that kind may appear before the apply.
+    ///
+    /// `None` in a plan saved before this list existed. The scan then still
+    /// went into those folders, so `files` and `directories` name everything
+    /// they hold and the folder is checked against that alone. An empty list
+    /// is a review that found no such folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_folders: Option<Vec<PathBuf>>,
 }
 impl Inventory {
     /// Requested roots must be disjoint. Assign the existing discovery inventory
@@ -116,9 +126,21 @@ impl Inventory {
                     .push((path.clone(), DirectoryStamp::read(path)?));
             }
         }
-        for inventory in &mut inventories {
+        for (inventory, root) in inventories.iter_mut().zip(roots) {
             inventory.files.sort_by(|a, b| a.path.cmp(&b.path));
             inventory.directories.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut system_folders = Vec::new();
+            let mut walk = walkdir::WalkDir::new(root).follow_links(false).into_iter();
+            while let Some(entry) = walk.next() {
+                anyhow::ensure!(!cancelled(), "Folder planning cancelled");
+                let entry = entry?;
+                if crate::core::catalog::is_system_folder(&entry) {
+                    system_folders.push(entry.into_path());
+                    walk.skip_current_dir();
+                }
+            }
+            system_folders.sort();
+            inventory.system_folders = Some(system_folders);
         }
         Ok(inventories)
     }
@@ -130,6 +152,9 @@ impl Inventory {
             source.path = map(&source.path);
         }
         for (path, _) in &mut self.directories {
+            *path = map(path);
+        }
+        for path in self.system_folders.iter_mut().flatten() {
             *path = map(path);
         }
     }
@@ -145,9 +170,24 @@ impl Inventory {
             .map(|s| s.path.clone())
             .chain(self.directories.iter().map(|(p, _)| p.clone()))
             .collect();
-        for entry in walkdir::WalkDir::new(root).follow_links(false) {
+        let mut walk = walkdir::WalkDir::new(root).follow_links(false).into_iter();
+        while let Some(entry) = walk.next() {
             anyhow::ensure!(!cancelled(), "Folder operation cancelled");
             let entry = entry?;
+            // The scan leaves these out; only the ones the review named may
+            // go with the folder. A plan from before they were named lists
+            // what is inside them like any other content, checked below.
+            if let Some(reviewed) = &self.system_folders
+                && crate::core::catalog::is_system_folder(&entry)
+            {
+                anyhow::ensure!(
+                    reviewed.iter().any(|p| p == entry.path()),
+                    "Folder contents changed since review: {}",
+                    entry.path().display()
+                );
+                walk.skip_current_dir();
+                continue;
+            }
             anyhow::ensure!(
                 !entry.file_type().is_symlink() && expected.remove(entry.path()),
                 "Folder contents changed since review: {}",

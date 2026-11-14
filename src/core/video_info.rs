@@ -48,8 +48,7 @@ fn read_info<R: std::io::Read + std::io::Seek>(reader: &mp4::Mp4Reader<R>) -> Op
                     }
                     .to_owned(),
                 );
-                let rate = track.frame_rate() as f32;
-                info.frame_rate = (rate.is_finite() && rate > 0.0).then_some(rate);
+                info.frame_rate = rate(track.sample_count(), track.duration());
                 let bitrate = track.bitrate();
                 info.bitrate = (bitrate > 0).then_some(bitrate);
             }
@@ -58,6 +57,13 @@ fn read_info<R: std::io::Read + std::io::Seek>(reader: &mp4::Mp4Reader<R>) -> Op
         }
     }
     (info.duration_s > 0.0).then_some(info)
+}
+
+/// Frames per second from the track's frame count and length. The reader's
+/// own `frame_rate` divides whole numbers, which turns 29.97 into 29.
+fn rate(frames: u32, length: std::time::Duration) -> Option<f32> {
+    let rate = (f64::from(frames) / length.as_secs_f64()) as f32;
+    (rate.is_finite() && rate > 0.0).then_some(rate)
 }
 
 /// "1:05", or "1:02:05" past an hour.
@@ -101,6 +107,16 @@ mod tests {
         assert_eq!(duration(3725.0), "1:02:05");
         assert_eq!(frame_rate(25.0), "25 fps");
         assert_eq!(frame_rate(29.97), "29.97 fps");
+        // Ten seconds of NTSC video: the rate keeps its decimals.
+        let shown = |frames, micros| {
+            frame_rate(rate(frames, std::time::Duration::from_micros(micros)).unwrap())
+        };
+        assert_eq!(shown(300, 10_010_000), "29.97 fps");
+        assert_eq!(shown(240, 10_010_000), "23.98 fps");
+        assert_eq!(shown(600, 10_010_000), "59.94 fps");
+        assert_eq!(shown(250, 10_000_000), "25 fps");
+        assert_eq!(rate(0, std::time::Duration::from_secs(10)), None);
+        assert_eq!(rate(300, std::time::Duration::ZERO), None);
         assert_eq!(bitrate(96_198_086), "96 Mbit/s");
         assert_eq!(bitrate(850_000), "850 kbit/s");
     }

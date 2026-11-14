@@ -1208,13 +1208,20 @@ impl PhotoSortApp {
             self.filter_dirty = false;
             return;
         }
-        let query = self.query.to_lowercase();
+        let query = crate::core::browsing::search_key(&self.query);
+        // The search reads paths inside the library, as Cull's does.
+        let root = self
+            .catalog
+            .as_ref()
+            .map(|catalog| catalog.root.clone())
+            .or_else(|| self.root.clone())
+            .unwrap_or_default();
         self.filtered = self
             .media
             .iter()
             .enumerate()
             .filter(|(_, m)| {
-                (query.is_empty() || m.path.to_string_lossy().to_lowercase().contains(&query))
+                (query.is_empty() || crate::core::browsing::search_text(&root, &m.path).contains(&query))
                     // Easy Delete's tabs choose its cards; a Trash filter
                     // would hide each card the moment its suggestion is staged.
                     && (self.step == Step::EasyDelete || self.filter.matches(

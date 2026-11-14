@@ -2,7 +2,6 @@
 //! side-by-side comparison, so both read the already-indexed metadata and never
 //! reopen a file. Raw EXIF codes are formatted here, once, for every backend.
 use super::model::{Details, Media, Metadata};
-use chrono::{Local, TimeZone};
 use std::fmt::Write as _;
 
 pub struct Section {
@@ -94,7 +93,7 @@ pub fn sections(items: &[(&Media, &Metadata)]) -> Vec<Section> {
             rows: vec![
                 row("Format", &|media, _| extension(media)),
                 row("Size", &|media, _| Some(size(media.fingerprint.bytes))),
-                row("Created", &|_, meta| created(meta)),
+                row("Created", &created),
                 row("Location", &|_, meta| location(meta)),
             ],
         },
@@ -248,12 +247,19 @@ fn size(bytes: u64) -> String {
     }
 }
 
-/// Capture time, falling back to filesystem creation, then to the raw EXIF text.
-fn created(meta: &Metadata) -> Option<String> {
+/// When the photo was taken, by the fallbacks Cull and Organize file it by
+/// (`dates::capture_millis`): the capture time; else a day written in the
+/// metadata or in the file's name, which has no time of day to show; else the
+/// file time; then the raw EXIF text.
+fn created(media: &Media, meta: &Metadata) -> Option<String> {
+    use super::dates;
+    let time = |ms: i64| Some(dates::clock(ms)?.format("%Y-%m-%d %H:%M").to_string());
     meta.captured_ms
-        .or(meta.created_ms)
-        .and_then(|ms| Local.timestamp_millis_opt(ms).single())
-        .map(|time| time.format("%Y-%m-%d %H:%M").to_string())
+        .or_else(|| dates::timestamp(&meta.captured))
+        .and_then(time)
+        .or_else(|| meta.grouping_date.as_deref().and_then(dates::parse))
+        .or_else(|| dates::filename(&media.name(), dates::current_year()))
+        .or_else(|| dates::file_millis(media, Some(meta)).and_then(time))
         .or_else(|| text(&meta.captured))
 }
 

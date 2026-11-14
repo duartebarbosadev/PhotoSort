@@ -71,6 +71,10 @@ fn fixture() -> (tempfile::TempDir, Catalog, Draft) {
 #[test]
 fn nested_case_renames_preserve_names_bytes_identities_and_manual_groups() {
     let (_dir, c, mut d) = fixture();
+    // A NAS thumbnail folder is not part of the review, and goes where its
+    // folder goes.
+    std::fs::create_dir_all(c.root.join("Trip/Day/@eaDir/a.jpg")).unwrap();
+    std::fs::write(c.root.join("Trip/Day/@eaDir/a.jpg/thumb.jpg"), b"thumb").unwrap();
     d.rename_folder("Trip", "TRIP").unwrap();
     d.rename_folder("TRIP/Day", "DAY").unwrap();
     let p = plan(&c, &d);
@@ -109,6 +113,7 @@ fn nested_case_renames_preserve_names_bytes_identities_and_manual_groups() {
     assert!(spelling(&c.root, "TRIP") && !spelling(&c.root, "Trip"));
     assert!(spelling(&c.root.join("TRIP"), "DAY"));
     assert!(c.root.join("TRIP/DAY/Empty").is_dir());
+    assert!(c.root.join("TRIP/DAY/@eaDir/a.jpg/thumb.jpg").is_file());
     assert_eq!(
         report.relocated.len(),
         c.inventory.len(),
@@ -140,6 +145,81 @@ fn nested_case_renames_preserve_names_bytes_identities_and_manual_groups() {
         );
     }
     assert!(plan(&refreshed, &draft(&refreshed)).actions.is_empty());
+}
+/// The previous version scanned NAS thumbnail folders like any other, so a
+/// folder plan it saved lists what they hold and has no `system_folders`. It
+/// must still apply after the upgrade, while a plan reviewed with the list
+/// accepts only the system folders that review named.
+#[cfg(unix)]
+#[test]
+fn folder_plan_saved_before_system_folders_were_listed_still_applies() {
+    use std::os::unix::fs::MetadataExt;
+    for saved in [
+        "before the list",
+        "with a system folder added since",
+        "with an empty list",
+    ] {
+        let (_dir, c, mut d) = fixture();
+        let thumbnails = c.root.join("Trip/Day/@eaDir");
+        std::fs::create_dir_all(thumbnails.join("a.jpg")).unwrap();
+        std::fs::write(thumbnails.join("a.jpg/thumb.jpg"), b"thumb").unwrap();
+        d.rename_folder("Trip", "TRIP").unwrap();
+        let mut plan = serde_json::to_value(plan(&c, &d)).unwrap();
+        let rename = &mut plan["actions"][0]["RenameDirectory"];
+        assert_eq!(rename["system_folders"].as_array().unwrap().len(), 1);
+        if saved == "with an empty list" {
+            rename["system_folders"] = serde_json::json!([]);
+        } else {
+            // As the previous version wrote it: no list, and the thumbnail
+            // folder's own content among the files and folders.
+            rename.as_object_mut().unwrap().remove("system_folders");
+            let file = operations::Source::capture(thumbnails.join("a.jpg/thumb.jpg")).unwrap();
+            rename["files"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::to_value(file).unwrap());
+            for folder in [thumbnails.clone(), thumbnails.join("a.jpg")] {
+                let meta = std::fs::metadata(&folder).unwrap();
+                let nanoseconds = |time: std::time::SystemTime| {
+                    time.duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos() as u64
+                };
+                rename["directories"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!([
+                        folder,
+                        {
+                            "modified_ns": nanoseconds(meta.modified().unwrap()),
+                            "created_ns": meta.created().ok().map(nanoseconds),
+                            "identity": [meta.dev(), meta.ino()],
+                        }
+                    ]));
+            }
+        }
+        if saved == "with a system folder added since" {
+            std::fs::create_dir(c.root.join("Trip/Day/Empty/@eaDir")).unwrap();
+        }
+        let plan: Plan = serde_json::from_str(&plan.to_string()).unwrap();
+        let report = run(&plan);
+        if saved == "before the list" {
+            assert!(report.errors.is_empty(), "{:?}", report.errors);
+            assert!(spelling(&c.root, "TRIP") && !spelling(&c.root, "Trip"));
+            assert!(c.root.join("TRIP/Day/@eaDir/a.jpg/thumb.jpg").is_file());
+        } else {
+            assert_eq!(report.errors.len(), 1, "{saved}");
+            assert!(
+                report.errors[0].contains("contents changed since review"),
+                "{saved}: {:?}",
+                report.errors
+            );
+            assert!(
+                spelling(&c.root, "Trip") && report.completed.is_empty(),
+                "{saved}"
+            );
+        }
+    }
 }
 #[test]
 fn case_rename_then_companion_move_retains_final_review_identity() {
@@ -409,4 +489,113 @@ fn future_folder_spelling_reserves_existing_filenames_before_later_moves() {
         std::fs::read(c.root.join("TRIP/Day/a_1.jpg")).unwrap(),
         b"incoming"
     );
+}
+
+/// A People, Location or Camera label can spell an existing folder with other
+/// capital letters. Where the volume treats them as one folder, the photos
+/// already there stay as they are instead of becoming "x_1.jpg".
+#[test]
+fn a_label_in_other_capital_letters_leaves_the_photos_of_that_folder_in_place() {
+    a_label_spelled_another_way("anna", "Anna", |c| c.names_ignore_case);
+}
+
+/// The same for accents: a typed or generated label has "é" as one character,
+/// a folder copied from an older Mac volume has "e" and a combining accent.
+/// A folder renamed on the board to the other form is respelled, as it is
+/// for capital letters, and its photos keep their names.
+#[test]
+fn a_label_with_composed_accents_leaves_the_photos_of_a_decomposed_folder_in_place() {
+    let (decomposed, composed) = ("Fe\u{301}rias", "F\u{e9}rias");
+    a_label_spelled_another_way(decomposed, composed, |c| c.names_ignore_form);
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(decomposed)).unwrap();
+    std::fs::write(dir.path().join(decomposed).join("x.jpg"), b"x").unwrap();
+    let c = catalog(dir.path());
+    let mut d = draft(&c);
+    d.rename_folder(decomposed, composed).unwrap();
+    let p = plan(&c, &d);
+    assert!(
+        matches!(p.actions.as_slice(), [Action::RenameDirectory(_)]),
+        "{:?}",
+        p.actions
+    );
+    let r = run(&p);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert!(spelling(&c.root, composed) && !spelling(&c.root, decomposed));
+    assert!(spelling(&c.root.join(composed), "x.jpg"));
+}
+
+/// `folder` holds a photo and `label` names it in another spelling. Where
+/// the volume takes both for one folder (`one_folder`), nothing there moves.
+fn a_label_spelled_another_way(folder: &str, label: &str, one_folder: fn(&Catalog) -> bool) {
+    let dir = tempfile::tempdir().unwrap();
+    for name in [
+        format!("{folder}/x.jpg"),
+        format!("{folder}/x.xmp"),
+        "inbox/y.jpg".to_owned(),
+    ] {
+        let path = dir.path().join(&name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, name.as_bytes()).unwrap();
+    }
+    let c = catalog(dir.path());
+    let id = |name: &str| MediaId::for_path(&c.root.join(name));
+    let here = HashMap::from([(id(&format!("{folder}/x.jpg")), label.to_string())]);
+    let pending = operations::organize_changes_pending(
+        &c,
+        &here,
+        &HashMap::new(),
+        &c.root,
+        &Default::default(),
+    );
+    let mut labels = here.clone();
+    labels.insert(id("inbox/y.jpg"), label.to_string());
+    let p = operations::organize_plan(&c, &labels, &c.root, true).unwrap();
+    let moves: Vec<_> = p
+        .actions
+        .iter()
+        .filter_map(|a| match a {
+            Action::Move { files } => Some(files.clone()),
+            _ => None,
+        })
+        .flatten()
+        .map(|(source, to)| (source.path, to))
+        .collect();
+    if !one_folder(&c) {
+        // Two folders on this volume: the photo does move to the new one.
+        assert!(pending);
+        assert!(moves.contains(&(
+            c.root.join(folder).join("x.jpg"),
+            c.root.join(label).join("x.jpg")
+        )));
+        return;
+    }
+    assert!(!pending);
+    // Only the photo from elsewhere moves, into the folder as it is spelled.
+    assert_eq!(
+        moves,
+        [(
+            c.root.join("inbox/y.jpg"),
+            c.root.join(folder).join("y.jpg")
+        )]
+    );
+    let r = run(&p);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert!(spelling(&c.root, folder) && !spelling(&c.root, label));
+    let mut names: Vec<_> = std::fs::read_dir(c.root.join(folder))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["x.jpg", "x.xmp", "y.jpg"]);
+    // Nothing is left to do, however often it is planned again.
+    let again = catalog(dir.path());
+    let labels: HashMap<_, _> = again
+        .media
+        .iter()
+        .map(|m| (m.id, label.to_string()))
+        .collect();
+    let p = operations::organize_plan(&again, &labels, &again.root, true).unwrap();
+    assert!(p.actions.is_empty(), "{:?}", p.actions);
 }
