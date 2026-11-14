@@ -96,16 +96,8 @@ fn views_round_trip_separately_from_decisions_and_drain_across_navigation() {
 fn replaced_and_missing_files_do_not_inherit_focus_or_comparison() {
     let (dir, catalog, mut saved) = fixture();
     let photo = &catalog.media[1];
-    let modified = fs::metadata(&photo.path).unwrap().modified().unwrap();
-    let replacement = dir.path().join("replacement");
-    fs::write(&replacement, b"other").unwrap(); // b.jpg is also five bytes.
-    fs::File::options()
-        .write(true)
-        .open(&replacement)
-        .unwrap()
-        .set_times(fs::FileTimes::new().set_modified(modified))
-        .unwrap();
-    fs::rename(replacement, &photo.path).unwrap();
+    // b.jpg is also five bytes.
+    test_support::replace_keeping_modified_time(&photo.path, b"other");
     fs::remove_file(&catalog.media[2].path).unwrap();
     let current = Catalog::scan(dir.path(), || false, |_| {}).unwrap();
     let fresh = current.media.iter().find(|m| m.id == photo.id).unwrap();
@@ -581,16 +573,7 @@ fn replaced_supporting_file_does_not_inherit_selection_at_same_size_and_mtime() 
             .map(|(i, m)| (m.id, i))
             .collect(),
     );
-    let before = fs::metadata(&path).unwrap().modified().unwrap();
-    let replacement = dir.path().join("new.txt");
-    fs::write(&replacement, b"other").unwrap();
-    fs::File::options()
-        .write(true)
-        .open(&replacement)
-        .unwrap()
-        .set_times(fs::FileTimes::new().set_modified(before))
-        .unwrap();
-    fs::rename(&replacement, &path).unwrap();
+    test_support::replace_keeping_modified_time(&path, b"other");
     let fresh = Catalog::scan(dir.path(), || false, |_| {}).unwrap();
     assert_eq!(
         fresh.supporting_fingerprints[&id].bytes,

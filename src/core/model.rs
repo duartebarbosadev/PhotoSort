@@ -133,18 +133,27 @@ impl Fingerprint {
     /// The part of an identity that survives the volume being mounted again.
     /// A drive plugged back in or a share mounted again gets a new device
     /// number, and some filesystems invent inode numbers per mount, so on Unix
-    /// only the birth time is kept. Windows identities are left as they are.
+    /// only the birth time is kept. Where the volume keeps no birth time the
+    /// inode stays instead: without it a file replaced by another of the same
+    /// size and modified time would count as unchanged, so such a volume is
+    /// rather taken for changed when its inodes are numbered anew. Windows
+    /// identities are left as they are.
     pub(crate) fn stable_identity(identity: [u64; 4]) -> [u64; 4] {
-        if cfg!(unix) {
-            [0, 0, identity[2], identity[3]]
-        } else {
-            identity
+        if !cfg!(unix) {
+            return identity;
+        }
+        match identity {
+            [_, inode, 0, 0] => [0, inode, 0, 0],
+            [_, _, seconds, nanos] => [0, 0, seconds, nanos],
         }
     }
-    /// Size, modified time and birth time: what a saved choice, plan or cache
-    /// key may depend on. `==` also compares device and inode, which only mean
-    /// something while the volume stays mounted; hard-link and replacement
-    /// checks within one run keep using it.
+    /// Size, modified time and birth time (the inode where there is no birth
+    /// time): what a saved choice, plan or cache key may depend on. `==` also
+    /// compares device and inode, which only mean something while the volume
+    /// stays mounted; hard-link and replacement checks within one run keep
+    /// using it. Two files born in the same instant, as Linux stamps files
+    /// written within a few milliseconds of each other, are told apart by
+    /// size and modified time alone.
     pub fn stable(mut self) -> Self {
         self.identity = Self::stable_identity(self.identity);
         self
