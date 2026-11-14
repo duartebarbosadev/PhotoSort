@@ -629,10 +629,17 @@ mod tests {
         drop(store);
         assert!(gone(&released));
         // One record for all of a photo's pairs, in the persistent cache only.
+        // Records alone are counted: clearing the cache leaves its own lock
+        // file there, wherever the folder's path has no link in it (the
+        // temporary folder of macOS has one, and the lock is refused).
         let records = || {
             std::fs::read_dir(root.path())
                 .unwrap()
-                .filter(|entry| entry.as_ref().unwrap().file_type().unwrap().is_file())
+                .map(|entry| entry.unwrap())
+                .filter(|entry| {
+                    entry.file_type().unwrap().is_file()
+                        && entry.path().extension().is_some_and(|e| e == "bin")
+                })
                 .count()
         };
         assert_eq!(records(), 2);
