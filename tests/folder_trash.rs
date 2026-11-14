@@ -4,7 +4,7 @@ use photosort::core::{
     operations::{self, Action, Plan, TrashRequest},
     organize::{Draft, Intent},
     session::Session,
-    views::{self, GroupMode},
+    views::GroupMode,
 };
 use std::{cell::Cell, collections::HashMap, fs};
 fn fixture() -> (tempfile::TempDir, Catalog) {
@@ -298,7 +298,8 @@ fn folder_trash_draft_relocation_replacement_and_completed_organize_are_reconcil
 #[cfg(unix)]
 #[test]
 fn folder_trash_staged_organize_work_survives_the_drive_being_mounted_again() {
-    use photosort::core::model::Step;
+    // Unix only: Windows identities hold no device or inode number to change.
+    use photosort::core::{model::Step, views};
     let (_dir, c) = fixture();
     let mut saved = session(&c);
     let kept = MediaId::for_path(&c.root.join("A-1/b.jpg"));
