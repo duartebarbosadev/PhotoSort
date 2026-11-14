@@ -73,6 +73,7 @@ impl Section {
                 d.processing != s.processing
                     || d.cache.previews_mib != s.cache.previews_mib
                     || d.cache.originals_mib != s.cache.originals_mib
+                    || d.limit_prompts != s.limit_prompts
             }
             Section::Storage => d.cache.disk_mib != s.cache.disk_mib,
         }
@@ -697,7 +698,8 @@ impl PhotoSortApp {
                     draft.cache.originals_mib = defaults.originals_mib;
                 }
             });
-            rows.row("Prompts you turned off", "", None, |ui| {
+            let prompts = "Questions you answered with \"Don't ask again\": about memory and cache limits, and about RAW files you kept whose JPEG goes to the Trash.";
+            rows.row("Prompts you turned off", "", Some(prompts), |ui| {
                 if ui
                     .add_enabled(draft.limit_prompts.any(), egui::Button::new("Show again"))
                     .clicked()

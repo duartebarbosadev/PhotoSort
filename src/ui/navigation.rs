@@ -176,8 +176,14 @@ impl PhotoSortApp {
 
     /// Photos with a staged Trash mark, rating or rotation, plus Organize's
     /// planned moves, renames and new folders: everything the Review step
-    /// applies.
+    /// applies. A photo marked for Trash that also moves counts once, as the
+    /// Review step lists it. While that list is on screen the count is the
+    /// list's own, so the badge, the sentence and the Apply button always
+    /// say the same number.
     pub(super) fn staged_change_count(&self) -> usize {
+        if let Some(listed) = self.review_listed_count() {
+            return listed;
+        }
         self.staged_choice_count() + self.organize_change_count()
     }
     pub(super) fn switch_step(&mut self, step: Step) {
@@ -195,6 +201,7 @@ impl PhotoSortApp {
             // The Review step's list and result belong to it alone.
             if self.step == Step::Review {
                 self.review_outcome = None;
+                self.plan_rows.release_scroll();
                 if !self.plan_open && self.retry_plan.is_none() && !self.busy {
                     self.set_review_plan(None);
                 }

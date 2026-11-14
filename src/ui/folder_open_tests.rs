@@ -219,6 +219,8 @@ fn unavailable_folder_explains_itself_in_a_centred_dialog_over_the_welcome_scree
         app.review_after_moves = Some(review_step::Chain {
             decisions: HashMap::new(),
             followers: HashSet::new(),
+            created: Vec::new(),
+            tidy: Vec::new(),
             source: dir.path().to_path_buf(),
             root: Some(folder.clone()),
         });

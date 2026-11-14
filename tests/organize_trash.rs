@@ -333,6 +333,44 @@ fn trash_takes_only_raw_and_xmp_with_a_photo_never_same_name_photos() {
         paths(&plan),
         HashSet::from([c.root.join("pair.jpg"), c.root.join("pair.xmp")])
     );
+    // A rated RAW the review kept out of the listed files stays, and its
+    // rating is written; listed, it goes and the rating is dropped.
+    let mut decisions = decisions;
+    decisions.insert(
+        id(&c, "pair.ARW"),
+        Decision {
+            rating: Some(4),
+            ..Default::default()
+        },
+    );
+    let actions = |followers: &[&str]| {
+        operations::decisions_plan_with_followers(
+            &c,
+            &decisions,
+            true,
+            Some(&followers.iter().map(|name| id(&c, name)).collect()),
+            metadata::WritePolicy::SidecarOnly,
+            |m| Ok(metadata::read(&m.path)),
+            || false,
+        )
+        .unwrap()
+        .actions
+    };
+    let kept = actions(&[]);
+    assert!(
+        matches!(&kept[..], [
+            Action::Trash { files },
+            Action::Metadata { source, rating: Some(4), .. },
+        ] if files.len() == 1
+            && files[0].path == c.root.join("pair.jpg")
+            && source.path == c.root.join("pair.ARW")),
+        "{kept:?}"
+    );
+    let trashed = actions(&["pair.ARW", "pair.xmp"]);
+    assert!(
+        matches!(&trashed[..], [Action::Trash { files }] if files.len() == 3),
+        "{trashed:?}"
+    );
 }
 
 /// darktable and digiKam name a sidecar after the whole file ("IMG.CR2.xmp"),
@@ -436,4 +474,138 @@ fn sidecars_named_after_the_whole_file_or_beside_a_video_follow_it() {
         ])
     );
     assert!(!c.root.join("Old").exists());
+}
+
+/// The second half of an Apply whose moves came first: a folder those moves
+/// made is removed once the Trash marks leave nothing in it. A folder that
+/// keeps a photo stays. One that was there before goes only when the review
+/// listed it, and only after every photo in it reached the Trash.
+#[test]
+fn a_folder_the_moves_made_is_removed_once_the_trash_empties_it() {
+    let (_dir, c) = fixture();
+    let trash = tempfile::tempdir().unwrap();
+    operations::trash_stand_in(&c.root, trash.path());
+    // A folder of its own that the moves leave alone.
+    fs::create_dir(c.root.join("Old")).unwrap();
+    fs::write(c.root.join("Old/solo.jpg"), b"solo").unwrap();
+    let c = Catalog::scan(&c.root, || false, |_| {}).unwrap();
+    let labels = HashMap::from([
+        (id(&c, "A/photo.jpg"), "New/Deep".to_string()),
+        (id(&c, "A/photo.ARW"), "New/Deep".to_string()),
+        (id(&c, "A/clip.mov"), "Mixed".to_string()),
+        (id(&c, "A-1/other.jpg"), "Mixed".to_string()),
+    ]);
+    let plan = operations::organize_plan(&c, &labels, &c.root, true).unwrap();
+    let journal = tempfile::tempdir().unwrap();
+    let moved = operations::execute(&plan, journal.path(), || false, |_, _| {}).unwrap();
+    assert!(moved.errors.is_empty(), "{:?}", moved.errors);
+    // The run says which folders it made, parents included.
+    assert_eq!(
+        moved
+            .created_folders
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>(),
+        HashSet::from([
+            c.root.join("New"),
+            c.root.join("New/Deep"),
+            c.root.join("Mixed")
+        ])
+    );
+    let c = Catalog::scan(&c.root, || false, |_| {}).unwrap();
+    let rejected = |name: &str| {
+        (
+            id(&c, name),
+            Decision {
+                rejected: true,
+                ..Default::default()
+            },
+        )
+    };
+    let decisions = HashMap::from([
+        rejected("New/Deep/photo.jpg"),
+        rejected("Mixed/clip.mov"),
+        rejected("Old/solo.jpg"),
+    ]);
+    let mut plan = operations::decisions_plan(&c, &decisions, true).unwrap();
+    operations::remove_folders_emptied_by_trash(&mut plan, &c, &moved.created_folders, &[], || {
+        false
+    })
+    .unwrap();
+    // Only the folders left with nothing, the deepest first.
+    let removed: Vec<_> = plan
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::RemoveEmptyDirectory {
+                path, leftovers, ..
+            } => Some((path.clone(), leftovers.is_empty())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        removed,
+        [(c.root.join("New/Deep"), true), (c.root.join("New"), true)]
+    );
+    let report = operations::execute(&plan, journal.path(), || false, |_, _| {}).unwrap();
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert!(report.remaining.actions.is_empty());
+    // The photo went to the Trash with its RAW and XMP, from its new folder.
+    for name in [
+        "photo.jpg",
+        "photo.ARW",
+        "photo.xmp",
+        "clip.mov",
+        "solo.jpg",
+    ] {
+        assert!(trash.path().join(name).is_file(), "{name}");
+    }
+    assert!(!c.root.join("New").exists());
+    assert!(c.root.join("Mixed/other.jpg").is_file());
+    // The review did not list "Old", so it stays, empty: it was there before.
+    assert!(c.root.join("Old").is_dir(), "not listed, so not removed");
+
+    // A folder that was there before goes too once the review listed it:
+    // both its photos are marked. A stopped Apply leaves it, with the photo
+    // not yet in the Trash, and the retry finishes both.
+    for name in ["Old/x.jpg", "Old/y.jpg"] {
+        fs::write(c.root.join(name), name).unwrap();
+    }
+    let c = Catalog::scan(&c.root, || false, |_| {}).unwrap();
+    let marked = [c.root.join("Old/x.jpg"), c.root.join("Old/y.jpg")];
+    let listing =
+        operations::folders_emptied_by_trash(&c, &operations::Plan::default(), &marked, || false)
+            .unwrap();
+    let listed: Vec<(PathBuf, Vec<String>)> = listing
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::RemoveEmptyDirectory {
+                path, leftovers, ..
+            } => Some((path.clone(), leftovers.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(listed, [(c.root.join("Old"), Vec::new())]);
+    let decisions = HashMap::from([rejected("Old/x.jpg"), rejected("Old/y.jpg")]);
+    let mut plan = operations::decisions_plan(&c, &decisions, true).unwrap();
+    operations::remove_folders_emptied_by_trash(&mut plan, &c, &[], &listed, || false).unwrap();
+    assert_eq!(plan.actions.len(), 3, "two photos, then the folder");
+    let done = std::cell::Cell::new(0);
+    let stopped = operations::execute(
+        &plan,
+        journal.path(),
+        || done.get() >= 1,
+        |finished, _| done.set(finished),
+    )
+    .unwrap();
+    assert!(stopped.cancelled);
+    assert_eq!(stopped.remaining.actions.len(), 2);
+    assert!(c.root.join("Old").is_dir(), "a photo is still in it");
+    let retried =
+        operations::execute(&stopped.remaining, journal.path(), || false, |_, _| {}).unwrap();
+    assert!(retried.errors.is_empty(), "{:?}", retried.errors);
+    assert!(retried.remaining.actions.is_empty());
+    assert!(!c.root.join("Old").exists());
+    assert!(c.root.is_dir());
 }

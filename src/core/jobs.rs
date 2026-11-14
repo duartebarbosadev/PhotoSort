@@ -209,6 +209,33 @@ pub enum IoWork {
         output: PathBuf,
         companions: bool,
     },
+    /// Trash marks, ratings and rotations. Planned here, never on the image
+    /// worker: that one can be held for minutes preparing a model.
+    PlanDecisions {
+        catalog: Arc<Catalog>,
+        decisions: HashMap<MediaId, Decision>,
+        companions: bool,
+        /// The only files that may follow a rejected photo to the Trash.
+        followers: Option<HashSet<MediaId>>,
+        /// Folders the moves of the same Apply made: removed again when the
+        /// Trash marks leave them empty.
+        created: Vec<PathBuf>,
+        /// Folders the review listed as left empty by the Trash marks, each
+        /// with the leftovers listed for it: removed after them.
+        tidy: Vec<(PathBuf, Vec<String>)>,
+        policy: super::metadata::WritePolicy,
+        cancelled: Arc<AtomicBool>,
+    },
+    /// The review's question before anything is applied: which folders the
+    /// listed Trash marks leave empty once `moves` are done. Answered with a
+    /// plan of folder removals to list, never applied as it is.
+    PlanTidy {
+        catalog: Arc<Catalog>,
+        moves: Plan,
+        /// The files listed for the Trash, where they are now.
+        trashed: Vec<PathBuf>,
+        cancelled: Arc<AtomicBool>,
+    },
     Apply(Plan),
     ApplyRecoverable {
         context: Box<operations::recovery::Context>,
@@ -248,15 +275,6 @@ pub enum AnalysisProfile {
     Faces,
 }
 pub enum ImageWork {
-    PlanDecisions {
-        catalog: Arc<Catalog>,
-        decisions: HashMap<MediaId, Decision>,
-        companions: bool,
-        /// The only files that may follow a rejected photo to the Trash.
-        followers: Option<HashSet<MediaId>>,
-        policy: super::metadata::WritePolicy,
-    },
-
     IndexMetadata {
         run: u64,
         media: Arc<Vec<Media>>,
