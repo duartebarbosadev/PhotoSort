@@ -109,6 +109,7 @@ impl PhotoSortApp {
             self.pending_bookmark = self.saved_views.bookmarks.get(&self.step).cloned();
         }
         self.decisions.clear();
+        self.by_hand.clear();
         // Back to the defaults: with suggestions applied automatically, Easy
         // Delete, Fix Rotation and Pick Best stage them again; otherwise
         // they wait to be accepted.
@@ -212,6 +213,7 @@ impl PhotoSortApp {
             || self.metadata_run.is_some()
             || self.filter_dirty
             || self.browse_run.is_some()
+            || (self.step == Step::Cull && self.browse_refresh.pending())
         {
             return;
         }

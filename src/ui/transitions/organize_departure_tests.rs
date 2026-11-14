@@ -222,6 +222,8 @@ fn a_folder_made_only_for_photos_that_go_to_the_trash_is_not_left_behind() {
         app.decisions.entry(marked).or_default().rejected = true;
     }
     app.changed_items([a, d]);
+    // Two photos move and two are marked, but one is both: three changes.
+    assert_eq!(app.staged_change_count(), 3);
     app.review_changes();
     settle(&mut app);
     assert!(app.error.is_none(), "{:?}", app.error);
@@ -283,7 +285,7 @@ fn the_review_steps_apply_never_applies_choices_in_another_folder() {
                 ..Default::default()
             },
         )]),
-        fingerprints: HashMap::from([(marked, other.media[0].fingerprint)]),
+        fingerprints: HashMap::from([(marked, other.media[0].fingerprint)]).into(),
         ..Default::default()
     }
     .save(&other_root)
@@ -950,11 +952,12 @@ fn external_output_retry_preserves_earlier_moves_and_existing_destination_marks(
                 ..Default::default()
             },
         )]),
-        fingerprints: HashMap::from([(existing.id, existing.fingerprint)]),
+        fingerprints: HashMap::from([(existing.id, existing.fingerprint)]).into(),
         suggested: Default::default(),
         pick_suggested: Default::default(),
         rotations_staged: Default::default(),
         trash_steps: Default::default(),
+        by_hand: Default::default(),
     }
     .save(&output)
     .unwrap();

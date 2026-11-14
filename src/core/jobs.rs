@@ -58,7 +58,8 @@ pub enum Event {
         id: MediaId,
         preview: bool,
         decoder_warning: Option<String>,
-        pixels: Arc<RgbaImage>,
+        /// Ready to become a texture: the UI thread converts nothing.
+        pixels: Arc<eframe::egui::ColorImage>,
         metadata: Metadata,
         stats: Stats,
     },

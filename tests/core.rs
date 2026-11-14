@@ -451,6 +451,7 @@ fn session_drops_stale_decisions() {
         pick_suggested: Default::default(),
         rotations_staged: Default::default(),
         trash_steps: Default::default(),
+        by_hand: Default::default(),
         organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),
@@ -461,7 +462,7 @@ fn session_drops_stale_decisions() {
                 ..Default::default()
             },
         )]),
-        fingerprints: HashMap::from([(m.id, m.fingerprint)]),
+        fingerprints: HashMap::from([(m.id, m.fingerprint)]).into(),
     };
     let mut changed = m.clone();
     changed.fingerprint.bytes += 1;

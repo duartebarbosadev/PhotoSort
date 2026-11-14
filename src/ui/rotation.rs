@@ -16,6 +16,40 @@ fn count(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
+/// What Fix Rotation's grid is drawn from, kept between frames: a frame in
+/// which nothing changed reads it instead of working it out for every photo.
+#[derive(Default)]
+pub(super) struct Deck {
+    /// The list and the review the photos shown were taken from.
+    listed: Option<(u64, usize, u64)>,
+    shown: std::rc::Rc<Shown>,
+    /// The metadata the shapes were taken from.
+    sized: Option<(usize, u64)>,
+    /// Each photo's width over its height, as it is on disk.
+    shapes: Vec<f32>,
+    /// The decisions the turns were counted from.
+    counted: Option<u64>,
+    /// Whether each photo has a turn staged: its card then shows it twice.
+    turned: Vec<bool>,
+    /// How many do.
+    turns: usize,
+    /// A certain suggestion is not taken yet.
+    left: bool,
+    /// Changes whenever a card's shape may have: the grid asks its cards
+    /// again.
+    stamp: u64,
+}
+
+/// The photos the grid shows, in order.
+#[derive(Default)]
+pub(super) struct Shown {
+    ids: Vec<MediaId>,
+    /// Each photo's place among them.
+    places: HashMap<MediaId, usize>,
+    /// How many, from the first, have a suggestion.
+    suggested: usize,
+}
+
 /// The one-click action in a card's header, beside its rotate buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RotationLink {
@@ -309,16 +343,17 @@ impl PhotoSortApp {
     /// card per photo, as it is beside how it will be. Clicking a card
     /// opens its photos large in a panel beside the grid.
     pub(super) fn rotation_grid(&mut self, ui: &mut egui::Ui) {
-        let ids: Vec<MediaId> = self.filtered.iter().map(|i| self.media[*i].id).collect();
+        let shown = self.rotation_deck();
+        let ids = &shown.ids;
         self.rotation_summary(ui);
         ui.add_space(S2);
         // As in Easy Delete: the grid takes its final width at once and the
         // panel slides over the room it leaves.
         let area = ui.available_rect_before_wrap();
-        let shown = self.rotation_panel && self.active.is_some();
+        let panel_shown = self.rotation_panel && self.active.is_some();
         let slide = ui
             .ctx()
-            .animate_bool_responsive(egui::Id::new("rotation_panel_slide"), shown);
+            .animate_bool_responsive(egui::Id::new("rotation_panel_slide"), panel_shown);
         let widest = (area.width() - 460.0).max(360.0);
         self.rotation_panel_width = self
             .rotation_panel_width
@@ -326,24 +361,20 @@ impl PhotoSortApp {
             .clamp(360.0, widest)
             .into();
         let panel_width = self.rotation_panel_width.unwrap_or(360.0);
-        let grid = if shown {
+        let grid = if panel_shown {
             area.with_max_x(area.right() - panel_width - S3)
         } else {
             area
         };
         // Suggestions first, then, with every photo shown, the others.
-        let suggested = ids
-            .iter()
-            .take_while(|id| self.rotation_review.suggestion(**id).is_some())
-            .count();
+        let suggested = shown.suggested;
         let sections: Vec<(bool, usize)> = [(true, suggested), (false, ids.len() - suggested)]
             .into_iter()
             .filter(|(_, n)| *n > 0)
             .collect();
         let lengths: Vec<usize> = sections.iter().map(|(_, n)| *n).collect();
-        let current = self
-            .active
-            .and_then(|id| ids.iter().position(|other| *other == id));
+        let current = self.active.and_then(|id| shown.places.get(&id).copied());
+        let stamp = self.grids.rotation.stamp;
         let clicked = ui
             .scope_builder(
                 egui::UiBuilder::new()
@@ -354,7 +385,20 @@ impl PhotoSortApp {
                         ui,
                         "rotation",
                         &lengths,
-                        |app, i| app.rotation_card_aspects(ids[i]),
+                        stamp,
+                        // The photo as it is and, once a turn is staged, as
+                        // it will be. The turned photo keeps the first one's
+                        // slot, fitted inside it, so turning again does not
+                        // move the card or its rotate buttons.
+                        |app, i, shapes| {
+                            let deck = &app.grids.rotation;
+                            if let Some(shape) = deck.shapes.get(i) {
+                                shapes.push(*shape);
+                                if deck.turned.get(i) == Some(&true) {
+                                    shapes.push(*shape);
+                                }
+                            }
+                        },
                         |_, _| false,
                         // The rotate buttons sit in every card's header.
                         |_, _| true,
@@ -391,12 +435,7 @@ impl PhotoSortApp {
     /// One line over the grid: what is staged, the photo size, and Accept
     /// all suggestions.
     fn rotation_summary(&mut self, ui: &mut egui::Ui) {
-        let turned = self
-            .filtered
-            .iter()
-            .filter(|i| turns(&self.decisions, self.media[**i].id) != 0)
-            .count();
-        let left = !self.rotation_suggestions_left().is_empty();
+        let (turned, left) = (self.grids.rotation.turns, self.grids.rotation.left);
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 if ui
@@ -474,17 +513,67 @@ impl PhotoSortApp {
         }
     }
 
-    /// Each photo's width over its height on `id`'s card: the photo as it
-    /// is and, once a turn is staged, as it will be. The turned photo keeps
-    /// the first one's slot, fitted inside it, so turning again does not
-    /// move the card or its rotate buttons.
-    fn rotation_card_aspects(&self, id: MediaId) -> Vec<f32> {
-        let shape = self.photo_aspect(id, 0);
-        if turns(&self.decisions, id) == 0 {
-            vec![shape]
-        } else {
-            vec![shape, shape]
+    /// What the grid is drawn from, brought up to date: the photos shown
+    /// when the list was built again with other photos or in another order,
+    /// their shapes when a photo's metadata arrived, and which are turned
+    /// when a decision changed. A frame in which none of that happened
+    /// looks up three stamps.
+    fn rotation_deck(&mut self) -> std::rc::Rc<Shown> {
+        let mut deck = std::mem::take(&mut self.grids.rotation);
+        let review = self.rotation_review.revision();
+        let listed = (self.grids.listed, self.filtered.len(), review);
+        if deck.listed != Some(listed) {
+            let ids: Vec<MediaId> = self.filtered.iter().map(|i| self.media[*i].id).collect();
+            // A turn builds the list again, most often to the same photos
+            // in the same order: everything worked out for them stands.
+            let same = deck.listed.is_some_and(|(_, _, of)| of == review) && deck.shown.ids == ids;
+            if !same {
+                deck.shown = std::rc::Rc::new(Shown {
+                    suggested: ids
+                        .iter()
+                        .take_while(|id| self.rotation_review.suggestion(**id).is_some())
+                        .count(),
+                    places: ids
+                        .iter()
+                        .enumerate()
+                        .map(|(place, id)| (*id, place))
+                        .collect(),
+                    ids,
+                });
+                deck.sized = None;
+                deck.counted = None;
+            }
+            deck.listed = Some(listed);
         }
+        let metadata = self.metadata_stamp();
+        if deck.sized != Some(metadata) {
+            deck.shapes.clear();
+            deck.shapes
+                .extend(deck.shown.ids.iter().map(|id| self.photo_aspect(*id, 0)));
+            deck.sized = Some(metadata);
+            deck.stamp = crate::core::revision::next();
+        }
+        let decisions = self.decisions.revision();
+        if deck.counted != Some(decisions) {
+            // From the staged turns, which are few, not from every photo.
+            deck.turned.clear();
+            deck.turned.resize(deck.shown.ids.len(), false);
+            deck.turns = 0;
+            for (id, decision) in self.decisions.iter() {
+                if decision.turns % 4 != 0
+                    && let Some(place) = deck.shown.places.get(id)
+                {
+                    deck.turned[*place] = true;
+                    deck.turns += 1;
+                }
+            }
+            deck.left = !self.rotation_suggestions_left().is_empty();
+            deck.counted = Some(decisions);
+            deck.stamp = crate::core::revision::next();
+        }
+        let shown = deck.shown.clone();
+        self.grids.rotation = deck;
+        shown
     }
 
     /// The slot height over width a card's photos need: a quarter turn
@@ -518,7 +607,7 @@ impl PhotoSortApp {
     pub(super) fn rotation_card(&self, id: MediaId) -> ReviewCard {
         use egui_phosphor::regular as icon;
         let media = self.index.get(&id).map(|i| &self.media[*i]);
-        let caption = media.map(Media::name).unwrap_or_default();
+        let caption = media.map(|m| self.shown_name(m)).unwrap_or_default();
         let path = media
             .map(|m| m.path.display().to_string())
             .unwrap_or_default();
@@ -792,6 +881,56 @@ mod tests {
     }
 
     #[test]
+    fn the_grid_keeps_its_rows_until_a_turn_a_new_shape_or_the_width_changes_them() {
+        use super::super::review_card::{LaidRows as Rows, render_grid_at};
+        // The rows a grid that kept nothing lays out from the same state.
+        fn fresh(app: &mut PhotoSortApp, width: f32) -> Rows {
+            let kept = std::mem::take(&mut app.grids);
+            render_grid_at(app, width);
+            let rows = app.grids.rows.laid().1;
+            app.grids = kept;
+            rows
+        }
+        // One frame as the workspace draws it: how many times the rows
+        // were laid out so far, and the rows, which are always those a
+        // fresh grid would show.
+        fn draw(app: &mut PhotoSortApp, width: f32) -> (usize, Rows) {
+            app.refilter();
+            render_grid_at(app, width);
+            let (layouts, rows) = app.grids.rows.laid();
+            assert_eq!(rows, fresh(app, width), "at {width}");
+            (layouts, rows)
+        }
+        let mut app = fixture(false);
+        app.rotation_queue_only = false;
+        app.filter_dirty = true;
+        let (first, rows) = draw(&mut app, 1200.0);
+        assert_eq!(shown(&app).len(), 4);
+        // Nothing changed, then a choice that turns nothing: the rows stand.
+        assert_eq!(draw(&mut app, 1200.0).0, first);
+        app.decisions.entry(MediaId(4)).or_default().rating = Some(3);
+        assert_eq!(draw(&mut app, 1200.0), (first, rows.clone()));
+        // A turn shows the photo twice: its card is wider in the next frame.
+        app.rotate_card(MediaId(3), 1);
+        let (second, turned) = draw(&mut app, 1200.0);
+        assert!(second == first + 1 && turned != rows);
+        // A photo's size arrives: its card takes its shape.
+        app.metadata.insert(
+            MediaId(4),
+            Metadata {
+                width: 3000,
+                height: 4000,
+                ..Default::default()
+            },
+        );
+        let (third, shaped) = draw(&mut app, 1200.0);
+        assert!(third == second + 1 && shaped != turned);
+        // A window too narrow for two cards side by side.
+        let (fourth, narrow) = draw(&mut app, 320.0);
+        assert!(fourth == third + 1 && narrow != shaped);
+        assert_eq!(draw(&mut app, 320.0).0, fourth);
+    }
+    #[test]
     fn a_click_opens_the_card_in_the_panel_and_keys_act_only_on_it() {
         let mut app = fixture(true);
         assert!(!app.rotation_panel);
@@ -819,7 +958,7 @@ mod tests {
         assert!(session.rotations_staged.contains(&MediaId(1)));
         // A restart restores what was staged and does not stage it again.
         let mut again = fixture(true);
-        again.decisions = session.decisions.clone();
+        again.decisions = session.decisions.clone().into();
         again
             .rotation_review
             .restore_staged(session.rotations_staged);

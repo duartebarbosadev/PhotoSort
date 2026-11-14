@@ -17,6 +17,136 @@ pub(in crate::ui::workspace) struct BoardKey {
     pub(super) original: bool,
 }
 
+/// A library by identity: a catalog freed and another made in its place
+/// can share an address, so the catalog is held weakly, which keeps the
+/// address from being used again.
+#[derive(Clone, Default)]
+pub(in crate::ui::workspace) struct Library {
+    /// Counts the folders opened; discovery has no catalog yet.
+    pub(super) opened: u64,
+    pub(super) catalog: Option<std::sync::Weak<Catalog>>,
+}
+
+impl PartialEq for Library {
+    fn eq(&self, other: &Self) -> bool {
+        self.opened == other.opened
+            && match (&self.catalog, &other.catalog) {
+                (Some(a), Some(b)) => a.ptr_eq(b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
+/// What the folders a grouping proposes are worked out from.
+#[derive(Clone, PartialEq)]
+pub(in crate::ui::workspace) struct ProposalKey {
+    pub(super) mode: GroupMode,
+    pub(super) library: Library,
+    pub(super) media: usize,
+    /// How many photos have metadata and how often a known photo's changed
+    /// what a folder is named from; zero for a grouping that reads neither.
+    pub(super) metadata: (usize, u64),
+    pub(super) layout: crate::core::geography::Layout,
+    /// A date in a file name counts up to ten years ahead.
+    pub(super) year: i32,
+}
+
+/// What the board's per-photo folders were read from.
+#[derive(Clone, PartialEq)]
+pub(in crate::ui::workspace) struct InputsKey {
+    pub(super) board: BoardKey,
+    pub(super) proposal: ProposalKey,
+}
+
+/// A photo that stays where it is, in [`Inputs::folder`].
+pub(super) const UNPLACED: u32 = u32::MAX;
+
+/// Every photo's destination folder, kept between arrangements: a search
+/// or a filter changes which photos are shown, not where they go.
+pub(in crate::ui::workspace) struct Inputs {
+    /// `None` is never reused: an analysis replaces its groups in place,
+    /// with nothing to tell the old result from the new one by.
+    pub(super) key: Option<InputsKey>,
+    /// The destination folders, sorted, those of files that are not
+    /// photos included.
+    pub(super) folders: Vec<String>,
+    /// Each photo's folder in `folders`, by its place in `media`.
+    pub(super) folder: Vec<u32>,
+    /// The folders the grouping proposes or the ones on disk now; the
+    /// draft holds them once a folder is edited by hand.
+    pub(super) labels: Option<Arc<HashMap<MediaId, String>>>,
+    /// The planned changes, and the destination, the new names and the
+    /// "keep RAW and JPEG together" choice they were counted with.
+    pub(super) changes: Option<(String, u64, bool, usize)>,
+}
+
+/// The day each file's name carries, read once: only photos without a
+/// capture time ask, and a name never changes.
+#[derive(Default)]
+pub(in crate::ui::workspace) struct NameDays {
+    pub(super) library: Library,
+    pub(super) year: i32,
+    /// By place in `media`; `None` until asked.
+    pub(super) days: Vec<Option<Option<i64>>>,
+}
+
+/// Background work (a folder being read, metadata arriving, an analysis)
+/// changed what the board would show. While that work runs the board
+/// catches up a few times a second instead of once per batch.
+#[derive(Default)]
+pub(in crate::ui::workspace) struct Refresh {
+    pub(in crate::ui::workspace) owed: bool,
+    /// When the board last caught up with background work.
+    pub(in crate::ui::workspace) last: Option<Instant>,
+    /// How long the last filter and arrangement took.
+    pub(in crate::ui::workspace) cost: Duration,
+}
+
+/// The least time between two arrangements for background work.
+pub(super) const REFRESH_EVERY: Duration = Duration::from_millis(300);
+
+/// Photos whose shape (size, orientation or staged turns) may differ from
+/// the one the board's rows were laid out with.
+#[derive(Default)]
+pub(in crate::ui::workspace) struct Reshaped {
+    pub(super) ids: Vec<MediaId>,
+    /// Too many to check one by one: every row is laid out again.
+    pub(super) all: bool,
+}
+
+impl Reshaped {
+    pub(in crate::ui::workspace) fn note(&mut self, id: MediaId) {
+        if self.all {
+            return;
+        }
+        if self.ids.len() >= 4096 {
+            self.everything();
+        } else {
+            self.ids.push(id);
+        }
+    }
+    pub(in crate::ui::workspace) fn everything(&mut self) {
+        self.all = true;
+        self.ids = Vec::new();
+    }
+    pub(super) fn clear(&mut self) {
+        self.all = false;
+        self.ids.clear();
+    }
+}
+
+impl BoardKey {
+    /// Whether `now` differs only by photos found or metadata read since.
+    pub(super) fn grown_to(&self, now: &Self) -> bool {
+        Self {
+            media: now.media,
+            metadata: now.metadata,
+            ..self.clone()
+        } == *now
+    }
+}
+
 /// One destination folder's run of photos in `filtered` order.
 pub(in crate::ui::workspace) struct Section {
     /// Destination relative to the output folder; `None` stays in place.
@@ -76,6 +206,11 @@ pub(in crate::ui::workspace) struct Board {
     pub(in crate::ui::workspace) spy: Option<(f32, Option<MediaId>)>,
     /// The board was last scrolled by hand rather than by a new active photo.
     pub(in crate::ui::workspace) scrolled: bool,
+    /// Photos were just moved to other folders: the photo the view holds
+    /// still on once the board is arranged again (`None`: no photo in view
+    /// stayed), and the arrangement the move was made in. See
+    /// [`PhotoSortApp::board_hold_view`].
+    pub(in crate::ui::workspace) held: Option<(u64, Option<(MediaId, f32)>)>,
     /// The board scrolls back to its top once, after the folders shown change.
     pub(in crate::ui::workspace) to_top: bool,
     /// The sidebar's scroll offset and height in the last frame.
@@ -97,7 +232,8 @@ pub(in crate::ui::workspace) struct Board {
     /// A folder or photo name field had focus in the last frame.
     pub(in crate::ui::workspace) typing: bool,
     /// Planned changes when the board was last arranged: photos and videos
-    /// that move or are renamed, and new folders.
+    /// that move or are renamed, a RAW counted with its JPEG, and new
+    /// folders that stay empty.
     pub(in crate::ui::workspace) changes: usize,
     /// "Reset changes" is asking for confirmation.
     pub(in crate::ui::workspace) confirm_reset: bool,
@@ -124,6 +260,15 @@ pub(in crate::ui::workspace) struct Board {
     /// The board's rows as last laid out; reused while nothing they depend
     /// on has changed.
     pub(in crate::ui::workspace) rows: Option<Arc<BoardRows>>,
+    /// Photos whose rows may need laying out again.
+    pub(in crate::ui::workspace) reshaped: Reshaped,
+    /// Background work the board has yet to catch up with.
+    pub(in crate::ui::workspace) refresh: Refresh,
+    /// The folders the grouping proposes, while no folder is edited by hand.
+    pub(in crate::ui::workspace) proposal: Option<(ProposalKey, Arc<HashMap<MediaId, String>>)>,
+    /// Every photo's folder as last arranged.
+    pub(in crate::ui::workspace) inputs: Option<Inputs>,
+    pub(in crate::ui::workspace) name_days: NameDays,
 }
 
 /// What sits beside Organize's board. As the window narrows the preview

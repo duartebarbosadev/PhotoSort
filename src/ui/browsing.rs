@@ -1,6 +1,39 @@
 use super::*;
 use crate::core::browsing::{GroupSort, RatingFilter, Sort};
 
+/// The shortest time between two refreshes of Cull's view that background
+/// work asked for, however fast its results arrive.
+const BACKGROUND_REFRESH_EVERY: Duration = Duration::from_millis(300);
+
+/// A refresh of Cull's view owed to background work: new metadata or
+/// analysis results. Unlike a changed search, filter or sort it never
+/// replaces a running query and never holds back navigation or selection:
+/// the photos on screen stay usable until its result replaces them.
+#[derive(Default)]
+pub(super) struct BackgroundRefresh {
+    /// Background results arrived that no query has been asked to show yet.
+    owed: bool,
+    /// The query in flight that only background work asked for.
+    run: Option<u64>,
+    /// When the last such query was requested or its result shown.
+    last: Option<Instant>,
+}
+impl BackgroundRefresh {
+    /// Whether the view still has background results to catch up with.
+    pub(super) fn pending(&self) -> bool {
+        self.owed || self.run.is_some()
+    }
+}
+
+/// "1 file has unavailable metadata", "3 files have unavailable metadata".
+fn unavailable_metadata_text(files: usize) -> String {
+    if files == 1 {
+        "1 file has unavailable metadata".into()
+    } else {
+        format!("{files} files have unavailable metadata")
+    }
+}
+
 impl PhotoSortApp {
     pub(super) fn clear_browse_filters(&mut self) {
         self.browse.rating = RatingFilter::All;
@@ -114,6 +147,41 @@ impl PhotoSortApp {
             self.filter_dirty = true;
         }
     }
+    /// Background work changed what the photos show or their order. Cull
+    /// catches up without interrupting the query in flight or the user,
+    /// and Organize's board a few times a second while the work runs;
+    /// the other steps filter at once, as a changed filter does.
+    pub(super) fn browse_data_changed(&mut self) {
+        match self.step {
+            Step::Cull => self.browse_refresh.owed = true,
+            Step::Organize => self.board_data_changed(),
+            _ => self.filter_dirty = true,
+        }
+    }
+    /// How long until Cull's view can next catch up with background
+    /// results, when nothing else would bring a frame by then.
+    pub(super) fn background_refresh_wait(&self) -> Option<Duration> {
+        let waiting = self.step == Step::Cull
+            && self.browse_ready
+            && !self.scanning
+            && self.browse_refresh.owed
+            && self.browse_refresh.run.is_none()
+            && self.browse_run.is_none()
+            && !self.filter_dirty;
+        waiting.then(|| {
+            self.browse_refresh.last.map_or(Duration::ZERO, |last| {
+                BACKGROUND_REFRESH_EVERY.saturating_sub(last.elapsed())
+            })
+        })
+    }
+    fn browse_query(&self) -> crate::core::browsing::Query {
+        crate::core::browsing::Query {
+            text: self.query.clone(),
+            filter: self.filter,
+            options: self.browse.clone(),
+            navigator: self.navigator.clone(),
+        }
+    }
     pub(super) fn refilter_browse(&mut self) {
         if self.scanning {
             return;
@@ -123,20 +191,39 @@ impl PhotoSortApp {
             return;
         }
         if self.filter_dirty {
-            self.browse_run = Some(self.runtime.browsing.request(crate::core::browsing::Query {
-                text: self.query.clone(),
-                filter: self.filter,
-                options: self.browse.clone(),
-                navigator: self.navigator.clone(),
-            }));
+            // A change the user made replaces whatever is running. The
+            // worker applies every pending update before each query, so
+            // this one also shows what background work brought so far.
+            self.browse_run = Some(self.runtime.browsing.request(self.browse_query()));
             self.filter_dirty = false;
+            self.browse_refresh.owed = false;
+            self.browse_refresh.run = None;
         }
-        if let Some(result) = self.runtime.browsing.take_result()
-            && self.browse_run == Some(result.run)
-        {
-            self.browse_run = None;
+        self.accept_browse_result();
+        // Only once nothing is in flight, so a stream of background results
+        // lets each query finish, and spaced out so it stays cheap.
+        if self.background_refresh_wait() == Some(Duration::ZERO) {
+            self.browse_refresh.run = Some(self.runtime.browsing.request(self.browse_query()));
+            self.browse_refresh.owed = false;
+            self.browse_refresh.last = Some(Instant::now());
+        }
+    }
+    fn accept_browse_result(&mut self) {
+        let Some(result) = self.runtime.browsing.take_result() else {
+            return;
+        };
+        let background = self.browse_refresh.run == Some(result.run);
+        if background || self.browse_run == Some(result.run) {
+            if background {
+                self.browse_refresh.run = None;
+                self.browse_refresh.last = Some(Instant::now());
+            } else {
+                self.browse_run = None;
+                // A notice about the last key press outlives a refresh the
+                // user did not ask for.
+                self.navigation_notice = None;
+            }
             self.navigation_index = Some(result.navigation);
-            self.navigation_notice = None;
             self.filtered = result.indices;
             self.browse_groups = result.groups;
             self.group_choices = result.group_choices;
@@ -612,10 +699,7 @@ impl PhotoSortApp {
             }
         }
         if !self.metadata_failures.is_empty() {
-            let text = format!(
-                "{} files have unavailable metadata",
-                self.metadata_failures.len()
-            );
+            let text = unavailable_metadata_text(self.metadata_failures.len());
             ui.label(
                 RichText::new(if narrow {
                     icon::WARNING.to_owned()
@@ -652,14 +736,8 @@ impl PhotoSortApp {
                 self.start_metadata_index();
             }
             if !self.metadata_failures.is_empty() {
-                ui.colored_label(
-                    RED,
-                    format!(
-                        "{} files have unavailable metadata",
-                        self.metadata_failures.len()
-                    ),
-                )
-                .on_hover_text("Restore access, then read the remaining metadata.");
+                ui.colored_label(RED, unavailable_metadata_text(self.metadata_failures.len()))
+                    .on_hover_text("Restore access, then read the remaining metadata.");
             }
         });
     }

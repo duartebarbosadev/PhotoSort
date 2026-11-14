@@ -12,6 +12,21 @@ fn shape(metadata: &Metadata) -> (u32, u32, u8) {
     (metadata.width, metadata.height, metadata.orientation)
 }
 
+/// What a grouping by date, camera or place names a photo's folder from.
+fn folder_key(metadata: &Metadata) -> impl PartialEq + '_ {
+    (
+        &metadata.captured,
+        metadata.grouping_date.as_deref(),
+        metadata.created_ms,
+        &metadata.camera,
+        metadata
+            .location
+            .as_ref()
+            .map(|l| (&l.country, &l.region, &l.city)),
+        metadata.gps,
+    )
+}
+
 /// What browsing filters and sorts by in a photo's metadata: its rating and
 /// everything its capture time and day are read from.
 fn browse_key(metadata: &Metadata) -> (u8, Option<i64>, &str, Option<&str>, Option<i64>) {
@@ -132,7 +147,13 @@ impl PhotoSortApp {
                 }
                 match result {
                     Ok(metadata) => {
-                        self.metadata.entry(id).or_insert(metadata);
+                        if let std::collections::hash_map::Entry::Vacant(entry) =
+                            self.metadata.entry(id)
+                        {
+                            entry.insert(metadata);
+                            // Its size is known now: its tile may change shape.
+                            self.board.reshaped.note(id);
+                        }
                         self.update_browse_item(id);
                         self.metadata_failures.remove(&id);
                     }
@@ -153,7 +174,7 @@ impl PhotoSortApp {
                     self.organize();
                 }
             }
-            self.filter_dirty = true;
+            self.browse_data_changed();
         }
     }
 
@@ -162,7 +183,13 @@ impl PhotoSortApp {
             self.index.insert(item.id, self.media.len());
             self.media.push(item);
         }
-        self.filter_dirty = true;
+        // The board shows a folder being read a few times a second, not
+        // once per batch of a list that keeps growing.
+        if self.step == Step::Organize {
+            self.board_data_changed();
+        } else {
+            self.filter_dirty = true;
+        }
         self.set_status(format!("Discovered {} items…", self.media.len()));
     }
 
@@ -216,8 +243,9 @@ impl PhotoSortApp {
             .collect();
         self.manual_groups = session.manual_groups;
         self.scene_groups = session.scene_groups;
-        self.decisions = session.decisions;
+        self.decisions = session.decisions.into();
         self.trash_steps = session.trash_steps;
+        self.by_hand = session.by_hand;
         self.trash_steps
             .retain(|id, _| self.decisions.get(id).is_some_and(|d| d.rejected));
         self.delete_review.restore_suggested(session.suggested);
@@ -355,7 +383,7 @@ impl PhotoSortApp {
         &mut self,
         ctx: &egui::Context,
         (id, preview): (MediaId, bool),
-        pixels: Arc<RgbaImage>,
+        pixels: Arc<egui::ColorImage>,
         decoder_warning: Option<String>,
         metadata: Metadata,
         stats: Stats,
@@ -372,14 +400,16 @@ impl PhotoSortApp {
         self.replace_metadata(id, metadata);
         self.update_browse_item(id);
         self.metadata_failures.remove(&id);
-        self.filter_dirty |= reorders && (self.filter == Filter::Rated || self.step == Step::Cull);
+        if reorders && (self.filter == Filter::Rated || self.step == Step::Cull) {
+            self.browse_data_changed();
+        }
         self.stats = stats;
-        let size = [pixels.width() as usize, pixels.height() as usize];
-        let bytes = pixels.as_raw().len();
+        let bytes = pixels.pixels.len() * 4;
         self.evict(bytes);
+        // The worker built the image; it is handed over as it is.
         let handle = ctx.load_texture(
             format!("{}-{preview}-{}", id.0, self.tick),
-            egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_raw()),
+            pixels,
             egui::TextureOptions::LINEAR,
         );
         self.textures.insert(
@@ -447,7 +477,7 @@ impl PhotoSortApp {
         let name = self
             .index
             .get(&id)
-            .map(|&i| self.media[i].name())
+            .map(|&i| self.shown_name(&self.media[i]))
             .unwrap_or_default();
         // When nothing works at all (a broken model, a missing runtime), the
         // same error repeats for every photo: stop early and say so once.
@@ -547,22 +577,38 @@ impl PhotoSortApp {
                 self.duplicates.insert(id, original);
             }
             self.update_browse_item(id);
-            self.filter_dirty |= self.step == Step::Cull
+            if self.step == Step::Cull
                 || matches!(
                     self.filter,
                     Filter::Issues | Filter::Duplicates | Filter::Rated
-                );
+                )
+            {
+                self.browse_data_changed();
+            }
         }
     }
 
-    /// Keeps a decode's metadata. A known photo whose size or orientation
-    /// differs advances `metadata_shapes`, so grids laid out from the old
-    /// shape lay out again; a new photo already changes the map's size.
+    /// Keeps a decode's metadata. A photo that is new, or whose size or
+    /// orientation differs, may change shape on Organize's board, which
+    /// then lays its rows out again. A known photo whose date, camera or
+    /// place differs advances `metadata_revision`, so folders named from
+    /// the old ones are named again; a new photo already changes the
+    /// map's size.
     fn replace_metadata(&mut self, id: MediaId, metadata: Metadata) {
-        if let Some(known) = self.metadata.insert(id, metadata)
-            && shape(&known) != shape(&self.metadata[&id])
+        let known = self.metadata.insert(id, metadata);
+        let now = &self.metadata[&id];
+        if known
+            .as_ref()
+            .is_none_or(|known| shape(known) != shape(now))
         {
-            self.metadata_shapes += 1;
+            self.board.reshaped.note(id);
+            // The guided grids key their cached rows on this.
+            if known.is_some() {
+                self.metadata_shapes += 1;
+            }
+        }
+        if known.is_some_and(|known| folder_key(&known) != folder_key(now)) {
+            self.metadata_revision += 1;
         }
     }
 
@@ -742,8 +788,9 @@ impl PhotoSortApp {
                 let note = self.failure_note();
                 self.set_status(note.trim_start_matches(" · ").to_owned());
             }
-            // A grouping chosen while this run was busy starts now.
-            if self.step == Step::Organize && self.analysis_run.is_none() {
+            // What waited for this run starts now: a grouping chosen while it
+            // was busy, or the analysis of a guided step entered meanwhile.
+            if self.analysis_run.is_none() {
                 self.start_ready_analysis();
             }
         }
@@ -756,6 +803,14 @@ impl PhotoSortApp {
         self.busy = false;
         self.organize_departure = None;
         self.clear_status();
+        self.close_after_cancelled_plan();
+    }
+
+    /// The window was closed while the plan just cancelled was being made.
+    fn close_after_cancelled_plan(&mut self) {
+        if std::mem::take(&mut self.close_after_planning) {
+            self.request_departure(Destination::Close);
+        }
     }
 
     fn on_planned(&mut self, mut plan: Plan) {
@@ -766,6 +821,7 @@ impl PhotoSortApp {
                 self.abandon_review_apply();
                 self.organize_departure = None;
                 self.clear_status();
+                self.close_after_cancelled_plan();
                 return;
             }
             self.clear_status();
@@ -895,8 +951,9 @@ impl PhotoSortApp {
         } else {
             session.apply_verified_identities(&report.relocated);
         }
-        self.decisions = session.decisions.clone();
+        self.decisions = session.decisions.clone().into();
         self.trash_steps = session.trash_steps.clone();
+        self.by_hand = session.by_hand.clone();
         self.delete_review
             .restore_suggested(session.suggested.clone());
         self.pick_review
@@ -1014,6 +1071,7 @@ impl PhotoSortApp {
 
     fn on_error(&mut self, e: String) {
         self.plan_stop = None;
+        self.close_after_planning = false;
         self.abandon_review_apply();
         self.review_preview = false;
         self.apply_stop = None;
@@ -1084,7 +1142,7 @@ mod tests {
         let asset = |metadata: Metadata| Event::Asset {
             id,
             preview: false,
-            pixels: Arc::new(RgbaImage::new(1, 1)),
+            pixels: Arc::new(egui::ColorImage::filled([1, 1], Color32::BLACK)),
             decoder_warning: None,
             metadata,
             stats: Stats::default(),
@@ -1092,10 +1150,14 @@ mod tests {
         let known = app.metadata[&id].clone();
         app.filter_dirty = false;
         let _ = app.handle_event(&ctx, asset(known.clone()));
-        assert!(!app.filter_dirty, "the same metadata re-ran the query");
+        assert!(
+            !app.filter_dirty && !app.browse_refresh.pending(),
+            "the same metadata re-ran the query"
+        );
         let rated = Metadata { rating: 1, ..known };
         let _ = app.handle_event(&ctx, asset(rated));
-        assert!(app.filter_dirty);
+        // Owed to the view, without replacing a query the user is waiting for.
+        assert!(app.browse_refresh.pending() && !app.filter_dirty);
         assert_eq!(app.metadata[&id].rating, 1);
         app.runtime.shutdown();
     }

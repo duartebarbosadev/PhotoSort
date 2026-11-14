@@ -9,19 +9,38 @@ fn count(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
+/// What the cards' shapes were taken from: the review, the photos shown
+/// last (their stamp and how many) and the metadata.
+type Shaped = (u64, u64, Option<usize>, (usize, u64));
+
+/// What Pick Best's grid is drawn from, kept between frames: a frame in
+/// which nothing changed reads it instead of working it out for every group.
+#[derive(Default)]
+pub(super) struct Deck {
+    shaped: Option<Shaped>,
+    /// Each group's card: its photos' widths over their heights, and how
+    /// many it shows.
+    aspects: Vec<([f32; CARD_PHOTOS], usize)>,
+    /// Changes whenever a card's shape may have: the grid asks its cards
+    /// again.
+    stamp: u64,
+    /// The review and the decisions the counts were taken from.
+    counted: Option<(u64, u64)>,
+    /// Photos going to Trash, and their bytes.
+    trash: usize,
+    freed: u64,
+    /// Groups Accept all suggestions would change.
+    changed: usize,
+}
+
 impl PhotoSortApp {
     /// Easy Delete, Fix Rotation and Pick Best start their analysis on entry
     /// when they have nothing to show yet, so the step is never empty.
+    /// It is also called when a run ends, for a step entered while another
+    /// step's analysis was still running.
     pub(super) fn start_ready_analysis(&mut self) {
         let unanalysed = match self.step {
-            Step::PickBest => {
-                !self.view_data_ready.contains(&Step::PickBest)
-                    && self.pick_review.clusters().is_empty()
-            }
-            Step::EasyDelete => {
-                !self.view_data_ready.contains(&Step::EasyDelete)
-                    && self.delete_review.entries().is_empty()
-            }
+            Step::PickBest | Step::EasyDelete => self.step_unanalysed(),
             Step::Rotation => {
                 !self.view_data_ready.contains(&Step::Rotation)
                     && self.rotation_review.ids().is_empty()
@@ -43,6 +62,24 @@ impl PhotoSortApp {
             && self.analysis_run.is_none()
         {
             self.analyze_current_workflow();
+        }
+    }
+
+    /// Easy Delete or Pick Best with no results because its own analysis has
+    /// not run, or was cancelled: nothing found yet, which is not a result.
+    pub(super) fn step_unanalysed(&self) -> bool {
+        match self.step {
+            Step::PickBest => {
+                !self.view_data_ready.contains(&Step::PickBest)
+                    && self.pick_run.is_none()
+                    && self.pick_review.clusters().is_empty()
+            }
+            Step::EasyDelete => {
+                !self.view_data_ready.contains(&Step::EasyDelete)
+                    && self.delete_run.is_none()
+                    && self.delete_review.entries().is_empty()
+            }
+            _ => false,
         }
     }
 
@@ -107,6 +144,7 @@ impl PhotoSortApp {
             return;
         }
         self.pick_review.toggle(id, &mut self.decisions);
+        self.by_hand.insert(id);
         self.set_active(id);
         self.changed_items([id]);
     }
@@ -116,29 +154,45 @@ impl PhotoSortApp {
             self.toggle_pick(id);
         }
     }
-    /// Puts groups back to PhotoSort's suggestion.
-    fn accept_pick_suggestions(&mut self, groups: &[usize]) {
+    /// Undoes the user's changes to the selected group: one group, asked
+    /// for by hand, so its suggestion applies in full and its photos count
+    /// as undecided again.
+    pub(super) fn undo_pick(&mut self) {
+        if let Some(group) = self.pick_group() {
+            self.undo_pick_group(group);
+        }
+    }
+    fn undo_pick_group(&mut self, group: usize) {
         if !self.pick_enabled() {
             return;
         }
-        self.pick_review.accept(groups, &mut self.decisions);
-        let members: Vec<MediaId> = groups
-            .iter()
-            .filter_map(|g| self.pick_review.clusters().get(*g))
-            .flat_map(|c| c.ordered.iter().copied())
-            .collect();
+        let Some(members) = self
+            .pick_review
+            .clusters()
+            .get(group)
+            .map(|c| c.ordered.clone())
+        else {
+            return;
+        };
+        self.pick_review.accept(&[group], &mut self.decisions);
+        for id in &members {
+            self.by_hand.remove(id);
+        }
         self.changed_items(members);
     }
-    /// Undoes the user's changes to the selected group.
-    pub(super) fn undo_pick(&mut self) {
-        if let Some(group) = self.pick_group() {
-            self.accept_pick_suggestions(&[group]);
-        }
-    }
-    /// Every group back to its suggestion.
+    /// Accept all suggestions: every photo not decided by hand takes its
+    /// suggestion. A choice made by hand stays as it is, and a group whose
+    /// suggested photo is marked for Trash is left alone, so no group ever
+    /// ends with no photo kept.
     pub(super) fn accept_pick_defaults(&mut self) {
-        let groups: Vec<usize> = (0..self.pick_review.clusters().len()).collect();
-        self.accept_pick_suggestions(&groups);
+        if !self.pick_enabled() {
+            return;
+        }
+        let changed = self
+            .pick_review
+            .accept_undecided(&mut self.decisions, &self.by_hand);
+        self.accepted_status(changed.len());
+        self.changed_items(changed);
     }
     /// A click on the grid's empty space: no group is selected, and the
     /// panel beside the grid closes.
@@ -204,6 +258,7 @@ impl PhotoSortApp {
     /// one card per group with its best photos. Clicking a card opens all of
     /// its photos large in a panel beside the grid.
     pub(super) fn pick_grid(&mut self, ui: &mut egui::Ui) {
+        self.pick_deck();
         self.pick_summary(ui);
         ui.add_space(S2);
         let shown = self.pick_panel && self.pick_current.is_some();
@@ -215,6 +270,7 @@ impl PhotoSortApp {
         );
         let groups = self.pick_review.clusters().len();
         let current = self.pick_group();
+        let stamp = self.grids.pick.stamp;
         let clicked = ui
             .scope_builder(
                 egui::UiBuilder::new()
@@ -225,7 +281,12 @@ impl PhotoSortApp {
                         ui,
                         "pick",
                         groups,
-                        |app, i| app.pick_card_aspects(i),
+                        stamp,
+                        |app, i, shapes| {
+                            if let Some((aspects, shown)) = app.grids.pick.aspects.get(i) {
+                                shapes.extend_from_slice(&aspects[..*shown]);
+                            }
+                        },
                         |_, _| true,
                         |app, i| Some(app.pick_card(i)),
                         current,
@@ -252,24 +313,8 @@ impl PhotoSortApp {
     /// One line over the grid: what is staged, the photo size, and Accept
     /// all suggestions.
     fn pick_summary(&mut self, ui: &mut egui::Ui) {
-        let members: Vec<MediaId> = self
-            .pick_review
-            .clusters()
-            .iter()
-            .flat_map(|c| c.ordered.iter().copied())
-            .collect();
-        let trash: Vec<MediaId> = members
-            .iter()
-            .copied()
-            .filter(|id| self.decision(*id).rejected)
-            .collect();
-        let freed: u64 = trash
-            .iter()
-            .filter_map(|id| self.index.get(id))
-            .map(|i| self.media[*i].fingerprint.bytes)
-            .sum();
-        let groups: Vec<usize> = (0..self.pick_review.clusters().len()).collect();
-        let changed = self.pick_review.changed_count(&groups, &self.decisions);
+        let deck = &self.grids.pick;
+        let (trash, freed, changed) = (deck.trash, deck.freed, deck.changed);
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 if ui
@@ -290,7 +335,7 @@ impl PhotoSortApp {
                         ui,
                         &format!(
                             "{} going to Trash · frees {}",
-                            count(trash.len(), "photo", "photos"),
+                            count(trash, "photo", "photos"),
                             super::review_card::size_text(freed),
                         ),
                     );
@@ -327,20 +372,65 @@ impl PhotoSortApp {
             .iter()
             .filter_map(|id| self.metadata.get(id)?.captured_ms)
             .min()
-            .and_then(chrono::DateTime::from_timestamp_millis)
+            .and_then(crate::core::dates::clock)
             .map_or_else(
                 || format!("Group {}", group + 1),
                 |time| time.format("%-d %b %Y, %H:%M").to_string(),
             )
     }
 
-    /// Each photo's width over its height on a group's card, in order.
-    fn pick_card_aspects(&self, group: usize) -> Vec<f32> {
-        self.pick_order(&self.pick_review.clusters()[group])
-            .iter()
-            .take(CARD_PHOTOS)
-            .map(|id| self.photo_aspect(*id, 0))
-            .collect()
+    /// What the grid is drawn from, brought up to date: each card's photos'
+    /// shapes when the groups, the photos shown last or a photo's metadata
+    /// changed, and the counts when a decision did. A frame in which none
+    /// of that happened looks up the stamps.
+    fn pick_deck(&mut self) {
+        let mut deck = std::mem::take(&mut self.grids.pick);
+        let review = self.pick_review.revision();
+        let shaped = (
+            review,
+            self.grids.last_noted,
+            self.trash_last.as_ref().map(HashSet::len),
+            self.metadata_stamp(),
+        );
+        if deck.shaped != Some(shaped) {
+            deck.aspects.clear();
+            deck.aspects
+                .extend(self.pick_review.clusters().iter().map(|cluster| {
+                    let mut aspects = [0.0; CARD_PHOTOS];
+                    let mut shown = 0;
+                    for (slot, id) in aspects.iter_mut().zip(self.pick_order(cluster)) {
+                        *slot = self.photo_aspect(id, 0);
+                        shown += 1;
+                    }
+                    (aspects, shown)
+                }));
+            deck.shaped = Some(shaped);
+            deck.stamp = crate::core::revision::next();
+        }
+        let counted = (review, self.decisions.revision());
+        if deck.counted != Some(counted) {
+            let trash = self
+                .pick_review
+                .clusters()
+                .iter()
+                .flat_map(|c| c.ordered.iter())
+                .filter(|id| self.decisions.get(id).is_some_and(|d| d.rejected));
+            (deck.trash, deck.freed) = trash.fold((0, 0), |(count, bytes), id| {
+                let size = self
+                    .index
+                    .get(id)
+                    .map_or(0, |i| self.media[*i].fingerprint.bytes);
+                (count + 1, bytes + size)
+            });
+            deck.changed = (0..self.pick_review.clusters().len())
+                .filter(|group| {
+                    self.pick_review
+                        .pending(*group, &self.decisions, &self.by_hand)
+                })
+                .count();
+            deck.counted = Some(counted);
+        }
+        self.grids.pick = deck;
     }
 
     /// Why PhotoSort suggests keeping the group's best photo, for its
@@ -493,7 +583,7 @@ impl PhotoSortApp {
                     badge: Badge::keep(keep),
                     suggested,
                     suggested_hover: suggested.then(|| self.pick_keep_why(cluster)),
-                    caption: media.map(Media::name).unwrap_or_default(),
+                    caption: media.map(|m| self.shown_name(m)).unwrap_or_default(),
                     name: media
                         .map(|m| m.path.display().to_string())
                         .unwrap_or_default(),
@@ -567,7 +657,7 @@ impl PhotoSortApp {
                     self.toggle_pick(*id);
                 }
             }
-            CardEvent::Undo => self.accept_pick_suggestions(&[group]),
+            CardEvent::Undo => self.undo_pick_group(group),
             CardEvent::Button(_) => {}
         }
     }
@@ -741,11 +831,27 @@ mod tests {
         assert_eq!(trashed(&app), vec![1, 3, 4]);
         app.pick_card_event(0, CardEvent::Undo);
         assert_eq!(trashed(&app), vec![1, 2, 4]);
-        // Accept all puts every group back.
+        // Accept all leaves photos kept by hand as they are (1 and 4) and
+        // marks the one nobody decided (2).
         app.pick_card_event(1, CardEvent::Toggle(1));
         app.pick_card_event(0, CardEvent::Toggle(2));
+        app.decisions.remove(&MediaId(2));
+        assert_eq!(trashed(&app), Vec::<u64>::new());
         app.accept_pick_defaults();
-        assert_eq!(trashed(&app), vec![1, 2, 4]);
+        assert_eq!(trashed(&app), vec![2]);
+        // A group whose suggested photo is marked for Trash, by hand or by
+        // Easy Delete, is left as it is until its own Undo: marking the
+        // undecided photo 4 would leave it with no photo kept.
+        app.pick_card_event(1, CardEvent::Undo);
+        app.decisions.remove(&MediaId(4));
+        app.pick_card_event(1, CardEvent::Toggle(0));
+        assert_eq!(trashed(&app), vec![2, 5]);
+        app.accept_pick_defaults();
+        assert_eq!(trashed(&app), vec![2, 5]);
+        app.pick_deck();
+        assert_eq!(app.grids.pick.changed, 0, "Accept all has nothing to do");
+        app.pick_card_event(1, CardEvent::Undo);
+        assert_eq!(trashed(&app), vec![2, 4]);
     }
 
     #[test]
@@ -906,6 +1012,91 @@ mod tests {
             run, app.pick_run,
             "Step reentry must reuse the existing run"
         );
+    }
+    /// Easy Delete and Pick Best each entered while the other's analysis is
+    /// still running: the step waits, runs its own when that one ends, and
+    /// says "nothing found" only as a result.
+    #[test]
+    fn a_step_entered_during_another_steps_analysis_waits_then_runs_its_own() {
+        fn shown(app: &mut PhotoSortApp) -> String {
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            let output = ctx.run_test(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| app.empty_state(ui));
+                },
+            );
+            super::super::review_card::painted_text(&output)
+        }
+        let own_run = |app: &PhotoSortApp| match app.step {
+            Step::PickBest => app.pick_run,
+            _ => app.delete_run,
+        };
+        for (first, second, invitation, nothing) in [
+            (
+                Step::EasyDelete,
+                Step::PickBest,
+                "Find similar photos",
+                "No similar photos to compare",
+            ),
+            (
+                Step::PickBest,
+                Step::EasyDelete,
+                "Find photos to clean up",
+                "Nothing to clean up",
+            ),
+        ] {
+            let mut app = app();
+            app.pick_review = Default::default();
+            app.view_data_ready.clear();
+            app.set_step(first);
+            loaded_folder(&mut app);
+            let running = own_run(&app).expect("The first step analyzes on entry");
+            app.set_step(second);
+            app.refilter();
+            assert_eq!(app.analysis_run, Some(running), "{second:?}");
+            let waiting = shown(&mut app);
+            assert!(
+                waiting.contains("Waiting for the current analysis to finish")
+                    && !waiting.contains(nothing),
+                "{second:?}: {waiting}"
+            );
+            // The first run ends: the step on screen starts its own.
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            app.runtime.events = receiver;
+            sender
+                .send(crate::core::jobs::Envelope {
+                    epoch: app.runtime.epoch(),
+                    event: Event::AnalysisDone {
+                        run: running,
+                        stats: Default::default(),
+                    },
+                })
+                .unwrap();
+            app.poll(&egui::Context::default());
+            assert!(app.view_data_ready.contains(&first), "{first:?}");
+            let own = own_run(&app).expect("The step on screen runs its own analysis");
+            assert_eq!(app.analysis_run, Some(own), "{second:?}");
+            assert_ne!(own, running);
+            // Cancelled, it offers Analyze instead of starting over, and
+            // still claims no result.
+            app.cancel_analysis();
+            assert!(app.analysis_run.is_none(), "{second:?}");
+            let cancelled = shown(&mut app);
+            assert!(
+                cancelled.contains(invitation)
+                    && cancelled.contains("Analyze library")
+                    && !cancelled.contains(nothing),
+                "{second:?}: {cancelled}"
+            );
+        }
     }
     #[test]
     fn post_apply_departure_does_not_start_unwanted_pick_analysis() {

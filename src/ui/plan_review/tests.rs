@@ -608,7 +608,8 @@ fn one_review_applies_moves_then_staged_choices_without_a_second_review() {
     app.switch_step(Step::Rotation);
     crate::core::rotation::set_turns(&mut app.decisions, c, 1);
     app.changed_item(c);
-    assert_eq!(app.staged_change_count(), 5);
+    // The photo that is renamed and marked for Trash counts once.
+    assert_eq!(app.staged_change_count(), 4);
     let settle = |app: &mut PhotoSortApp| {
         let until = std::time::Instant::now() + crate::test_support::worker_patience();
         loop {
@@ -1054,6 +1055,9 @@ fn a_photo_that_moves_and_goes_to_the_trash_is_listed_once_under_trash() {
     );
     app.decisions.entry(jpeg).or_default().rejected = true;
     app.changed_item(jpeg);
+    // Before the list is made the badge already counts photos, as the list
+    // will: the JPEG and its RAW are one, and it moves and is marked once.
+    assert_eq!(app.staged_change_count(), 2);
     let settle = |app: &mut PhotoSortApp| {
         let until = std::time::Instant::now() + crate::test_support::worker_patience();
         loop {
@@ -1436,6 +1440,8 @@ fn the_review_badge_says_the_number_the_sentence_and_the_button_say() {
     let marked = id("raw/EXR_1.JPG");
     app.decisions.entry(marked).or_default().rejected = true;
     app.changed_item(marked);
+    // Three photos and the notes file move, one photo is marked.
+    assert_eq!(app.staged_change_count(), 5);
     app.review_changes();
     let until = std::time::Instant::now() + crate::test_support::worker_patience();
     loop {

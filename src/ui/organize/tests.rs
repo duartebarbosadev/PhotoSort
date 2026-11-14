@@ -219,6 +219,32 @@ fn metadata_organize_departure_waits_for_complete_metadata_before_reviewing_name
     app.resolve_organize_departure(super::super::transitions::OrganizeResolution::Cancel);
     assert!(app.plan.is_none() && app.file_names.len() == 1);
 }
+/// The bar and the step tabs ask for Organize's change count every frame.
+/// In Current folders, metadata arriving for one more photo never counts
+/// again; a grouping by date counts its moves once every photo's is in.
+#[test]
+fn arriving_metadata_counts_organize_changes_again_only_for_groupings_that_read_it() {
+    let (mut app, _temp) = metadata_fixture(3);
+    let ids: Vec<MediaId> = app.media.iter().map(|m| m.id).collect();
+    assert_eq!(app.group_mode, GroupMode::Current);
+    assert_eq!(app.organize_change_count(), 0);
+    let counted = app.organize_count.borrow().clone();
+    app.metadata.insert(ids[0], Metadata::default());
+    assert_eq!(app.organize_change_count(), 0);
+    assert_eq!(*app.organize_count.borrow(), counted, "counted again");
+    // A new name is still a change, with or without metadata.
+    app.file_names.insert(ids[0], "Keeper".into());
+    assert_eq!(app.organize_change_count(), 1);
+    app.file_names.clear();
+    // By date: no folder is proposed before every photo's metadata is read.
+    app.group_mode = GroupMode::Date;
+    assert_eq!(app.organize_change_count(), 0);
+    for id in &ids[1..] {
+        app.metadata.insert(*id, Metadata::default());
+    }
+    assert_eq!(app.organize_change_count(), 3);
+    app.runtime.shutdown();
+}
 fn app() -> PhotoSortApp {
     let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
     // Nonexistent paths prove folder editing needs no rescan or image load.

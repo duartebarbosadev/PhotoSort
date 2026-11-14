@@ -449,12 +449,15 @@ impl PhotoSortApp {
             || matches!(self.group_mode, GroupMode::Location | GroupMode::Faces)
             || self.scene_editing();
         if fit == top_bar::Fit::Overflow && more {
-            top_bar::overflow_popover(
-                ui,
-                egui::Id::new("organize-more"),
-                "More grouping options",
-                |ui| self.organize_more_controls(ui),
-            );
+            let id = egui::Id::new("organize-more");
+            top_bar::overflow_popover(ui, id, "More grouping options", |ui| {
+                self.organize_more_controls(ui)
+            });
+            // A choice there that opens a dialog (AI models, or the question
+            // before a grouping is made again) is not left open over it.
+            if self.modal_active() {
+                ui.ctx().data_mut(|data| data.insert_temp(id, false));
+            }
         } else {
             self.organize_more_controls(ui);
         }
@@ -528,15 +531,21 @@ impl PhotoSortApp {
                         .on_hover_text(super::inspector::readable_path(&root))
                         .clicked()
                 {
-                    self.output = root.display().to_string();
+                    self.set_output(&root);
                 }
                 ui.horizontal(|ui| {
                     let other = ui.radio(!here, "Another folder…");
                     let change = !here && ui.small_button("Change…").clicked();
                     if (other.clicked() || change)
-                        && let Some(path) = rfd::FileDialog::new().pick_folder()
+                        && let Some(path) = native_dialog::pick(
+                            ui.ctx(),
+                            rfd::FileDialog::new(),
+                            rfd::FileDialog::pick_folder,
+                        )
                     {
-                        self.output = path.display().to_string();
+                        self.set_output(&path);
+                        // The dialog held this frame up: draw the new plan.
+                        ui.ctx().request_repaint();
                     }
                 });
                 if !here {
@@ -570,6 +579,15 @@ impl PhotoSortApp {
                 }
             });
     }
+    /// Chooses the folder the organized folders are made in. What moves
+    /// depends on it, so the board counts its planned changes again.
+    pub(super) fn set_output(&mut self, folder: &std::path::Path) {
+        let output = folder.display().to_string();
+        if self.output != output {
+            self.output = output;
+            self.board_epoch += 1;
+        }
+    }
     /// One-line explanation of the current Organize mode, shown on hover.
     fn organize_hint(&self) -> Option<&'static str> {
         match self.group_mode {
@@ -592,6 +610,17 @@ impl PhotoSortApp {
 #[path = "organize/tests.rs"]
 mod tests;
 
+/// Organize's pending changes, as the bar and the step tabs count them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Changes {
+    /// Photos that move or get a new name, and new folders that stay
+    /// empty: what the Review step lists for Organize, counted its way.
+    count: usize,
+    /// The files that move or get a new name, each with the number of the
+    /// photo it belongs to: a RAW and the JPEG it stays with are one photo.
+    photos: HashMap<MediaId, usize>,
+}
+
 /// What [`PhotoSortApp::organize_change_count`] was last worked out from.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ChangeCountKey {
@@ -603,6 +632,7 @@ pub(super) struct ChangeCountKey {
     catalog: usize,
     metadata: usize,
     ready: bool,
+    companions: bool,
 }
 
 impl PhotoSortApp {
@@ -610,13 +640,12 @@ impl PhotoSortApp {
     /// Worked out again only when the folders, names or grouping change,
     /// since the bar and the step tabs ask every frame.
     pub(super) fn organize_change_count(&self) -> usize {
-        use std::hash::{Hash, Hasher};
-        // Map order is arbitrary: each name is hashed alone and combined.
-        let names = self.file_names.iter().fold(0u64, |all, entry| {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            entry.hash(&mut hasher);
-            all ^ hasher.finish()
-        });
+        // Only a grouping by date, camera or place with no folder edited by
+        // hand reads the photos' metadata. Any other count stays the same
+        // while metadata arrives, photo by photo, in a large library.
+        let reads_metadata =
+            self.metadata_organize_mode() && !self.organize_drafts.contains_key(&self.group_mode);
+        let names = self.file_names_stamp();
         let key = ChangeCountKey {
             epoch: self.board_epoch,
             mode: self.group_mode,
@@ -624,23 +653,77 @@ impl PhotoSortApp {
             names,
             output: self.output.clone(),
             catalog: self.catalog.as_ref().map_or(0, |c| Arc::as_ptr(c) as usize),
-            metadata: self.metadata.len(),
+            metadata: if reads_metadata {
+                self.metadata.len()
+            } else {
+                0
+            },
             ready: self.organize_grouping_ready(),
+            companions: self.companions,
         };
-        if let Some((cached, count)) = &*self.organize_count.borrow()
+        if let Some((cached, changes)) = &*self.organize_count.borrow()
             && *cached == key
         {
-            return *count;
+            return changes.count;
         }
-        let count = self.count_organize_changes();
-        *self.organize_count.borrow_mut() = Some((key, count));
+        let changes = self.count_organize_changes();
+        let count = changes.count;
+        *self.organize_count.borrow_mut() = Some((key, changes));
         count
     }
-    fn count_organize_changes(&self) -> usize {
-        if self.catalog.is_none() || self.scanning {
+    /// Photos marked for Trash that Organize also moves or renames. The
+    /// Review step lists each once, under Trash, so they count once: a RAW
+    /// and JPEG that are both marked are still one photo that moves.
+    pub(super) fn moved_to_trash_count(&self) -> usize {
+        // Brings the photos Organize changes up to date.
+        if self.organize_change_count() == 0 {
             return 0;
         }
+        let cached = self.organize_count.borrow();
+        let Some((_, changes)) = &*cached else {
+            return 0;
+        };
+        let mut counted = HashSet::new();
+        self.decisions
+            .iter()
+            .filter(|(id, d)| d.rejected && self.index.contains_key(id))
+            .filter_map(|(id, _)| changes.photos.get(id))
+            .filter(|photo| counted.insert(**photo))
+            .count()
+    }
+    /// The staged new names as one number, to tell when any changed.
+    pub(super) fn file_names_stamp(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        // Map order is arbitrary: each name is hashed alone and combined.
+        self.file_names.iter().fold(0u64, |all, entry| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            entry.hash(&mut hasher);
+            all ^ hasher.finish()
+        })
+    }
+    fn count_organize_changes(&self) -> Changes {
+        if self.catalog.is_none() || self.scanning {
+            return Changes::default();
+        }
         let draft = self.organize_drafts.get(&self.group_mode);
+        // Current folders, none edited, in the library itself: every photo
+        // keeps its folder, so only the new names count. No label is built.
+        if draft.is_none()
+            && self.group_mode == GroupMode::Current
+            && self
+                .catalog
+                .as_ref()
+                .is_some_and(|c| c.root.as_path() == std::path::Path::new(&self.output))
+        {
+            let mut photos = HashMap::new();
+            self.each_organize_change(&HashMap::new(), |id, photo| {
+                photos.insert(id, photo);
+            });
+            return Changes {
+                count: photos.values().collect::<HashSet<_>>().len(),
+                photos,
+            };
+        }
         let generated;
         let labels = match draft {
             Some(draft) => draft.labels(),
@@ -653,15 +736,41 @@ impl PhotoSortApp {
                 &generated
             }
         };
-        self.organize_changes_in(labels, draft.map_or(0, |d| d.created_folders().len()))
+        let mut photos = HashMap::new();
+        self.each_organize_change(labels, |id, photo| {
+            photos.insert(id, photo);
+        });
+        Changes {
+            count: photos.values().collect::<HashSet<_>>().len()
+                + draft.map_or(0, |d| empty_new_folders(labels, d.created_folders())),
+            photos,
+        }
     }
-    /// Items that move to the folder `labels` gives them, items renamed
-    /// where they are, and `created` new folders.
+    /// Photos that move to the folder `labels` gives them, photos renamed
+    /// where they are, and the folders of `created` that stay empty.
     pub(super) fn organize_changes_in(
         &self,
         labels: &HashMap<MediaId, String>,
-        created: usize,
+        created: &std::collections::BTreeSet<String>,
     ) -> usize {
+        let mut changed = 0;
+        self.each_organize_change(labels, |_, photo| changed = changed.max(photo + 1));
+        changed + empty_new_folders(labels, created)
+    }
+    /// Each file that moves to the folder `labels` gives it or is renamed
+    /// where it is, with the number of the photo it belongs to, counted from
+    /// zero. The Review step lists a photo once with its RAW, so a RAW and
+    /// the JPEG it stays with share a number. A file that only follows its
+    /// folder (a lone XMP, a notes file) is listed on its own and has its
+    /// own number.
+    fn each_organize_change(
+        &self,
+        labels: &HashMap<MediaId, String>,
+        mut each: impl FnMut(MediaId, usize),
+    ) {
+        if labels.is_empty() && self.file_names.is_empty() {
+            return;
+        }
         let output = std::path::Path::new(&self.output);
         // Many photos share a folder: each destination is worked out once.
         let mut destinations: HashMap<&str, PathBuf> = HashMap::new();
@@ -670,17 +779,87 @@ impl PhotoSortApp {
                 .entry(label)
                 .or_insert_with(|| crate::core::operations::folder_destination(output, label));
         }
-        let moves = |id: &MediaId, label: &str| {
-            self.index.get(id).is_some_and(|&i| {
-                self.media[i].path.parent() != destinations.get(label).map(PathBuf::as_path)
-            })
+        // A folder renamed on the board to other capital letters does move
+        // its files. Any other label that spells an existing folder that way
+        // names the folder itself where the volume ignores letter case.
+        let respelled: Vec<&str> = self
+            .organize_drafts
+            .get(&self.group_mode)
+            .map(|draft| draft.respelled_folders().collect())
+            .unwrap_or_default();
+        let within = |label: &str, folder: &str| {
+            label
+                .strip_prefix(folder)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
         };
-        let moved = labels.iter().filter(|(id, label)| moves(id, label)).count();
-        let renamed = self
-            .file_names
-            .keys()
-            .filter(|id| !labels.get(id).is_some_and(|label| moves(id, label)))
-            .count();
-        moved + renamed + created
+        let moves = |path: &std::path::Path, label: &str| {
+            let parent = path.parent();
+            let destination = destinations.get(label).map(PathBuf::as_path);
+            parent != destination
+                && !parent
+                    .zip(destination)
+                    .zip(self.catalog.as_deref())
+                    .is_some_and(|((parent, destination), catalog)| {
+                        catalog.same_folder(parent, destination)
+                            && !respelled.iter().any(|folder| within(label, folder))
+                    })
+        };
+        // The files that follow their folder without being photos. They
+        // move only when a folder does, so they are looked up only then.
+        let supporting = match self.catalog.as_deref() {
+            Some(catalog) if !labels.is_empty() => catalog.supporting_files(),
+            _ => Vec::new(),
+        };
+        let files = self
+            .media
+            .iter()
+            .filter(|m| self.index.contains_key(&m.id))
+            .map(|m| (m.id, m.path.as_path()))
+            .chain(supporting);
+        let mut photos = HashMap::new();
+        for (id, path) in files {
+            if labels.get(&id).is_some_and(|label| moves(path, label))
+                || self.file_names.contains_key(&id)
+            {
+                let next = photos.len();
+                let key = crate::core::organize::name_key(path, self.companions);
+                each(id, *photos.entry(key).or_insert(next));
+            }
+        }
     }
+}
+
+/// The folders of `created`, made by hand on the board, that the Review
+/// step lists as created and empty: no file goes into them or below them,
+/// and no other new folder is inside. One that receives photos is named
+/// with them instead.
+fn empty_new_folders(
+    labels: &HashMap<MediaId, String>,
+    created: &std::collections::BTreeSet<String>,
+) -> usize {
+    if created.is_empty() {
+        return 0;
+    }
+    // Every folder a file goes into, with the folders above it.
+    let mut used = HashSet::new();
+    for label in labels.values() {
+        let mut folder = label.as_str();
+        while used.insert(folder) {
+            match folder.rsplit_once('/') {
+                Some((parent, _)) => folder = parent,
+                None => break,
+            }
+        }
+    }
+    created
+        .iter()
+        .filter(|folder| {
+            !used.contains(folder.as_str())
+                && !created.iter().any(|other| {
+                    other
+                        .strip_prefix(folder.as_str())
+                        .is_some_and(|rest| rest.starts_with('/'))
+                })
+        })
+        .count()
 }

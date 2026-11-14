@@ -108,7 +108,7 @@ impl PhotoSortApp {
             painter.text(
                 rect.left_top() + egui::vec2(8.0, 8.0),
                 Align2::LEFT_TOP,
-                format!("VIDEO · {}", media.name()),
+                format!("VIDEO · {}", self.shown_name(&media)),
                 FontId::proportional(11.0),
                 MUTED,
             );

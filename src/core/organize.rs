@@ -1,6 +1,6 @@
 //! Editable organization intent. No scanning, decoding or filesystem mutations.
 use super::{
-    model::{Media, MediaId, MediaKind},
+    model::{Media, MediaId, MediaKind, Shared},
     operations::safe_component,
     text,
 };
@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Draft {
-    labels: HashMap<MediaId, String>,
+    /// One entry per file. Shared, so saving a draft copies none of them.
+    labels: Shared<HashMap<MediaId, String>>,
     folders: BTreeSet<String>,
     explicit: BTreeSet<String>,
     empty_origins: BTreeMap<String, String>,
@@ -22,8 +23,42 @@ pub struct Intent {
     pub drafts: HashMap<super::views::GroupMode, Draft>,
     pub names: HashMap<MediaId, String>,
     pub output: std::path::PathBuf,
-    fingerprints: HashMap<MediaId, super::model::Fingerprint>,
-    directory_identities: HashMap<String, [u64; 4]>,
+    fingerprints: Shared<HashMap<MediaId, super::model::Fingerprint>>,
+    directory_identities: Shared<HashMap<String, [u64; 4]>>,
+}
+/// What a catalog's files and folders were when an intent was captured:
+/// every file's fingerprint and every folder's identity. Built once per
+/// catalog and shared, so saving again reads neither the photos nor the
+/// folders.
+#[derive(Clone, Debug)]
+pub struct Identities {
+    fingerprints: Shared<HashMap<MediaId, super::model::Fingerprint>>,
+    directories: Shared<HashMap<String, [u64; 4]>>,
+}
+impl Identities {
+    pub fn of(catalog: &super::catalog::Catalog) -> Self {
+        Self::with_media(catalog, &catalog.media)
+    }
+    /// `media` is the catalog's photos as the caller holds them.
+    pub fn with_media(catalog: &super::catalog::Catalog, media: &[Media]) -> Self {
+        Self {
+            fingerprints: media
+                .iter()
+                .map(|m| (m.id, m.fingerprint))
+                .chain(
+                    catalog
+                        .supporting_fingerprints
+                        .iter()
+                        .map(|(id, f)| (*id, *f)),
+                )
+                .collect(),
+            directories: Intent::directory_identities(catalog).into(),
+        }
+    }
+    /// Every photo's and supporting file's fingerprint.
+    pub fn fingerprints(&self) -> &Shared<HashMap<MediaId, super::model::Fingerprint>> {
+        &self.fingerprints
+    }
 }
 impl Intent {
     pub fn capture(
@@ -35,23 +70,24 @@ impl Intent {
         if drafts.is_empty() && names.is_empty() {
             return None;
         }
-        let fingerprints = catalog
-            .media
-            .iter()
-            .map(|m| (m.id, m.fingerprint))
-            .chain(
-                catalog
-                    .supporting_fingerprints
-                    .iter()
-                    .map(|(id, f)| (*id, *f)),
-            )
-            .collect();
+        Self::capture_with(&Identities::of(catalog), drafts, names, output)
+    }
+    /// [`Self::capture`] with the catalog's identities already read.
+    pub fn capture_with(
+        identities: &Identities,
+        drafts: HashMap<super::views::GroupMode, Draft>,
+        names: HashMap<MediaId, String>,
+        output: std::path::PathBuf,
+    ) -> Option<Self> {
+        if drafts.is_empty() && names.is_empty() {
+            return None;
+        }
         Some(Self {
             drafts,
             names,
             output,
-            fingerprints,
-            directory_identities: Self::directory_identities(catalog),
+            fingerprints: identities.fingerprints.clone(),
+            directory_identities: identities.directories.clone(),
         })
     }
     pub fn relocate(&mut self, changes: &[(MediaId, MediaId, super::model::Fingerprint)]) {
@@ -133,7 +169,7 @@ impl Intent {
                     | super::views::GroupMode::Camera
                     | super::views::GroupMode::Location
             ) {
-                for (id, label) in &baseline.labels {
+                for (id, label) in baseline.labels.iter() {
                     draft.labels.entry(*id).or_insert_with(|| label.clone());
                 }
             }
@@ -168,8 +204,8 @@ impl Intent {
                 draft.include_parents(&path);
             }
         }
-        self.fingerprints = current;
-        self.directory_identities = directory_identities;
+        self.fingerprints = current.into();
+        self.directory_identities = directory_identities.into();
     }
 }
 /// A staged selection shared by drag/drop and explicit move controls.
@@ -230,7 +266,7 @@ fn validate_leaf(name: &str) -> Result<()> {
 impl Draft {
     pub fn new(labels: HashMap<MediaId, String>) -> Self {
         let mut draft = Self {
-            labels,
+            labels: labels.into(),
             folders: BTreeSet::from([String::new()]),
             explicit: BTreeSet::new(),
             empty_origins: BTreeMap::new(),

@@ -24,6 +24,8 @@ mod library;
 mod limits;
 #[path = "models.rs"]
 mod model_setup;
+#[path = "native_dialog.rs"]
+mod native_dialog;
 #[path = "navigation.rs"]
 mod navigation;
 #[path = "navigator.rs"]
@@ -149,6 +151,8 @@ pub struct PhotoSortApp {
     /// Recent folders that were missing at startup (e.g. an unplugged drive):
     /// hidden from the menu but kept, so they return once available again.
     missing_recent: HashSet<PathBuf>,
+    /// Recent folders found missing, as a background check finds them.
+    recent_check: Option<std::sync::mpsc::Receiver<PathBuf>>,
     /// A saved "Reduce motion" choice to apply to the context next frame.
     reduce_motion_pending: Option<bool>,
     /// A crash report to tell the user about, and whether it is from a
@@ -198,7 +202,9 @@ pub struct PhotoSortApp {
     filter_dirty: bool,
     step: Step,
     root: Option<PathBuf>,
-    decisions: HashMap<MediaId, Decision>,
+    /// The staged choices, stamped on every change so that what the
+    /// guided grids count from them is counted again only then.
+    decisions: crate::core::revision::Revised<HashMap<MediaId, Decision>>,
     metadata: HashMap<MediaId, Metadata>,
     analysis: HashMap<MediaId, Analysis>,
     groups: HashMap<MediaId, usize>, // Provisional technical groups only.
@@ -212,7 +218,12 @@ pub struct PhotoSortApp {
     group_best: HashMap<usize, (MediaId, usize)>,
     /// Cull groups with a photo scored since their best was picked.
     group_best_stale: HashSet<usize>,
-    /// Advances when a known photo's size or orientation changes.
+    /// Advances when a known photo's metadata changes what its Organize
+    /// folder is named from: its date, camera or place.
+    metadata_revision: u64,
+    /// Advances when a known photo's size or orientation changes, so the
+    /// guided grids laid out from the old shape lay out again; a new photo
+    /// already changes the map's size.
     metadata_shapes: u64,
     /// The folder Cull's navigator highlights and scrolls the photos to.
     spy: navigator::Spy,
@@ -286,6 +297,7 @@ pub struct PhotoSortApp {
     library_reveal: bool,
     browse_ready: bool,
     browse_run: Option<u64>,
+    browse_refresh: browsing::BackgroundRefresh,
     metadata_run: Option<u64>,
     metadata_progress: Option<(usize, usize)>,
     metadata_failures: HashMap<MediaId, String>,
@@ -361,15 +373,23 @@ pub struct PhotoSortApp {
     /// The step the Review step was opened from, for its Back button.
     review_from: Step,
     /// Organize's change count and what it was worked out from.
-    organize_count: std::cell::RefCell<Option<(organize::ChangeCountKey, usize)>>,
+    organize_count: std::cell::RefCell<Option<(organize::ChangeCountKey, organize::Changes)>>,
+    /// The open catalog's fingerprints and folder identities, read once: a
+    /// save shares them instead of walking every photo again.
+    catalog_identities: std::cell::RefCell<Option<CatalogIdentities>>,
     /// The step each Trash mark was made in: a mark from another step is
     /// shown dimmed.
     trash_steps: HashMap<MediaId, Step>,
+    /// Photos whose Keep or Trash was chosen by hand, in any step: Accept
+    /// all suggestions leaves them as they are. Saved with the session.
+    by_hand: HashSet<MediaId>,
     /// The photos Fix Rotation, Easy Delete and Pick Best show last: those
     /// already marked for Trash when the step's list was built or entered.
     /// `None` until the next list is built, so a photo never jumps away the
     /// moment it is marked or unmarked.
     trash_last: Option<HashSet<MediaId>>,
+    /// What the guided steps' grids keep from frame to frame.
+    grids: review_card::Grids,
     file_names: HashMap<MediaId, String>,
     status: String,
     status_scope: Option<(Step, Option<GroupMode>)>,
@@ -390,6 +410,9 @@ pub struct PhotoSortApp {
     recovery_ticket: Option<crate::core::operations::recovery::Ticket>,
     applying_plan: Option<Plan>,
     plan_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// The window was closed while a plan was being made: the plan is
+    /// cancelled, and closing goes on once the worker has let go of it.
+    close_after_planning: bool,
     apply_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     plan_open: bool,
     help: bool,
@@ -472,13 +495,10 @@ impl PhotoSortApp {
         app.crash_notice = crate::core::crash::unseen_report(&crate::core::crash::directory())
             .map(|path| (path, true));
         app.crash_notice_shown = app.crash_notice.is_some();
-        app.missing_recent = app
-            .preferences
-            .recent_folders
-            .iter()
-            .filter(|p| !p.is_dir())
-            .cloned()
-            .collect();
+        // Off this thread: a recent folder on a share that does not answer
+        // would otherwise hold the window back.
+        let ctx = cc.egui_ctx.clone();
+        app.check_recent_folders(move || ctx.request_repaint());
         app.runtime.cache.configure(app.preferences.cache);
         app.runtime.processing.configure(app.preferences.processing);
         app.runtime.raw_look.set(app.preferences.raw_look);
@@ -504,6 +524,7 @@ impl PhotoSortApp {
             video_context: None,
             preferences: Default::default(),
             missing_recent: HashSet::new(),
+            recent_check: None,
             reduce_motion_pending: None,
             crash_notice: None,
             crash_notice_shown: false,
@@ -543,7 +564,7 @@ impl PhotoSortApp {
             filter_dirty: true,
             step: Step::Organize,
             root: None,
-            decisions: HashMap::new(),
+            decisions: Default::default(),
             metadata: HashMap::new(),
             analysis: HashMap::new(),
             groups: HashMap::new(),
@@ -554,6 +575,7 @@ impl PhotoSortApp {
             cull_groups: Arc::default(),
             group_best: HashMap::new(),
             group_best_stale: HashSet::new(),
+            metadata_revision: 0,
             metadata_shapes: 0,
             spy: Default::default(),
             swipe: None,
@@ -618,6 +640,7 @@ impl PhotoSortApp {
             library_reveal: true,
             browse_ready: false,
             browse_run: None,
+            browse_refresh: Default::default(),
             metadata_run: None,
             metadata_progress: None,
             metadata_failures: HashMap::new(),
@@ -658,8 +681,11 @@ impl PhotoSortApp {
             review_action: None,
             review_from: Step::Cull,
             organize_count: Default::default(),
+            catalog_identities: Default::default(),
             trash_steps: HashMap::new(),
+            by_hand: HashSet::new(),
             trash_last: None,
+            grids: Default::default(),
             file_names: HashMap::new(),
             status_scope: None,
             status: String::new(),
@@ -678,6 +704,7 @@ impl PhotoSortApp {
             recovery_ticket: None,
             applying_plan: None,
             plan_stop: None,
+            close_after_planning: false,
             apply_stop: None,
             plan_open: false,
             help: false,
@@ -713,28 +740,52 @@ impl PhotoSortApp {
             pick_suggested: self.pick_review.suggested().clone(),
             rotations_staged: self.rotation_review.staged().clone(),
             trash_steps: self.trash_steps.clone(),
-            organize: self.catalog.as_ref().and_then(|catalog| {
-                crate::core::organize::Intent::capture(
-                    catalog,
-                    self.organize_drafts.clone(),
-                    self.file_names.clone(),
-                    PathBuf::from(&self.output),
-                )
-            }),
+            by_hand: self.by_hand.clone(),
+            // Nothing staged in Organize: nothing of the catalog is read.
+            organize: self
+                .catalog
+                .as_ref()
+                .filter(|_| !self.organize_drafts.is_empty() || !self.file_names.is_empty())
+                .and_then(|catalog| {
+                    // The drafts share their per-photo labels with the copy.
+                    crate::core::organize::Intent::capture_with(
+                        &self.catalog_identities(catalog),
+                        self.organize_drafts.clone(),
+                        self.file_names.clone(),
+                        PathBuf::from(&self.output),
+                    )
+                }),
             ..Default::default()
         }
     }
+    /// The catalog's fingerprints and folder identities, read the first time
+    /// they are asked for and shared from then on.
+    fn catalog_identities(&self, catalog: &Arc<Catalog>) -> crate::core::organize::Identities {
+        let mut cached = self.catalog_identities.borrow_mut();
+        if let Some((owner, photos, identities)) = &*cached
+            && *photos == self.media.len()
+            && owner
+                .upgrade()
+                .is_some_and(|owner| Arc::ptr_eq(&owner, catalog))
+        {
+            return identities.clone();
+        }
+        let identities = crate::core::organize::Identities::with_media(catalog, &self.media);
+        *cached = Some((
+            Arc::downgrade(catalog),
+            self.media.len(),
+            identities.clone(),
+        ));
+        identities
+    }
     fn session_snapshot(&self) -> Session {
         let mut session = self.session_intent();
-        session.fingerprints = self.media.iter().map(|m| (m.id, m.fingerprint)).collect();
-        if let Some(catalog) = &self.catalog {
-            session.fingerprints.extend(
-                session
-                    .decisions
-                    .keys()
-                    .filter_map(|id| catalog.supporting_fingerprints.get(id).map(|f| (*id, *f))),
-            );
-        }
+        // With the catalog's supporting files, which only staged choices on
+        // them ever look up.
+        session.fingerprints = match &self.catalog {
+            Some(catalog) => self.catalog_identities(catalog).fingerprints().clone(),
+            None => self.media.iter().map(|m| (m.id, m.fingerprint)).collect(),
+        };
         session
     }
     fn save_session(&mut self) {
@@ -807,6 +858,7 @@ impl PhotoSortApp {
         self.selection.clear();
         self.decisions.clear();
         self.trash_steps.clear();
+        self.by_hand.clear();
         self.trash_last = None;
         self.review_blocked = None;
         self.review_targets = false;
@@ -909,14 +961,12 @@ impl PhotoSortApp {
             self.abandon_review_apply();
         }
     }
-    fn select_folder(&mut self) {
+    fn select_folder(&mut self, ctx: &egui::Context) {
         if self.review_applying() {
             return;
         }
-        if let Some(path) = rfd::FileDialog::new()
-            .set_title("Open a photo library")
-            .pick_folder()
-        {
+        let dialog = rfd::FileDialog::new().set_title("Open a photo library");
+        if let Some(path) = native_dialog::pick(ctx, dialog, rfd::FileDialog::pick_folder) {
             self.open(path);
         }
     }
@@ -927,6 +977,12 @@ impl PhotoSortApp {
         let ids: Vec<MediaId> = ids.into_iter().collect();
         self.note_trash_steps(&ids, self.step);
         self.review_stale |= self.step == Step::Review;
+        if self.step == Step::Organize {
+            // A turn changes a photo's shape on the board.
+            for id in &ids {
+                self.board.reshaped.note(*id);
+            }
+        }
         if self.browse_ready {
             self.runtime
                 .browsing
@@ -942,6 +998,9 @@ impl PhotoSortApp {
     /// made in; this does not guess one for marks it did not make.
     fn review_changed(&mut self) {
         self.review_stale |= self.step == Step::Review;
+        if self.step == Step::Organize {
+            self.board.reshaped.everything();
+        }
         self.trash_steps
             .retain(|id, _| self.decisions.get(id).is_some_and(|d| d.rejected));
         if self.browse_ready {
@@ -951,9 +1010,26 @@ impl PhotoSortApp {
         self.decisions_changed_filter();
     }
     /// Easy Delete's cards come from its review and tabs, never from Trash
-    /// marks or ratings, so a choice there leaves its grid as it is.
+    /// marks or ratings, so a choice there leaves its grid as it is. So does
+    /// one in Organize, whose board is ordered by folder and capture time,
+    /// unless the filter shows photos by their marks or ratings.
     fn decisions_changed_filter(&mut self) {
-        self.filter_dirty |= self.step != Step::EasyDelete;
+        self.filter_dirty |= match self.step {
+            Step::EasyDelete => false,
+            Step::Organize => matches!(
+                self.filter,
+                Filter::Unmarked | Filter::Rejected | Filter::Rated
+            ),
+            _ => true,
+        };
+    }
+    /// What Accept all suggestions says when it is done, in the status line.
+    fn accepted_status(&mut self, accepted: usize) {
+        self.set_status(match accepted {
+            0 => "No suggestion left to accept · choices made by hand stay as they are".into(),
+            1 => "Accepted 1 suggestion".into(),
+            n => format!("Accepted {n} suggestions"),
+        });
     }
     /// Remembers the step a new Trash mark among `ids` was made in, and
     /// forgets marks that were taken back.
@@ -992,6 +1068,7 @@ impl PhotoSortApp {
             .map(|(id, _)| *id)
             .collect();
         self.trash_last = Some(marked);
+        self.grids.last_noted = crate::core::revision::next();
     }
     /// Whether `id` goes last in this step's list.
     pub(super) fn shown_last(&self, id: MediaId) -> bool {
@@ -1108,6 +1185,7 @@ impl PhotoSortApp {
     }
     fn poll(&mut self, ctx: &egui::Context) {
         self.poll_desktop();
+        self.poll_recent_folders();
         // A frame takes a few events; workers' wakeups for the rest may have
         // been spent on this frame, so an unfinished queue asks for the next.
         let mut drained = false;
@@ -1199,6 +1277,8 @@ impl PhotoSortApp {
         if !self.filter_dirty {
             return;
         }
+        // The guided grids take their cards from the list built here.
+        self.grids.listed = crate::core::revision::next();
         if matches!(
             self.step,
             Step::Rotation | Step::EasyDelete | Step::PickBest
@@ -1222,6 +1302,7 @@ impl PhotoSortApp {
             self.filter_dirty = false;
             return;
         }
+        let started = Instant::now();
         let query = crate::core::browsing::search_key(&self.query);
         // The search reads paths inside the library, as Cull's does.
         let root = self
@@ -1230,6 +1311,8 @@ impl PhotoSortApp {
             .map(|catalog| catalog.root.clone())
             .or_else(|| self.root.clone())
             .unwrap_or_default();
+        // Only what the chosen filter reads is looked up, photo by photo.
+        let filter = self.filter;
         self.filtered = self
             .media
             .iter()
@@ -1238,20 +1321,29 @@ impl PhotoSortApp {
                 (query.is_empty() || crate::core::browsing::search_text(&root, &m.path).contains(&query))
                     // Easy Delete's tabs choose its cards; a Trash filter
                     // would hide each card the moment its suggestion is staged.
-                    && (self.step == Step::EasyDelete || self.filter.matches(
-                        self.decision(m.id).rejected,
-                        crate::core::browsing::rating(m.id, &self.decisions, &self.metadata),
-                        self.analysis
-                            .get(&m.id)
-                            .is_some_and(|a| !a.issues.is_empty()),
-                        self.duplicates.contains_key(&m.id)
-                            || self.near_duplicates.contains_key(&m.id),
+                    && (self.step == Step::EasyDelete || filter == Filter::All || filter.matches(
+                        matches!(filter, Filter::Unmarked | Filter::Rejected)
+                            && self.decisions.get(&m.id).is_some_and(|d| d.rejected),
+                        (filter == Filter::Rated)
+                            .then(|| {
+                                crate::core::browsing::rating(m.id, &self.decisions, &self.metadata)
+                            })
+                            .flatten(),
+                        filter == Filter::Issues
+                            && self
+                                .analysis
+                                .get(&m.id)
+                                .is_some_and(|a| !a.issues.is_empty()),
+                        filter == Filter::Duplicates
+                            && (self.duplicates.contains_key(&m.id)
+                                || self.near_duplicates.contains_key(&m.id)),
                     ))
             })
             .map(|(i, _)| i)
             .collect();
         if self.step == Step::Organize {
             self.arrange_board();
+            self.board.refresh.cost = started.elapsed();
         }
         if self.step == Step::Rotation {
             self.refilter_rotations();
@@ -1296,17 +1388,33 @@ impl PhotoSortApp {
             self.filter_dirty = false;
             return;
         }
+        // Organize: a photo the search or filter hides stops being selected
+        // or compared, so D or a move never reaches a photo not shown.
+        let shown = self.board_shown_order();
+        let order = shown.as_deref().unwrap_or(&self.filtered);
+        self.selection.reconcile(&self.media, order);
+        let compared = self.comparison.len();
+        self.comparison
+            .retain(|id| self.index.get(id).is_some_and(|i| order.contains(i)));
+        if self.comparison.len() < compared.min(2) {
+            self.comparison.clear();
+        }
+        if self
+            .comparison_focus
+            .is_some_and(|id| !self.selection.contains(id))
+        {
+            self.comparison_focus = None;
+        }
         if self
             .active
             .is_none_or(|id| !self.filtered.iter().any(|&i| self.media[i].id == id))
         {
             // With only some folders shown, a hidden photo never becomes
-            // current; only empty folders shown leave none.
-            let first = match self.board_shown_positions() {
-                Some(shown) => shown.first().map(|&p| self.filtered[p]),
-                None => self.filtered.first().copied(),
-            };
-            self.active = first.map(|i| self.media[i].id);
+            // current; only empty folders shown leave none. A photo still
+            // selected comes first, so the current photo is one D acts on.
+            let selected = self.selection.ordered(&self.media, order);
+            let first = order.first().map(|&i| self.media[i].id);
+            self.active = selected.first().copied().or(first);
         }
         self.filter_dirty = false;
     }
@@ -1324,8 +1432,22 @@ impl PhotoSortApp {
         }
         self.resume_suspended = self.pending_bookmark.is_some();
         self.runtime.cancel_analysis();
+        // Easy Delete or Pick Best cancelling its own run offers Analyze
+        // again instead of starting over by itself; cancelling the run it
+        // waits behind lets its own start.
+        let own = self.analysis_run.is_none()
+            || match self.step {
+                Step::PickBest => self.pick_run.is_some(),
+                Step::EasyDelete => self.delete_run.is_some(),
+                _ => true,
+            };
         if self.rotation_run.is_some() {
             self.finish_rotation_detection();
+            // A detection stopped before it found anything has not shown
+            // that every photo is upright.
+            if self.rotation_review.ids().is_empty() {
+                self.rotations.clear();
+            }
         }
         self.delete_run = None; // A cancelled pass never publishes partial pair choices.
         self.pick_run = None;
@@ -1337,6 +1459,9 @@ impl PhotoSortApp {
         self.analysis_run = None;
         self.progress = None;
         self.clear_status();
+        if !own {
+            self.start_ready_analysis();
+        }
     }
     pub(super) fn can_start_analysis(&self) -> bool {
         !self.media.is_empty() && !self.scanning && !self.busy && self.analysis_run.is_none()
@@ -1779,6 +1904,13 @@ impl PhotoSortApp {
             || self.intro.playing()
     }
 }
+/// The catalog the identities were read from, how many photos it had then,
+/// and the identities.
+type CatalogIdentities = (
+    std::sync::Weak<Catalog>,
+    usize,
+    crate::core::organize::Identities,
+);
 /// Thumbnail decodes queued at once; see [`PhotoSortApp::texture`].
 pub(super) const THUMBNAILS_IN_FLIGHT: usize = 8;
 /// Worker events applied per frame, so a burst never stalls drawing.
@@ -1861,6 +1993,14 @@ impl PhotoSortApp {
         self.restore_bookmark();
         if self.filter_dirty && !dirty {
             ctx.request_repaint();
+        }
+        // Background results that ended leave no event to bring the frame
+        // that shows them.
+        if let Some(wait) = self.background_refresh_wait() {
+            ctx.request_repaint_after(wait);
+        }
+        if let Some(wait) = self.board_refresh_wait() {
+            ctx.request_repaint_after(wait);
         }
     }
     // Shared frame boundary lets input and native-close ordering be verified
@@ -2686,7 +2826,9 @@ impl eframe::App for PhotoSortApp {
     }
 }
 
-fn pressed_keys(ctx: &egui::Context, rotation: bool) -> Vec<(egui::Key, egui::Modifiers)> {
+/// Each key pressed this frame, with its own modifiers and whether it is a
+/// held key repeating.
+fn pressed_keys(ctx: &egui::Context, rotation: bool) -> Vec<(egui::Key, egui::Modifiers, bool)> {
     // Preserve key-down modifiers even when key-up arrives before repaint. Consume
     // handled events so an arrow cannot also move a focused zoom slider or button.
     ctx.input_mut(|input| {
@@ -2695,6 +2837,7 @@ fn pressed_keys(ctx: &egui::Context, rotation: bool) -> Vec<(egui::Key, egui::Mo
             if let egui::Event::Key {
                 key,
                 pressed: down,
+                repeat,
                 modifiers,
                 ..
             } = event
@@ -2740,7 +2883,7 @@ fn pressed_keys(ctx: &egui::Context, rotation: bool) -> Vec<(egui::Key, egui::Mo
                         && modifiers.shift);
                 if handled {
                     if *down {
-                        pressed.push((*key, *modifiers));
+                        pressed.push((*key, *modifiers, *repeat));
                     }
                     return false;
                 }
@@ -2820,7 +2963,7 @@ mod keyboard_tests {
         });
         assert_eq!(
             captured,
-            vec![(egui::Key::ArrowRight, egui::Modifiers::SHIFT); 3]
+            vec![(egui::Key::ArrowRight, egui::Modifiers::SHIFT, false); 3]
         );
     }
     #[test]

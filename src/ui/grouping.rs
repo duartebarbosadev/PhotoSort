@@ -306,9 +306,10 @@ impl PhotoSortApp {
                         let name = self
                             .index
                             .get(&example)
-                            .map(|i| self.media[*i].name())
+                            .map(|i| self.shown_name(&self.media[*i]))
                             .unwrap_or_default();
-                        format!("Scene {group:03} · {count} photos · {name}")
+                        let photos = if count == 1 { "photo" } else { "photos" };
+                        format!("Scene {group:03} · {count} {photos} · {name}")
                     } else {
                         self.group_choices.get(&group).map_or_else(
                             || format!("Group {group}"),
@@ -316,9 +317,10 @@ impl PhotoSortApp {
                                 let name = self
                                     .index
                                     .get(&choice.example)
-                                    .map(|i| self.media[*i].name())
+                                    .map(|i| self.shown_name(&self.media[*i]))
                                     .unwrap_or_default();
-                                format!("Group {group} · {} photos · {name}", choice.count)
+                                let photos = if choice.count == 1 { "photo" } else { "photos" };
+                                format!("Group {group} · {} {photos} · {name}", choice.count)
                             },
                         )
                     };

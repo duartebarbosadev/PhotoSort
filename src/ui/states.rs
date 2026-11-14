@@ -171,6 +171,21 @@ impl PhotoSortApp {
         if self.step == Step::Organize && !self.media.is_empty() {
             return self.library(ui);
         }
+        // Easy Delete and Pick Best say "nothing found" only once their own
+        // analysis has run. Entered while another step's is running, they
+        // wait for it and start theirs when it ends.
+        let unanalysed = !self.media.is_empty() && self.step_unanalysed();
+        if unanalysed && self.analysis_run.is_some() {
+            return self.working_state(
+                ui,
+                "Waiting for the current analysis to finish",
+                if self.step == Step::PickBest {
+                    "Pick Best looks for similar photos as soon as it is done."
+                } else {
+                    "Easy Delete looks for photos to clean up as soon as it is done."
+                },
+            );
+        }
         let next = self.preferences.neighbor(self.step, true);
         let can_analyze = self.can_start_analysis();
         let mut action = None;
@@ -196,7 +211,13 @@ impl PhotoSortApp {
                 } else {
                     "Find sideways photos"
                 },
-                "",
+                // Detection starts on request, so its button says why it
+                // cannot be pressed yet.
+                if !detected && self.analysis_run.is_some() {
+                    "Available when the current analysis finishes."
+                } else {
+                    ""
+                },
                 |ui| {
                     if !detected
                         && ui
@@ -212,7 +233,12 @@ impl PhotoSortApp {
                 },
             );
         } else if self.step == Step::PickBest {
-            state_card(ui, icon::STACK, "No similar photos to compare", "", |ui| {
+            let title = if unanalysed {
+                "Find similar photos"
+            } else {
+                "No similar photos to compare"
+            };
+            state_card(ui, icon::STACK, title, "", |ui| {
                 if ui
                     .add_enabled(can_analyze, primary("Analyze library"))
                     .clicked()
@@ -228,6 +254,8 @@ impl PhotoSortApp {
                 icon::BROOM,
                 if hidden {
                     "No suggestions match"
+                } else if unanalysed {
+                    "Find photos to clean up"
                 } else {
                     "Nothing to clean up"
                 },
@@ -264,7 +292,7 @@ impl PhotoSortApp {
             );
         }
         match action {
-            Some(Empty::OpenFolder) => self.select_folder(),
+            Some(Empty::OpenFolder) => self.select_folder(ui.ctx()),
             Some(Empty::Analyze) => self.analyze_current_workflow(),
             Some(Empty::ShowAllRotations) => {
                 self.rotation_queue_only = false;

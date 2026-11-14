@@ -1160,3 +1160,268 @@ fn compared_photos_marked_for_trash_stay_bright() {
         app.runtime.shutdown();
     }
 }
+
+/// One frame of swipe compare on a 900 x 600 canvas, with every request
+/// for original pixels it made.
+fn swipe_frame(
+    app: &mut PhotoSortApp,
+    ctx: &egui::Context,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    app.inspection_wanted.clear();
+    ctx.run_test(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 700.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                app.swipe_canvas(ui, egui::vec2(900.0, 600.0));
+            });
+        },
+    )
+}
+/// Three selected photos of `size` open in swipe compare, each with a
+/// 1200 x 800 preview already decoded.
+fn swipe_fixture(
+    ctx: &egui::Context,
+    size: [u32; 2],
+) -> (tempfile::TempDir, PhotoSortApp, Vec<MediaId>) {
+    let (cache, mut app, ids) = sized_photos(&[size; 3]);
+    theme_install(ctx);
+    let preview = ctx.load_texture(
+        "preview",
+        egui::ColorImage::filled([1200, 800], Color32::WHITE),
+        egui::TextureOptions::LINEAR,
+    );
+    for id in &ids {
+        app.textures.insert(
+            (*id, true),
+            Texture {
+                handle: preview.clone(),
+                bytes: 1200 * 800 * 4,
+                used: 0,
+            },
+        );
+    }
+    app.step = Step::Cull;
+    app.filtered = (0..ids.len()).collect();
+    app.selection.replace(ids.iter().copied());
+    app.comparison = ids.clone();
+    app.review = true;
+    app.view_started = Instant::now() - Duration::from_secs(2);
+    app.open_swipe();
+    assert!(app.swipe.is_some());
+    (cache, app, ids)
+}
+
+#[test]
+fn swipe_compare_lights_what_d_marks_and_shows_trash_on_each_slice() {
+    fn rects(output: &egui::FullOutput) -> Vec<egui::epaint::RectShape> {
+        fn flatten(shape: &egui::Shape, out: &mut Vec<egui::epaint::RectShape>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| flatten(s, out)),
+                egui::Shape::Rect(rect) => out.push(rect.clone()),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for clipped in &output.shapes {
+            flatten(&clipped.shape, &mut out);
+        }
+        out
+    }
+    // The numbered labels lit, and the slices edged in red, left to right.
+    let lit = |output: &egui::FullOutput| rects(output).iter().filter(|r| r.fill == ACCENT).count();
+    let edged = |output: &egui::FullOutput| -> Vec<f32> {
+        rects(output)
+            .iter()
+            .filter(|r| r.stroke.color == RED && r.stroke.width >= TRASH_EDGE)
+            .map(|r| r.rect.center().x)
+            .collect()
+    };
+    let ctx = egui::Context::default();
+    // Portrait photos leave canvas free either side of them.
+    let (_cache, mut app, ids) = swipe_fixture(&ctx, [4000, 6000]);
+    let none = egui::Modifiers::NONE;
+    let marked = |app: &PhotoSortApp| -> Vec<bool> {
+        ids.iter().map(|id| app.decision(*id).rejected).collect()
+    };
+    // Nothing clicked yet: every label is lit, and D marks every photo,
+    // which shows on every slice at once.
+    let output = swipe_frame(&mut app, &ctx, Vec::new());
+    assert_eq!((lit(&output), edged(&output).len()), (3, 0));
+    assert!(app.cull_selection_key(egui::Key::D, none));
+    assert_eq!(marked(&app), [true; 3]);
+    app.browse_run = None;
+    let output = swipe_frame(&mut app, &ctx, Vec::new());
+    assert_eq!((lit(&output), edged(&output).len()), (3, 3));
+    assert!(super::review_card::painted_text(&output).contains("Trash"));
+    assert!(app.cull_selection_key(egui::Key::D, none));
+    assert_eq!(marked(&app), [false; 3]);
+    app.browse_run = None;
+    // 2 and 2 again: back in slices with the second photo picked. Only its
+    // label is lit, D marks only it, and only its slice is edged.
+    assert!(app.swipe_key(egui::Key::Num2, none) && app.swipe_key(egui::Key::Num2, none));
+    assert_eq!(app.swipe.as_ref().unwrap().solo, None);
+    let output = swipe_frame(&mut app, &ctx, Vec::new());
+    assert_eq!((lit(&output), edged(&output).len()), (1, 0));
+    assert!(app.cull_selection_key(egui::Key::D, none));
+    assert_eq!(marked(&app), [false, true, false]);
+    app.browse_run = None;
+    let output = swipe_frame(&mut app, &ctx, Vec::new());
+    let edges = edged(&output);
+    assert_eq!(edges.len(), 1);
+    assert!(
+        (edges[0] - output_center(&output)).abs() < 40.0,
+        "the middle slice is the one edged, at {edges:?}"
+    );
+    // A click beside the photos lets go of it: every label is lit again.
+    let beside = egui::pos2(40.0, 300.0);
+    let button = |pressed| egui::Event::PointerButton {
+        pos: beside,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: none,
+    };
+    swipe_frame(
+        &mut app,
+        &ctx,
+        vec![egui::Event::PointerMoved(beside), button(true)],
+    );
+    swipe_frame(&mut app, &ctx, vec![button(false)]);
+    assert_eq!(app.focused_comparison_photo(), None);
+    let output = swipe_frame(&mut app, &ctx, Vec::new());
+    assert_eq!(lit(&output), 3);
+    app.runtime.shutdown();
+}
+/// The middle of the swipe canvas drawn by [`swipe_frame`], across.
+fn output_center(output: &egui::FullOutput) -> f32 {
+    let mut bounds = egui::Rect::NOTHING;
+    for clipped in &output.shapes {
+        if let egui::Shape::Mesh(mesh) = &clipped.shape {
+            bounds = bounds.union(mesh.calc_bounds());
+        }
+    }
+    bounds.center().x
+}
+
+#[test]
+fn swipe_compare_asks_for_original_pixels_past_the_preview_and_paints_them() {
+    let ctx = egui::Context::default();
+    let (_cache, mut app, ids) = swipe_fixture(&ctx, [6000, 4000]);
+    // At Fit the previews hold every pixel shown: nothing is asked for.
+    swipe_frame(&mut app, &ctx, Vec::new());
+    assert!(app.inspection_wanted.is_empty());
+    // 1:1 asks for the part in view of every compared photo, one slot each.
+    app.actual_size();
+    swipe_frame(&mut app, &ctx, Vec::new());
+    let wanted = app.inspection_wanted.clone();
+    assert_eq!(
+        wanted
+            .iter()
+            .map(|r| (r.slot, r.media.id))
+            .collect::<Vec<_>>(),
+        ids.iter()
+            .enumerate()
+            .map(|(slot, id)| (slot as u64, *id))
+            .collect::<Vec<_>>()
+    );
+    assert!(wanted.iter().all(|r| r.region.width < 6000));
+    // When they arrive they are painted over the previews and labelled.
+    let detail = ctx.load_texture(
+        "detail",
+        egui::ColorImage::filled([64, 64], Color32::WHITE),
+        egui::TextureOptions::LINEAR,
+    );
+    for request in wanted {
+        app.inspection_frames.insert(
+            request.slot,
+            InspectionFrame {
+                request,
+                texture: Some(detail.clone()),
+                error: None,
+                too_large: None,
+            },
+        );
+    }
+    let output = swipe_frame(&mut app, &ctx, Vec::new());
+    let painted = output
+        .shapes
+        .iter()
+        .filter(|s| matches!(&s.shape, egui::Shape::Mesh(m) if m.texture_id == detail.id()))
+        .count();
+    assert_eq!(painted, 3);
+    assert_eq!(
+        super::review_card::painted_text(&output)
+            .matches("Original · 1:1")
+            .count(),
+        3
+    );
+    // One photo shown whole asks for that photo alone.
+    assert!(app.swipe_key(egui::Key::Num2, egui::Modifiers::NONE));
+    swipe_frame(&mut app, &ctx, Vec::new());
+    assert_eq!(app.inspection_wanted.len(), 1);
+    assert_eq!(app.inspection_wanted[0].media.id, ids[1]);
+    app.runtime.shutdown();
+}
+
+/// A Pick Best group of twelve shows every photo, each from its thumbnail:
+/// all of them ask for detail, the focused one first, and each for no more
+/// pixels than its own canvas shows.
+#[test]
+fn every_photo_of_a_large_pick_best_group_asks_for_detail_focused_first() {
+    let (_cache, mut app, ids) = sized_photos(&[[6000, 4000]; 12]);
+    app.step = Step::PickBest;
+    app.pick_review
+        .replace(vec![crate::core::pick_review::Cluster::new(
+            1,
+            ids.clone(),
+            ids.iter().map(|id| (*id, id.0 as f64)).collect(),
+        )]);
+    app.pick_current = Some(ids[0]);
+    let shown = app.comparison_ids();
+    assert_eq!(shown.len(), 12);
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    let thumbnail = ctx.load_texture(
+        "thumbnail",
+        egui::ColorImage::filled([320, 213], Color32::WHITE),
+        egui::TextureOptions::LINEAR,
+    );
+    for id in &ids {
+        app.textures.insert(
+            (*id, false),
+            Texture {
+                handle: thumbnail.clone(),
+                bytes: 320 * 213 * 4,
+                used: 0,
+            },
+        );
+    }
+    app.view_started = Instant::now() - Duration::from_secs(2);
+    app.focused_slot = 10;
+    let size = egui::vec2(400.0, 300.0);
+    canvases(&mut app, &ctx, &shown, size, Vec::new());
+    let slots: Vec<u64> = app.inspection_wanted.iter().map(|r| r.slot).collect();
+    assert_eq!(slots, [10, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11]);
+    // Detail is cut to the canvas: twelve photos never hold twelve originals.
+    let edge = (size.x * ctx.pixels_per_point()).ceil() as u32;
+    assert!(
+        app.inspection_wanted.iter().all(|r| r.output_edge <= edge),
+        "{:?}",
+        app.inspection_wanted
+            .iter()
+            .map(|r| r.output_edge)
+            .collect::<Vec<_>>()
+    );
+    // Only those the decoder has queued say they are loading: the focused
+    // photo and the first eight others.
+    let mut loading: Vec<u64> = app.detail_waiting.keys().copied().collect();
+    loading.sort();
+    assert_eq!(loading, [0, 1, 2, 3, 4, 5, 6, 7, 10]);
+}
