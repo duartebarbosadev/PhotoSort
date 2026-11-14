@@ -294,6 +294,7 @@ fn similarity(a: &[f32], b: &[f32]) -> f32 {
 }
 /// One recognized person while grouping: descriptor indices, their sum, and the
 /// sorted photos they appear in.
+#[cfg_attr(test, derive(Clone, Debug, PartialEq))]
 struct Person {
     members: Vec<usize>,
     sum: Vec<f32>,
@@ -326,6 +327,92 @@ impl Person {
             }
         }
         false
+    }
+}
+/// How well the faces of two people match on average.
+fn average(first: &Person, second: &Person) -> f32 {
+    similarity(&first.sum, &second.sum) / (first.members.len() * second.members.len()) as f32
+}
+/// The person after `a` that `a` would merge with: the best average match of
+/// at least `MIN_SIMILARITY` never seen with `a`, the earliest on equal scores.
+fn partner(groups: &[Person], a: usize) -> Option<(f32, usize)> {
+    let first = &groups[a];
+    let mut best = None;
+    let mut best_score = MIN_SIMILARITY;
+    for (b, second) in groups.iter().enumerate().skip(a + 1) {
+        let score = average(first, second);
+        if score >= best_score
+            && best.is_none_or(|_| score > best_score)
+            && !first.seen_with(second)
+        {
+            best = Some(b);
+            best_score = score;
+        }
+    }
+    best.map(|b| (best_score, b))
+}
+/// Merges the closest pair of people that match on average until none does;
+/// `None` when cancelled. Every round merges the pair a scan of all pairs in
+/// (a, b) order would pick, the first of the best scores, so the result does
+/// not depend on how the pair is found. Each person remembers its best partner
+/// among the people after it, and a merge only looks again at the scores it
+/// changed: about one comparison per person instead of one per pair, and
+/// still no pairwise matrix.
+fn merge(mut groups: Vec<Person>, cancelled: impl Fn() -> bool) -> Option<Vec<Person>> {
+    let mut partners = Vec::with_capacity(groups.len());
+    for a in 0..groups.len() {
+        if cancelled() {
+            return None;
+        }
+        partners.push(partner(&groups, a));
+    }
+    loop {
+        if cancelled() {
+            return None;
+        }
+        let mut best: Option<(f32, usize, usize)> = None;
+        for (a, found) in partners.iter().enumerate() {
+            if let Some((score, b)) = *found
+                && best.is_none_or(|(top, ..)| score > top)
+            {
+                best = Some((score, a, b));
+            }
+        }
+        let Some((_, a, b)) = best else {
+            return Some(groups);
+        };
+        let second = groups.remove(b);
+        groups[a].absorb(second);
+        partners.remove(b);
+        for i in 0..groups.len() {
+            // Remembered partners still count positions as before the removal.
+            if i == a || partners[i].is_some_and(|(_, p)| p == a || p == b) {
+                // Its own faces changed, or its partner changed or is gone.
+                if cancelled() {
+                    return None;
+                }
+                partners[i] = partner(&groups, i);
+                continue;
+            }
+            if let Some((_, p)) = &mut partners[i]
+                && *p > b
+            {
+                *p -= 1;
+            }
+            // Everyone before `a` has a new score with it; its pairs with
+            // the people after it were looked at again above.
+            if i < a {
+                let (first, second) = (&groups[i], &groups[a]);
+                let score = average(first, second);
+                let better = match partners[i] {
+                    Some((top, p)) => score > top || (score == top && a < p),
+                    None => score >= MIN_SIMILARITY,
+                };
+                if better && !first.seen_with(second) {
+                    partners[i] = Some((score, a));
+                }
+            }
+        }
     }
 }
 /// Deterministic average-linkage grouping. A face joins the person whose faces
@@ -422,33 +509,10 @@ pub fn group(
             None => groups.push(face),
         }
     }
-    // Admission order can still leave one person in two groups; merge the
-    // closest pair that matches on average until none does.
-    loop {
-        let mut best = None;
-        let mut best_score = MIN_SIMILARITY;
-        for (a, first) in groups.iter().enumerate() {
-            if cancelled() {
-                return Ok(None);
-            }
-            for (b, second) in groups.iter().enumerate().skip(a + 1) {
-                let score = similarity(&first.sum, &second.sum)
-                    / (first.members.len() * second.members.len()) as f32;
-                if score >= best_score
-                    && best.is_none_or(|_| score > best_score)
-                    && !first.seen_with(second)
-                {
-                    best = Some((a, b));
-                    best_score = score;
-                }
-            }
-        }
-        let Some((a, b)) = best else {
-            break;
-        };
-        let second = groups.remove(b);
-        groups[a].absorb(second);
-    }
+    // Admission order can still leave one person in two groups.
+    let Some(groups) = merge(groups, &cancelled) else {
+        return Ok(None);
+    };
     let mut identity = vec![0; vectors.len()];
     for (g, person) in groups.iter().enumerate() {
         for &index in &person.members {
@@ -695,5 +759,136 @@ mod tests {
                 repeated: 1
             }
         );
+    }
+    /// The merge as first written: every round compares every pair again.
+    fn merge_by_full_scan(mut groups: Vec<Person>) -> Vec<Person> {
+        loop {
+            let mut best = None;
+            let mut best_score = MIN_SIMILARITY;
+            for (a, first) in groups.iter().enumerate() {
+                for (b, second) in groups.iter().enumerate().skip(a + 1) {
+                    let score = similarity(&first.sum, &second.sum)
+                        / (first.members.len() * second.members.len()) as f32;
+                    if score >= best_score
+                        && best.is_none_or(|_| score > best_score)
+                        && !first.seen_with(second)
+                    {
+                        best = Some((a, b));
+                        best_score = score;
+                    }
+                }
+            }
+            let Some((a, b)) = best else {
+                return groups;
+            };
+            let second = groups.remove(b);
+            groups[a].absorb(second);
+        }
+    }
+    /// Repeatable pseudo-random numbers in 0..1.
+    fn random(seed: u64) -> impl FnMut() -> f32 {
+        let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 40) as f32 / (1u64 << 24) as f32
+        }
+    }
+    #[test]
+    fn merging_picks_the_same_pairs_as_comparing_every_pair_each_round() {
+        let (mut merges, mut kept_apart) = (0, 0);
+        for seed in 0..600 {
+            let mut next = random(seed);
+            let count = 2 + (next() * 40.) as usize;
+            let mut members = 0..;
+            let groups: Vec<Person> = (0..count)
+                .map(|_| {
+                    let size = 1 + (next() * 3.) as usize;
+                    let sum = (0..6)
+                        .map(|_| match seed % 3 {
+                            // Quarter steps: many pairs score exactly the same,
+                            // so the order of equal pairs decides.
+                            0 => (next() * 5.).floor() / 4. * size as f32,
+                            // Every pair within a few rounding steps of the
+                            // threshold: rounding decides who matches.
+                            1 => f32::from_bits(
+                                (0.28867513 * size as f32).to_bits() - 1 + (next() * 3.) as u32,
+                            ),
+                            _ => (next() * 1.6 - 0.4) * size as f32,
+                        })
+                        .collect();
+                    let mut photos: Vec<_> = (0..1 + (next() * 3.) as usize)
+                        .map(|_| (next() * 2. * count as f32) as usize)
+                        .collect();
+                    photos.sort_unstable();
+                    photos.dedup();
+                    Person {
+                        members: members.by_ref().take(size).collect(),
+                        sum,
+                        photos,
+                    }
+                })
+                .collect();
+            let expected = merge_by_full_scan(groups.clone());
+            assert_eq!(merge(groups.clone(), || false).unwrap(), expected);
+            merges += count - expected.len();
+            kept_apart += expected
+                .iter()
+                .enumerate()
+                .flat_map(|(a, first)| expected[a + 1..].iter().map(move |second| (first, second)))
+                .filter(|(first, second)| {
+                    average(first, second) >= MIN_SIMILARITY && first.seen_with(second)
+                })
+                .count();
+            assert!(merge(groups, || true).is_none());
+        }
+        // The inputs must exercise both chains of merges and people who match
+        // but share a photo.
+        assert!(merges > 5000 && kept_apart > 1000, "{merges} {kept_apart}");
+    }
+    /// Not a check: prints how long both merges take on people that mostly do
+    /// not match. `cargo test --release --lib merge_timing -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn merge_timing() {
+        for (count, twins) in [
+            (1000, 100),
+            (2000, 100),
+            (2000, 200),
+            (4000, 100),
+            (15000, 500),
+        ] {
+            let mut next = random(count as u64);
+            let mut unit = |near: Option<&Vec<f32>>| {
+                let mut v: Vec<f32> = (0..128).map(|_| next() * 2. - 1.).collect();
+                let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+                for (i, x) in v.iter_mut().enumerate() {
+                    *x = *x / norm * 0.5 + near.map_or(0., |near| near[i]);
+                }
+                let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+                v.iter().map(|x| x / norm).collect::<Vec<f32>>()
+            };
+            let mut groups = Vec::<Person>::new();
+            for i in 0..count {
+                // The last `twins` people are near copies of the first ones.
+                let near = (i >= count - twins).then(|| groups[i + twins - count].sum.clone());
+                groups.push(Person {
+                    members: vec![i],
+                    sum: unit(near.as_ref()),
+                    photos: vec![i],
+                });
+            }
+            let start = std::time::Instant::now();
+            let merged = merge(groups.clone(), || false).unwrap();
+            let fast = start.elapsed();
+            assert_eq!(merged.len(), count - twins);
+            let slow = (count <= 4000).then(|| {
+                let start = std::time::Instant::now();
+                assert_eq!(merge_by_full_scan(groups), merged);
+                start.elapsed()
+            });
+            println!("{count} people, {twins} merges: {fast:.2?}, full scan {slow:.2?}");
+        }
     }
 }

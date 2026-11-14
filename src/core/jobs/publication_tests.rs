@@ -201,3 +201,125 @@ fn policy_workers_stop_once_the_image_worker_is_gone() {
     publisher.stop.store(true, Ordering::Release);
     assert!(stopped);
 }
+
+/// During duplicate review the similarity worker asks the image worker for
+/// evidence photo after photo. The idle worker must take each request up at
+/// once, and answer eyes it judged before from the cache, without pixels.
+#[test]
+fn the_idle_image_worker_answers_evidence_at_once_and_cached_eyes_without_pixels() {
+    use crate::core::{
+        eyes,
+        faces::Faces,
+        model::*,
+        models,
+        near_duplicates::batch::Input,
+        pipeline::Pipeline,
+        subjects::{DenseEmbedding, store::Features, store::Store},
+    };
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("photo.png");
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/near_duplicate/00.png"),
+        &path,
+    )
+    .unwrap();
+    let media = Media {
+        id: MediaId(1),
+        fingerprint: Fingerprint::read(&path).unwrap(),
+        path,
+        kind: MediaKind::Photo,
+    };
+    let source = Pipeline::key(&media).unwrap();
+    let cache = root.path().join("cache");
+    let store = Arc::new(Store::new(cache.clone(), true).unwrap());
+    let key = Store::key(&source, "models");
+    let features = Features {
+        dense: DenseEmbedding::from_tokens(&vec![1.0; 257 * 384], 384).unwrap(),
+        faces: Some(Faces::default()),
+        identities: Some(vec![]),
+    };
+    store.put(&key, &features).unwrap();
+    let eyes_key = Store::eyes_key(
+        &source,
+        &format!("{}:{}", eyes::RECIPE, models::face_signature()),
+    );
+    store.put_eyes(&eyes_key, &[]).unwrap();
+    let input = Input {
+        media,
+        source,
+        key,
+        hash: String::new(),
+        group: 1,
+        embedding: Vec::new(),
+        sharpness: None,
+        metadata_fields: 0,
+        shot: None,
+        camera: String::new(),
+        captured_ms: None,
+        faces: 1,
+    };
+
+    let (tx, _events) = mpsc::sync_channel(64);
+    let publisher = Publisher {
+        generation: Arc::new(AtomicU64::new(0)),
+        ..publisher(tx, || {})
+    };
+    let stop = publisher.stop.clone();
+    let (_images, image_rx) = mpsc::sync_channel(1);
+    let (_priority, priority_rx) = mpsc::sync_channel(1);
+    let (evidence, evidence_rx) = mpsc::sync_channel(1);
+    let (similarity_tx, _similarity_rx) = mpsc::sync_channel(1);
+    let (subject_tx, _subject_rx) = mpsc::sync_channel(1);
+    let wake = Wake::default();
+    let worker = images::spawn(images::Wiring {
+        publisher,
+        previews: previews::Builder::new(cache.clone(), 0, Arc::default()).throttle(),
+        cache: cache.clone(),
+        cache_control: crate::core::cache::Control::with_directory(cache),
+        processing: Default::default(),
+        raw_look: Default::default(),
+        inspection: Default::default(),
+        analysis: Default::default(),
+        metadata: Default::default(),
+        images: image_rx,
+        priority: priority_rx,
+        evidence: evidence_rx,
+        wake: wake.clone(),
+        similarity: similarity_tx,
+        subjects: subject_tx,
+    });
+    let ask = |people: bool| {
+        let (reply, answer) = mpsc::sync_channel(1);
+        evidence
+            .send(similarity::EvidenceRequest {
+                epoch: 0,
+                run: 0,
+                input: input.clone(),
+                store: store.clone(),
+                faces: true,
+                people,
+                reply,
+            })
+            .unwrap();
+        wake.notify();
+        answer
+            .recv_timeout(crate::test_support::worker_patience())
+            .unwrap()
+            .unwrap()
+    };
+    const REQUESTS: u32 = 60;
+    let started = std::time::Instant::now();
+    for _ in 0..REQUESTS {
+        let (asset, _, people, stats) = ask(true);
+        assert!(asset.is_none() && people == Some(vec![]));
+        assert_eq!(stats.decodes, 0, "cached eyes need no pixels");
+    }
+    // Without the wake each request waited for the worker's next idle poll.
+    assert!(started.elapsed() < Duration::from_millis(15) * REQUESTS / 2);
+    // Faces alone still come with the photo.
+    let (asset, faces, people, _) = ask(false);
+    assert!(asset.is_some() && faces.is_some_and(|f| f.is_empty()) && people.is_none());
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap();
+}

@@ -27,16 +27,20 @@ pub(super) struct SimilarityJob {
     pub(super) inputs: Vec<near_duplicates::batch::Input>,
     pub(super) store: Arc<subjects::store::Store>,
     pub(super) stats: AnalysisStats,
+    /// Tells the image worker an evidence request is waiting.
+    pub(super) wake: super::Wake,
 }
+/// The pixels are missing only when people were asked for and their eyes
+/// were judged before: that answer comes from the cache alone.
 pub(super) type EvidenceReply = (
-    crate::core::pipeline::Asset,
+    Option<crate::core::pipeline::Asset>,
     Option<Vec<faces::Face>>,
     Option<Vec<eyes::Person>>,
     AnalysisStats,
 );
 /// One photo's pixels, faces and people, as a request asked for them.
 type Evidence = (
-    crate::core::pipeline::Asset,
+    Option<crate::core::pipeline::Asset>,
     Option<Vec<faces::Face>>,
     Option<Vec<eyes::Person>>,
 );
@@ -76,7 +80,11 @@ impl EvidenceClient<'_> {
         loop {
             anyhow::ensure!(!(self.cancelled)(), "Duplicate review cancelled");
             match self.requests.try_send(request) {
-                Ok(()) => break,
+                Ok(()) => {
+                    // The worker may be idle; it answers now, not at its next poll.
+                    self.job.wake.notify();
+                    break;
+                }
                 Err(TrySendError::Full(returned)) => {
                     request = returned;
                     thread::sleep(Duration::from_millis(2));
@@ -103,7 +111,8 @@ impl near_duplicates::batch::Evidence for EvidenceClient<'_> {
         &mut self,
         input: &near_duplicates::batch::Input,
     ) -> anyhow::Result<crate::core::pipeline::Asset> {
-        self.request(input, false, false).map(|(asset, ..)| asset)
+        let (asset, ..) = self.request(input, false, false)?;
+        asset.ok_or_else(|| anyhow::anyhow!("Image worker sent no pixels"))
     }
     fn faces(&mut self, input: &near_duplicates::batch::Input) -> Option<Vec<faces::Face>> {
         self.request(input, true, false)
@@ -201,15 +210,30 @@ impl Similarity<'_> {
     /// Cluster the prepared records; `None` when cancelled, stale or failed.
     fn group(&self, job: &SimilarityJob) -> Option<regional::grouping::Output> {
         let cancelled = || self.cancelled(job);
+        let mut steps = super::ProgressSteps::default();
         let grouping = if job.profile == AnalysisProfile::Faces {
             face_groups::group(&job.regional, &job.store, cancelled)
         } else {
-            regional::grouping::group(
+            regional::grouping::group_with(
                 &job.regional,
                 &job.store,
                 job.profile == AnalysisProfile::Mixed,
                 job.similarity_distance,
+                job.stats.model_threads,
                 cancelled,
+                |done, total| {
+                    // A large library compares for a while: show how far it is.
+                    if steps.due(done, total) {
+                        self.send(
+                            job,
+                            Event::Progress {
+                                run: job.run,
+                                done,
+                                total,
+                            },
+                        );
+                    }
+                },
             )
         };
         let grouped = match grouping {

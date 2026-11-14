@@ -7,7 +7,10 @@ use crate::core::{
     subjects::store::Store,
 };
 use anyhow::Result;
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    rc::Rc,
+};
 
 #[derive(Clone)]
 pub struct Input {
@@ -131,7 +134,27 @@ pub fn review(
     store: &Store,
     evidence: &mut impl Evidence,
     cancelled: impl Fn() -> bool,
+    progress: impl FnMut(usize, usize),
+) -> Result<Option<Vec<Pair>>> {
+    let held = crate::core::memory::grouping_allowance() / 4;
+    review_holding(
+        inputs,
+        store,
+        evidence,
+        cancelled,
+        progress,
+        usize::try_from(held).unwrap_or(usize::MAX),
+    )
+}
+
+/// `review` holding at most `held` bytes of the photos under comparison.
+fn review_holding(
+    inputs: &[Input],
+    store: &Store,
+    evidence: &mut impl Evidence,
+    cancelled: impl Fn() -> bool,
     mut progress: impl FnMut(usize, usize),
+    held: usize,
 ) -> Result<Option<Vec<Pair>>> {
     let mut comparator = Comparator::default();
     let mut exact = BTreeMap::<&str, Vec<usize>>::new();
@@ -177,79 +200,108 @@ pub fn review(
         .map(|g| g.len().saturating_mul(g.len().saturating_sub(1)) / 2)
         .sum();
     let mut done = 0;
+    // A photo meets every other photo of its group. Its pixels are asked for
+    // once per group while they fit, and its faces once per review, found or
+    // not: a photo whose faces cannot be had now is not asked again per pair.
+    let mut planes = Planes::new(held);
+    let mut faces = HashMap::<usize, Option<Vec<Face>>>::new();
     for group in groups.values() {
+        planes.clear();
         let mut candidates = Vec::new();
         for (at, &a) in group.iter().enumerate() {
-            for &b in &group[at + 1..] {
-                if cancelled() {
-                    return Ok(None);
-                }
-                done += 1;
-                if done % 16 == 0 || done == total {
-                    progress(done, total);
-                }
-                let (first, second) = (&inputs[a], &inputs[b]);
-                let Some(cosine) =
-                    cosine(&first.embedding, &second.embedding).filter(|v| *v >= 0.97)
-                else {
-                    continue;
-                };
-                let key = Store::duplicate_key(&first.key, &second.key);
-                let assessment = if let Some(previous) = store.duplicate(&key) {
-                    previous
-                } else {
-                    // Like a twin preview in `format_pairs`, a photo that cannot be
-                    // read now only skips its pairs instead of failing the review.
-                    let (left, right) = match (evidence.image(first), evidence.image(second)) {
-                        (Ok(left), Ok(right)) => (left, right),
-                        (Err(error), _) | (_, Err(error)) => {
-                            if cancelled() {
-                                return Ok(None);
+            let first = &inputs[a];
+            // The first photo's assessments are one cache record, read when
+            // a pair first needs it and written once the photo is done.
+            let mut known = None;
+            let row = (|| -> Result<Option<()>> {
+                for &b in &group[at + 1..] {
+                    if cancelled() {
+                        return Ok(None);
+                    }
+                    done += 1;
+                    if done % 16 == 0 || done == total {
+                        progress(done, total);
+                    }
+                    let second = &inputs[b];
+                    let Some(cosine) =
+                        cosine(&first.embedding, &second.embedding).filter(|v| *v >= 0.97)
+                    else {
+                        continue;
+                    };
+                    let known = known.get_or_insert_with(|| store.duplicates(&first.key));
+                    let id = Store::duplicate_id(&first.key, &second.key);
+                    let assessment = if let Some(previous) = known.get(&id) {
+                        previous.clone()
+                    } else {
+                        // Like a twin preview in `format_pairs`, a photo that cannot be
+                        // read now only skips its pairs instead of failing the review.
+                        let (left, right) = match (
+                            planes.get(a, first, evidence, &cancelled),
+                            planes.get(b, second, evidence, &cancelled),
+                        ) {
+                            (Ok(left), Ok(right)) => (left, right),
+                            (Err(error), _) | (_, Err(error)) => {
+                                if cancelled() {
+                                    return Ok(None);
+                                }
+                                tracing::warn!(
+                                    first = %first.media.path.display(),
+                                    second = %second.media.path.display(),
+                                    %error,
+                                    "near-duplicate pair skipped"
+                                );
+                                continue;
                             }
-                            tracing::warn!(
-                                first = %first.media.path.display(),
-                                second = %second.media.path.display(),
-                                %error,
-                                "near-duplicate pair skipped"
-                            );
-                            continue;
+                        };
+                        let (Some(left), Some(right)) = (left, right) else {
+                            return Ok(None);
+                        };
+                        let (left, right) = (left.plane(), right.plane());
+                        let assessment = comparator.assess(
+                            Some(left.view()),
+                            Some(right.view()),
+                            false,
+                            |side| {
+                                let index = match side {
+                                    Side::First => a,
+                                    Side::Second => b,
+                                };
+                                faces
+                                    .entry(index)
+                                    .or_insert_with(|| evidence.faces(&inputs[index]))
+                                    .clone()
+                            },
+                            &cancelled,
+                        );
+                        if cancelled() || assessment.reason == Reason::Cancelled {
+                            return Ok(None);
                         }
-                    };
-                    let Some(left) = gray(&left, &cancelled) else {
-                        return Ok(None);
-                    };
-                    let Some(right) = gray(&right, &cancelled) else {
-                        return Ok(None);
-                    };
-                    let assessment = comparator.assess(
-                        Some(left.view()),
-                        Some(right.view()),
-                        false,
-                        |side| {
-                            evidence.faces(match side {
-                                Side::First => first,
-                                Side::Second => second,
-                            })
-                        },
-                        &cancelled,
-                    );
-                    if cancelled() || assessment.reason == Reason::Cancelled {
-                        return Ok(None);
-                    }
-                    // Missing model/evidence may be transient. Never persist that failure.
-                    if assessment.reason != Reason::FaceAnalysisUnavailable {
-                        store.put_duplicate(&key, &assessment)?;
-                    }
-                    assessment
-                };
-                if assessment.accepted() {
-                    let distance = (1. - cosine).min(
+                        // Missing model/evidence may be transient. Never persist that failure.
+                        if assessment.reason != Reason::FaceAnalysisUnavailable {
+                            known.insert(id, assessment.clone());
+                        }
                         assessment
-                            .structural_similarity
-                            .map_or(1. - cosine, |s| 1. - s),
-                    );
-                    candidates.push((distance, a, b, assessment));
+                    };
+                    if assessment.accepted() {
+                        let distance = (1. - cosine).min(
+                            assessment
+                                .structural_similarity
+                                .map_or(1. - cosine, |s| 1. - s),
+                        );
+                        candidates.push((distance, a, b, assessment));
+                    }
                 }
+                Ok(Some(()))
+            })();
+            // Also when the review stops here: what was assessed stays assessed.
+            if let Some(known) = known {
+                let written = store.put_duplicates(known);
+                if row.is_ok() {
+                    written?;
+                }
+            }
+            if row?.is_none() {
+                return Ok(None);
             }
         }
         candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
@@ -342,22 +394,287 @@ impl Plane {
         Gray::new(&self.pixels, self.width, self.height).unwrap()
     }
 }
-/// OpenCV's integer RGB-to-gray coefficients, then unit normalization. Work at
-/// the shared canonical preview size; resolution differences remain documented.
-fn gray(asset: &Asset, cancelled: &impl Fn() -> bool) -> Option<Plane> {
+/// A photo's luminance as bytes: a quarter of what the comparison works on,
+/// so a whole burst can wait in memory for its next pair.
+struct Luma {
+    pixels: Vec<u8>,
+    width: usize,
+    height: usize,
+}
+impl Luma {
+    /// Unit-range luminance for the comparison.
+    fn plane(&self) -> Plane {
+        Plane {
+            pixels: self.pixels.iter().map(|v| f32::from(*v) / 255.).collect(),
+            width: self.width,
+            height: self.height,
+        }
+    }
+}
+/// OpenCV's integer RGB-to-gray coefficients. Work at the shared canonical
+/// preview size; resolution differences remain documented.
+fn luma(asset: &Asset, cancelled: &impl Fn() -> bool) -> Option<Luma> {
     let (width, height) = asset.pixels.dimensions();
     let mut pixels = Vec::with_capacity(width as usize * height as usize);
     for row in asset.pixels.rows() {
         if cancelled() {
             return None;
         }
-        pixels.extend(
-            row.map(|p| f32::from(crate::core::pixels::luminance(p[0], p[1], p[2])) / 255.),
-        );
+        pixels.extend(row.map(|p| crate::core::pixels::luminance(p[0], p[1], p[2])));
     }
-    Some(Plane {
+    Some(Luma {
         pixels,
         width: width as usize,
         height: height as usize,
     })
+}
+/// The photos of the group under review, each asked of the image owner once
+/// while they fit in `budget` bytes; beyond that the ones unused the longest
+/// are let go and asked for again.
+struct Planes {
+    held: HashMap<usize, (Rc<Luma>, u64)>,
+    bytes: usize,
+    budget: usize,
+    tick: u64,
+}
+impl Planes {
+    fn new(budget: usize) -> Self {
+        Self {
+            held: HashMap::new(),
+            bytes: 0,
+            budget,
+            tick: 0,
+        }
+    }
+    fn clear(&mut self) {
+        self.held.clear();
+        self.bytes = 0;
+    }
+    /// `Ok(None)` when cancelled. A photo that cannot be read is asked for
+    /// again by its next pair, as it may be readable then.
+    fn get(
+        &mut self,
+        index: usize,
+        input: &Input,
+        evidence: &mut impl Evidence,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Option<Rc<Luma>>> {
+        self.tick += 1;
+        if let Some((luma, used)) = self.held.get_mut(&index) {
+            *used = self.tick;
+            return Ok(Some(luma.clone()));
+        }
+        let Some(luma) = luma(&evidence.image(input)?, cancelled) else {
+            return Ok(None);
+        };
+        let luma = Rc::new(luma);
+        self.bytes += luma.pixels.len();
+        self.held.insert(index, (luma.clone(), self.tick));
+        while self.bytes > self.budget {
+            let Some(oldest) = self
+                .held
+                .iter()
+                .filter(|(held, _)| **held != index)
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(held, _)| *held)
+            else {
+                break;
+            };
+            if let Some((dropped, _)) = self.held.remove(&oldest) {
+                self.bytes -= dropped.pixels.len();
+            }
+        }
+        Ok(Some(luma))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::model::{Fingerprint, MediaKind};
+    use std::sync::Arc;
+
+    /// A library on disk: some photos cannot be read, some have no face
+    /// evidence, and every request is counted.
+    struct Library {
+        sizes: Vec<Asset>,
+        images: HashMap<MediaId, usize>,
+        faces: HashMap<MediaId, usize>,
+    }
+    impl Library {
+        /// One picture at several sizes. Photos of one size are the same
+        /// frame; photos of different sizes cannot be aligned, which is
+        /// decided at once and keeps the test quick.
+        fn new() -> Self {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/near_duplicate/00.png");
+            let picture = image::open(path).unwrap().to_rgba8();
+            let sizes = (0..6)
+                .map(|n| {
+                    let pixels = image::imageops::thumbnail(&picture, 64 - 4 * n, 48 - 3 * n);
+                    let pixels = Arc::new(pixels);
+                    Asset {
+                        decoder_warning: None,
+                        pixels: pixels.clone(),
+                        thumbnail: pixels,
+                        metadata: Default::default(),
+                    }
+                })
+                .collect();
+            Self {
+                sizes,
+                images: HashMap::new(),
+                faces: HashMap::new(),
+            }
+        }
+    }
+    impl Evidence for Library {
+        fn image(&mut self, input: &Input) -> Result<Asset> {
+            anyhow::ensure!(input.media.id.0 % 11 != 5, "Cannot decode");
+            *self.images.entry(input.media.id).or_default() += 1;
+            // The test keeps each photo's size in its metadata count.
+            Ok(self.sizes[input.metadata_fields].clone())
+        }
+        fn faces(&mut self, input: &Input) -> Option<Vec<Face>> {
+            *self.faces.entry(input.media.id).or_default() += 1;
+            (input.media.id.0 % 6 != 4).then(Vec::new)
+        }
+    }
+
+    /// The near pass as it was before photos and faces were held: every pair
+    /// asks for both photos and both faces again, and nothing is cached.
+    fn pair_by_pair(inputs: &[Input], evidence: &mut impl Evidence) -> Vec<Pair> {
+        let mut comparator = Comparator::default();
+        let mut groups = BTreeMap::<usize, Vec<usize>>::new();
+        for (i, input) in inputs.iter().enumerate() {
+            groups.entry(input.group).or_default().push(i);
+        }
+        let mut assigned = HashSet::new();
+        let mut result = Vec::new();
+        for group in groups.values() {
+            let mut candidates = Vec::new();
+            for (at, &a) in group.iter().enumerate() {
+                for &b in &group[at + 1..] {
+                    let (first, second) = (&inputs[a], &inputs[b]);
+                    let Some(cosine) =
+                        cosine(&first.embedding, &second.embedding).filter(|v| *v >= 0.97)
+                    else {
+                        continue;
+                    };
+                    let (Ok(left), Ok(right)) = (evidence.image(first), evidence.image(second))
+                    else {
+                        continue;
+                    };
+                    let left = luma(&left, &|| false).unwrap().plane();
+                    let right = luma(&right, &|| false).unwrap().plane();
+                    let assessment = comparator.assess(
+                        Some(left.view()),
+                        Some(right.view()),
+                        false,
+                        |side| {
+                            evidence.faces(match side {
+                                Side::First => first,
+                                Side::Second => second,
+                            })
+                        },
+                        || false,
+                    );
+                    if assessment.accepted() {
+                        let distance = (1. - cosine).min(
+                            assessment
+                                .structural_similarity
+                                .map_or(1. - cosine, |s| 1. - s),
+                        );
+                        candidates.push((distance, a, b, assessment));
+                    }
+                }
+            }
+            candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+            for (_, a, b, assessment) in candidates {
+                if !assigned.contains(&a) && !assigned.contains(&b) {
+                    assigned.extend([a, b]);
+                    result.push(pair(&inputs[a], &inputs[b], assessment));
+                }
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn holding_photos_and_faces_for_the_review_keeps_every_pair_and_asks_once() {
+        let summary = |pairs: &[Pair]| -> Vec<_> {
+            pairs
+                .iter()
+                .map(|p| {
+                    (
+                        p.keep,
+                        p.discard,
+                        p.keeper,
+                        p.assessment.reason,
+                        p.assessment.structural_similarity.map(f64::to_bits),
+                    )
+                })
+                .collect()
+        };
+        let mut seed = 77_u64;
+        let mut random = |below: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % below
+        };
+        // Room for every photo of a group, then for less than one.
+        for held in [usize::MAX, 1] {
+            let inputs: Vec<_> = (0..11)
+                .map(|n| Input {
+                    media: Media {
+                        id: MediaId(n),
+                        path: format!("/{n}.png").into(),
+                        kind: MediaKind::Photo,
+                        fingerprint: Fingerprint {
+                            bytes: 100 + random(3),
+                            ..Default::default()
+                        },
+                    },
+                    source: n.to_string(),
+                    key: Store::key(&n.to_string(), "model"),
+                    hash: format!("hash{n}"),
+                    // Three frames of one burst compete for two places.
+                    group: if n < 3 { 0 } else { random(2) as usize },
+                    // Most pairs pass the similarity gate, some do not.
+                    embedding: vec![1., random(28) as f32 / 100.],
+                    sharpness: Some(random(4) as f64),
+                    metadata_fields: if n < 3 { 0 } else { random(6) as usize },
+                    shot: None,
+                    camera: String::new(),
+                    captured_ms: None,
+                    faces: 0,
+                })
+                .collect();
+            let expected = summary(&pair_by_pair(&inputs, &mut Library::new()));
+            assert!(!expected.is_empty());
+            let root = tempfile::tempdir().unwrap();
+            let store = Store::new(root.path().into(), true).unwrap();
+            let mut library = Library::new();
+            let review = |library: &mut Library| {
+                review_holding(&inputs, &store, library, || false, |_, _| {}, held)
+                    .unwrap()
+                    .unwrap()
+            };
+            assert_eq!(summary(&review(&mut library)), expected, "holding {held}");
+            assert!(library.faces.values().all(|asked| *asked == 1));
+            if held == usize::MAX {
+                assert!(library.images.values().all(|asked| *asked == 1));
+            }
+            // One record per first photo. A second review needs pixels only
+            // for the pairs whose faces could not be had.
+            assert!(std::fs::read_dir(root.path()).unwrap().count() < inputs.len());
+            let before: usize = library.images.values().sum();
+            assert_eq!(summary(&review(&mut library)), expected);
+            let again = library.images.values().sum::<usize>() - before;
+            if held == usize::MAX {
+                assert!(again <= inputs.len());
+            }
+        }
+    }
 }

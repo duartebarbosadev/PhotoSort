@@ -373,12 +373,39 @@ fn probe_model() -> Vec<u8> {
         bytes(t, 8, b"W");
         bytes(t, 9, &1f32.to_le_bytes());
     });
-    // NodeProto { input: 1, output: 2, op_type: 4 }.
+    // AttributeProto { name: 1, i: 3, ints: 8, type: 20 }.
+    const INT: u64 = 2;
+    const INTS: u64 = 7;
+    let ints = |name: &str, values: &[u64]| {
+        message(|a| {
+            bytes(a, 1, name.as_bytes());
+            for value in values {
+                int(a, 8, *value);
+            }
+            int(a, 20, INTS);
+        })
+    };
+    // NodeProto { input: 1, output: 2, op_type: 4, attribute: 5 }. The
+    // attributes are spelled out as every exported model does: Core ML
+    // refuses a convolution that leaves its padding to the default.
     let node = message(|n| {
         bytes(n, 1, b"X");
         bytes(n, 1, b"W");
         bytes(n, 2, b"Y");
         bytes(n, 4, b"Conv");
+        bytes(n, 5, &ints("dilations", &[1, 1]));
+        bytes(
+            n,
+            5,
+            &message(|a| {
+                bytes(a, 1, b"group");
+                int(a, 3, 1);
+                int(a, 20, INT);
+            }),
+        );
+        bytes(n, 5, &ints("kernel_shape", &[1, 1]));
+        bytes(n, 5, &ints("pads", &[0, 0, 0, 0]));
+        bytes(n, 5, &ints("strides", &[1, 1]));
     });
     // GraphProto { node: 1, name: 2, initializer: 5, input: 11, output: 12 }.
     let graph = message(|g| {
@@ -493,6 +520,12 @@ mod tests {
         assert_eq!(
             found.probes.iter().map(|(b, _)| *b).collect::<Vec<_>>(),
             offered
+        );
+        // Core ML is part of macOS: a failure here is the probe model's.
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            found.probes,
+            [(Backend::CoreMl, crate::core::processing::Probe::Works)]
         );
         eprintln!("{found:?}");
         Ok(())

@@ -1,4 +1,4 @@
-use super::{Artifact, Evidence, Geometry, cosine};
+use super::{Artifact, Evidence, Geometry, cosine, cosine_of, length};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,12 +151,19 @@ fn match_sets(a: &[Evidence], b: &[Evidence]) -> (bool, f64) {
     }
     let n = a.len();
     let mut scores = vec![vec![0.0; n]; n];
+    // Every descriptor is finite here; its length is the same for each of
+    // the other photo's regions it is compared with.
+    let lengths =
+        |set: &[Evidence]| -> Vec<f32> { set.iter().map(|e| length(&e.descriptor)).collect() };
+    let (lengths_a, lengths_b) = (lengths(a), lengths(b));
     for (i, a) in a.iter().enumerate() {
         for (j, b) in b.iter().enumerate() {
-            if a.kind != b.kind {
+            if a.kind != b.kind || a.descriptor.len() != b.descriptor.len() {
                 continue;
             }
-            let Some(similarity) = cosine(&a.descriptor, &b.descriptor) else {
+            let Some(similarity) =
+                cosine_of(&a.descriptor, &b.descriptor, lengths_a[i], lengths_b[j])
+            else {
                 continue;
             };
             let aspect = |e: &Evidence| {

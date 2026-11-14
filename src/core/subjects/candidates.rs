@@ -1,5 +1,6 @@
 //! Exact semantic and temporal retrieval shared by Cull and Pick Best.
 use super::{Artifact, dot, normalized};
+use crate::core::parallel;
 use std::{
     cmp::Reverse,
     collections::{BTreeSet, BinaryHeap},
@@ -38,13 +39,23 @@ fn offer(heap: &mut BinaryHeap<Reverse<Neighbor>>, value: Neighbor) {
 }
 
 /// Exact candidates with O(n*k) retained storage and no n-by-n matrix. Stable
-/// path order breaks semantic/temporal ties. Finite dot products are symmetric;
-/// evaluate each pair once, feeding both bounded top-32 heaps. Invalid vectors
-/// retain directional IEEE behavior rather than assuming NaN payload symmetry.
+/// path order breaks semantic/temporal ties.
 pub fn candidates(
     artifacts: &[Artifact],
     times: &[Option<i64>],
     cancelled: impl Fn() -> bool,
+) -> Option<Vec<(usize, usize)>> {
+    candidates_with(artifacts, times, 1, cancelled, |_, _| {})
+}
+
+/// `candidates` on up to `threads` threads. `progress` hears how many photos
+/// have their nearest neighbours, of how many.
+pub fn candidates_with(
+    artifacts: &[Artifact],
+    times: &[Option<i64>],
+    threads: usize,
+    cancelled: impl Fn() -> bool,
+    progress: impl FnMut(usize, usize),
 ) -> Option<Vec<(usize, usize)>> {
     let mut vectors = Vec::with_capacity(artifacts.len());
     let mut finite = Vec::with_capacity(artifacts.len());
@@ -56,6 +67,40 @@ pub fn candidates(
         finite.push(vector.iter().all(|v| v.is_finite()));
         vectors.push(vector);
     }
+    let width = vectors.first().map_or(0, Vec::len);
+    let nearest = if width > 0
+        && finite.iter().all(|finite| *finite)
+        && vectors.iter().all(|v| v.len() == width)
+    {
+        nearest_screened(vectors, width, threads, &cancelled, progress)?
+    } else {
+        nearest_exhaustive(&vectors, &finite, &cancelled)?
+    };
+    let mut pairs = BTreeSet::new();
+    for (i, row) in nearest.into_iter().enumerate() {
+        if cancelled() {
+            return None;
+        }
+        for j in row {
+            pairs.insert((i.min(j), i.max(j)));
+        }
+    }
+    if !add_temporal(times, artifacts.len(), &mut pairs, &cancelled) {
+        return None;
+    }
+    (!cancelled()).then(|| pairs.into_iter().collect())
+}
+
+/// Each photo's 32 nearest, every pair compared with the exact dot product.
+/// Finite dot products are symmetric; evaluate each pair once, feeding both
+/// bounded top-32 heaps. Invalid vectors retain directional IEEE behavior
+/// rather than assuming NaN payload symmetry. Also the reference the screened
+/// search is tested against.
+fn nearest_exhaustive(
+    vectors: &[Vec<f32>],
+    finite: &[bool],
+    cancelled: &impl Fn() -> bool,
+) -> Option<Vec<Vec<usize>>> {
     let mut nearest: Vec<_> = (0..vectors.len())
         .map(|_| BinaryHeap::with_capacity(32.min(vectors.len().saturating_sub(1))))
         .collect();
@@ -77,20 +122,103 @@ pub fn candidates(
             offer(&mut nearest[j], Neighbor(backward, i));
         }
     }
-    drop(vectors);
-    let mut pairs = BTreeSet::new();
-    for (i, heap) in nearest.into_iter().enumerate() {
+    Some(
+        nearest
+            .into_iter()
+            .map(|heap| heap.into_iter().map(|Reverse(Neighbor(_, j))| j).collect())
+            .collect(),
+    )
+}
+
+/// Photos searched per block, and photos compared against at a time so the
+/// block's vectors stay in the processor cache.
+const ROWS: usize = 16;
+const COLUMNS: usize = 128;
+
+/// The same neighbours as `nearest_exhaustive` for finite vectors of one
+/// width, several times faster and on several threads. A vectorized dot
+/// product ranks every other photo first; it can differ from the exact one by
+/// less than `dot_error`, so every photo that close to the 32nd place is
+/// compared exactly, and the exact values alone choose and order the 32.
+fn nearest_screened(
+    mut vectors: Vec<Vec<f32>>,
+    width: usize,
+    threads: usize,
+    cancelled: &impl Fn() -> bool,
+    mut progress: impl FnMut(usize, usize),
+) -> Option<Vec<Vec<usize>>> {
+    let count = vectors.len();
+    let mut flat = Vec::with_capacity(count * width);
+    let mut lengths = Vec::with_capacity(count);
+    for vector in vectors.drain(..) {
         if cancelled() {
             return None;
         }
-        for Reverse(Neighbor(_, j)) in heap {
-            pairs.insert((i.min(j), i.max(j)));
-        }
+        lengths.push(
+            vector
+                .iter()
+                .map(|v| f64::from(*v) * f64::from(*v))
+                .sum::<f64>()
+                .sqrt(),
+        );
+        flat.extend_from_slice(&vector);
     }
-    if !add_temporal(times, artifacts.len(), &mut pairs, &cancelled) {
-        return None;
-    }
-    (!cancelled()).then(|| pairs.into_iter().collect())
+    let longest = lengths.iter().copied().fold(0.0, f64::max);
+    let row = |i: usize| &flat[i * width..(i + 1) * width];
+    let blocks = parallel::blocks(
+        threads,
+        count.div_ceil(ROWS),
+        cancelled,
+        |blocks| progress((blocks * ROWS).min(count), count),
+        |block, stop| {
+            let rows = block * ROWS..((block + 1) * ROWS).min(count);
+            let mut scores = vec![0.0f32; rows.len() * count];
+            for columns in (0..count).step_by(COLUMNS) {
+                if stop() {
+                    return None;
+                }
+                for (r, i) in rows.clone().enumerate() {
+                    let a = row(i);
+                    for j in columns..(columns + COLUMNS).min(count) {
+                        scores[r * count + j] = parallel::fast_dot(a, row(j));
+                    }
+                }
+            }
+            let mut nearest = Vec::with_capacity(rows.len());
+            for (r, i) in rows.enumerate() {
+                let scores = &scores[r * count..(r + 1) * count];
+                let mut screened = BinaryHeap::with_capacity(32);
+                for (j, score) in scores.iter().enumerate() {
+                    if j != i {
+                        offer(&mut screened, Neighbor(f64::from(*score), j));
+                    }
+                }
+                // Below this no photo can be among the exact 32: the 32 best
+                // screened scores are each at least `place - error` exactly.
+                let cut = if screened.len() < 32 {
+                    f64::NEG_INFINITY
+                } else {
+                    let place = screened.peek().map_or(f64::NEG_INFINITY, |n| n.0.0);
+                    place - 2.0 * parallel::dot_error(width, lengths[i], longest)
+                };
+                let a = row(i);
+                let mut exact = BinaryHeap::with_capacity(32);
+                for (j, score) in scores.iter().enumerate() {
+                    if j != i && f64::from(*score) >= cut {
+                        offer(&mut exact, Neighbor(f64::from(dot(a, row(j))), j));
+                    }
+                }
+                nearest.push(
+                    exact
+                        .into_iter()
+                        .map(|Reverse(Neighbor(_, j))| j)
+                        .collect::<Vec<_>>(),
+                );
+            }
+            Some(nearest)
+        },
+    )?;
+    Some(blocks.into_iter().flatten().collect())
 }
 
 fn add_temporal(
@@ -350,6 +478,46 @@ mod tests {
                     );
                 }
             }
+        }
+        // The threaded search ranks with a faster dot product first. Photos of
+        // one scene differ in the last bits of their similarity, far closer
+        // than that product is exact, and exact copies tie: the 32 must still
+        // be chosen and ordered by the exact values alone.
+        let scenes: Vec<Vec<f32>> = (0..5)
+            .map(|scene| {
+                (0..384)
+                    .map(|i| ((i * 31 + scene * 17) % 97) as f32 - 48.0)
+                    .collect()
+            })
+            .collect();
+        let artifacts: Vec<_> = (0..230)
+            .map(|i| Artifact {
+                global: scenes[i % scenes.len()]
+                    .iter()
+                    .map(|v| {
+                        seed ^= seed << 13;
+                        seed ^= seed >> 7;
+                        seed ^= seed << 17;
+                        let noise = (seed % 2001) as f32 / 1000.0 - 1.0;
+                        v + noise * [0.0, 1e-4, 1e-2, 3.0][i / 5 % 4]
+                    })
+                    .collect(),
+                subjects: vec![],
+                faces: vec![],
+            })
+            .collect();
+        let expected = oracle(&artifacts, &[]);
+        for threads in [1, 3] {
+            let mut reported = Vec::new();
+            let found = candidates_with(
+                &artifacts,
+                &[],
+                threads,
+                || false,
+                |done, total| reported.push((done, total)),
+            );
+            assert_eq!(found.unwrap(), expected, "{threads} threads");
+            assert_eq!(reported.last(), Some(&(230, 230)));
         }
     }
 
