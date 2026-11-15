@@ -117,9 +117,11 @@ fn recovery_details_preserve_source_failure_chain_through_restart_and_retry() {
             .unwrap();
         assert_eq!(report.errors.len(), 1);
         assert!(report.errors[0].starts_with(&format!("{label}: ")));
+        // The path as a person reads it: without the prefix Windows puts on
+        // a resolved path.
         assert!(report.errors[0].contains(&format!(
             "Could not verify reviewed source {}",
-            source.path.display()
+            crate::core::text::shown(&source.path)
         )));
         assert!(report.errors[0].contains(&cause));
         let ticket = report.recovery.as_ref().unwrap();
