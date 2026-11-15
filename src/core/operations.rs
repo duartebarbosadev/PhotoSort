@@ -295,7 +295,7 @@ pub struct Report {
 }
 /// A folder the review listed as going that is still there. Keeping it is
 /// the safe end of its step, not a failure: a retry would end the same way.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeptFolder {
     pub path: PathBuf,
     /// The review listed it as sent to the Trash with its leftovers, which

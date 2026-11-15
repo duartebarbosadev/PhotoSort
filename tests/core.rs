@@ -463,11 +463,29 @@ fn session_drops_stale_decisions() {
             },
         )]),
         fingerprints: HashMap::from([(m.id, m.fingerprint)]).into(),
+        waiting: None,
     };
     let mut changed = m.clone();
     changed.fingerprint.bytes += 1;
     s.reconcile(&[changed]);
     assert!(s.decisions.is_empty());
+    // With nothing waiting for Retry the file is written as it always was.
+    // What waits is read back, and notes that cannot be read, a later
+    // build's say, are skipped: they never cost the staged choices.
+    assert!(!serde_json::to_string(&s).unwrap().contains("waiting"));
+    let saved = |notes: &str| -> Session {
+        serde_json::from_str(&format!(
+            r#"{{"decisions":{{"1":{{"rejected":true,"rating":null,"turns":0}}}},"fingerprints":{{}},"waiting_for_retry":{notes}}}"#
+        ))
+        .unwrap()
+    };
+    let read = saved(
+        r#"{"kept_folders":[{"path":"/p/Locked","for_trash":true,"why":{"in_use":"desktop.ini"}}],"staged":true}"#,
+    );
+    let waiting = read.waiting.unwrap();
+    assert!(waiting.staged && waiting.kept_folders[0].path.ends_with("Locked"));
+    let later = saved(r#"{"kept_folders":[{"path":"/p/Locked","why":{"later_reason":1}}]}"#);
+    assert!(later.waiting.is_none() && later.decisions[&MediaId(1)].rejected);
 }
 #[cfg(unix)]
 #[test]

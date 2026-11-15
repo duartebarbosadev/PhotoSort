@@ -483,6 +483,7 @@ fn identity_chains_and_in_place_updates_preserve_all_intent_and_verified_fingerp
             })
             .collect(),
         fingerprints: m.iter().map(|m| (m.id, m.fingerprint)).collect(),
+        waiting: None,
     };
     let changes: Vec<_> = [(0, 1), (1, 2), (2, 9), (3, 3)]
         .into_iter()

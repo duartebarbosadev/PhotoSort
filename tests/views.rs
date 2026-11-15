@@ -68,6 +68,7 @@ fn views_round_trip_separately_from_decisions_and_drain_across_navigation() {
             .iter()
             .map(|m| (m.id, m.fingerprint))
             .collect(),
+        waiting: None,
     };
     session.save(dir.path()).unwrap();
     let mut runtime = Runtime::with_cache(|| {}, dir.path().join("cache"));

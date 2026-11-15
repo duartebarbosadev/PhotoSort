@@ -481,6 +481,7 @@ fn embedded_rotation_preserves_unapplied_ratings_and_saved_focus_across_reload()
             },
         )]),
         fingerprints: HashMap::from([(m.id, m.fingerprint)]).into(),
+        waiting: None,
     };
     let mut views = Saved::default();
     views.bookmarks.insert(
