@@ -172,6 +172,115 @@ fn pruned_clustering_keeps_labels_loads_bounds_transitivity_and_cancellation() {
     );
 }
 
+/// The in-memory path must number every library exactly as block loading
+/// does, on any number of threads and when it has to fall back.
+#[test]
+fn resident_clustering_gives_the_labels_of_block_loading_on_random_libraries() {
+    let mut state = 2026;
+    let unit = |index: usize| {
+        let mut v = vec![0.; 384];
+        v[index] = 1.;
+        v
+    };
+    for (round, eps) in [0.02, DEFAULT_EPS, 0.2, 1., DEFAULT_EPS, 0.09]
+        .into_iter()
+        .enumerate()
+    {
+        let count = 90 + round * 37;
+        // Scenes of a few photos each, spread from identical to unrelated.
+        let scenes: Vec<Vec<Vec<f32>>> = (0..count / 5 + 1)
+            .map(|_| {
+                (0..6)
+                    .map(|_| (0..384).map(|_| random(&mut state)).collect())
+                    .collect()
+            })
+            .collect();
+        let mut features: Vec<_> = (0..count)
+            .map(|i| {
+                let spread = [0., 0.02, 0.06, 0.12, 0.25, 0.6][i % 6];
+                let rows = scenes[i % scenes.len()]
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|x| x + spread * random(&mut state))
+                            .collect()
+                    })
+                    .collect();
+                Features::new(rows).unwrap()
+            })
+            .collect();
+        // Photos that differ from the first only in their whole-image region,
+        // each a hair to either side of where that region alone decides. Any
+        // pair the fast first look got wrong would change a label here.
+        let limit = 6. * (1. - f64::from(eps)) - 5.;
+        features[0] = Features::new(vec![unit(0); 6]).unwrap();
+        for step in 0..24 {
+            let cosine = (limit + (step as f64 - 12.) * 2e-7).clamp(-1., 1.);
+            let mut rows = vec![unit(0); 6];
+            rows[0][0] = cosine as f32;
+            rows[0][step + 1] = (1. - cosine * cosine).sqrt() as f32;
+            features[step + 1] = Features::new(rows).unwrap();
+        }
+        // Evidence without identity, a single region, and exact copies.
+        features[30] = Features::new(vec![vec![0.; 384]; 6]).unwrap();
+        features[31] = features[30].clone();
+        features[32] = Features::new(vec![features[40].rows[0].clone()]).unwrap();
+        features[33] = features[41].clone();
+        let mut records = inputs(count);
+        for (i, record) in records.iter_mut().enumerate() {
+            record.portrait = i % 7 == 3;
+        }
+        let load = |key: &str| Ok(features[key.parse::<usize>().unwrap()].clone());
+        let expected = cluster(&records, eps, load, || false).unwrap().unwrap();
+        for threads in [1, 3] {
+            let mut parts = Vec::new();
+            let resident = cluster_resident(
+                &records,
+                eps,
+                load,
+                || false,
+                threads,
+                u64::MAX,
+                |part| parts.push(part),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                resident.labels, expected.labels,
+                "round {round}, {threads} threads"
+            );
+            assert_eq!(
+                resident.stats.evidence_loads, count,
+                "each descriptor is read once"
+            );
+            assert!(
+                parts.is_sorted() && parts.last().is_some_and(|last| *last <= 1.),
+                "{parts:?}"
+            );
+        }
+        // Too large to hold: block loading takes over, with the same labels.
+        let blocks = cluster_resident(&records, eps, load, || false, 3, 4096, |_| {})
+            .unwrap()
+            .unwrap();
+        assert_eq!(blocks.labels, expected.labels);
+        assert!(blocks.stats.evidence_loads > count && blocks.stats.peak_resident_records <= 128);
+        let checks = Cell::new(0);
+        let stopped = cluster_resident(
+            &records,
+            eps,
+            load,
+            || {
+                checks.set(checks.get() + 1);
+                checks.get() > count + 2
+            },
+            3,
+            u64::MAX,
+            |_| {},
+        );
+        assert!(stopped.unwrap().is_none());
+    }
+}
+
 #[test]
 #[ignore = "controlled release benchmark; set PHOTOSORT_REGIONAL_MODE and PHOTOSORT_REGIONAL_COUNT"]
 fn regional_pruning_benchmark() -> Result<()> {

@@ -118,6 +118,9 @@ fn damaged_binary_is_a_miss() {
     for index in [0, 7, 8, 9, original.len() - 1] {
         let mut damaged = original.clone();
         damaged[index] ^= 1;
+        // Replaced as the cache replaces a record, never edited in place:
+        // the working set pins the record that was written by a hard link.
+        std::fs::remove_file(&binary).unwrap();
         std::fs::write(&binary, damaged).unwrap();
         assert!(
             Store::new(root.path().into(), true)
