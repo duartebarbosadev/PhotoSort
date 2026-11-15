@@ -69,7 +69,7 @@ pub(super) fn fetch(
             .write(true)
             .create_new(true)
             .open(destination)
-            .with_context(|| format!("Create {}", destination.display()))?;
+            .with_context(|| format!("Create {}", crate::core::text::shown(destination)))?;
         let mut hash = Sha256::new();
         let mut received = 0u64;
         while let Some(chunk) = response.chunk().await? {

@@ -89,7 +89,7 @@ impl Store {
             ensure!(
                 matches!(fs::symlink_metadata(to), Err(e) if e.kind() == std::io::ErrorKind::NotFound),
                 "Destination already exists or cannot be checked: {}",
-                to.display()
+                crate::core::text::shown(to)
             );
             ensure!(
                 destinations.insert(key(to)),

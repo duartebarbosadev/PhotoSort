@@ -386,7 +386,7 @@ fn managed_directory(root: &Path) -> Result<Option<PathBuf>> {
             Ok(meta) => ensure!(
                 meta.is_dir() && !meta.file_type().is_symlink(),
                 "Managed model directory is not a regular directory: {}",
-                path.display()
+                crate::core::text::shown(path)
             ),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
@@ -444,9 +444,10 @@ pub fn remove_reviewed(
                 report.bytes += copy.bytes();
                 report.removed.push(copy.path.clone());
             }
-            Err(error) => report
-                .errors
-                .push(format!("{}: {error:#}", copy.path.display())),
+            Err(error) => report.errors.push(format!(
+                "{}: {error:#}",
+                crate::core::text::shown(&copy.path)
+            )),
         }
     }
     Ok(report)
