@@ -183,7 +183,7 @@ impl PhotoSortApp {
                 )
                 .on_hover_text(format!(
                     "{} · double-click or F2 to rename",
-                    media.path.display()
+                    crate::core::text::shown(&media.path)
                 ));
             if label.double_clicked() {
                 self.board_rename_photo(active);

@@ -204,6 +204,30 @@ fn recovery_details_keep_known_failures_beside_an_interrupted_action() {
     assert!(context.root.join("b.jpg").exists());
     assert!(!context.root.join("Sorted").exists());
     store.discard(&context.root, &restored.ticket).unwrap();
+    // A folder that was kept because it held something the review did not
+    // list is over, not a failure: read back, it is neither retried nor
+    // reported, and only the interrupted move is left.
+    let mut kept = plan.clone();
+    kept.actions[0] = Action::RemoveEmptyDirectory {
+        path: context.root.join("Old"),
+        root: context.root.clone(),
+        after: vec![],
+        leftovers: vec!["Thumbs.db".into()],
+    };
+    let tail = format!(
+        "{}\n{}\n{}\n",
+        serde_json::json!({"status":"pending","index":0}),
+        serde_json::json!({"status":"completed","index":0,"kept":{"holds":"keep.txt"}}),
+        serde_json::json!({"status":"pending","index":1})
+    );
+    prepared(&store, &context, &kept, tail.as_bytes());
+    let restored = store.restore(&context.root, &|| false).unwrap().unwrap();
+    assert!(restored.errors.is_empty(), "{:?}", restored.errors);
+    assert!(matches!(
+        restored.plan.actions.as_slice(),
+        [Action::Move { .. }]
+    ));
+    store.discard(&context.root, &restored.ticket).unwrap();
 }
 
 #[test]
@@ -2487,7 +2511,22 @@ fn trash_group_that_fails_partway_retries_only_the_files_still_present() {
         .unwrap();
     flags("nouchg");
     assert!(!a.exists() && b.exists());
-    assert_eq!(report.errors.len(), 1);
+    // A plain sentence that names the file and its folder, where that
+    // folder is, then what the system itself said: its words, not the
+    // error's debug form with a type name and escaped quotes.
+    let said = format!(
+        "“b.jpg” in “{}” could not be sent to the Trash. It may be locked, or this drive may have no Trash.\n  Folder: {}\n  System message: ",
+        context.root.file_name().unwrap().to_string_lossy(),
+        crate::core::text::shown(&context.root)
+    );
+    assert!(
+        matches!(&report.errors[..], [failure] if failure.starts_with(&said)
+            && !failure.contains("Unknown {")
+            && !failure.contains("trashItemAtURL")
+            && !failure.contains('\\')),
+        "{:?}",
+        report.errors
+    );
     assert!(matches!(
         &report.remaining.actions[..],
         [Action::Trash { files }] if files.len() == 1 && files[0].path == b
@@ -2501,6 +2540,8 @@ fn trash_group_that_fails_partway_retries_only_the_files_still_present() {
         serde_json::to_value(&restored.plan.actions).unwrap(),
         serde_json::to_value(&report.remaining.actions).unwrap()
     );
+    // Read back after a restart, the failure is worded the same way.
+    assert_eq!(restored.errors, report.errors);
     let retried = store
         .execute(
             &context,

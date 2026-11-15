@@ -129,7 +129,7 @@ impl PhotoSortApp {
             let message = format!(
                 "{} failed for {}: {}",
                 completion.request.action.label(),
-                completion.request.path.display(),
+                crate::core::text::shown(&completion.request.path),
                 error
             );
             self.error = Some(message);

@@ -179,13 +179,23 @@ impl PhotoSortApp {
     /// applies. A photo marked for Trash that also moves counts once, as the
     /// Review step lists it. While that list is on screen the count is the
     /// list's own, so the badge, the sentence and the Apply button always
-    /// say the same number.
+    /// say the same number. While an Apply that did not finish waits to be
+    /// resolved, the count is what it left to do, as the status bar and the
+    /// Review step say it: nothing else is applied before that.
     pub(super) fn staged_change_count(&self) -> usize {
+        // Counted once per plan, not on every frame: see `unfinished`.
+        if let Some(unfinished) = self.unfinished() {
+            return unfinished.left;
+        }
         if let Some(listed) = self.review_listed_count() {
             return listed;
         }
-        (self.staged_choice_count() + self.organize_change_count())
-            .saturating_sub(self.moved_to_trash_count())
+        // A plan made for leaving has read the disk: it knows the folders
+        // that go to the Trash with their leftover files, as Review will.
+        let organize = self
+            .departure_listed_count()
+            .unwrap_or_else(|| self.organize_change_count());
+        (self.staged_choice_count() + organize).saturating_sub(self.moved_to_trash_count())
     }
     pub(super) fn switch_step(&mut self, step: Step) {
         if self.step != step && self.preferences.visible(step) {
@@ -601,7 +611,7 @@ impl PhotoSortApp {
                                             .min_size(egui::vec2(column - 2.0 * S3, 30.0)),
                                     )
                                     .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .on_hover_text(path.display().to_string());
+                                    .on_hover_text(crate::core::text::shown(&path));
                                 let enabled = row.enabled();
                                 row.widget_info(|| {
                                     egui::WidgetInfo::labeled(

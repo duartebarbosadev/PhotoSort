@@ -309,6 +309,9 @@ struct Entry {
     /// never have run.
     #[serde(default)]
     batched: bool,
+    /// A folder's step that ended with the folder still there, and why.
+    #[serde(default)]
+    kept: Option<super::Kept>,
 }
 struct Loaded {
     pending: Vec<usize>,
@@ -496,7 +499,10 @@ impl Store {
                         pending.remove(&entry.index) && completed.insert(entry.index),
                         "Completion without a pending action"
                     );
-                    report.complete(&plan.actions[entry.index], &entry.relocated);
+                    match entry.kept {
+                        Some(why) => report.keep(&plan.actions[entry.index], why),
+                        None => report.complete(&plan.actions[entry.index], &entry.relocated),
+                    }
                     if !entry.error.is_empty() {
                         report
                             .errors
@@ -529,6 +535,7 @@ impl Store {
                                 .context("Invalid partial Trash record")
                                 .map_err(|error| error.context(Damaged))?;
                         report.complete(&done, &[]);
+                        report.split_trash_groups += 1;
                         partial.insert(entry.index, vec![rest]);
                     }
                     if !entry.error.is_empty() {

@@ -81,12 +81,15 @@ mod windows {
         // SAFETY: both strings are NUL-terminated and outlive the calls.
         unsafe {
             if SetDllDirectoryW(wide(&bin).as_ptr()) == 0 {
-                return Err(format!("Could not use GStreamer in {}", bin.display()));
+                return Err(format!(
+                    "Could not use GStreamer in {}",
+                    crate::core::text::shown(&bin)
+                ));
             }
             if LoadLibraryW(wide(&bin.join(CORE)).as_ptr()).is_null() {
                 return Err(format!(
                     "Could not load GStreamer from {}: {}",
-                    bin.display(),
+                    crate::core::text::shown(&bin),
                     std::io::Error::last_os_error()
                 ));
             }

@@ -279,7 +279,7 @@ impl PhotoSortApp {
                 }
                 if ui
                     .button(crate::core::desktop::Action::Reveal.label())
-                    .on_hover_text(path.display().to_string())
+                    .on_hover_text(crate::core::text::shown(&path))
                     .clicked()
                 {
                     reveal = true;
@@ -310,6 +310,13 @@ pub(super) const ERROR_DIALOG: &str = "error_dialog";
 /// technical remainder, which stays available under Details.
 fn error_parts(error: &str) -> (String, Option<String>) {
     let first = error.lines().next().unwrap_or(error).trim();
+    let fits = first.chars().count() <= 240;
+    // A first line that is a sentence of its own leads whole; what follows
+    // it (the system's own words, further failures) is under Details. Before
+    // the split below: a folder may be called "Trip: Day 1".
+    if fits && error.contains('\n') {
+        return (first.to_owned(), Some(error.to_owned()));
+    }
     if let Some((what, _)) = first.split_once(": ")
         && (8..=90).contains(&what.chars().count())
     {
@@ -318,7 +325,7 @@ fn error_parts(error: &str) -> (String, Option<String>) {
             Some(error.to_owned()),
         );
     }
-    if first.chars().count() <= 240 && !error.contains('\n') {
+    if fits {
         return (error.to_owned(), None);
     }
     let short: String = first.chars().take(140).collect();
@@ -352,6 +359,15 @@ mod error_tests {
         let long = "x".repeat(400);
         let (headline, details) = error_parts(&long);
         assert!(headline.chars().count() <= 141 && details.is_some());
+        // A failure that says what the system answered on a second line
+        // leads with its own sentence, whole: not cut at the ": " in the
+        // name of a folder.
+        let lead = "“IMG_0001.jpg” in “Trip: Day 1” could not be sent to the Trash. It may be locked, or this drive may have no Trash.";
+        let (headline, details) = error_parts(&format!(
+            "{lead}\n  Folder: /Volumes/Photos/Trip: Day 1\n  System message: Some operations were aborted"
+        ));
+        assert_eq!(headline, lead);
+        assert!(details.unwrap().ends_with("Some operations were aborted"));
     }
 }
 

@@ -585,7 +585,7 @@ impl PhotoSortApp {
                     suggested_hover: suggested.then(|| self.pick_keep_why(cluster)),
                     caption: media.map(|m| self.shown_name(m)).unwrap_or_default(),
                     name: media
-                        .map(|m| m.path.display().to_string())
+                        .map(|m| crate::core::text::shown(&m.path))
                         .unwrap_or_default(),
                     facts,
                     trash: !keep,

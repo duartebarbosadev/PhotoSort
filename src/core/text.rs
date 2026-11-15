@@ -65,3 +65,84 @@ pub fn other_form(name: &str) -> Option<String> {
     };
     (other != name).then_some(other)
 }
+
+/// A path as it is shown to the user. A folder is opened by its canonical
+/// path, which Windows spells with a prefix that says "take this path as it
+/// is": `\\?\C:\Photos`, and `\\?\UNC\server\share` on a network share.
+/// File work keeps that spelling, which is what lets it reach long paths;
+/// nobody should have to read it. Everything that prints a path for a
+/// person goes through here, or through [`plain_paths`] for a finished
+/// sentence.
+pub fn shown(path: &std::path::Path) -> String {
+    let text = path.display().to_string();
+    match plain_paths(&text) {
+        Cow::Borrowed(_) => text,
+        Cow::Owned(plain) => plain,
+    }
+}
+
+/// `text` with every path in it spelled the way File Explorer spells it:
+/// `\\?\C:\Photos` as `C:\Photos`, `\\?\UNC\server\share` as
+/// `\\server\share`. Other `\\?\` paths (a volume by its identifier) have no
+/// shorter spelling and stay. This is text work only, the same on every
+/// system; a path on macOS or Linux never starts this way.
+pub fn plain_paths(text: &str) -> Cow<'_, str> {
+    const PREFIX: &str = r"\\?\";
+    const SHARE: &str = r"UNC\";
+    if !text.contains(PREFIX) {
+        return Cow::Borrowed(text);
+    }
+    let mut plain = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(PREFIX) {
+        plain.push_str(&rest[..at]);
+        let after = &rest[at + PREFIX.len()..];
+        let drive = {
+            let mut letters = after.chars();
+            letters.next().is_some_and(|c| c.is_ascii_alphabetic()) && letters.next() == Some(':')
+        };
+        if let Some(share) = after.strip_prefix(SHARE) {
+            plain.push_str(r"\\");
+            rest = share;
+        } else {
+            if !drive {
+                plain.push_str(PREFIX);
+            }
+            rest = after;
+        }
+    }
+    plain.push_str(rest);
+    Cow::Owned(plain)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shown_paths_drop_the_windows_prefix_and_keep_everything_else() {
+        for (path, shown_as) in [
+            (r"\\?\C:\Photos\2024\a.jpg", r"C:\Photos\2024\a.jpg"),
+            (r"\\?\f:\", r"f:\"),
+            (r"\\?\UNC\nas\photos\Trip", r"\\nas\photos\Trip"),
+            // No shorter spelling exists for these: they stay as they are.
+            (
+                r"\\?\Volume{4c1b02c1-d990-11dc-99ae-806e6f6e6963}\a.jpg",
+                r"\\?\Volume{4c1b02c1-d990-11dc-99ae-806e6f6e6963}\a.jpg",
+            ),
+            (r"C:\Photos\a.jpg", r"C:\Photos\a.jpg"),
+            (r"\\nas\photos", r"\\nas\photos"),
+            ("/Volumes/Photos/What?/a.jpg", "/Volumes/Photos/What?/a.jpg"),
+        ] {
+            assert_eq!(shown(std::path::Path::new(path)), shown_as);
+        }
+        // A finished sentence is cleaned the same way, every path in it.
+        assert_eq!(
+            plain_paths(
+                r"Rename file \\?\C:\a\x.jpg → \\?\UNC\nas\p\y.jpg: Destination already exists: \\?\C:\a\y.jpg"
+            ),
+            r"Rename file C:\a\x.jpg → \\nas\p\y.jpg: Destination already exists: C:\a\y.jpg"
+        );
+        assert!(matches!(plain_paths("/library/a.jpg"), Cow::Borrowed(_)));
+    }
+}

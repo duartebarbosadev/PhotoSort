@@ -154,18 +154,25 @@ fn system_folders_and_appledouble_files_are_never_photos() {
 #[test]
 fn hidden_current_folders_are_a_noop_and_subtree_moves_keep_names_and_companions() {
     let base = tempfile::tempdir().unwrap();
-    let root = base.path().canonicalize().unwrap();
+    let root = base.path().canonicalize().unwrap().join("library");
+    let trash = base.path().join("trash");
+    operations::trash_stand_in(&root, &trash);
     fs::create_dir_all(root.join(".before/.meta")).unwrap();
     let contents = [
         (".pair.jpg", "jpeg"),
         (".pair.ARW", "raw"),
         (".pair.xmp", "xmp"),
-        (".DS_Store", "hidden document"),
+        (".notes", "hidden document"),
         (".meta/.notes.json", "metadata"),
     ];
     for (name, bytes) in contents {
         fs::write(root.join(".before").join(name), bytes).unwrap();
     }
+    // Finder's own file is the folder's, not one of its documents, and a
+    // folder that holds nothing else is an empty folder to the user.
+    fs::write(root.join(".before/.DS_Store"), b"finder").unwrap();
+    fs::create_dir(root.join(".before/.seen")).unwrap();
+    fs::write(root.join(".before/.seen/Thumbs.db"), b"explorer").unwrap();
     let catalog = Catalog::scan(&root, || false, |_| {}).unwrap();
     let mut draft = Draft::from_catalog(&catalog, labels(&catalog));
     let before = operations::organize_plan_with_layout(
@@ -189,6 +196,9 @@ fn hidden_current_folders_are_a_noop_and_subtree_moves_keep_names_and_companions
         &draft.directory_edits()
     ));
     draft.rename_folder(".before", ".after").unwrap();
+    // It is carried along as an empty folder is: the layout shows it at
+    // its new place, and that is what the disk ends as.
+    assert!(draft.folders().contains(".after/.meta") && draft.folders().contains(".after/.seen"));
     let plan = operations::organize_plan_with_layout(
         &catalog,
         draft.labels(),
@@ -217,6 +227,38 @@ fn hidden_current_folders_are_a_noop_and_subtree_moves_keep_names_and_companions
             bytes
         );
     }
+    // The view files do not follow their folders: each old folder is listed
+    // with the one that goes to the Trash with it. The folder the moves
+    // alone emptied is only removed.
+    let listed: Vec<_> = plan
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::RemoveEmptyDirectory {
+                path, leftovers, ..
+            } => Some((
+                path.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+                leftovers.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (".before/.meta".to_owned(), vec![]),
+            (".before/.seen".to_owned(), vec!["Thumbs.db".to_owned()]),
+            (".before".to_owned(), vec![".DS_Store".to_owned()]),
+        ]
+    );
+    assert!(!root.join(".after/.DS_Store").exists());
+    // Made again, empty: its view file did not move.
+    assert_eq!(fs::read_dir(root.join(".after/.seen")).unwrap().count(), 0);
+    assert!(trash.join(".before/.DS_Store").is_file());
+    assert!(trash.join(".seen/Thumbs.db").is_file());
 }
 
 #[test]
@@ -303,7 +345,7 @@ fn seven_reference_samples_survive_hidden_subtree_move() -> anyhow::Result<()> {
         ));
         fs::copy(&media.path, root.join(".before").join(media.name()))?;
     }
-    fs::write(root.join(".before/.DS_Store"), b"hidden supporting file")?;
+    fs::write(root.join(".before/.notes"), b"hidden supporting file")?;
     fs::write(root.join(".before/.meta/notes.json"), b"metadata document")?;
     fs::write(root.join(".before/arw_sample.xmp"), b"companion bytes")?;
     let catalog = Catalog::scan(&root, || false, |_| {})?;

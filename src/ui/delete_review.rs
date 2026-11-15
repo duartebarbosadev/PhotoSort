@@ -1141,7 +1141,7 @@ impl PhotoSortApp {
                 .as_deref()
                 .and_then(|root| root.file_name())
                 .map_or_else(
-                    || parent.display().to_string(),
+                    || crate::core::text::shown(parent),
                     |n| n.to_string_lossy().into(),
                 ),
             Some(relative) => relative
@@ -1149,7 +1149,7 @@ impl PhotoSortApp {
                 .map(|c| c.to_string_lossy())
                 .collect::<Vec<_>>()
                 .join("/"),
-            None => parent.display().to_string(),
+            None => crate::core::text::shown(parent),
         }
     }
 
@@ -1228,7 +1228,7 @@ impl PhotoSortApp {
                         .flatten(),
                     caption: media.map(|m| self.shown_name(m)).unwrap_or_default(),
                     name: media
-                        .map(|m| m.path.display().to_string())
+                        .map(|m| crate::core::text::shown(&m.path))
                         .unwrap_or_default(),
                     facts,
                     trash: !keep,

@@ -406,6 +406,13 @@ pub struct PhotoSortApp {
     plan: Option<Plan>,
     plan_rows: plan_review::Rows,
     retry_plan: Option<Plan>,
+    /// `retry_plan` in numbers; `None` until asked, and whenever that plan
+    /// is replaced. See [`PhotoSortApp::unfinished`].
+    unfinished: std::cell::Cell<Option<review_step::Unfinished>>,
+    /// Changes the first half of an Apply on the Review step finished (its
+    /// moves), while the second half (Trash marks, ratings, rotations) is
+    /// on its way: the result counts both.
+    applied_before: usize,
     retry_edit: Option<plan_review::Edit>,
     recovery_ticket: Option<crate::core::operations::recovery::Ticket>,
     applying_plan: Option<Plan>,
@@ -449,7 +456,12 @@ pub struct PhotoSortApp {
 impl PhotoSortApp {
     fn report_scan_warnings(&mut self, warnings: &[String]) {
         if let Some(first) = warnings.first() {
-            let warning = format!("{} scan warning(s). {first}", warnings.len());
+            // The walk quotes the path it could not read as the system spells it.
+            let first = crate::core::text::plain_paths(first);
+            let warning = match warnings.len() {
+                1 => format!("1 scan warning. {first}"),
+                n => format!("{n} scan warnings. {first}"),
+            };
             // Recovery is published before the catalog; discovery must not hide it.
             match &mut self.error {
                 Some(error) => {
@@ -464,18 +476,26 @@ impl PhotoSortApp {
     fn restore_operations(&mut self, restored: crate::core::operations::recovery::Restored) {
         self.rotation_plan = !restored.plan.actions.is_empty() && restored.rotation_only;
         self.retry_plan = (!restored.plan.actions.is_empty()).then_some(restored.plan);
+        // Reading the folder again after an Apply that stopped finds the
+        // same plan saved: how much of it had finished is still known.
+        let before = self.unfinished.take();
+        if let Some(unfinished) = self.unfinished()
+            && let Some(before) = before.filter(|before| before.left == unfinished.left)
+        {
+            self.unfinished.set(Some(before));
+        }
         self.recovery_ticket = self.retry_plan.as_ref().map(|_| restored.ticket);
-        if let Some(plan) = &self.retry_plan {
-            self.set_status(format!(
-                "{} saved operations await review",
-                plan.actions.len()
-            ));
+        if let Some(unfinished) = self.unfinished() {
+            self.set_status(unfinished.status());
             let mut details = restored.errors;
-            if restored.uncertain > 0 {
-                details.insert(0, format!(
-                    "{} operation(s) were interrupted before a completion record. They may already be partly applied. Check their source and destination files before retrying; the original source and overwrite guards remain active.",
-                    restored.uncertain
-                ));
+            // These are steps of the saved plan, not the changes counted
+            // above: one photo's move can be one of several.
+            match restored.uncertain {
+                0 => {}
+                1 => details.insert(0, "1 file operation of the unfinished changes was interrupted partway and may already be partly applied. Check its source and destination files before retrying; the original source and overwrite guards remain active.".to_owned()),
+                n => details.insert(0, format!(
+                    "{n} file operations of the unfinished changes were interrupted partway and may already be partly applied. Check their source and destination files before retrying; the original source and overwrite guards remain active."
+                )),
             }
             if !details.is_empty() {
                 self.error = Some(details.join("\n"));
@@ -700,6 +720,8 @@ impl PhotoSortApp {
             plan: None,
             plan_rows: plan_review::Rows::default(),
             retry_plan: None,
+            unfinished: Default::default(),
+            applied_before: 0,
             retry_edit: None,
             recovery_ticket: None,
             applying_plan: None,
@@ -933,6 +955,7 @@ impl PhotoSortApp {
         self.filter = Filter::All;
         self.set_review_plan(None);
         self.retry_plan = None;
+        self.unfinished.set(None);
         self.recovery_ticket = None;
         self.applying_plan = None;
         self.apply_stop = None;

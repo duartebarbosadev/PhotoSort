@@ -307,6 +307,9 @@ impl PhotoSortApp {
         // the moves went to; a departure waits until they are applied.
         let expected = self.review_after_moves.take();
         let dropped = expected.is_some();
+        // What the moves finished counts on only into the second half of
+        // that same Apply. It is given back below when that half starts.
+        let moves_finished = std::mem::take(&mut self.applied_before);
         let chain = expected.filter(|chain| {
             chain
                 .root
@@ -337,7 +340,9 @@ impl PhotoSortApp {
             if !decisions.is_empty() {
                 self.apply_planned = true;
                 self.plan_decisions(decisions, Some(chain.followers), chain.created, chain.tidy);
-                if !self.busy {
+                if self.busy {
+                    self.applied_before = moves_finished;
+                } else {
                     self.apply_planned = false;
                 }
             }
@@ -358,11 +363,8 @@ impl PhotoSortApp {
                 }
             }
         }
-        if let Some(plan) = &self.retry_plan {
-            self.set_status(format!(
-                "{} unfinished operations · Review changes to resolve",
-                plan.actions.len()
-            ));
+        if let Some(unfinished) = self.unfinished() {
+            self.set_status(unfinished.status());
         }
         if !self.manual_groups.is_empty() {
             self.resolve_groups(
@@ -851,6 +853,7 @@ impl PhotoSortApp {
         if std::mem::take(&mut self.apply_planned) {
             if plan.actions.is_empty() {
                 self.set_review_plan(None);
+                self.applied_before = 0;
                 // Nothing left to write: the Review step's Apply is done.
                 if let Some(outcome) = &mut self.review_outcome {
                     outcome.done = true;
@@ -861,7 +864,10 @@ impl PhotoSortApp {
                 }
             } else {
                 self.set_review_plan(Some(plan));
+                // Still the same Apply: what its moves finished counts on.
+                let before = self.applied_before;
                 self.apply_reviewed_plan();
+                self.applied_before = before;
             }
             return;
         }
@@ -904,6 +910,15 @@ impl PhotoSortApp {
                 self.retry_edit = None;
                 self.recovery_ticket = Some(restored.ticket);
                 self.retry_plan = Some(restored.plan.clone());
+                // Another destination can change how the rest is counted.
+                let finished = self
+                    .unfinished
+                    .get()
+                    .and_then(|unfinished| unfinished.finished);
+                self.unfinished.set(Some(review_step::Unfinished {
+                    finished,
+                    left: super::plan_review::plan_changes(&restored.plan),
+                }));
                 self.set_review_plan(Some(restored.plan));
                 self.error = None;
                 self.set_status(
@@ -930,9 +945,18 @@ impl PhotoSortApp {
         self.discard_remaining_operations();
     }
 
-    fn on_applied(&mut self, report: crate::core::operations::Report) -> ControlFlow<()> {
+    fn on_applied(&mut self, mut report: crate::core::operations::Report) -> ControlFlow<()> {
         let recovery_ticket = report.recovery.clone();
         self.busy = false;
+        // What finished and what is left, counted as the Review list counts
+        // changes: its sentence, the status bar and the "did not finish"
+        // card then say the same numbers.
+        // The moves the same Apply finished before these choices count too.
+        let finished = finished_changes(&mut report) + std::mem::take(&mut self.applied_before);
+        let unfinished = (!report.remaining.actions.is_empty()).then(|| review_step::Unfinished {
+            finished: Some(finished),
+            left: super::plan_review::plan_changes(&report.remaining),
+        });
         // The pre-apply bookmark is already in the durable operation
         // context. Do not enqueue that old identity snapshot here.
         self.saved_views.relocate(&report.relocated);
@@ -996,30 +1020,31 @@ impl PhotoSortApp {
                 .collect();
             chain.created = report.created_folders.clone();
             chain.root = self.root.clone().map(|root| output.clone().unwrap_or(root));
+            // The second half adds to these. A photo that moved on its way
+            // to the Trash is counted there, once, as the list counted it.
+            let passing = moved_on_the_way_to_trash(&report.completed, |id| {
+                chain.decisions.get(&id).is_some_and(|d| d.rejected)
+                    || chain.followers.contains(&id)
+            });
+            self.applied_before = finished.saturating_sub(passing);
         }
         let retry = (!report.remaining.actions.is_empty()).then_some(report.remaining);
-        // A folder that was to go to the Trash with its leftover files and
-        // could not: the result says it is still there.
-        let kept = match report.kept_folders.len() {
-            0 => String::new(),
-            1 => " · 1 folder could not be moved to the Trash and is still there".into(),
-            n => format!(" · {n} folders could not be moved to the Trash and are still there"),
-        };
+        // A folder the list removed or sent to the Trash that is still
+        // there: the result says so, and why.
+        let kept: String = super::review_step::kept_lines(&report.kept_folders)
+            .iter()
+            .map(|line| format!(" · {}", line.trim_end_matches('.')))
+            .collect();
         if let Some(outcome) = &mut self.review_outcome {
             outcome.kept_folders.extend(report.kept_folders);
         }
         let message = format!(
-            "{} {} applied{}{kept}",
-            report.completed.len(),
-            if report.completed.len() == 1 {
-                "change"
-            } else {
-                "changes"
-            },
+            "{finished} {} applied{}{kept}",
+            if finished == 1 { "change" } else { "changes" },
             if staged_kept {
-                " · unfinished operations retained · Trash marks, ratings and rotations are still staged"
+                " · unfinished changes kept for Retry · Trash marks, ratings and rotations are still staged"
             } else if incomplete {
-                " · unfinished operations retained"
+                " · unfinished changes kept for Retry"
             } else {
                 ""
             }
@@ -1034,6 +1059,7 @@ impl PhotoSortApp {
             }) {
                 self.error = Some(error);
                 self.retry_plan = retry;
+                self.unfinished.set(unfinished);
                 self.review_after_moves = None;
                 self.review_outcome = None;
                 return ControlFlow::Break(());
@@ -1046,6 +1072,7 @@ impl PhotoSortApp {
             {
                 self.error = Some(error);
                 self.retry_plan = retry;
+                self.unfinished.set(unfinished);
                 self.review_after_moves = None;
                 self.review_outcome = None;
                 return ControlFlow::Break(());
@@ -1058,6 +1085,8 @@ impl PhotoSortApp {
             self.rotation_reload = Some(remaining_rotations);
         }
         self.retry_plan = retry;
+        // After the folder is read again above, which forgets the old plan.
+        self.unfinished.set(unfinished);
         self.recovery_ticket = recovery_ticket;
         if self.retry_plan.is_some() {
             self.rotation_plan = retry_rotation;
@@ -1070,6 +1099,7 @@ impl PhotoSortApp {
     }
 
     fn on_error(&mut self, e: String) {
+        self.applied_before = 0;
         self.plan_stop = None;
         self.close_after_planning = false;
         self.abandon_review_apply();
@@ -1079,6 +1109,10 @@ impl PhotoSortApp {
         self.resume_suspended = self.pending_bookmark.is_some();
         if let Some(plan) = self.applying_plan.take() {
             self.retry_plan = Some(plan);
+            // Counted here, once: the bar and the step tabs read the number
+            // on every frame, from whichever step is open.
+            self.unfinished.set(None);
+            self.unfinished();
         }
         self.runtime.cancel_analysis();
         self.analysis_run = None;
@@ -1131,9 +1165,133 @@ impl PhotoSortApp {
     }
 }
 
+/// How many changes a run finished, counted as the Review list counts
+/// changes (see `plan_review::plan_changes`). Not finished: a folder that
+/// was to go to the Trash and is still there, whether the Trash refused it
+/// or it now holds something else, and a photo whose RAW or JPEG
+/// went while the other was refused, which is counted with what is left.
+fn finished_changes(report: &mut crate::core::operations::Report) -> usize {
+    let done = Plan {
+        actions: std::mem::take(&mut report.completed),
+        ..Default::default()
+    };
+    let count = super::plan_review::plan_changes(&done);
+    report.completed = done.actions;
+    count
+        .saturating_sub(report.kept_folders.iter().filter(|k| k.for_trash).count())
+        .saturating_sub(report.split_trash_groups)
+}
+
+/// How many photos among `completed` moves were only passing through: every
+/// photo or video of the group is `gone`, marked for the Trash or listed as
+/// going there with one that is. A RAW and JPEG that move together are one
+/// photo, as the Review list counts them, and a group that keeps its RAW
+/// while the JPEG goes still counts as moved.
+fn moved_on_the_way_to_trash(
+    completed: &[crate::core::operations::Action],
+    gone: impl Fn(MediaId) -> bool,
+) -> usize {
+    use crate::core::operations::Action;
+    let passes = |destinations: &mut dyn Iterator<Item = &PathBuf>| {
+        let mut media = destinations
+            .filter(|to| MediaKind::from_path(to).is_some())
+            .peekable();
+        media.peek().is_some() && media.all(|to| gone(MediaId::for_path(to)))
+    };
+    completed
+        .iter()
+        .filter(|action| match action {
+            Action::Move { files } | Action::FinishMove { files } => {
+                passes(&mut files.iter().map(|(_, to)| to))
+            }
+            Action::RenameFile { to, .. } => passes(&mut std::iter::once(to)),
+            _ => false,
+        })
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// What a run finished is counted as the Review list counts changes,
+    /// and only what is done: not a folder that is still there, and not
+    /// the half of a photo that went while its other file was refused.
+    #[test]
+    fn finished_changes_leave_out_kept_folders_and_half_trashed_photos() {
+        use crate::core::operations::{Action, Kept, KeptFolder, Report, Source};
+        let at = |name: &str| PathBuf::from("/library/Trip").join(name);
+        let source = |name: &str| Source {
+            path: at(name),
+            fingerprint: Default::default(),
+        };
+        let trash = |names: &[&str]| Action::Trash {
+            files: names.iter().map(|name| source(name)).collect(),
+        };
+        let moved = |names: &[&str]| Action::Move {
+            files: names
+                .iter()
+                .map(|name| (source(name), PathBuf::from("/library/Sorted").join(name)))
+                .collect(),
+        };
+        let folder = PathBuf::from("/library/Old");
+        let mut report = Report {
+            completed: vec![
+                moved(&["a.jpg"]),
+                trash(&["b.jpg"]),
+                // The JPEG went; the Trash refused the RAW of the same group.
+                trash(&["c.jpg"]),
+                // A group of its own that went: the video of the same name is
+                // another group, which the Trash refused.
+                trash(&["d.HEIC"]),
+                // Recorded as over: the Trash refused it, so it is still there.
+                Action::RemoveEmptyDirectory {
+                    path: folder.clone(),
+                    root: PathBuf::from("/library"),
+                    after: Vec::new(),
+                    leftovers: vec![".DS_Store".into()],
+                },
+            ],
+            // A folder that was only to be removed and now holds a file is
+            // kept too, and was never one of the changes counted.
+            kept_folders: vec![
+                KeptFolder {
+                    path: folder,
+                    for_trash: true,
+                    why: Kept::TrashRefused,
+                },
+                KeptFolder {
+                    path: PathBuf::from("/library/Empty"),
+                    for_trash: false,
+                    why: Kept::Holds(Some("new.txt".into())),
+                },
+            ],
+            split_trash_groups: 1,
+            ..Default::default()
+        };
+        report.remaining.actions = vec![trash(&["c.CR2", "c.CR2.xmp"]), trash(&["d.MOV"])];
+        // One photo moved and two went to the Trash.
+        assert_eq!(finished_changes(&mut report), 3);
+        assert_eq!(report.completed.len(), 5, "the report is left as it was");
+        // The photo still half there and the video are what is left.
+        assert_eq!(
+            super::super::plan_review::plan_changes(&report.remaining),
+            2
+        );
+        // Of the photos that moved, those only on their way to the Trash
+        // are counted there. A RAW and JPEG that both go are one photo; a
+        // group whose RAW is kept still moved.
+        let completed = [
+            moved(&["a.jpg"]),
+            moved(&["e.jpg", "e.CR2", "e.xmp"]),
+            moved(&["f.jpg", "f.CR2"]),
+        ];
+        let going = ["e.jpg", "e.CR2", "f.jpg"]
+            .map(|name| MediaId::for_path(&PathBuf::from("/library/Sorted").join(name)));
+        assert_eq!(
+            moved_on_the_way_to_trash(&completed, |id| going.contains(&id)),
+            1
+        );
+    }
     #[test]
     fn a_decoded_thumbnail_requeries_cull_only_when_its_metadata_changes_the_view() {
         let (_temp, mut app) = super::super::compact_cull_tests::fixture();

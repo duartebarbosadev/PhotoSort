@@ -4,22 +4,71 @@
 use super::plan_review::ReviewAction;
 use super::states::{state_card, state_frame};
 use super::*;
+use crate::core::operations::{Kept, KeptFolder};
 use egui_phosphor::regular as icon;
 use std::path::{Path, PathBuf};
 
 /// What the last Apply on the Review step did.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Outcome {
-    /// "Moved 3 photos and sent 2 photos to the Trash."
-    pub sentence: String,
+    /// What the list said it would do: "Moved 3 photos and sent 2 photos to
+    /// the Trash.", once the folders that stayed are known.
+    pub applied: super::plan_review::Applied,
     /// Every part finished, nothing is left to retry.
     pub done: bool,
     /// Listed photos that stayed in the folder they were listed in while
     /// the rest moved to another: their choices are still staged there.
     pub left_behind: Option<(usize, PathBuf)>,
-    /// Folders the list sent to the Trash with their leftover files that
-    /// could not go there, and so are still on disk.
-    pub kept_folders: Vec<PathBuf>,
+    /// Folders the list removed or sent to the Trash that are still on
+    /// disk, each with the reason.
+    pub kept_folders: Vec<KeptFolder>,
+}
+impl Outcome {
+    /// What the Apply did. A folder listed for the Trash that is still
+    /// there is not said to have gone.
+    pub(super) fn sentence(&self) -> String {
+        let kept = self.kept_folders.iter().filter(|k| k.for_trash).count();
+        self.applied.sentence(kept)
+    }
+}
+
+/// What an Apply or a Retry left to do, counted as the Review list counts
+/// changes (see `plan_review::plan_changes`), so the status bar, the "did
+/// not finish" card and the list of what is left say the same numbers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Unfinished {
+    /// Changes the run that stopped had finished. `None` when the plan was
+    /// found saved by an earlier session, which did not say.
+    pub finished: Option<usize>,
+    /// Changes still to do.
+    pub left: usize,
+}
+impl Unfinished {
+    /// The status bar's line while changes wait for Retry.
+    pub(super) fn status(&self) -> String {
+        match self.left {
+            // Only folders to make or tidy away are left.
+            0 => "Unfinished changes · Review changes to resolve".into(),
+            1 => "1 unfinished change · Review changes to resolve".into(),
+            n => format!("{n} unfinished changes · Review changes to resolve"),
+        }
+    }
+    /// The "did not finish" card's line: how many finished, how many did not.
+    pub(super) fn sentence(&self) -> String {
+        let changes = |n: usize| match n {
+            1 => "1 change".to_owned(),
+            n => format!("{n} changes"),
+        };
+        let counted = match (self.finished, self.left) {
+            (_, 0) => "The changes that finished are applied.".to_owned(),
+            (Some(0), left) => format!("{} did not finish.", changes(left)),
+            (Some(done), left) => {
+                format!("{} finished and {left} did not.", changes(done))
+            }
+            (None, left) => format!("{} did not finish.", changes(left)),
+        };
+        format!("{counted} Retry the rest, choose another destination or discard them.")
+    }
 }
 
 /// Why the Review step lists nothing and waits for Organize instead.
@@ -203,6 +252,21 @@ impl PhotoSortApp {
         .then(|| self.plan_rows.total())
     }
 
+    /// What the unfinished plan leaves to do, counted once per plan: the
+    /// status bar, the step tabs and the Review step ask every time they
+    /// are drawn. Counting indexes every row of the plan, so the number is
+    /// kept until the plan is replaced.
+    pub(super) fn unfinished(&self) -> Option<Unfinished> {
+        let plan = self.retry_plan.as_ref()?;
+        if self.unfinished.get().is_none() {
+            self.unfinished.set(Some(Unfinished {
+                finished: None,
+                left: super::plan_review::plan_changes(plan),
+            }));
+        }
+        self.unfinished.get()
+    }
+
     /// How many photos `staged_choices` lists, without listing them: what
     /// the Review badge counts off the Review step, and the folder and
     /// Close guards.
@@ -373,13 +437,15 @@ impl PhotoSortApp {
         }
         let listed = live;
         let moves = !plan.actions.is_empty();
+        // A new Apply: nothing of an earlier one counts toward it.
+        self.applied_before = 0;
         // Apply's own plan is never taken for the list's write targets.
         self.review_targets = false;
         self.review_tidy = false;
         // Only the folders "Tidying up" names are removed after the marks.
         let tidy = self.plan_rows.emptied();
         self.review_outcome = Some(review_step::Outcome {
-            sentence: self.plan_rows.applied_sentence(),
+            applied: self.plan_rows.applied(),
             done: false,
             left_behind: None,
             kept_folders: Vec::new(),
@@ -501,6 +567,7 @@ impl PhotoSortApp {
     /// a failed apply, a folder that is gone or a stopped worker. Without
     /// this, its lock on the steps and folders would stay until a restart.
     pub(super) fn abandon_review_apply(&mut self) {
+        self.applied_before = 0;
         self.review_after_moves = None;
         self.apply_planned = false;
         self.review_targets = false;
@@ -564,13 +631,19 @@ impl PhotoSortApp {
             || self.apply_planned
             || self.review_outcome.as_ref().is_some_and(|o| !o.done)
                 && (self.busy || self.scanning);
-        if self.retry_plan.is_some() {
+        // A Retry at work is an Apply at work: the card that says some
+        // changes did not finish waits until it is known whether they did.
+        if self.retry_plan.is_some() && !applying {
+            let body = self.unfinished().map_or_else(
+                || "The changes that finished are applied. Retry the rest, choose another destination or discard them.".to_owned(),
+                |unfinished| unfinished.sentence(),
+            );
             let mut open = false;
             state_card(
                 ui,
                 icon::WARNING_CIRCLE,
                 "Some changes did not finish",
-                "The changes that finished are applied. Retry the rest, choose another destination or discard them.",
+                &body,
                 |ui| {
                     open = ui
                         .add_enabled(!self.busy, primary("Review unfinished changes…"))
@@ -584,10 +657,15 @@ impl PhotoSortApp {
         }
         if applying {
             let total = self.applying_plan.as_ref().map(|plan| plan.actions.len());
+            let title = if self.retry_plan.is_some() {
+                "Retrying the unfinished changes"
+            } else {
+                "Applying your changes"
+            };
             state_frame(ui, |ui| {
                 ui.add(egui::Spinner::new().size(28.0).color(ACCENT));
                 ui.add_space(S3);
-                ui.label(RichText::new("Applying your changes").font(semibold(18.0)));
+                ui.label(RichText::new(title).font(semibold(18.0)));
                 ui.add_space(S1);
                 let detail = match total {
                     Some(n) => format!(
@@ -680,7 +758,7 @@ impl PhotoSortApp {
         ui.add_space(S1);
         // An Apply just finished, and this folder had choices of its own.
         if let Some(outcome) = self.review_outcome.as_ref().filter(|o| o.done) {
-            ui.add(egui::Label::new(RichText::new(&outcome.sentence).color(GREEN)).wrap());
+            ui.add(egui::Label::new(RichText::new(outcome.sentence()).color(GREEN)).wrap());
             if let Some(text) = left_behind_text(outcome) {
                 ui.add(egui::Label::new(RichText::new(text).color(MUTED)).wrap());
             }
@@ -721,7 +799,7 @@ impl PhotoSortApp {
         let mut open = None;
         match &self.review_outcome {
             Some(outcome) if outcome.done => {
-                let sentence = outcome.sentence.clone();
+                let sentence = outcome.sentence();
                 let left = left_behind_text(outcome);
                 state_frame(ui, |ui| {
                     ui.label(RichText::new(icon::CHECK_CIRCLE).size(40.0).color(GREEN));
@@ -767,7 +845,7 @@ fn left_behind_text(outcome: &Outcome) -> Option<String> {
         folder
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| folder.display().to_string())
+            .unwrap_or_else(|| crate::core::text::shown(folder))
     };
     let mut lines = Vec::new();
     if let Some((n, folder)) = &outcome.left_behind {
@@ -781,7 +859,33 @@ fn left_behind_text(outcome: &Outcome) -> Option<String> {
             name(folder)
         ));
     }
-    match outcome.kept_folders.as_slice() {
+    lines.extend(kept_lines(&outcome.kept_folders));
+    (!lines.is_empty()).then(|| lines.join(" "))
+}
+
+/// What to say about folders the list removed or sent to the Trash that are
+/// still there: "Roll was kept: it now holds keep.txt, which Review did not
+/// list."
+pub(super) fn kept_lines(kept: &[KeptFolder]) -> Vec<String> {
+    let name = |folder: &KeptFolder| {
+        folder
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| crate::core::text::shown(&folder.path))
+    };
+    let names = |folders: &[&KeptFolder]| {
+        folders
+            .iter()
+            .map(|folder| name(folder))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let (refused, holding): (Vec<&KeptFolder>, Vec<&KeptFolder>) = kept
+        .iter()
+        .partition(|folder| folder.why == Kept::TrashRefused);
+    let mut lines = Vec::new();
+    match refused.as_slice() {
         [] => {}
         [folder] => lines.push(format!(
             "{} could not be moved to the Trash, so it is still there with its leftover files.",
@@ -790,8 +894,38 @@ fn left_behind_text(outcome: &Outcome) -> Option<String> {
         folders => lines.push(format!(
             "{} folders could not be moved to the Trash, so they are still there with their leftover files: {}.",
             folders.len(),
-            folders.iter().map(|f| name(f)).collect::<Vec<_>>().join(", ")
+            names(folders)
         )),
     }
-    (!lines.is_empty()).then(|| lines.join(" "))
+    match holding.as_slice() {
+        // Each with what it holds, while that stays short enough to read.
+        folders if folders.len() <= 3 => {
+            lines.extend(folders.iter().map(|folder| {
+                match &folder.why {
+                    // A folder inside it that was kept, and is named already.
+                    Kept::Holds(Some(inside))
+                        if kept
+                            .iter()
+                            .any(|other| other.path == folder.path.join(inside)) =>
+                    {
+                        format!("{} was kept: {inside} is still in it.", name(folder))
+                    }
+                    Kept::Holds(Some(file)) => format!(
+                        "{} was kept: it now holds {file}, which Review did not list.",
+                        name(folder)
+                    ),
+                    _ => format!(
+                        "{} was kept: it now holds something Review did not list.",
+                        name(folder)
+                    ),
+                }
+            }))
+        }
+        folders => lines.push(format!(
+            "{} folders were kept because they now hold something Review did not list: {}.",
+            folders.len(),
+            names(folders)
+        )),
+    }
+    lines
 }
