@@ -235,7 +235,7 @@ mod tests {
         for message in [
             "Discovered 12 items…",
             "Checking files and folders for Trash review…",
-            "3 unfinished operations · Review changes to resolve",
+            "3 unfinished changes · Review changes to resolve",
         ] {
             app.set_status(message.into());
             for step in Step::ALL {
