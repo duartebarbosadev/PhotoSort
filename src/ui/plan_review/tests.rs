@@ -226,7 +226,7 @@ fn organize_review_reads_as_plain_sentences_without_full_paths() {
     let texts = dialog_texts(&mut app, &ctx, egui::vec2(1280.0, 800.0));
     for expected in [
         "You're about to move 3 photos into a new folder \"h\" and send 1 folder to the Trash.",
-        "Sent to the Trash: 2025-10-25 / group-6, with .DS_Store and @eaDir. Folders left empty are removed: 2025-10-25",
+        "Sent to the Trash: 2025-10-25 / group-6, with .DS_Store and @eaDir. Folders left empty are removed: 2025-10-25 / group-2, 2025-10-25",
         "Apply all changes",
     ] {
         assert!(texts.iter().any(|t| t == expected), "{expected}: {texts:?}");
@@ -665,6 +665,10 @@ fn one_review_applies_moves_then_staged_choices_without_a_second_review() {
         std::thread::sleep(Duration::from_millis(5));
     }
     let moved = MediaId::for_path(&root.join("Before/e.jpg"));
+    // What the moves finished is kept for the result of the whole Apply:
+    // one photo renamed. The other was renamed on its way to the Trash and
+    // counts there, once, as the list counted it.
+    assert_eq!(app.applied_before, 1);
     let chain = app.review_after_moves.as_mut().unwrap();
     assert!(chain.decisions[&moved].rejected && !chain.decisions.contains_key(&d));
     // Only the sidecar the mark listed may follow it, under its new name.
@@ -681,6 +685,7 @@ fn one_review_applies_moves_then_staged_choices_without_a_second_review() {
     settle(&mut app);
     assert!(app.error.is_none(), "{:?}", app.error);
     assert!(app.retry_plan.is_none() && !app.plan_open && !app.apply_planned);
+    assert_eq!(app.applied_before, 0, "added to the second half's count");
     // Each apply journals on its own; a finished chain leaves none behind.
     assert!(app.recovery_ticket.is_none());
     assert!(root.join("Before/b.jpg").exists() && root.join("Before/e.jpg").exists());
@@ -695,17 +700,12 @@ fn one_review_applies_moves_then_staged_choices_without_a_second_review() {
     );
     assert_eq!(app.step, Step::Review);
     assert_eq!(app.staged_change_count(), 1);
+    let outcome = app.review_outcome.as_ref().unwrap();
     assert_eq!(
-        app.review_outcome,
-        Some(review_step::Outcome {
-            sentence:
-                "Renamed 1 photo, rotated 1 photo, rated 1 photo and sent 1 photo to the Trash."
-                    .into(),
-            done: true,
-            left_behind: None,
-            kept_folders: Vec::new(),
-        })
+        outcome.sentence(),
+        "Renamed 1 photo, rotated 1 photo, rated 1 photo and sent 1 photo to the Trash."
     );
+    assert!(outcome.done && outcome.left_behind.is_none() && outcome.kept_folders.is_empty());
     app.runtime.shutdown();
 }
 #[test]
@@ -1007,7 +1007,7 @@ fn a_listed_trash_mark_names_the_raw_and_xmp_that_go_with_it() {
     );
     assert!(app.plan_rows.ratings.is_empty());
     assert_eq!(
-        app.review_outcome.as_ref().map(|o| o.sentence.as_str()),
+        app.review_outcome.as_ref().map(|o| o.sentence()).as_deref(),
         Some("Sent 2 photos to the Trash.")
     );
     assert!(app.busy && app.raw_question.is_none());
@@ -1176,12 +1176,16 @@ fn trash_marks_alone_remove_the_folders_they_empty_and_the_list_names_them_first
     crate::core::operations::trash_stand_in(&root, trash.path());
     for name in [
         "Solo/a.jpg",
+        "Solo/a.CR2",
+        "Solo/a.xmp",
         "Solo/.DS_Store",
         "Deep/Inner/b.jpg",
         "Notes/c.jpg",
         "Notes/notes.txt",
         "Mixed/d.jpg",
         "Mixed/e.jpg",
+        "Roll/f.jpg",
+        "Roll/Thumbs.db",
     ] {
         std::fs::create_dir_all(root.join(name).parent().unwrap()).unwrap();
         std::fs::write(root.join(name), name).unwrap();
@@ -1204,6 +1208,7 @@ fn trash_marks_alone_remove_the_folders_they_empty_and_the_list_names_them_first
         "Deep/Inner/b.jpg",
         "Notes/c.jpg",
         "Mixed/d.jpg",
+        "Roll/f.jpg",
     ] {
         app.reject(MediaId::for_path(&root.join(name)));
     }
@@ -1227,24 +1232,36 @@ fn trash_marks_alone_remove_the_folders_they_empty_and_the_list_names_them_first
     assert!(plan.actions.is_empty(), "nothing moves");
     assert_eq!(
         cleanup_text(plan, &app.plan_rows, Some(&root), 3, false),
-        "Sent to the Trash: Solo, with .DS_Store. Folders left empty are removed: Deep"
+        "Sent to the Trash: Roll, with Thumbs.db; Solo, with .DS_Store. Folders left empty are removed: Deep / Inner, Deep"
     );
-    // The folder that goes to the Trash is counted, as the sentence says.
+    // (An empty folder inside one that is removed is named too: no folder
+    // goes without being listed.)
+    // The folders that go to the Trash are counted, as the sentence says.
     assert_eq!(
         app.review_sentence(plan, &app.plan_rows),
-        "You're about to send 4 photos and 1 folder to the Trash."
+        "You're about to send 5 photos and 2 folders to the Trash."
     );
-    assert_eq!(app.staged_change_count(), 5);
+    assert_eq!(app.staged_change_count(), 7);
     // Nothing has changed on disk while the changes are only listed.
     assert!(root.join("Solo/a.jpg").is_file() && root.join("Deep/Inner").is_dir());
+    // A file put into a listed folder before Apply keeps that folder.
+    std::fs::write(root.join("Roll/keep.txt"), "keep me").unwrap();
     app.apply_review();
     settle(&mut app);
     assert!(app.error.is_none(), "{:?}", app.error);
     assert!(app.retry_plan.is_none() && !app.review_applying());
+    // The result does not say the kept folder went, and says why it stayed.
+    let outcome = app.review_outcome.as_ref().unwrap();
     assert_eq!(
-        app.review_outcome.as_ref().map(|o| o.sentence.as_str()),
-        Some("Sent 4 photos and 1 folder to the Trash.")
+        outcome.sentence(),
+        "Sent 5 photos and 1 folder to the Trash."
     );
+    assert_eq!(
+        review_step::kept_lines(&outcome.kept_folders),
+        ["Roll was kept: it now holds keep.txt, which Review did not list."]
+    );
+    assert!(root.join("Roll/keep.txt").is_file() && root.join("Roll/Thumbs.db").is_file());
+    assert!(!trash.path().join("Roll").exists());
     // What the list named is gone, and nothing else.
     assert!(!root.join("Solo").exists() && !root.join("Deep").exists());
     assert!(trash.path().join("Solo/.DS_Store").is_file());

@@ -236,6 +236,51 @@ fn and_list(parts: &[String]) -> String {
     }
 }
 
+/// How many changes `plan` makes, counted as its review list counts them:
+/// a photo once with its RAW and edit files, a folder once, and no folder
+/// that is only made or tidied away for them. The status bar and the
+/// "did not finish" card read this number, so they agree with the list.
+pub(super) fn plan_changes(plan: &Plan) -> usize {
+    let mut rows = Rows::default();
+    rows.replace(Some(plan), &[], &HashSet::new(), &HashSet::new());
+    rows.total()
+}
+
+/// What an Apply was listed to do, kept until it is done: the result is
+/// said from it, less the folders that turned out to stay.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Applied {
+    /// "moved 3 photos", "rated 1 photo": everything but the Trash.
+    parts: Vec<String>,
+    /// "2 photos", when any went to the Trash.
+    trashed: Option<String>,
+    /// Folders listed as going to the Trash with their leftovers.
+    trashed_folders: usize,
+}
+impl Applied {
+    /// "Moved 3 photos and sent 2 photos to the Trash." `kept` of the
+    /// folders listed for the Trash are still there, and are not said to
+    /// have gone.
+    pub(super) fn sentence(&self, kept: usize) -> String {
+        let mut parts = self.parts.clone();
+        let mut trash: Vec<String> = self.trashed.iter().cloned().collect();
+        let folders = self.trashed_folders.saturating_sub(kept);
+        if folders > 0 {
+            trash.push(count(folders, "folder", "folders"));
+        }
+        if !trash.is_empty() {
+            parts.push(format!("sent {} to the Trash", and_list(&trash)));
+        }
+        let text = and_list(&parts);
+        let mut chars = text.chars();
+        match chars.next() {
+            Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
+            None if kept > 0 => "Nothing was sent to the Trash.".into(),
+            None => "Your changes are applied.".into(),
+        }
+    }
+}
+
 /// Plain counts: photos, never file operations. The sentence, the Apply
 /// button and the Review badge all read these same numbers.
 #[derive(Default)]
@@ -614,9 +659,8 @@ impl Rows {
             && self.rotations.is_empty()
             && self.ratings.is_empty()
     }
-    /// What applying it did, said once it is done: "Moved 3 photos and
-    /// sent 2 photos to the Trash."
-    pub(super) fn applied_sentence(&self) -> String {
+    /// What applying it does, for the sentence said once it is done.
+    pub(super) fn applied(&self) -> Applied {
         let summary = &self.summary;
         let mut parts = Vec::new();
         if summary.moved.total() > 0 {
@@ -643,21 +687,10 @@ impl Rows {
         if summary.rated > 0 {
             parts.push(format!("rated {}", photos(summary.rated)));
         }
-        let mut trash = Vec::new();
-        if summary.trashed.total() > 0 {
-            trash.push(summary.trashed.text());
-        }
-        if summary.trashed_folders > 0 {
-            trash.push(count(summary.trashed_folders, "folder", "folders"));
-        }
-        if !trash.is_empty() {
-            parts.push(format!("sent {} to the Trash", and_list(&trash)));
-        }
-        let text = and_list(&parts);
-        let mut chars = text.chars();
-        match chars.next() {
-            Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
-            None => "Your changes are applied.".into(),
+        Applied {
+            parts,
+            trashed: (summary.trashed.total() > 0).then(|| summary.trashed.text()),
+            trashed_folders: summary.trashed_folders,
         }
     }
     /// Remembers how `plan`, the staged ratings and rotations planned, would
@@ -804,7 +837,7 @@ impl Rows {
 fn folder_text(path: &Path, base: Option<&Path>) -> String {
     match base.and_then(|base| path.strip_prefix(base).ok()) {
         Some(relative) if relative.as_os_str().is_empty() => path.file_name().map_or_else(
-            || path.display().to_string(),
+            || crate::core::text::shown(path),
             |n| n.to_string_lossy().into(),
         ),
         Some(relative) => relative
@@ -812,7 +845,7 @@ fn folder_text(path: &Path, base: Option<&Path>) -> String {
             .map(|c| c.to_string_lossy())
             .collect::<Vec<_>>()
             .join(" / "),
-        None => path.display().to_string(),
+        None => crate::core::text::shown(path),
     }
 }
 fn file_name(path: &Path) -> String {
@@ -928,8 +961,8 @@ struct Thumb {
 
 /// What a plan tidies away afterwards, in one line. Folders that still hold
 /// thumbnail folders or Finder leftovers come first: they go to the Trash
-/// with them, named up to `limit` each. Empty folders are simply removed;
-/// one inside another that is removed is not named apart from it.
+/// with them, named up to `limit` each. Empty folders are simply removed,
+/// each one named, deepest first.
 /// `every` names each leftover; otherwise the "._name" file macOS keeps
 /// beside a "name" that is listed is not named a second time.
 fn cleanup_text(
@@ -952,18 +985,9 @@ fn cleanup_text(
             _ => None,
         });
     let by_marks = index.emptied.iter().map(|(path, left)| (path, left));
-    let folders: Vec<_> = by_moves.chain(by_marks).collect();
-    // Each folder once: an empty folder inside one that is removed goes
-    // with it, and naming it too would say its parent a second time.
-    let gone: HashSet<&Path> = folders
-        .iter()
-        .filter(|(_, leftovers)| leftovers.is_empty())
-        .map(|(path, _)| path.as_path())
-        .collect();
-    for (path, leftovers) in folders {
-        if leftovers.is_empty() && path.ancestors().skip(1).any(|above| gone.contains(above)) {
-            continue;
-        }
+    // Every folder that goes is named, an empty one inside another that
+    // is removed too ("Album / Blank, Album"): none goes unlisted.
+    for (path, leftovers) in by_moves.chain(by_marks) {
         let folder = folder_text(path, root);
         let names: Vec<String> = leftovers
             .iter()
@@ -1537,7 +1561,7 @@ impl PhotoSortApp {
                 response.widget_info(|| {
                     egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &spoken)
                 });
-                response.on_hover_text(folder.path.display().to_string());
+                response.on_hover_text(crate::core::text::shown(&folder.path));
             },
         );
     }
@@ -1739,12 +1763,12 @@ fn path_line(
     let display = if relative.as_os_str().is_empty() {
         ".".into()
     } else {
-        relative.display().to_string()
+        crate::core::text::shown(relative)
     };
     // Extend inside the two-axis scroll area: long paths can be read without hover.
     let response = ui
         .add(egui::Label::new(RichText::new(format!("{shown}{display}")).color(color)).extend())
-        .on_hover_text(path.display().to_string());
+        .on_hover_text(crate::core::text::shown(path));
     let spoken = format!("{spoken}{display}");
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &spoken));
 }
@@ -2115,7 +2139,7 @@ impl PhotoSortApp {
             }
             if let Some(output) = &plan.output_root && self.root.as_ref() != Some(output) {
                 ui.add(egui::Label::new(RichText::new(format!("Photos go to {}", folder_text(output, Some(output)))).color(MUTED)).truncate())
-                    .on_hover_text(output.display().to_string());
+                    .on_hover_text(crate::core::text::shown(output));
             }
             if retry && self.error.is_some() { ui.colored_label(RED, "Some operations need attention. See Operation details."); }
             // Details swap the plain view for every file operation, so the
@@ -2175,7 +2199,21 @@ impl PhotoSortApp {
             self.discard_remaining_operations();
         }
         if apply {
+            // A Retry from the Review step ends there like an Apply: with
+            // what it did once it is done, or with what is still left.
+            let retried = self.retry_plan.is_some() && self.step == Step::Review;
+            if retried {
+                self.review_outcome = Some(super::review_step::Outcome {
+                    applied: self.plan_rows.applied(),
+                    done: false,
+                    left_behind: None,
+                    kept_folders: Vec::new(),
+                });
+            }
             self.apply_reviewed_plan();
+            if retried && !self.busy {
+                self.review_outcome = None;
+            }
         }
     }
 }
@@ -2270,12 +2308,12 @@ impl PhotoSortApp {
                             let group = self.plan_rows.movable[row];
                             if let Action::Move { files } = &plan.actions[group] {
                                 let name = files[0].1.file_name().unwrap_or_default().to_string_lossy();
-                                if ui.add(egui::Button::new(format!("Group {} · {} · {} file(s)", group + 1, name, files.len())).selected(edit.group == group).truncate()).clicked() { select = Some(group); }
+                                if ui.add(egui::Button::new(format!("Group {} · {} · {}", group + 1, name, count(files.len(), "file", "files"))).selected(edit.group == group).truncate()).clicked() { select = Some(group); }
                             }
                         }
                     });
                 let base = plan.output_root.as_deref().or(self.root.as_deref()).unwrap_or(Path::new(""));
-                ui.add(egui::Label::new(format!("Folder within {}", base.display())).truncate()).on_hover_text(base.display().to_string());
+                ui.add(egui::Label::new(format!("Folder within {}", crate::core::text::shown(base))).truncate()).on_hover_text(crate::core::text::shown(base));
                 ui.add(egui::TextEdit::singleline(&mut edit.folder).hint_text("Leave empty for the destination root").desired_width(f32::INFINITY));
                 ui.label("New base name (optional)");
                 ui.add(egui::TextEdit::singleline(&mut edit.stem).hint_text("Leave empty to keep reviewed names").desired_width(f32::INFINITY));
