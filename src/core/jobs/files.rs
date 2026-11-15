@@ -6,6 +6,7 @@ use crate::core::{
     model::*,
     operations::{self, Plan},
     session::Session,
+    text::TRASH,
     views,
 };
 use std::{
@@ -528,7 +529,7 @@ fn unresumable_notice(lost: &operations::recovery::Unresumable) -> String {
             None => String::new(),
         };
         return format!(
-            "An interrupted file operation in this folder could not be read this time ({}).{record} PhotoSort will try again the next time this folder is opened; until then nothing can be applied here. Some files may already have been moved, renamed or sent to the Trash.",
+            "An interrupted file operation in this folder could not be read this time ({}).{record} PhotoSort will try again the next time this folder is opened; until then nothing can be applied here. Some files may already have been moved, renamed or sent to the {TRASH}.",
             lost.reason
         );
     }
@@ -540,7 +541,7 @@ fn unresumable_notice(lost: &operations::recovery::Unresumable) -> String {
         None => "its record is missing".to_owned(),
     };
     format!(
-        "An interrupted file operation in this folder could not be resumed: {record}. Some files may already have been moved, renamed or sent to the Trash. Check this folder and any folder you were organizing into."
+        "An interrupted file operation in this folder could not be resumed: {record}. Some files may already have been moved, renamed or sent to the {TRASH}. Check this folder and any folder you were organizing into."
     )
 }
 

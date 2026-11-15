@@ -90,6 +90,7 @@ impl PhotoSortApp {
             .is_some_and(|plan| plan.output_root.is_some());
         self.retry_plan = None;
         self.unfinished.set(None);
+        self.waiting = Default::default();
         self.review_after_moves = None;
         self.apply_planned = false;
         self.set_review_plan(None);

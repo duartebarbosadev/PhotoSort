@@ -4,6 +4,7 @@ use super::review_card::{
 };
 use super::*;
 use crate::core::delete_review::{self, Category, Entry, FormatChoice, Review};
+use crate::core::text::TO_TRASH;
 
 /// How the star on a suggested keeper explains itself.
 pub(super) const SUGGESTED: &str = "Suggested by PhotoSort.";
@@ -813,7 +814,7 @@ impl PhotoSortApp {
                     summary_label(
                         ui,
                         &format!(
-                            "{} going to Trash · frees {}",
+                            "{} going {TO_TRASH} · frees {}",
                             count(trash, "photo", "photos"),
                             size_text(freed),
                         ),
@@ -1836,7 +1837,7 @@ mod tests {
             "Keep JPEG · frees 5.0 MB",
             "Accept all suggestions",
             "HEIC",
-            "2 photos going to Trash · frees 4.0 MB",
+            &format!("2 photos going {TO_TRASH} · frees 4.0 MB"),
         ] {
             assert!(shown.contains(text), "{text} missing from:\n{shown}");
         }
@@ -1928,7 +1929,7 @@ mod tests {
         // apart, so their card has no line of facts.
         app.media[1].fingerprint.bytes = app.media[0].fingerprint.bytes;
         let shown = render_grid(&mut app);
-        assert!(shown.contains("2 photos going to Trash · frees 4.0 MB"));
+        assert!(shown.contains(&format!("2 photos going {TO_TRASH} · frees 4.0 MB")));
         assert!(!shown.contains("Sharpness"));
         // An analysis tells them apart. The grid does not watch it: the
         // card on screen notices, and its row has the line a frame later.
@@ -1960,7 +1961,7 @@ mod tests {
         // A decision made anywhere is counted in the next frame.
         app.decisions.entry(MediaId(5)).or_default().rejected = true;
         let shown = render_grid(&mut app);
-        assert!(shown.contains("3 photos going to Trash · frees 9.0 MB"));
+        assert!(shown.contains(&format!("3 photos going {TO_TRASH} · frees 9.0 MB")));
     }
     #[test]
     fn saved_groups_other_than_one_tab_open_on_all_and_tabs_select_one_group() {

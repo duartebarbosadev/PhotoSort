@@ -847,17 +847,23 @@ fn a_refused_or_cancelled_new_folder_name_stages_nothing() {
     assert!(app.organize_drafts.is_empty());
     // Names no system takes. On Windows "CON" and a name that ends in a
     // dot are refused by the same check.
-    for refused in ["Trip/2024", ".."] {
+    for (refused, why) in [
+        ("Trip/2024", "A folder name cannot contain “/”"),
+        ("..", "A folder name cannot be “..”"),
+    ] {
         app.board_new_folder("", &[]);
+        // What was said about the last name is gone once a new field opens.
+        assert_eq!(app.navigation_notice, None);
         app.board.editing.as_mut().unwrap().1 = refused.into();
         app.board_finish_edit();
-        let notice = app.navigation_notice.clone().unwrap_or_default();
-        assert!(
-            notice.starts_with("Use a folder name"),
-            "{refused}: {notice}"
-        );
+        // The one rule the name broke, short enough to read whole.
+        assert_eq!(app.navigation_notice.as_deref(), Some(why), "{refused}");
         assert!(app.organize_drafts.is_empty(), "{refused} left a folder");
     }
+    // Renaming a photo opens a name field too.
+    app.board_rename_photo(app.media[0].id);
+    assert_eq!(app.navigation_notice, None);
+    app.board.renaming = None;
     // With folder edits already made, exactly those stay.
     new_folder(&mut app, "", "Keep");
     let before = app.organize_drafts[&GroupMode::Current].clone();

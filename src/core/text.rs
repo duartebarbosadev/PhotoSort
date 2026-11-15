@@ -66,6 +66,29 @@ pub fn other_form(name: &str) -> Option<String> {
     (other != name).then_some(other)
 }
 
+/// The system's own name for the place deleted files go: "the Trash", and
+/// "the Recycle Bin" on Windows. Every phrase that says where files end up
+/// takes the name from here, so one system never reads both. The Trash
+/// mark, its key and its button are PhotoSort's own and keep their name.
+pub const TRASH: &str = if cfg!(windows) {
+    "Recycle Bin"
+} else {
+    "Trash"
+};
+/// The same after "to" in a short label, where macOS and Linux leave "the"
+/// out ("3 photos going to Trash"). Windows never does.
+pub const TO_TRASH: &str = if cfg!(windows) {
+    "to the Recycle Bin"
+} else {
+    "to Trash"
+};
+/// The same where it is told apart from PhotoSort's own Trash mark.
+pub const SYSTEM_TRASH: &str = if cfg!(windows) {
+    "Recycle Bin"
+} else {
+    "System Trash"
+};
+
 /// A path as it is shown to the user. A folder is opened by its canonical
 /// path, which Windows spells with a prefix that says "take this path as it
 /// is": `\\?\C:\Photos`, and `\\?\UNC\server\share` on a network share.

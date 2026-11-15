@@ -2,6 +2,7 @@ use super::*;
 use crate::core::{
     operations::{Action, Report},
     organize::Draft,
+    text::TRASH,
 };
 use crate::test_support::worker_patience;
 
@@ -231,7 +232,9 @@ fn a_folder_made_only_for_photos_that_go_to_the_trash_is_not_left_behind() {
     let plan = app.plan.as_ref().unwrap();
     assert_eq!(
         app.review_sentence(plan, &app.plan_rows),
-        "You're about to move 1 photo into the folder \"Kept\" and send 2 photos to the Trash."
+        format!(
+            "You're about to move 1 photo into the folder \"Kept\" and send 2 photos to the {TRASH}."
+        )
     );
     assert_eq!(app.plan_rows.apply_label(), "Move 1 and trash 2");
     assert!(plan.actions.iter().any(|action| matches!(
@@ -255,7 +258,7 @@ fn a_folder_made_only_for_photos_that_go_to_the_trash_is_not_left_behind() {
     assert!(app.retry_plan.is_none() && !app.review_applying());
     assert_eq!(
         app.review_outcome.as_ref().map(|o| o.sentence()).as_deref(),
-        Some("Moved 1 photo and sent 2 photos to the Trash.")
+        Some(format!("Moved 1 photo and sent 2 photos to the {TRASH}.").as_str())
     );
     // Moved first, so both went to the Trash from where the list said.
     let trashed = |name: &str| trash.path().join(name).is_file();
@@ -269,6 +272,164 @@ fn a_folder_made_only_for_photos_that_go_to_the_trash_is_not_left_behind() {
     assert!(!root.join("Before").exists());
     assert!(root.is_dir());
     assert!(app.decisions.values().all(Decision::is_empty));
+}
+/// Reads the library folder again after a test added files to it.
+fn rescan(app: &mut PhotoSortApp) {
+    let catalog = Catalog::scan(app.root.as_ref().unwrap(), || false, |_| {}).unwrap();
+    app.media = catalog.media.clone();
+    app.catalog = Some(Arc::new(catalog));
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+}
+/// Nothing the list named goes unsaid. A folder that was to go to the Trash
+/// and stays is named while another change of the same Apply waits for
+/// Retry, with the changes that did not finish, and again in the result of
+/// the Retry, whose own list never names the folder: its step is over.
+#[test]
+fn a_folder_that_stays_is_named_while_changes_wait_for_retry_and_after_it() {
+    use crate::core::operations::{Kept, KeptFolder};
+    let (dir, mut app) = fixture();
+    let root = dir.path().canonicalize().unwrap();
+    // No Trash to be had: a file is where the stand-in would be made.
+    let elsewhere = tempfile::tempdir().unwrap();
+    let trash = elsewhere.path().join("trash");
+    std::fs::write(&trash, b"").unwrap();
+    crate::core::operations::trash_stand_in(&root, &trash);
+    std::fs::create_dir(root.join("Locked")).unwrap();
+    for name in ["Before/h.jpg", "Locked/p.jpg", "Locked/Thumbs.db"] {
+        std::fs::write(root.join(name), name).unwrap();
+    }
+    rescan(&mut app);
+    let id = |name: &str| MediaId::for_path(&root.join(name));
+    let (a, h, p) = (id("Before/a.jpg"), id("Before/h.jpg"), id("Locked/p.jpg"));
+    // Locked's only photo moves out, and a photo elsewhere is marked.
+    app.step = Step::Organize;
+    app.organize_drafts.insert(
+        app.group_mode,
+        Draft::new(HashMap::from([
+            (a, "Before".to_owned()),
+            (h, "Before".to_owned()),
+            (p, "Kept".to_owned()),
+        ])),
+    );
+    app.decisions.entry(h).or_default().rejected = true;
+    app.changed_items([h]);
+    app.review_changes();
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let listed = app.review_sentence(app.plan.as_ref().unwrap(), &app.plan_rows);
+    assert!(
+        listed.ends_with(&format!("send 1 photo and 1 folder to the {TRASH}.")),
+        "{listed}"
+    );
+    app.apply_review();
+    settle(&mut app);
+    // The photo moved. The Trash took neither the marked photo, which
+    // waits for Retry, nor the folder, which stays.
+    assert!(app.retry_plan.is_some() && app.error.is_some());
+    assert!(root.join("Kept/p.jpg").is_file() && root.join("Before/h.jpg").is_file());
+    assert!(root.join("Locked/Thumbs.db").is_file());
+    let stayed = format!(
+        "Locked could not be moved to the {TRASH}, so it is still there with its leftover files."
+    );
+    assert_eq!(app.waiting_lines(), std::slice::from_ref(&stayed));
+    // Retry, now that there is a Trash. The folder is not tried again, and
+    // the result still says it stayed.
+    std::fs::remove_file(&trash).unwrap();
+    assert!(app.review_remaining_operations());
+    app.apply_listed_plan();
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.retry_plan.is_none() && app.waiting_lines().is_empty());
+    let outcome = app.review_outcome.as_ref().unwrap();
+    assert!(outcome.done);
+    assert_eq!(outcome.sentence(), format!("Sent 1 photo to the {TRASH}."));
+    assert_eq!(review_step::left_behind_text(outcome), Some(stayed));
+    assert!(trash.join("h.jpg").is_file() && root.join("Locked/Thumbs.db").is_file());
+    // Where the folder itself said why it could not go, the line says so.
+    let line = |why: Kept| {
+        review_step::kept_lines(&[KeptFolder {
+            path: root.join("Locked"),
+            for_trash: true,
+            why,
+        }])
+        .join(" ")
+    };
+    assert_eq!(
+        line(Kept::InUse(Some("desktop.ini".into()))),
+        format!(
+            "Locked could not be moved to the {TRASH} because a program has desktop.ini open, so it is still there with its leftover files."
+        )
+    );
+    assert_eq!(
+        line(Kept::InUse(None)),
+        format!(
+            "Locked could not be moved to the {TRASH} because a program has it open, so it is still there with its leftover files."
+        )
+    );
+    app.runtime.shutdown();
+}
+/// Photos marked for Trash that Organize moves to another folder are moved
+/// first. When the moves stop partway, no mark is applied and none is lost:
+/// the changes that wait for Retry say so, the marks of the photos that
+/// already moved wait with them in the other folder, and Retry takes the
+/// rest there, still staged.
+#[test]
+fn trash_marks_wait_with_their_photos_when_the_moves_to_another_folder_stop() {
+    let (_dir, mut app) = fixture();
+    add_second_photo(&mut app);
+    let root = app.root.clone().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let output = target.path().canonicalize().unwrap().join("sorted");
+    std::fs::create_dir(&output).unwrap();
+    let id = |name: &str| MediaId::for_path(&root.join(name));
+    for marked in [id("Before/a.jpg"), id("Before/b.jpg")] {
+        app.decisions.entry(marked).or_default().rejected = true;
+    }
+    app.changed_items([id("Before/a.jpg"), id("Before/b.jpg")]);
+    app.step = Step::Organize;
+    app.output = output.display().to_string();
+    app.review_changes();
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    // One of the two cannot move: its place is taken after the list is made.
+    std::fs::create_dir(output.join("Before")).unwrap();
+    std::fs::write(output.join("Before/b.jpg"), b"in the way").unwrap();
+    app.apply_review();
+    settle(&mut app);
+    assert!(app.retry_plan.is_some());
+    assert_eq!(app.root.as_ref(), Some(&root), "still in the library");
+    assert!(output.join("Before/a.jpg").is_file() && root.join("Before/b.jpg").is_file());
+    assert_eq!(
+        app.waiting_lines(),
+        [
+            "Trash marks, ratings and rotations are still staged. Those of photos that already moved wait with them in sorted."
+        ]
+    );
+    // The photo left behind keeps its mark here; the one that moved has
+    // its mark in the other folder, where it is.
+    assert!(app.decisions[&id("Before/b.jpg")].rejected);
+    let moved = MediaId::for_path(&output.join("Before/a.jpg"));
+    assert!(Session::load(&output).unwrap().decisions[&moved].rejected);
+    // Retry moves the rest and opens the other folder: both still marked,
+    // neither in the Trash.
+    std::fs::remove_file(output.join("Before/b.jpg")).unwrap();
+    assert!(app.review_remaining_operations());
+    app.apply_listed_plan();
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.retry_plan.is_none() && app.waiting_lines().is_empty());
+    assert_eq!(app.root.as_ref(), Some(&output));
+    for name in ["Before/a.jpg", "Before/b.jpg"] {
+        assert!(output.join(name).is_file(), "{name}");
+        let id = MediaId::for_path(&output.join(name));
+        assert!(app.decisions[&id].rejected, "{name} is still marked");
+    }
+    app.runtime.shutdown();
 }
 /// The Review step's Apply finishes in the folder it listed: opening another
 /// folder waits for it, and a folder opened anyway never gets its choices.
