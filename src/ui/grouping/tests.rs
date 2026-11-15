@@ -277,6 +277,7 @@ fn real_application_reopen_restores_groups_and_bookmark_without_ai() {
         rotations_staged: Default::default(),
         trash_steps: Default::default(),
         by_hand: Default::default(),
+        waiting: None,
     }
     .save(&catalog.root)
     .unwrap();

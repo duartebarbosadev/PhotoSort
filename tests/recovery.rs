@@ -137,6 +137,7 @@ fn move_migrates_decisions_and_new_fingerprints_without_marking_them_applied() {
             })
             .collect(),
         fingerprints: c.media.iter().map(|m| (m.id, m.fingerprint)).collect(),
+        waiting: None,
     };
     let report = run(&plan, &c.root.join("journal"));
     assert!(report.applied_decisions(&c.media).is_empty());
@@ -185,6 +186,7 @@ fn session_merge_preserves_preexisting_destination_decisions() {
             },
         )]),
         fingerprints: Default::default(),
+        waiting: None,
     };
     moved.apply_report(&report, &c.media);
     let existing = MediaId(900);

@@ -772,6 +772,7 @@ impl PhotoSortApp {
             rotations_staged: self.rotation_review.staged().clone(),
             trash_steps: self.trash_steps.clone(),
             by_hand: self.by_hand.clone(),
+            waiting: (!self.waiting.is_empty()).then(|| self.waiting.clone()),
             // Nothing staged in Organize: nothing of the catalog is read.
             organize: self
                 .catalog

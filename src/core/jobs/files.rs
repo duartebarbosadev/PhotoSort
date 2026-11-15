@@ -304,6 +304,11 @@ impl Files<'_> {
             self.send(Event::ViewError(notices.join(" ")));
         }
         session.reconcile_catalog(&catalog);
+        // A folder that was said to have stayed and has gone since is not
+        // said to be there. Nothing else about it is looked at again.
+        if let Some(waiting) = &mut session.waiting {
+            waiting.kept_folders.retain(|kept| kept.path.is_dir());
+        }
         let mut views = views::Saved::load(&catalog.root).unwrap_or_else(|e| {
             self.send(Event::ViewError(format!(
                 "Saved view could not be restored: {e}"

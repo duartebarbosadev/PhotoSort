@@ -285,10 +285,22 @@ fn rescan(app: &mut PhotoSortApp) {
         .map(|(i, m)| (m.id, i))
         .collect();
 }
+/// Quits and opens the folder again, on the Review step.
+fn reopen(mut app: PhotoSortApp, root: &std::path::Path) -> PhotoSortApp {
+    app.runtime.shutdown();
+    drop(app);
+    let mut app = PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, root.join("cache")), None);
+    app.scan_folder(root.to_path_buf());
+    settle(&mut app);
+    app.step = Step::Review;
+    app
+}
 /// Nothing the list named goes unsaid. A folder that was to go to the Trash
 /// and stays is named while another change of the same Apply waits for
 /// Retry, with the changes that did not finish, and again in the result of
 /// the Retry, whose own list never names the folder: its step is over.
+/// Quitting in between changes none of it: what was recorded is said again
+/// when the folder is opened, less a folder that has gone since.
 #[test]
 fn a_folder_that_stays_is_named_while_changes_wait_for_retry_and_after_it() {
     use crate::core::operations::{Kept, KeptFolder};
@@ -299,21 +311,29 @@ fn a_folder_that_stays_is_named_while_changes_wait_for_retry_and_after_it() {
     let trash = elsewhere.path().join("trash");
     std::fs::write(&trash, b"").unwrap();
     crate::core::operations::trash_stand_in(&root, &trash);
-    std::fs::create_dir(root.join("Locked")).unwrap();
-    for name in ["Before/h.jpg", "Locked/p.jpg", "Locked/Thumbs.db"] {
+    for name in [
+        "Before/h.jpg",
+        "Locked/p.jpg",
+        "Locked/Thumbs.db",
+        "Loose/q.jpg",
+        "Loose/Thumbs.db",
+    ] {
+        std::fs::create_dir_all(root.join(name).parent().unwrap()).unwrap();
         std::fs::write(root.join(name), name).unwrap();
     }
     rescan(&mut app);
     let id = |name: &str| MediaId::for_path(&root.join(name));
-    let (a, h, p) = (id("Before/a.jpg"), id("Before/h.jpg"), id("Locked/p.jpg"));
-    // Locked's only photo moves out, and a photo elsewhere is marked.
+    let (a, h) = (id("Before/a.jpg"), id("Before/h.jpg"));
+    // The only photo of Locked and of Loose moves out, and a photo
+    // elsewhere is marked.
     app.step = Step::Organize;
     app.organize_drafts.insert(
         app.group_mode,
         Draft::new(HashMap::from([
             (a, "Before".to_owned()),
             (h, "Before".to_owned()),
-            (p, "Kept".to_owned()),
+            (id("Locked/p.jpg"), "Kept".to_owned()),
+            (id("Loose/q.jpg"), "Kept".to_owned()),
         ])),
     );
     app.decisions.entry(h).or_default().rejected = true;
@@ -323,16 +343,28 @@ fn a_folder_that_stays_is_named_while_changes_wait_for_retry_and_after_it() {
     assert!(app.error.is_none(), "{:?}", app.error);
     let listed = app.review_sentence(app.plan.as_ref().unwrap(), &app.plan_rows);
     assert!(
-        listed.ends_with(&format!("send 1 photo and 1 folder to the {TRASH}.")),
+        listed.ends_with(&format!("send 1 photo and 2 folders to the {TRASH}.")),
         "{listed}"
     );
     app.apply_review();
     settle(&mut app);
-    // The photo moved. The Trash took neither the marked photo, which
-    // waits for Retry, nor the folder, which stays.
+    // The photos moved. The Trash took neither the marked photo, which
+    // waits for Retry, nor the folders, which stay.
     assert!(app.retry_plan.is_some() && app.error.is_some());
     assert!(root.join("Kept/p.jpg").is_file() && root.join("Before/h.jpg").is_file());
-    assert!(root.join("Locked/Thumbs.db").is_file());
+    assert!(root.join("Locked/Thumbs.db").is_file() && root.join("Loose/Thumbs.db").is_file());
+    let both = format!(
+        "2 folders could not be moved to the {TRASH}, so they are still there with their leftover files: Locked, Loose."
+    );
+    assert_eq!(app.waiting_lines(), [both.as_str()]);
+    // Quit and open the folder again: the changes still wait, and what
+    // they leave unsaid is said as it was recorded.
+    let app = reopen(app, &root);
+    assert!(app.retry_plan.is_some());
+    assert_eq!(app.waiting_lines(), [both.as_str()]);
+    // A folder that is gone by the next time is no longer said to be there.
+    std::fs::remove_dir_all(root.join("Loose")).unwrap();
+    let mut app = reopen(app, &root);
     let stayed = format!(
         "Locked could not be moved to the {TRASH}, so it is still there with its leftover files."
     );
@@ -415,6 +447,11 @@ fn trash_marks_wait_with_their_photos_when_the_moves_to_another_folder_stop() {
     assert!(app.decisions[&id("Before/b.jpg")].rejected);
     let moved = MediaId::for_path(&output.join("Before/a.jpg"));
     assert!(Session::load(&output).unwrap().decisions[&moved].rejected);
+    // Quit and open the library again: the line is there as it was.
+    let staged = app.waiting_lines();
+    let mut app = reopen(app, &root);
+    assert!(app.retry_plan.is_some());
+    assert_eq!(app.waiting_lines(), staged);
     // Retry moves the rest and opens the other folder: both still marked,
     // neither in the Trash.
     std::fs::remove_file(output.join("Before/b.jpg")).unwrap();
@@ -1176,6 +1213,7 @@ fn external_output_retry_preserves_earlier_moves_and_existing_destination_marks(
         rotations_staged: Default::default(),
         trash_steps: Default::default(),
         by_hand: Default::default(),
+        waiting: None,
     }
     .save(&output)
     .unwrap();

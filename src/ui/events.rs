@@ -257,6 +257,11 @@ impl PhotoSortApp {
             self.file_names = intent.names;
             self.output = intent.output.to_string_lossy().into_owned();
         }
+        // What the unfinished plan found saved here leaves unsaid, as it
+        // was recorded when its last run stopped.
+        if let Some(waiting) = session.waiting.filter(|_| self.retry_plan.is_some()) {
+            self.waiting = waiting;
+        }
         self.active = self.media.first().map(|m| m.id);
         self.root = Some(catalog.root.clone());
         self.clear_status();
@@ -1055,6 +1060,9 @@ impl PhotoSortApp {
         } else {
             Default::default()
         };
+        // Saved below with the staged choices, to be said again when this
+        // folder is opened later and the changes still wait.
+        session.waiting = (!waiting.is_empty()).then(|| waiting.clone());
         let message = format!(
             "{finished} {} applied{}{kept}",
             if finished == 1 { "change" } else { "changes" },

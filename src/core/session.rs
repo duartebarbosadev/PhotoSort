@@ -138,6 +138,47 @@ pub struct Session {
     /// all suggestions leaves them as they are.
     #[serde(default, rename = "decided_by_hand")]
     pub by_hand: HashSet<MediaId>,
+    /// What this folder's unfinished file plan does not say itself, while
+    /// that plan waits for Retry. An earlier build skips it; one that
+    /// cannot be read is dropped and never costs the staged choices.
+    #[serde(
+        default,
+        rename = "waiting_for_retry",
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "readable"
+    )]
+    pub waiting: Option<Waiting>,
+}
+/// What the changes that wait for Retry do not say themselves, kept with
+/// them so that nothing the list named goes unsaid: the "did not finish"
+/// card and the list of what is left show it, and the result of the Retry
+/// names the folders again. Saved with the staged choices, so it is said
+/// again when the folder is opened later and its unfinished plan is found.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Waiting {
+    /// Folders the list removed or sent to the Trash that the runs so far
+    /// kept. Their step is over, so what is left to retry never names them.
+    #[serde(default)]
+    pub kept_folders: Vec<super::operations::KeptFolder>,
+    /// The Apply that stopped also listed Trash marks, ratings or
+    /// rotations. They wait for the moves, so none of them was applied.
+    #[serde(default)]
+    pub staged: bool,
+}
+impl Waiting {
+    pub fn is_empty(&self) -> bool {
+        self.kept_folders.is_empty() && !self.staged
+    }
+}
+/// A value that reads, or nothing: whatever else is in its place, a later
+/// build's spelling say, is skipped like a field that is not known.
+fn readable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
 }
 pub(crate) fn session_path(root: &Path) -> PathBuf {
     // Equivalent trailing separators must not create different session stores.

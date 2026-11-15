@@ -40,19 +40,7 @@ impl Outcome {
     }
 }
 
-/// What the changes that wait for Retry do not say themselves, kept with
-/// them so that nothing the list named goes unsaid: the "did not finish"
-/// card and the list of what is left show it, and the result of the Retry
-/// names the folders again.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(super) struct Waiting {
-    /// Folders the list removed or sent to the Trash that the runs so far
-    /// kept. Their step is over, so what is left to retry never names them.
-    pub kept_folders: Vec<KeptFolder>,
-    /// The Apply that stopped also listed Trash marks, ratings or
-    /// rotations. They wait for the moves, so none of them was applied.
-    pub staged: bool,
-}
+pub(super) use crate::core::session::Waiting;
 impl Waiting {
     /// One line each. `elsewhere` is the folder the photos move to when it
     /// is not the one that is open: the choices of the photos that already
