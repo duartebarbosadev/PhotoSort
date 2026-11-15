@@ -168,7 +168,7 @@ impl PhotoSortApp {
         let logo = crate::ui::brand::app_logo(ui, 16.0);
         if let Some(root) = &self.root {
             let name = root.file_name().unwrap_or_default().to_string_lossy();
-            logo.on_hover_text(format!("{name}\n{}", root.display()));
+            logo.on_hover_text(format!("{name}\n{}", crate::core::text::shown(root)));
         }
     }
 
@@ -375,7 +375,7 @@ impl PhotoSortApp {
         let Some(root) = self.root.clone() else {
             return;
         };
-        let path = root.display().to_string();
+        let path = crate::core::text::shown(&root);
         let name = root.file_name().unwrap_or_default().to_string_lossy();
         let widest = match fit {
             _ if self.sidebar_names_folder(ui.ctx()) => 0.0,

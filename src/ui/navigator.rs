@@ -579,7 +579,7 @@ impl PhotoSortApp {
                             let response = match folder {
                                 Some(path) => response.on_hover_text(format!(
                                     "{}\nCtrl/Cmd-click to show only the folders you choose",
-                                    path.display()
+                                    crate::core::text::shown(path)
                                 )),
                                 None => response,
                             };

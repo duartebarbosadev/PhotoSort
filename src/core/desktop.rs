@@ -69,17 +69,21 @@ impl Request {
             self.path.is_absolute(),
             "Desktop actions require an absolute local path"
         );
-        let metadata = std::fs::metadata(&self.path)
-            .with_context(|| format!("File is unavailable: {}", self.path.display()))?;
+        let metadata = std::fs::metadata(&self.path).with_context(|| {
+            format!(
+                "File is unavailable: {}",
+                crate::core::text::shown(&self.path)
+            )
+        })?;
         ensure!(
             self.action != Action::OpenFolder || metadata.is_dir(),
             "Folder is unavailable: {}",
-            self.path.display()
+            crate::core::text::shown(&self.path)
         );
         ensure!(
             metadata.is_file() || (metadata.is_dir() && self.action != Action::OpenVideo),
             "File is unavailable: {}",
-            self.path.display()
+            crate::core::text::shown(&self.path)
         );
         ensure!(
             self.action != Action::OpenVideo

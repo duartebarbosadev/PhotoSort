@@ -13,7 +13,7 @@ impl DirectoryStamp {
         anyhow::ensure!(
             meta.is_dir() && !meta.file_type().is_symlink(),
             "Folder was replaced: {}",
-            path.display()
+            crate::core::text::shown(path)
         );
         #[cfg(unix)]
         let identity = {
@@ -87,7 +87,7 @@ impl Inventory {
                 anyhow::ensure!(
                     Fingerprint::read_directory(root)?.identity == *identity,
                     "Folder was replaced since discovery: {}",
-                    root.display()
+                    crate::core::text::shown(root)
                 );
             }
         }
@@ -112,7 +112,7 @@ impl Inventory {
                     anyhow::ensure!(
                         source.fingerprint == *fingerprint,
                         "File changed since discovery: {}",
-                        path.display()
+                        crate::core::text::shown(path)
                     );
                 }
                 inventories[i].files.push(source);
@@ -183,7 +183,7 @@ impl Inventory {
                 anyhow::ensure!(
                     reviewed.iter().any(|p| p == entry.path()),
                     "Folder contents changed since review: {}",
-                    entry.path().display()
+                    crate::core::text::shown(entry.path())
                 );
                 walk.skip_current_dir();
                 continue;
@@ -195,7 +195,7 @@ impl Inventory {
             anyhow::ensure!(
                 !entry.file_type().is_symlink() && expected.remove(entry.path()),
                 "Folder contents changed since review: {}",
-                entry.path().display()
+                crate::core::text::shown(entry.path())
             );
         }
         anyhow::ensure!(expected.is_empty(), "Folder contents changed since review");
@@ -204,7 +204,7 @@ impl Inventory {
             anyhow::ensure!(
                 DirectoryStamp::read(path)? == *stamp,
                 "Folder changed since review: {}",
-                path.display()
+                crate::core::text::shown(path)
             );
         }
         for source in &self.files {
@@ -231,6 +231,5 @@ impl TrashDirectory {
         );
         self.inventory.verify(&self.path, cancelled)?;
         move_to_trash(&self.path)
-            .with_context(|| format!("Could not move folder {} to OS Trash", self.path.display()))
     }
 }
