@@ -103,6 +103,72 @@ fn fixture() -> (tempfile::TempDir, PhotoSortApp) {
     (temp, app)
 }
 #[test]
+fn background_metadata_refreshes_cull_without_interrupting_the_view_or_the_user() {
+    let (_temp, mut app) = fixture();
+    let ids: Vec<_> = app.media.iter().map(|m| m.id).collect();
+    let five = Metadata {
+        rating: 5,
+        ..Default::default()
+    };
+    for id in &ids[..32] {
+        app.metadata.insert(*id, five.clone());
+    }
+    app.step = Step::Cull;
+    app.review = false;
+    app.browse.rating = RatingFilter::Exactly(5);
+    settle(&mut app);
+    assert_eq!(app.filtered.len(), 32);
+    assert_eq!(app.active, Some(ids[0]));
+    // The rest arrives one batch after another, a frame after each.
+    let ctx = egui::Context::default();
+    app.metadata_run = Some(7);
+    let mut flying = None;
+    for (n, id) in ids[32..].iter().enumerate() {
+        let _ = app.handle_event(
+            &ctx,
+            Event::MetadataBatch {
+                run: 7,
+                items: vec![(*id, Ok(five.clone()))],
+                done: 33 + n,
+                total: 65,
+                stats: Stats::default(),
+            },
+        );
+        app.refilter();
+        assert!(app.browse_run.is_none() && app.selection_ready());
+        let run = app.browse_refresh.run;
+        assert!(
+            flying.is_none() || run.is_none() || flying == run,
+            "a batch replaced the query that was running"
+        );
+        flying = run;
+        if n == 16 {
+            // A key press acts on the photos on screen.
+            app.navigate_selection(1, false, true);
+            assert_eq!(app.active, Some(ids[1]));
+        }
+    }
+    assert!(app.metadata_run.is_none());
+    // The view catches up with every batch without another change.
+    let deadline = Instant::now() + worker_patience();
+    while app.browse_refresh.pending() {
+        assert!(Instant::now() < deadline, "the view never caught up");
+        std::thread::sleep(Duration::from_millis(1));
+        app.refilter();
+    }
+    assert_eq!(app.filtered.len(), 65);
+    assert_eq!(app.active, Some(ids[1]));
+    // A filter the user changes does not wait for a refresh that is owed.
+    app.browse_data_changed();
+    app.browse.rating = RatingFilter::Exactly(3);
+    app.filter_dirty = true;
+    app.refilter();
+    assert!(!app.browse_refresh.pending());
+    settle(&mut app);
+    assert!(app.filtered.is_empty());
+    assert_eq!(app.stats.decodes, 0);
+}
+#[test]
 fn folder_filter_preserves_focus_and_stays_in_cull_without_more_metadata_work() {
     let (_temp, mut app) = fixture();
     app.step = Step::Cull;

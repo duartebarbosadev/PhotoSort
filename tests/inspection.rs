@@ -282,6 +282,45 @@ fn inspection_mailbox_coalesces_views_and_rejects_late_results() {
     assert!(q.take().is_none());
 }
 
+/// A view of twelve photos, as a large Pick Best group is: only a few
+/// decodes wait at once, but every photo gets its turn, most wanted first.
+#[test]
+fn inspection_mailbox_serves_more_requests_than_it_queues_most_wanted_first() {
+    let root = tempfile::tempdir().unwrap();
+    let media = photo(root.path(), "a.png", 96, 64);
+    let slot = |slot: u64| Request {
+        slot,
+        ..request(&media, Region::full(96, 64))
+    };
+    // Slot 11 has the focus, so the view asks for it first.
+    let wanted: Vec<Request> = [11, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        .into_iter()
+        .map(slot)
+        .collect();
+    let mut q = Queue::default();
+    q.update(1, wanted.clone());
+    assert!(q.accepts(1, &slot(11)));
+    assert!(!q.accepts(1, &slot(10)), "Past the queue: not yet");
+    let mut served = Vec::new();
+    while let Some((_, request)) = q.take() {
+        served.push(request.slot);
+    }
+    assert_eq!(served, [11, 0, 1, 2, 3, 4, 5, 6, 7], "{}", Queue::WAITING);
+    // The view asks for the same again in its next frame: the rest follow,
+    // and what was decoded is not decoded again.
+    q.update(1, wanted.clone());
+    while let Some((_, request)) = q.take() {
+        served.push(request.slot);
+        q.update(1, wanted.clone());
+    }
+    assert_eq!(served, [11, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    assert!(wanted.iter().all(|request| q.accepts(1, request)));
+    // A photo scrolled out of view is dropped, decoded or not.
+    q.update(1, wanted[..4].to_vec());
+    assert!(!q.accepts(1, &slot(10)) && q.accepts(1, &slot(11)));
+    assert!(q.take().is_none());
+}
+
 #[test]
 fn disk_proxy_preserves_decoded_geometry_when_exif_dimensions_differ() {
     use image::ImageEncoder;

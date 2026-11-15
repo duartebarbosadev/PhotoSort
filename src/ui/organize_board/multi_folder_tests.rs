@@ -470,11 +470,11 @@ fn the_contact_sheet_filters_and_group_by_work_on_several_folders() {
         .filter(|id| app.decision(*id).rejected)
         .collect();
     assert_eq!(marked, shown_ids);
-    // A filter narrows the photos shown and keeps the folders chosen.
-    press(&mut app, &ctx, egui::Key::D, Default::default());
-    app.selection.clear();
+    // A filter narrows the photos shown and keeps the folders chosen. The
+    // photo it hides stops being selected: D unmarks the nine marked photos
+    // shown, and does not mark the hidden one with them.
     app.reject(ids[0]);
-    app.filter = Filter::Unmarked;
+    app.filter = Filter::Rejected;
     app.filter_dirty = true;
     app.refilter();
     rendered(&mut app, &ctx, size);
@@ -482,6 +482,9 @@ fn the_contact_sheet_filters_and_group_by_work_on_several_folders() {
     let order = app.board_shown_order().unwrap();
     let order: Vec<MediaId> = order.iter().map(|i| app.media[*i].id).collect();
     assert_eq!(order, shown_ids[1..]);
+    assert_eq!(app.selection.snapshot().0.len(), 9);
+    press(&mut app, &ctx, egui::Key::D, Default::default());
+    assert!(ids.iter().all(|id| !app.decision(*id).rejected));
     app.filter = Filter::All;
     // Another grouping has none of these folders: every folder shows.
     app.set_group_mode(GroupMode::Camera);

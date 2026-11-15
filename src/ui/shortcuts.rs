@@ -52,7 +52,7 @@ impl PhotoSortApp {
             return false;
         };
         match action {
-            ApplicationKey::Open => self.select_folder(),
+            ApplicationKey::Open => self.select_folder(ctx),
             ApplicationKey::Find => {
                 if self.root.is_some() && self.step != Step::PickBest {
                     let search = egui::Id::new("library_search");
@@ -132,7 +132,7 @@ impl PhotoSortApp {
             self.step,
             Step::Rotation | Step::EasyDelete | Step::PickBest
         );
-        for (pressed, modifiers) in pressed_keys(ctx, guided) {
+        for (pressed, modifiers, repeat) in pressed_keys(ctx, guided) {
             if self.modal_active() {
                 break;
             }
@@ -178,7 +178,7 @@ impl PhotoSortApp {
             if command && pressed == egui::Key::A {
                 continue; // Select All belongs to the Cull browser or a text field.
             }
-            if !command && !modifiers.alt && self.guided_step_key(pressed, modifiers) {
+            if !command && !modifiers.alt && self.guided_step_key(pressed, modifiers, repeat) {
                 continue;
             }
             self.arrow_key(pressed, modifiers);
@@ -187,10 +187,15 @@ impl PhotoSortApp {
         }
     }
 
-    fn guided_step_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
+    fn guided_step_key(
+        &mut self,
+        pressed: egui::Key,
+        modifiers: egui::Modifiers,
+        repeat: bool,
+    ) -> bool {
         match self.step {
             Step::PickBest => self.pick_key(pressed, modifiers),
-            Step::EasyDelete => self.delete_key(pressed, modifiers),
+            Step::EasyDelete => self.delete_key(pressed, modifiers, repeat),
             Step::Rotation => self.rotation_key(pressed, modifiers),
             _ => false,
         }
@@ -232,23 +237,28 @@ impl PhotoSortApp {
         true
     }
 
-    fn delete_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
-        // Keys that change a card act on the one shown beside the grid.
-        let shown = self.delete_panel;
+    fn delete_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers, repeat: bool) -> bool {
+        // Keys that change a card act on the one shown beside the grid, once
+        // per press: a held key's repeats would switch a photo back and forth.
+        let decides = self.delete_panel && !repeat;
         // A digit is a photo's place on the card, as its switch's tooltip
         // says: an Eyes closed card can show more than two.
         let photo = digit(pressed).filter(|d| *d > 0);
         match pressed {
-            egui::Key::ArrowLeft if shown => self.toggle_delete_candidate(0),
-            egui::Key::ArrowRight if shown => self.toggle_delete_candidate(1),
+            // Left keeps the card's photos, Right sends all but its keeper
+            // to Trash, as Help says.
+            egui::Key::ArrowLeft | egui::Key::ArrowRight => {
+                if decides {
+                    self.decide_delete_card(pressed == egui::Key::ArrowRight);
+                }
+            }
             _ if photo.is_some() => {
-                if shown && let Some(photo) = photo {
+                if decides && let Some(photo) = photo {
                     self.toggle_delete_candidate(photo - 1);
                 }
             }
-            egui::Key::ArrowLeft | egui::Key::ArrowRight => {}
             egui::Key::R if modifiers.shift => self.accept_delete_defaults(),
-            egui::Key::R if shown => self.undo_delete(),
+            egui::Key::R if self.delete_panel => self.undo_delete(),
             egui::Key::R => {}
             egui::Key::Enter if modifiers.shift => self.review_changes(),
             egui::Key::Enter => self.next_delete_card(),
@@ -299,6 +309,14 @@ impl PhotoSortApp {
         }
     }
 
+    /// An Easy Delete or Pick Best card of several photos shows none of them
+    /// as the active one (in Easy Delete it is the one suggested for Trash),
+    /// so a rating or a turn there would change a photo the user never
+    /// chose. Each photo of the card has its own Keep/Trash switch instead.
+    pub(super) fn unmarked_active(&self) -> bool {
+        matches!(self.step, Step::EasyDelete | Step::PickBest) && self.comparison_ids().len() > 1
+    }
+
     /// Single-photo actions shared by every workflow that shows a canvas.
     fn photo_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) {
         // Easy Delete and Pick Best choose with their own keys, and Fix
@@ -313,7 +331,8 @@ impl PhotoSortApp {
                     self.reject(id);
                 }
             }
-            egui::Key::R => {
+            // From a guided step only Alt+R gets here: R and Shift+R are its own.
+            egui::Key::R if !self.unmarked_active() => {
                 if let Some(id) = self.active {
                     let turns = if modifiers.alt {
                         2
@@ -353,7 +372,9 @@ impl PhotoSortApp {
         let command = modifiers.command || modifiers.ctrl;
         let Some(digit) = digit(pressed) else { return };
         if command {
-            if let Some(id) = self.active {
+            if !self.unmarked_active()
+                && let Some(id) = self.active
+            {
                 self.rating(id, digit.min(5) as u8);
             }
             return;

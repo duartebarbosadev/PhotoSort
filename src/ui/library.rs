@@ -280,7 +280,7 @@ impl PhotoSortApp {
         let best_name = self
             .index
             .get(&best)
-            .map_or_else(String::new, |i| self.media[*i].name());
+            .map_or_else(String::new, |i| self.shown_name(&self.media[*i]));
         // The best photo carries its own badge in the set.
         painter.text(
             egui::pos2(rect.left() + 16.0, y),
@@ -349,7 +349,7 @@ impl PhotoSortApp {
                 egui::WidgetType::Button,
                 true,
                 active || selected,
-                media.name(),
+                self.shown_name(&media),
             )
         });
         let painter = ui.painter_at(rect);
@@ -466,7 +466,7 @@ impl PhotoSortApp {
             check_mark(&painter, check, selected);
         }
         if captioned {
-            let name = media.name();
+            let name = self.shown_name(&media);
             let left = rect.left() + S2;
             let text_rect = egui::Rect::from_min_max(
                 egui::pos2(left, image_rect.bottom()),
@@ -519,7 +519,12 @@ impl PhotoSortApp {
         let comparison = self.comparison.contains(&id);
         let response = ui.interact(rect, ui.id().with(("strip-row", id)), self.tile_sense());
         response.widget_info(|| {
-            egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, media.name())
+            egui::WidgetInfo::selected(
+                egui::WidgetType::Button,
+                true,
+                active,
+                self.shown_name(&media),
+            )
         });
         let painter = ui.painter_at(rect);
         let hover = ui
@@ -567,7 +572,7 @@ impl PhotoSortApp {
         clip.text(
             egui::pos2(left, rect.center().y - 7.0),
             Align2::LEFT_CENTER,
-            media.name(),
+            self.shown_name(&media),
             FontId::proportional(11.5),
             if active {
                 INK

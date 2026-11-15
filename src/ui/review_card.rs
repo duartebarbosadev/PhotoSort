@@ -171,6 +171,166 @@ impl CardLayout {
     }
 }
 
+/// What the guided steps' grids keep from frame to frame, so that a frame
+/// in which nothing changed costs what it draws, not what the step holds.
+#[derive(Default)]
+pub(super) struct Grids {
+    /// Stamped each time a step's list of photos is built again.
+    pub listed: u64,
+    /// Stamped each time the photos a step shows last are taken again.
+    pub last_noted: u64,
+    /// The rows of the grid on screen.
+    pub rows: CardRows,
+    pub delete: super::delete_review::Deck,
+    pub rotation: super::rotation::Deck,
+    pub pick: super::pick_review::Deck,
+}
+
+/// Where a grid's rows put what: each line's top and height, and each of
+/// its cards' left edge and width.
+#[cfg(test)]
+pub(super) type LaidRows = Vec<(f32, f32, Vec<(f32, f32)>)>;
+
+/// One line of a card grid.
+enum Row {
+    /// A section's header, by section.
+    Header(usize),
+    Cards(super::photo_rows::PhotoRow, CardLayout),
+}
+
+/// What a grid needs to know about a card to place it.
+#[derive(Clone, Copy, PartialEq)]
+struct CardInputs {
+    tile: super::photo_rows::Tile,
+    facts: bool,
+    titled: bool,
+}
+
+/// A card grid's rows, kept between frames: what each card asks of its row,
+/// and the rows laid out from that for one width and photo size.
+#[derive(Default)]
+pub(super) struct CardRows {
+    /// The grid, its stamp, its sections and whether they have headers,
+    /// as they were when the cards were last asked.
+    asked: Option<(&'static str, u64, Vec<usize>, bool)>,
+    cards: Vec<CardInputs>,
+    /// The width, photo size, captions and gap the rows were laid out for.
+    laid: Option<(f32, f32, bool, f32)>,
+    /// Each line's top and height in the scrolled content, top to bottom.
+    rows: Vec<(f32, f32, Row)>,
+    /// Each card's top and height, for scrolling to it; in a section's
+    /// first row, from its header.
+    spans: Vec<(f32, f32)>,
+    /// The height of the content.
+    height: f32,
+    /// How many times the rows were laid out.
+    #[cfg(test)]
+    layouts: usize,
+}
+
+impl CardRows {
+    fn asked_for(&self, salt: &str, stamp: u64, sections: &[usize], headers: bool) -> bool {
+        self.asked.as_ref().is_some_and(|(s, at, of, with)| {
+            *s == salt && *at == stamp && of == sections && *with == headers
+        })
+    }
+
+    /// Takes the cards' new answers. The rows stand when none changed.
+    fn ask(
+        &mut self,
+        salt: &'static str,
+        stamp: u64,
+        sections: &[usize],
+        headers: bool,
+        cards: Vec<CardInputs>,
+    ) {
+        let same = self
+            .asked
+            .as_ref()
+            .is_some_and(|(s, _, of, with)| *s == salt && of == sections && *with == headers)
+            && self.cards == cards;
+        self.asked = Some((salt, stamp, sections.to_vec(), headers));
+        if !same {
+            self.cards = cards;
+            self.laid = None;
+        }
+    }
+
+    /// Lays the cards out in rows, unless they already are for this width,
+    /// photo size, captions and gap.
+    fn lay_out(&mut self, width: f32, target: f32, captions: bool, gap: f32) {
+        if self.laid == Some((width, target, captions, gap)) {
+            return;
+        }
+        let Some((_, _, sections, headers)) = &self.asked else {
+            return;
+        };
+        self.rows.clear();
+        self.spans.clear();
+        let mut tiles = Vec::new();
+        let mut top = 0.0;
+        let mut start = 0;
+        for (section, &len) in sections.iter().enumerate() {
+            let header_top = top;
+            if *headers {
+                self.rows.push((top, SECTION, Row::Header(section)));
+                top += SECTION;
+            }
+            let cards = &self.cards[start..start + len];
+            tiles.clear();
+            tiles.extend(cards.iter().map(|card| card.tile));
+            for (n, mut row) in super::photo_rows::justify(&tiles, width, target, gap)
+                .into_iter()
+                .enumerate()
+            {
+                let of_row = &cards[row.range.clone()];
+                row.range = row.range.start + start..row.range.end + start;
+                let layout = CardLayout {
+                    photo_height: row.height,
+                    header: of_row.iter().any(|card| card.titled),
+                    captions,
+                    facts: of_row.iter().any(|card| card.facts),
+                };
+                let height = layout.height();
+                for _ in row.range.clone() {
+                    // The first row keeps its section's header in view.
+                    self.spans.push(if n == 0 {
+                        (header_top, top + height - header_top)
+                    } else {
+                        (top, height)
+                    });
+                }
+                self.rows.push((top, height, Row::Cards(row, layout)));
+                top += height + gap;
+            }
+            start += len;
+        }
+        self.height = top;
+        self.laid = Some((width, target, captions, gap));
+        #[cfg(test)]
+        {
+            self.layouts += 1;
+        }
+    }
+
+    /// How many times the rows were laid out, and where they put what.
+    #[cfg(test)]
+    pub(super) fn laid(&self) -> (usize, LaidRows) {
+        let rows = self
+            .rows
+            .iter()
+            .map(|(top, height, row)| {
+                let cards = match row {
+                    Row::Header(_) => Vec::new(),
+                    Row::Cards(row, _) => row.tiles.clone(),
+                };
+                (*top, *height, cards)
+            })
+            .collect();
+        (self.layouts, rows)
+    }
+}
+
 /// A card's place in a justified row: its photos' shapes side by side, the
 /// padding around them, and the narrowest its header allows.
 pub(super) fn card_tile(aspects: &[f32]) -> super::photo_rows::Tile {
@@ -223,21 +383,28 @@ impl PhotoSortApp {
     /// A virtualized grid of review cards in sections, each under a header
     /// row that `header` draws. Cards sit in justified rows: the photos of
     /// a row share one height, near the shared photo size, and each photo
-    /// is as wide as its shape needs, so it fills its slot. `aspects` gives
+    /// is as wide as its shape needs, so it fills its slot. `aspects` adds
     /// a card's photos' widths over their heights, from what is known
-    /// without drawing it, `facts` whether it shows a line of facts under
-    /// its photos, and `titled` whether it has a title; a row keeps that
-    /// line, or a header, only when one of its cards needs it. Cards are
-    /// numbered across sections, `sections` holding each one's count.
+    /// without drawing it, `facts` says whether it shows a line of facts
+    /// under its photos, and `titled` whether it has a title; a row keeps
+    /// that line, or a header, only when one of its cards needs it. Cards
+    /// are numbered across sections, `sections` holding each one's count.
+    ///
+    /// The rows are kept from frame to frame. The three are asked about
+    /// every card only when `stamp` or the sections change, so `stamp` must
+    /// change whenever any card's answer may have; the rows are laid out
+    /// again only when an answer did change, or the width, the photo size
+    /// or the captions did. A frame otherwise asks about the cards it draws.
     /// Returns the card and event clicked this frame, or a click on the
     /// empty space around the cards.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn sectioned_card_grid(
         &mut self,
         ui: &mut egui::Ui,
-        salt: &str,
+        salt: &'static str,
         sections: &[usize],
-        aspects: impl Fn(&Self, usize) -> Vec<f32>,
+        stamp: u64,
+        aspects: impl Fn(&Self, usize, &mut Vec<f32>),
         facts: impl Fn(&Self, usize) -> bool,
         titled: impl Fn(&Self, usize) -> bool,
         header: impl FnMut(&mut Self, &mut egui::Ui, usize),
@@ -245,7 +412,7 @@ impl PhotoSortApp {
         current: Option<usize>,
     ) -> Option<GridClick> {
         self.rows_card_grid(
-            ui, salt, sections, true, aspects, facts, titled, header, card, current,
+            ui, salt, sections, true, stamp, aspects, facts, titled, header, card, current,
         )
     }
 
@@ -254,9 +421,10 @@ impl PhotoSortApp {
     pub(super) fn flat_card_grid(
         &mut self,
         ui: &mut egui::Ui,
-        salt: &str,
+        salt: &'static str,
         count: usize,
-        aspects: impl Fn(&Self, usize) -> Vec<f32>,
+        stamp: u64,
+        aspects: impl Fn(&Self, usize, &mut Vec<f32>),
         facts: impl Fn(&Self, usize) -> bool,
         card: impl FnMut(&mut Self, usize) -> Option<ReviewCard>,
         current: Option<usize>,
@@ -266,6 +434,7 @@ impl PhotoSortApp {
             salt,
             &[count],
             false,
+            stamp,
             aspects,
             facts,
             |_, _| true,
@@ -279,71 +448,48 @@ impl PhotoSortApp {
     fn rows_card_grid(
         &mut self,
         ui: &mut egui::Ui,
-        salt: &str,
+        salt: &'static str,
         sections: &[usize],
         headers: bool,
-        aspects: impl Fn(&Self, usize) -> Vec<f32>,
+        stamp: u64,
+        aspects: impl Fn(&Self, usize, &mut Vec<f32>),
         facts: impl Fn(&Self, usize) -> bool,
         titled: impl Fn(&Self, usize) -> bool,
         mut header: impl FnMut(&mut Self, &mut egui::Ui, usize),
         mut card: impl FnMut(&mut Self, usize) -> Option<ReviewCard>,
         current: Option<usize>,
     ) -> Option<GridClick> {
-        enum Row {
-            Header(usize),
-            Cards(super::photo_rows::PhotoRow, CardLayout),
-        }
         let gap = S2;
         ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
         let width = ui.available_width();
         let target = self.photo_size();
         let captions = self.preferences.show_filenames;
 
-        // (top, height, row) in the scrolled content.
-        let mut rows: Vec<(f32, f32, Row)> = Vec::new();
-        let mut spans = Vec::new();
-        let mut top = 0.0;
-        let mut start = 0;
-        for (section, &len) in sections.iter().enumerate() {
-            let header_top = top;
-            if headers {
-                rows.push((top, SECTION, Row::Header(section)));
-                top += SECTION;
+        // Out of `self` while the cards, which need all of it, are drawn.
+        let mut grid = std::mem::take(&mut self.grids.rows);
+        let mut shapes = Vec::new();
+        if !grid.asked_for(salt, stamp, sections, headers) {
+            let count = sections.iter().sum();
+            let mut cards = Vec::with_capacity(count);
+            for i in 0..count {
+                shapes.clear();
+                aspects(self, i, &mut shapes);
+                cards.push(CardInputs {
+                    tile: card_tile(&shapes),
+                    facts: facts(self, i),
+                    titled: titled(self, i),
+                });
             }
-            let tiles: Vec<_> = (start..start + len)
-                .map(|i| card_tile(&aspects(self, i)))
-                .collect();
-            for (n, mut row) in super::photo_rows::justify(&tiles, width, target, gap)
-                .into_iter()
-                .enumerate()
-            {
-                row.range = row.range.start + start..row.range.end + start;
-                let layout = CardLayout {
-                    photo_height: row.height,
-                    header: row.range.clone().any(|i| titled(self, i)),
-                    captions,
-                    facts: row.range.clone().any(|i| facts(self, i)),
-                };
-                let height = layout.height();
-                for _ in row.range.clone() {
-                    // The first row keeps its section's header in view.
-                    spans.push(if n == 0 {
-                        (header_top, top + height - header_top)
-                    } else {
-                        (top, height)
-                    });
-                }
-                rows.push((top, height, Row::Cards(row, layout)));
-                top += height + gap;
-            }
-            start += len;
+            grid.ask(salt, stamp, sections, headers, cards);
         }
+        grid.lay_out(width, target, captions, gap);
+
         let scroll = self.card_scroll(ui, salt, current, |position| {
-            spans.get(position).copied().unwrap_or((0.0, 0.0))
+            grid.spans.get(position).copied().unwrap_or((0.0, 0.0))
         });
         let mut clicked = None;
         let output = scroll.show_viewport(ui, |ui, viewport| {
-            ui.set_min_height(top);
+            ui.set_min_height(grid.height);
             let origin = ui.max_rect().min;
             // Under every card and header, which take their own clicks.
             let background = egui::Rect::from_min_max(
@@ -356,9 +502,14 @@ impl PhotoSortApp {
             {
                 clicked = Some(GridClick::Background);
             }
-            for (row_top, height, row) in &rows {
-                if row_top + height < viewport.min.y || *row_top > viewport.max.y {
-                    continue;
+            // Rows go down the content in order: the first one in view is
+            // found without walking those above it.
+            let first = grid
+                .rows
+                .partition_point(|(top, height, _)| top + height < viewport.min.y);
+            for (row_top, height, row) in &grid.rows[first..] {
+                if *row_top > viewport.max.y {
+                    break;
                 }
                 let y = origin.y + row_top;
                 match row {
@@ -384,7 +535,8 @@ impl PhotoSortApp {
                                 egui::pos2(origin.x + left, y),
                                 egui::vec2(card_width, *height),
                             );
-                            let shapes = aspects(self, index);
+                            shapes.clear();
+                            aspects(self, index, &mut shapes);
                             let event = ui
                                 .scope_builder(
                                     egui::UiBuilder::new().id_salt((salt, index)).max_rect(rect),
@@ -400,6 +552,7 @@ impl PhotoSortApp {
             }
         });
         self.library_offset = output.state.offset.y;
+        self.grids.rows = grid;
         clicked
     }
 
@@ -955,6 +1108,12 @@ impl PhotoSortApp {
         })
     }
 
+    /// Changes when a photo's metadata arrives or its size or orientation
+    /// turns out different: what was laid out from the old one is stale.
+    pub(super) fn metadata_stamp(&self) -> (usize, u64) {
+        (self.metadata.len(), self.metadata_shapes)
+    }
+
     /// A guided step's status once its analysis finishes: only the photos
     /// it could not analyze. What it found shows in the step itself, and
     /// what is staged on the Review button.
@@ -1142,6 +1301,12 @@ pub(super) fn assert_trash_drawn_bright(output: &egui::FullOutput, texture: egui
 /// Draws one frame of a guided step's grid, as the workspace would.
 #[cfg(test)]
 pub(super) fn render_grid(app: &mut PhotoSortApp) -> String {
+    render_grid_at(app, 1200.0)
+}
+
+/// `render_grid` in a window `width` wide.
+#[cfg(test)]
+pub(super) fn render_grid_at(app: &mut PhotoSortApp, width: f32) -> String {
     let ctx = egui::Context::default();
     theme_install(&ctx);
     app.review = false;
@@ -1149,7 +1314,7 @@ pub(super) fn render_grid(app: &mut PhotoSortApp) -> String {
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(1200.0, 900.0),
+                egui::vec2(width, 900.0),
             )),
             ..Default::default()
         },

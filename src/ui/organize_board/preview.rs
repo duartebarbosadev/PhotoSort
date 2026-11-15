@@ -174,17 +174,7 @@ impl PhotoSortApp {
                 self.board.typing |= field.response.has_focus() || finish;
                 return;
             }
-            let title = self.file_names.get(&active).map_or_else(
-                || media.name(),
-                |stem| {
-                    crate::core::organize::renamed_file_name(
-                        &media.path,
-                        std::ffi::OsStr::new(stem),
-                    )
-                    .to_string_lossy()
-                    .into_owned()
-                },
-            );
+            let title = self.shown_name(&media);
             let label = ui
                 .add(
                     egui::Label::new(RichText::new(title).font(semibold(13.0)))
@@ -406,7 +396,7 @@ impl PhotoSortApp {
         focus: Option<MediaId>,
     ) {
         let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-        let name = self.media[self.index[&id]].name();
+        let name = self.shown_name(&self.media[self.index[&id]]);
         response.widget_info(|| {
             egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, &name)
         });

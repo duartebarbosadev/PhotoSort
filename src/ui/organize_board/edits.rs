@@ -28,7 +28,7 @@ impl PhotoSortApp {
         if ids.is_empty() || self.board_draft().is_none() {
             return;
         }
-        let initial = self.organize_labels();
+        let initial = self.proposed_labels();
         let title = if target.is_empty() {
             self.board_root_name()
         } else {
@@ -68,6 +68,7 @@ impl PhotoSortApp {
         } else {
             format!("Moved {} to {title}", what(ids.len()))
         });
+        self.board_hold_view();
     }
     /// Leaves items in the folders they are in now: they join "Not moving".
     pub(in crate::ui::workspace) fn board_keep_in_place(&mut self, ids: &[MediaId]) {
@@ -86,13 +87,21 @@ impl PhotoSortApp {
                 "items stay"
             },
         ));
+        self.board_hold_view();
     }
     pub(super) fn board_finish_edit(&mut self) {
         let Some((path, name)) = self.board.editing.take() else {
             return;
         };
+        let made = self.board.made_to_name.take();
         let name = name.trim().to_owned();
-        if name.is_empty() || name == leaf(&path) {
+        if name.is_empty() {
+            // A name wiped out is a change of mind about a folder just made.
+            self.board_unmake_folder(made, &path);
+            return;
+        }
+        // Enter on the suggested name keeps it, as it keeps an old name.
+        if name == leaf(&path) {
             return;
         }
         if self.board_draft().is_none() {
@@ -101,8 +110,108 @@ impl PhotoSortApp {
         // Naming a person renames every folder they are in.
         match self.rename_person(&path, &name) {
             Ok(renamed) => self.board_refocus(&path, &renamed),
-            Err(error) => self.navigation_notice = Some(error.to_string()),
+            Err(error) => {
+                self.board_unmake_folder(made, &path);
+                self.navigation_notice = Some(error.to_string());
+            }
         }
+    }
+    /// Escape in a folder's name field, or the field going away half-typed:
+    /// an old folder keeps its name, and a folder made a moment ago to be
+    /// named is not made after all.
+    pub(in crate::ui::workspace) fn board_cancel_edit(&mut self) {
+        let Some((path, _)) = self.board.editing.take() else {
+            return;
+        };
+        let made = self.board.made_to_name.take();
+        self.board_unmake_folder(made, &path);
+    }
+    /// Takes back a folder made to be named, whose name was refused or given
+    /// up: the folder goes, and what making it moved into it is where it
+    /// was. Nothing else changes. A folder that has since been given
+    /// anything more (photos dropped on it, a folder nested in it) is kept
+    /// under the name it has, with all that is in it.
+    fn board_unmake_folder(&mut self, made: Option<MadeToName>, path: &str) {
+        let Some(made) = made.filter(|made| made.path == path && made.mode == self.group_mode)
+        else {
+            return;
+        };
+        if !self.board_editable() {
+            return;
+        }
+        let Some(draft) = self.organize_drafts.get_mut(&made.mode) else {
+            return;
+        };
+        let inside: Vec<&String> = draft
+            .folders()
+            .iter()
+            .filter(|folder| folder.as_str() != path && within(folder, path))
+            .collect();
+        let labelled = |draft: &Draft, folder: &str| -> HashSet<MediaId> {
+            draft
+                .labels()
+                .iter()
+                .filter(|(_, label)| within(label, folder))
+                .map(|(id, _)| *id)
+                .collect()
+        };
+        let unmade = match &made.holds {
+            Made::Items(items) => {
+                let put: HashSet<MediaId> = items.iter().map(|(id, _)| *id).collect();
+                let back: HashMap<MediaId, String> = items
+                    .iter()
+                    .filter_map(|(id, label)| Some((*id, label.clone()?)))
+                    .collect();
+                // Every folder they came from is still there under its
+                // name: one that was moved or merged since would send them
+                // somewhere else, so the new folder is kept instead.
+                inside.is_empty()
+                    && labelled(draft, path) == put
+                    && back.values().all(|folder| draft.folders().contains(folder))
+                    && draft.remove_folder(path, &back).is_ok()
+            }
+            Made::Around(source) => {
+                let wrapped = join(path, leaf(source));
+                let above = source.rsplit_once('/').map_or("", |(parent, _)| parent);
+                // Only the folder it was put around is in it, and nothing
+                // was put beside that folder.
+                let only = inside.iter().all(|folder| within(folder, &wrapped))
+                    && labelled(draft, path) == labelled(draft, &wrapped);
+                let mut next = draft.clone();
+                let restored = only
+                    && if above.is_empty() {
+                        next.unnest_folder(&wrapped)
+                    } else {
+                        next.nest_folder(&wrapped, above)
+                    }
+                    .is_ok_and(|back| back == *source)
+                    && next.remove_folder(path, &HashMap::new()).is_ok();
+                if restored {
+                    *draft = next;
+                }
+                restored
+            }
+        };
+        if !unmade {
+            return;
+        }
+        // The first edit taken back leaves no edit: the grouping is the
+        // proposal again, not a copy of it held as edited.
+        if made.first_edit
+            && let Some(catalog) = self.catalog.clone()
+            && self.organize_drafts.get(&made.mode)
+                == Some(&Draft::from_catalog(&catalog, self.organize_labels()))
+        {
+            self.organize_drafts.remove(&made.mode);
+        }
+        // What making it said is no longer so. A later notice stays: it is
+        // about something that still holds.
+        if made.notice.is_some() && self.navigation_notice == made.notice {
+            self.navigation_notice = None;
+        }
+        self.board.focus.retain(|folder| !within(folder, path));
+        self.board_epoch += 1;
+        self.dirty = Some(Instant::now());
     }
     /// Folder `from` is now `to`: the folders shown and highlighted inside
     /// it follow.
@@ -120,6 +229,8 @@ impl PhotoSortApp {
     /// Starts renaming a folder in place in the sidebar. A folded-away
     /// sidebar opens its popover for it, so the name field is in view.
     pub(in crate::ui::workspace) fn board_rename_folder(&mut self, path: &str) {
+        // An old folder: whoever made this one a moment ago says so after.
+        self.board.made_to_name = None;
         if !path.is_empty() {
             self.board.editing = Some((path.to_owned(), leaf(path).to_owned()));
             self.board.edit_focus = true;
@@ -226,23 +337,58 @@ impl PhotoSortApp {
     /// moves `ids` into it and starts renaming it in place, as Finder does.
     /// Nothing is made on disk until the changes are reviewed and applied.
     pub(in crate::ui::workspace) fn board_new_folder(&mut self, parent: &str, ids: &[MediaId]) {
+        let first_edit = !self.organize_drafts.contains_key(&self.group_mode);
+        // The draft first: it knows every folder on disk, shown or not.
+        if self.board_draft().is_none() {
+            return;
+        }
         let name = self.unused_folder_name(parent);
-        let Some(draft) = self.board_draft() else {
+        let Some(draft) = self.organize_drafts.get_mut(&self.group_mode) else {
             return;
         };
         match draft.create_folder(parent, &name) {
             Ok(path) => {
+                // Shares the labels until the move below changes them.
+                let before = draft.clone();
+                // Only what making the folder says is taken back with it:
+                // a notice that was showing before is not this folder's.
+                let earlier = self.navigation_notice.take();
                 if !ids.is_empty() {
                     self.board_move(ids, &path);
                 }
+                let notice = self.navigation_notice.clone();
+                if notice.is_none() {
+                    self.navigation_notice = earlier;
+                }
+                // What the move put in it, a RAW with its JPEG included,
+                // and where each of those was.
+                let items = match self.organize_drafts.get(&self.group_mode) {
+                    Some(draft) if !ids.is_empty() => draft
+                        .labels()
+                        .iter()
+                        .filter(|(_, label)| within(label, &path))
+                        .map(|(id, _)| (*id, before.labels().get(id).cloned()))
+                        .collect(),
+                    _ => Vec::new(),
+                };
                 self.board_rename_folder(&path);
+                self.board.made_to_name = Some(MadeToName {
+                    mode: self.group_mode,
+                    path,
+                    first_edit,
+                    holds: Made::Items(items),
+                    notice,
+                });
             }
             Err(error) => self.navigation_notice = Some(error.to_string()),
         }
     }
     /// "New folder", or "New folder 2" and so on when that name is taken
-    /// inside `parent`.
+    /// inside `parent`. A name is taken in any letter case and either form
+    /// of its accents, as it is when the folder is made: "New Folder" and
+    /// "New folder" are one folder on macOS and Windows.
     fn unused_folder_name(&self, parent: &str) -> String {
+        let draft = self.organize_drafts.get(&self.group_mode);
         (1..)
             .map(|n| {
                 if n == 1 {
@@ -252,15 +398,25 @@ impl PhotoSortApp {
                 }
             })
             .find(|name| {
-                let path = join(parent, name);
+                let folded = crate::core::text::folded(&join(parent, name));
+                let taken = |path: &str| crate::core::text::folded(path) == folded;
                 // Hidden empty folders still take their names.
-                !self.board.folders.iter().any(|f| f.path == path)
-                    && !self
-                        .organize_drafts
-                        .get(&self.group_mode)
-                        .is_some_and(|d| d.folders().contains(&path))
+                !self.board.folders.iter().any(|f| taken(&f.path))
+                    && !draft.is_some_and(|d| d.folders().iter().any(|f| taken(f)))
             })
             .unwrap_or_default()
+    }
+    /// A photo's name as its tile, the strip and the preview's title show
+    /// it: the new name staged for it in Organize, or the one on disk.
+    pub(in crate::ui::workspace) fn shown_name(&self, media: &Media) -> String {
+        match self.file_names.get(&media.id) {
+            Some(stem) if !stem.trim().is_empty() => {
+                crate::core::organize::renamed_file_name(&media.path, std::ffi::OsStr::new(stem))
+                    .to_string_lossy()
+                    .into_owned()
+            }
+            _ => media.name(),
+        }
     }
     /// Starts renaming a photo in the preview's title. Its RAW, JPEG and
     /// edit files take the same name when they move together.
@@ -399,14 +555,26 @@ impl PhotoSortApp {
             }
             FolderAction::Wrap(source) => {
                 let parent = source.rsplit_once('/').map_or("", |(p, _)| p).to_owned();
+                let first_edit = !self.organize_drafts.contains_key(&self.group_mode);
+                if self.board_draft().is_none() {
+                    return;
+                }
                 let name = self.unused_folder_name(&parent);
-                let Some(draft) = self.board_draft() else {
+                let Some(draft) = self.organize_drafts.get_mut(&self.group_mode) else {
                     return;
                 };
                 match draft.create_parent(&source, &name) {
                     Ok(_) => {
                         self.board.focus.clear();
-                        self.board_rename_folder(&join(&parent, &name));
+                        let path = join(&parent, &name);
+                        self.board_rename_folder(&path);
+                        self.board.made_to_name = Some(MadeToName {
+                            mode: self.group_mode,
+                            path,
+                            first_edit,
+                            holds: Made::Around(source),
+                            notice: None,
+                        });
                     }
                     Err(error) => self.navigation_notice = Some(error.to_string()),
                 }
@@ -432,7 +600,7 @@ impl PhotoSortApp {
                 });
             }
             FolderAction::Remove(path) => {
-                let initial = self.organize_labels();
+                let initial = self.proposed_labels();
                 let Some(draft) = self.board_draft() else {
                     return;
                 };
@@ -451,6 +619,7 @@ impl PhotoSortApp {
                 if self.board_editable() {
                     self.organize_drafts.remove(&self.group_mode);
                     self.board.editing = None;
+                    self.board.made_to_name = None;
                     self.board_epoch += 1;
                     self.dirty = Some(Instant::now());
                     self.navigation_notice = Some("Folder edits undone".into());

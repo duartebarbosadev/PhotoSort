@@ -28,6 +28,7 @@ pub mod video_info;
 
 pub mod inspection;
 
+pub mod revision;
 pub mod rotation;
 
 pub mod delete_review;

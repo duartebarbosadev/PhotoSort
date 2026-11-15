@@ -387,11 +387,22 @@ impl PhotoSortApp {
         slot: u64,
         id: MediaId,
     ) {
+        self.detail_loading_label_in(ui.painter(), rect, slot, id);
+    }
+    /// [`Self::detail_loading_label`] through `painter`, which swipe compare
+    /// clips to the photo's slice.
+    pub(super) fn detail_loading_label_in(
+        &mut self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        slot: u64,
+        id: MediaId,
+    ) {
         const AFTER: Duration = Duration::from_millis(500);
         let since = *self.detail_waiting.entry(slot).or_insert_with(Instant::now);
         let waited = since.elapsed();
         if waited < AFTER {
-            ui.ctx().request_repaint_after(AFTER - waited);
+            painter.ctx().request_repaint_after(AFTER - waited);
             return;
         }
         let megapixels = self
@@ -404,7 +415,7 @@ impl PhotoSortApp {
         } else {
             "Loading full size".to_owned()
         };
-        ui.painter().text(
+        painter.text(
             rect.left_bottom() + egui::vec2(10.0, -8.0),
             Align2::LEFT_BOTTOM,
             text,

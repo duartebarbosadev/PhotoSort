@@ -8,6 +8,7 @@ use super::eyes::{self, Blink};
 use super::faces::EyeState;
 use super::model::{Decision, MediaId, update_trash};
 use super::near_duplicates::batch::{Keeper, Kind};
+use super::pick_review::Review as PickReview;
 use std::collections::{HashMap, HashSet};
 
 #[derive(
@@ -149,10 +150,17 @@ pub struct Review {
     index: HashMap<MediaId, usize>,
     /// Photos whose suggestion was staged once; see `Session::suggested`.
     suggested: HashSet<MediaId>,
+    /// The stamp of the last change to the review itself.
+    revision: u64,
 }
 impl Review {
     pub fn entries(&self) -> &[Entry] {
         &self.entries
+    }
+    /// Changes whenever the review does, never with the decisions: what
+    /// was worked out from its cards stays good while this is the same.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
     pub fn entry(&self, id: MediaId) -> Option<&Entry> {
         self.index.get(&id).map(|i| &self.entries[*i])
@@ -165,12 +173,14 @@ impl Review {
             .map(|(i, e)| (e.subject, i))
             .collect();
         self.entries = entries;
+        self.revision = super::revision::next();
     }
     pub fn suggested(&self) -> &HashSet<MediaId> {
         &self.suggested
     }
     pub fn restore_suggested(&mut self, ids: HashSet<MediaId>) {
         self.suggested = ids;
+        self.revision = super::revision::next();
     }
     /// Stages the suggested Trash marks of photos seen for the first time.
     /// Never unmarks anything, and never repeats for a photo: a later
@@ -182,17 +192,29 @@ impl Review {
         &mut self,
         decisions: &mut HashMap<MediaId, Decision>,
     ) -> Vec<MediaId> {
-        let mut marked = Vec::new();
+        self.stage_new_suggestions_sparing(&Default::default(), decisions)
+    }
+    /// As `stage_new_suggestions`, beside Pick Best's groups: a photo that
+    /// is the last one still kept of its group is not marked, so a whole
+    /// group never goes to Trash on its own. Its card stays as it is.
+    pub fn stage_new_suggestions_sparing(
+        &mut self,
+        groups: &PickReview,
+        decisions: &mut HashMap<MediaId, Decision>,
+    ) -> Vec<MediaId> {
+        let mut marks = Vec::new();
         for entry in &self.entries {
             let keeper_kept = entry.companion.is_none_or(|id| kept(decisions, id));
             for (id, keep) in entry.candidates().into_iter().zip(entry.suggestion()) {
                 if self.suggested.insert(id) && !keep && keeper_kept {
-                    marked.push(id);
+                    marks.push((id, true));
                 }
             }
         }
-        update_trash(decisions, marked.iter().map(|id| (*id, true)));
-        marked
+        groups.spare(decisions, &mut marks);
+        update_trash(decisions, marks.iter().copied());
+        self.revision = super::revision::next();
+        marks.into_iter().map(|(id, _)| id).collect()
     }
     pub fn keeps(decisions: &HashMap<MediaId, Decision>, candidate: MediaId) -> bool {
         kept(decisions, candidate)
@@ -230,15 +252,119 @@ impl Review {
             update_trash(decisions, [(candidate, kept(decisions, candidate))]);
         }
     }
+    /// Keeps every photo of a card.
+    pub fn keep(&self, id: MediaId, decisions: &mut HashMap<MediaId, Decision>) {
+        if let Some(entry) = self.entry(id) {
+            update_trash(
+                decisions,
+                entry.candidates().into_iter().map(|c| (c, false)),
+            );
+        }
+    }
+    /// Sends a card's photos to Trash, all but its keeper, which stays even
+    /// where the suggestion keeps both (two formats of one shot): a card of
+    /// several photos never loses them all. A photo alone on its card goes.
+    pub fn trash(&self, id: MediaId, decisions: &mut HashMap<MediaId, Decision>) {
+        if let Some(entry) = self.entry(id) {
+            let marks = entry
+                .candidates()
+                .into_iter()
+                .map(|c| (c, c == entry.subject || entry.extra.contains(&c)));
+            update_trash(decisions, marks);
+        }
+    }
     /// Puts each card back to its suggestion.
     pub fn accept(&self, ids: &[MediaId], decisions: &mut HashMap<MediaId, Decision>) {
-        let marks: Vec<_> = ids
+        update_trash(decisions, self.suggested_marks(ids));
+    }
+    /// Accept all: every photo of these cards that was not decided by hand
+    /// takes its suggestion; a choice made by hand stays. No card of
+    /// several photos and no Pick Best group is left with no photo kept: a
+    /// photo that would be the last one to go to Trash is left as it is.
+    /// Returns the photos changed.
+    pub fn accept_sparing(
+        &self,
+        ids: &[MediaId],
+        groups: &PickReview,
+        decisions: &mut HashMap<MediaId, Decision>,
+        by_hand: &HashSet<MediaId>,
+    ) -> Vec<MediaId> {
+        let mut marks: Vec<(MediaId, bool)> = ids
             .iter()
+            .filter_map(|id| self.entry(*id))
+            .flat_map(|entry| Self::undecided_marks(entry, decisions, by_hand))
+            .collect();
+        groups.spare(decisions, &mut marks);
+        update_trash(decisions, marks.iter().copied());
+        // A better shot can be on two cards: it is counted once.
+        let mut seen = HashSet::new();
+        marks
+            .into_iter()
+            .map(|(id, _)| id)
+            .filter(|id| seen.insert(*id))
+            .collect()
+    }
+    /// What Accept all sets on one card: the suggestion of each photo not
+    /// decided by hand that differs from it. On a card of several photos
+    /// none goes to Trash where that would leave no photo of it kept.
+    fn undecided_marks(
+        entry: &Entry,
+        decisions: &HashMap<MediaId, Decision>,
+        by_hand: &HashSet<MediaId>,
+    ) -> Vec<(MediaId, bool)> {
+        let candidates = entry.candidates();
+        let mut marks: Vec<(MediaId, bool)> = candidates
+            .iter()
+            .copied()
+            .zip(entry.suggestion())
+            .filter(|(id, keep)| !by_hand.contains(id) && kept(decisions, *id) != *keep)
+            .map(|(id, keep)| (id, !keep))
+            .collect();
+        let goes = |id: &MediaId| {
+            marks
+                .iter()
+                .find(|(marked, _)| marked == id)
+                .map_or(!kept(decisions, *id), |(_, trash)| *trash)
+        };
+        if candidates.len() > 1 && candidates.iter().all(goes) {
+            marks.retain(|(_, trash)| !trash);
+        }
+        marks
+    }
+    /// Each photo of these cards, and whether its suggestion is Trash.
+    fn suggested_marks(&self, ids: &[MediaId]) -> Vec<(MediaId, bool)> {
+        ids.iter()
             .filter_map(|id| self.entry(*id))
             .flat_map(|e| e.candidates().into_iter().zip(e.suggestion()))
             .map(|(id, keep)| (id, !keep))
-            .collect();
-        update_trash(decisions, marks);
+            .collect()
+    }
+    /// The photos of a card whose Trash suggestion is held back: each is
+    /// in `last_kept`, the last photos still kept of their Pick Best groups.
+    pub fn held(&self, id: MediaId, last_kept: &HashSet<MediaId>) -> Vec<MediaId> {
+        self.entry(id).map_or_else(Vec::new, |e| {
+            e.candidates()
+                .into_iter()
+                .zip(e.suggestion())
+                .filter(|(id, keep)| !keep && last_kept.contains(id))
+                .map(|(id, _)| id)
+                .collect()
+        })
+    }
+    /// Whether Accept all would change a card: a photo not decided by hand
+    /// differs from its suggestion, by more than the photos held back.
+    pub fn pending(
+        &self,
+        id: MediaId,
+        decisions: &HashMap<MediaId, Decision>,
+        last_kept: &HashSet<MediaId>,
+        by_hand: &HashSet<MediaId>,
+    ) -> bool {
+        self.entry(id).is_some_and(|e| {
+            Self::undecided_marks(e, decisions, by_hand)
+                .iter()
+                .any(|(id, trash)| !trash || !last_kept.contains(id))
+        })
     }
     /// How many of these cards differ from their suggestion.
     pub fn changed_count(&self, ids: &[MediaId], decisions: &HashMap<MediaId, Decision>) -> usize {

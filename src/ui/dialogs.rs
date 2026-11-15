@@ -33,11 +33,11 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     (
         "Easy Delete",
         &[
-            ("1 / Left", "Keep"),
-            ("2 / Right", "Trash"),
+            ("Left / Right", "Keep / Trash"),
+            ("1–9", "Switch that photo"),
             ("Enter", "Next"),
             ("R", "Undo"),
-            ("A", "Accept all suggestions"),
+            ("A / Shift+R", "Accept all suggestions"),
         ],
     ),
     (
@@ -55,7 +55,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("1–9", "Keep or trash"),
             ("Enter", "Show or next"),
             ("R", "Undo"),
-            ("A", "Accept all suggestions"),
+            ("A / Shift+R", "Accept all suggestions"),
         ],
     ),
     (

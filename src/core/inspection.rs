@@ -205,20 +205,36 @@ pub struct Queue {
     pending: std::collections::VecDeque<Request>,
 }
 impl Queue {
+    /// Decodes that wait at once. A view that wants more gets the rest as
+    /// these complete: it asks again every frame, most wanted first.
+    pub const WAITING: usize = 9;
+
+    /// The view's requests as of this frame, most wanted first. Those already
+    /// handed to the decoder stay accepted while they are still wanted; the
+    /// others wait in the given order, and only `WAITING` of them at a time.
     pub fn update(&mut self, epoch: u64, requests: Vec<Request>) {
-        let requests: Vec<_> = requests.into_iter().take(9).collect();
         if self.epoch != epoch {
             self.desired.clear();
             self.pending.clear();
             self.epoch = epoch;
         }
-        self.pending.retain(|request| requests.contains(request));
-        for request in &requests {
-            if !self.desired.contains(request) {
-                self.pending.push_back(request.clone());
+        let mut desired: Vec<Request> = Vec::new();
+        let mut pending = std::collections::VecDeque::new();
+        for request in requests {
+            if desired.contains(&request) {
+                continue;
             }
+            let taken = self.desired.contains(&request) && !self.pending.contains(&request);
+            if !taken {
+                if pending.len() == Self::WAITING {
+                    continue;
+                }
+                pending.push_back(request.clone());
+            }
+            desired.push(request);
         }
-        self.desired = requests;
+        self.desired = desired;
+        self.pending = pending;
     }
     pub fn take(&mut self) -> Option<(u64, Request)> {
         self.pending

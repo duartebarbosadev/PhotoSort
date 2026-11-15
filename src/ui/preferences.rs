@@ -72,9 +72,55 @@ impl PhotoSortApp {
             Err(error) => self.error = Some(error),
         }
     }
+    /// Looks for each recent folder on its own thread and calls `wake` for
+    /// every one found missing; `poll_recent_folders` then hides it. The
+    /// thread is never joined: a share that does not answer can take long,
+    /// and neither the window nor quitting waits for it.
+    pub(super) fn check_recent_folders(&mut self, wake: impl Fn() + Send + 'static) {
+        let folders = self.preferences.recent_folders.clone();
+        if folders.is_empty() {
+            return;
+        }
+        let (found, check) = std::sync::mpsc::channel();
+        let started = std::thread::Builder::new()
+            .name("photosort-recents".into())
+            .spawn(move || {
+                for folder in folders {
+                    if !folder.is_dir() {
+                        if found.send(folder).is_err() {
+                            return;
+                        }
+                        wake();
+                    }
+                }
+            });
+        if started.is_ok() {
+            self.recent_check = Some(check);
+        }
+    }
+    /// Hides the recent folders the background check found missing so far.
+    pub(super) fn poll_recent_folders(&mut self) {
+        use std::sync::mpsc::TryRecvError;
+        loop {
+            let answer = match &self.recent_check {
+                Some(check) => check.try_recv(),
+                None => return,
+            };
+            match answer {
+                // A folder opened since the check started is there.
+                Ok(folder) if self.root.as_ref() != Some(&folder) => {
+                    self.missing_recent.insert(folder);
+                }
+                Ok(_) => {}
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => self.recent_check = None,
+            }
+        }
+    }
     fn clear_recent_folders(&mut self) {
         self.preferences.recent_folders.clear();
         self.missing_recent.clear();
+        self.recent_check = None;
         self.save_preferences();
         self.forget_message = Some("Recent folders cleared.".into());
     }
@@ -227,7 +273,7 @@ impl PhotoSortApp {
                         .on_hover_text("Ctrl/Cmd+O")
                         .clicked()
                     {
-                        self.select_folder();
+                        self.select_folder(ui.ctx());
                         ui.close();
                     }
                     ui.separator();

@@ -13,9 +13,6 @@ pub(in crate::ui::workspace) enum Row {
 #[derive(Clone, PartialEq)]
 pub(in crate::ui::workspace) struct BoardRowsKey {
     arranged: u64,
-    /// Photos' shapes come with their metadata, which arrives without
-    /// rearranging the board: new entries, and changed shapes of known ones.
-    metadata: (usize, u64),
     focus: Vec<String>,
     width: f32,
     target: f32,
@@ -32,6 +29,138 @@ pub(in crate::ui::workspace) struct BoardRows {
     heights: Vec<f32>,
     bottoms: Vec<f32>,
     total: f32,
+    /// The shape each photo was laid out with, by its place in `filtered`;
+    /// zero for a photo in a folder that is not shown.
+    aspects: Vec<f32>,
+    /// Each photo's place in `filtered`, by its place in `media`.
+    places: Vec<u32>,
+}
+
+/// A photo's tile: its photo at the row's height and the inset around it.
+fn tile(aspect: f32) -> photo_rows::Tile {
+    photo_rows::Tile {
+        aspect,
+        extra: 2.0 * TILE_INSET,
+        min_width: MIN_TILE,
+    }
+}
+
+/// A tile row's height: its photo at the row's height, the inset around
+/// it and the caption under it.
+fn tile_height(photo: f32) -> f32 {
+    photo + TILE_INSET + library::CAPTION
+}
+
+impl BoardRows {
+    /// The first photo of a row, or of a header's folder.
+    fn start(row: &Row, sections: &[Section]) -> usize {
+        match row {
+            Row::Header(section) => sections[*section].range.start,
+            Row::Tiles(_, tiles) => tiles.range.start,
+        }
+    }
+    /// Lays out again the rows around the photos at the places in
+    /// `changed` (ascending), now in the shapes given, and leaves every
+    /// other row as it is: exactly what laying out every row would give.
+    /// A row is made from its own photos and the one after them, so the
+    /// rows from the one before a changed photo are made again until a new
+    /// row starts where an old one did. `false` when the rows are not the
+    /// ones `sections` was laid out as.
+    fn reshape(&mut self, sections: &[Section], changed: &[(usize, f32)]) -> bool {
+        for &(place, aspect) in changed {
+            self.aspects[place] = aspect;
+        }
+        let mut lowest = self.rows.len();
+        let mut justifier: Option<(usize, photo_rows::Justifier)> = None;
+        // From the last one back, so the rows before stay where they are.
+        for &(place, _) in changed.iter().rev() {
+            let holding = self
+                .rows
+                .partition_point(|row| Self::start(row, sections) <= place)
+                .saturating_sub(1);
+            let Some(Row::Tiles(section, row)) = self.rows.get(holding) else {
+                return false;
+            };
+            let section = *section;
+            let range = sections[section].range.clone();
+            if !row.range.contains(&place) || !range.contains(&place) {
+                return false;
+            }
+            // The first photo of a row also decided where the row before
+            // it ended.
+            let first = match holding.checked_sub(1).map(|before| &self.rows[before]) {
+                Some(Row::Tiles(..)) if row.range.start == place => holding - 1,
+                _ => holding,
+            };
+            let Row::Tiles(_, row) = &self.rows[first] else {
+                return false;
+            };
+            let mut at = row.range.start;
+            if justifier.as_ref().is_none_or(|(of, _)| *of != section) {
+                let tiles = self.aspects[range.clone()]
+                    .iter()
+                    .map(|a| tile(*a))
+                    .collect();
+                justifier = Some((
+                    section,
+                    photo_rows::Justifier::new(
+                        tiles,
+                        self.key.width,
+                        self.key.target,
+                        self.key.gap,
+                    ),
+                ));
+            }
+            let layout = &justifier.as_ref().unwrap().1;
+            let mut fresh = Vec::new();
+            let mut until = first;
+            loop {
+                let mut row = layout.row(at - range.start);
+                row.range = row.range.start + range.start..row.range.end + range.start;
+                at = row.range.end;
+                fresh.push(row);
+                // Old rows of this folder that start before the new row's
+                // end are replaced.
+                while let Some(Row::Tiles(of, old)) = self.rows.get(until)
+                    && *of == section
+                    && old.range.start < at
+                {
+                    until += 1;
+                }
+                let joins = matches!(
+                    self.rows.get(until),
+                    Some(Row::Tiles(of, old)) if *of == section && old.range.start == at
+                );
+                if at > place && (at == range.end || joins) {
+                    break;
+                }
+            }
+            self.heights.splice(
+                first..until,
+                fresh.iter().map(|row| tile_height(row.height)),
+            );
+            self.rows.splice(
+                first..until,
+                fresh.into_iter().map(|row| Row::Tiles(section, row)),
+            );
+            lowest = lowest.min(first);
+        }
+        // Every row from the first one made again gets its place, by the
+        // sums a whole layout makes.
+        let mut y = self.tops.get(lowest).copied().unwrap_or(self.total);
+        self.tops.truncate(lowest);
+        self.bottoms.truncate(lowest);
+        for (row, height) in self.rows.iter().zip(&self.heights).skip(lowest) {
+            self.tops.push(y);
+            self.bottoms.push(y + height);
+            y += match row {
+                Row::Header(_) => *height,
+                Row::Tiles(..) => height + self.key.spacing,
+            };
+        }
+        self.total = y;
+        true
+    }
 }
 
 /// A folder's header above its photos: name, parent path and counts.
@@ -124,19 +253,24 @@ impl PhotoSortApp {
     /// The shown sections as header and tile rows: justified rows, each
     /// photo as wide as its shape needs at the row's height. Laid out again
     /// only when what they depend on changes, so a still board costs
-    /// nothing per frame however many photos it holds.
+    /// nothing per frame however many photos it holds. A photo whose shape
+    /// changed (its size arrived with its thumbnail, or it was turned)
+    /// lays out the rows around it alone.
     fn board_rows(&mut self, key: BoardRowsKey) -> Arc<BoardRows> {
         if let Some(rows) = &self.board.rows
             && rows.key == key
         {
-            return rows.clone();
+            let reshaped = &self.board.reshaped;
+            if !reshaped.all && (reshaped.ids.is_empty() || self.reshape_rows()) {
+                self.board.reshaped.clear();
+                return self.board.rows.clone().expect("rows were just checked");
+            }
         }
-        // A tile is its photo at the row's height, the inset around it and
-        // the caption under it.
-        let tile_height = |photo: f32| photo + TILE_INSET + library::CAPTION;
+        self.board.reshaped.clear();
         let mut rows = Vec::new();
         let mut tops = Vec::new();
         let mut heights = Vec::new();
+        let mut aspects = vec![0.0; self.filtered.len()];
         let mut y = 0.0;
         for (index, section) in self.board.sections.iter().enumerate() {
             if !shows(&key.focus, section.path.as_deref()) {
@@ -151,11 +285,9 @@ impl PhotoSortApp {
                 .clone()
                 .map(|position| {
                     let id = self.media[self.filtered[position]].id;
-                    photo_rows::Tile {
-                        aspect: self.photo_aspect(id, self.preview_turns(id)),
-                        extra: 2.0 * TILE_INSET,
-                        min_width: MIN_TILE,
-                    }
+                    let aspect = self.photo_aspect(id, self.preview_turns(id));
+                    aspects[position] = aspect;
+                    tile(aspect)
                 })
                 .collect();
             for mut row in photo_rows::justify(&tiles, key.width, key.target, key.gap) {
@@ -169,6 +301,10 @@ impl PhotoSortApp {
             }
         }
         let bottoms = tops.iter().zip(&heights).map(|(t, h)| t + h).collect();
+        let mut places = vec![u32::MAX; self.media.len()];
+        for (position, &index) in self.filtered.iter().enumerate() {
+            places[index] = position as u32;
+        }
         let laid = Arc::new(BoardRows {
             key,
             rows,
@@ -176,9 +312,81 @@ impl PhotoSortApp {
             heights,
             bottoms,
             total: y,
+            aspects,
+            places,
         });
         self.board.rows = Some(laid.clone());
         laid
+    }
+    /// Checks the photos noted as possibly reshaped against the shapes the
+    /// rows were laid out with, and lays out again the rows around those
+    /// that differ. Most do not: a thumbnail usually brings the size the
+    /// rows assumed, and a Trash mark or a rating changes no shape.
+    /// `false` when the rows have to be laid out in full instead.
+    fn reshape_rows(&mut self) -> bool {
+        let Some(laid) = &self.board.rows else {
+            return false;
+        };
+        let mut changed: Vec<(usize, f32)> = self
+            .board
+            .reshaped
+            .ids
+            .iter()
+            .filter_map(|id| {
+                let place = *laid.places.get(*self.index.get(id)?)? as usize;
+                let was = *laid.aspects.get(place)?;
+                let now = self.photo_aspect(*id, self.preview_turns(*id));
+                (was != 0.0 && was != now).then_some((place, now))
+            })
+            .collect();
+        if changed.is_empty() {
+            return true;
+        }
+        changed.sort_by_key(|(place, _)| *place);
+        changed.dedup_by_key(|(place, _)| *place);
+        // Shared only while a frame draws from them; then lay out in full.
+        self.board
+            .rows
+            .as_mut()
+            .and_then(Arc::get_mut)
+            .is_some_and(|laid| laid.reshape(&self.board.sections, &changed))
+    }
+    /// Photos were just moved to other folders. The scroll anchor would
+    /// follow the photo at the top of the view to wherever it now sits, so
+    /// the view holds still on the first photo from its top that stayed in
+    /// its folder instead. Read from the rows as last drawn, before the
+    /// board is arranged again.
+    pub(super) fn board_hold_view(&mut self) {
+        let arranged = self.board.arranged;
+        let Some(laid) = self
+            .board
+            .rows
+            .clone()
+            .filter(|l| l.key.arranged == arranged)
+        else {
+            return;
+        };
+        let Some(draft) = self.organize_drafts.get(&self.group_mode) else {
+            return;
+        };
+        let offset = self.library_offset;
+        let top = laid.bottoms.partition_point(|bottom| *bottom <= offset);
+        let stayed = laid
+            .rows
+            .iter()
+            .zip(&laid.tops)
+            .skip(top)
+            .find_map(|(row, top)| {
+                let Row::Tiles(section, tiles) = row else {
+                    return None;
+                };
+                let folder = self.board.sections.get(*section)?.path.as_ref();
+                tiles.range.clone().find_map(|position| {
+                    let id = self.media[*self.filtered.get(position)?].id;
+                    (draft.labels().get(&id) == folder).then_some((id, top - offset))
+                })
+            });
+        self.board.held = Some((arranged, stayed));
     }
     /// The middle of Organize: photos grouped under their destination folder.
     pub(in crate::ui::workspace) fn organize_board(&mut self, ui: &mut egui::Ui) {
@@ -230,7 +438,6 @@ impl PhotoSortApp {
         let spacing = ui.spacing().item_spacing.y;
         let laid = self.board_rows(BoardRowsKey {
             arranged: self.board.arranged,
-            metadata: (self.metadata.len(), self.metadata_shapes),
             focus: self.board.focus.clone(),
             width,
             target: self.photo_size(),
@@ -289,9 +496,17 @@ impl PhotoSortApp {
         // top of the view stays where it was.
         // Kept per library, so another folder's photo is never the anchor.
         let anchor_key = egui::Id::new(("organize-board-anchor", self.group_mode, &self.root));
-        let anchor = ui
-            .data(|d| d.get_temp::<Option<(MediaId, f32)>>(anchor_key))
-            .flatten()
+        // A photo just moved to another folder is not followed there: the
+        // view holds on one that stayed, see `board_hold_view`.
+        let arranged = self.board.arranged;
+        let held = self.board.held.take_if(|held| held.0 != arranged);
+        let anchor = match held {
+            Some((_, stayed)) => stayed,
+            None => ui
+                .data(|d| d.get_temp::<Option<(MediaId, f32)>>(anchor_key))
+                .flatten(),
+        };
+        let anchor = anchor
             .and_then(|(id, shift)| {
                 let position = self
                     .index
@@ -645,8 +860,11 @@ impl PhotoSortApp {
         let (active, top) = looking;
         let path = |index: usize| self.board.sections[index].path.clone();
         self.board_look_at(active.map(path), top.map(path), output.state.offset.y);
-        if self.board.reveal_current {
-            ui.ctx().request_repaint(); // The sidebar was drawn first.
+        // The sidebar was drawn first, so it reveals the folder in the next
+        // frame. Folded away with its popover closed, it reveals the folder
+        // when it is next shown: asking for frames until then never ends.
+        if self.board.reveal_current && (self.board.layout.sidebar || self.board.folders_open) {
+            ui.ctx().request_repaint();
         }
         if let Some((index, modifiers)) = select_section
             && self.library_selection_mode()
@@ -665,53 +883,114 @@ impl PhotoSortApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Everything the rows place, to compare two layouts.
+    type Laid = (
+        Vec<(usize, Option<photo_rows::PhotoRow>)>,
+        Vec<f32>,
+        Vec<f32>,
+        Vec<f32>,
+        f32,
+    );
+    fn laid(rows: &BoardRows) -> Laid {
+        let placed = rows
+            .rows
+            .iter()
+            .map(|row| match row {
+                Row::Header(section) => (*section, None),
+                Row::Tiles(section, tiles) => (*section, Some(tiles.clone())),
+            })
+            .collect();
+        (
+            placed,
+            rows.tops.clone(),
+            rows.heights.clone(),
+            rows.bottoms.clone(),
+            rows.total,
+        )
+    }
+
     #[test]
-    fn a_photos_new_shape_lays_the_board_out_again() {
-        let (_temp, mut app) = super::super::compact_cull_tests::fixture();
+    fn a_photos_new_shape_lays_out_the_rows_around_it_again() {
+        let (_temp, mut app) = super::super::compact_cull_tests::fixture_with(40);
         app.step = Step::Organize;
         app.review = false;
         app.output = app.root.as_ref().unwrap().display().to_string();
+        // One photo's size is not known yet: it is laid out as 4:3.
+        let unread = app.media[20].id;
+        let read = app.metadata.remove(&unread).unwrap();
         app.filter_dirty = true;
         app.refilter();
+        // Narrow enough for several rows in each folder.
         let key = |app: &PhotoSortApp| BoardRowsKey {
             arranged: app.board.arranged,
-            metadata: (app.metadata.len(), app.metadata_shapes),
             focus: Vec::new(),
-            width: 900.0,
+            width: 520.0,
             target: 120.0,
             gap: 8.0,
             spacing: 8.0,
         };
-        let first = app.board_rows(key(&app));
-        let id = app.media[0].id;
-        let decoded = |app: &mut PhotoSortApp, width, height| {
+        let decoded = |app: &mut PhotoSortApp, id, width, height| {
             let metadata = Metadata {
                 width,
                 height,
-                ..app.metadata[&id].clone()
+                ..app.metadata.get(&id).unwrap_or(&read).clone()
             };
             let _ = app.handle_event(
                 &egui::Context::default(),
                 Event::Asset {
                     id,
                     preview: false,
-                    pixels: Arc::new(image::RgbaImage::new(1, 1)),
+                    pixels: Arc::new(egui::ColorImage::filled([1, 1], Color32::BLACK)),
                     decoder_warning: None,
                     metadata,
                     stats: Default::default(),
                 },
             );
         };
-        // The same shape again keeps the rows.
+        let first = app.board_rows(key(&app));
+        let before = laid(&first);
+        // The same shape again keeps the rows; so does a size that arrives
+        // as the 4:3 the rows assumed, and a Trash mark.
+        let id = app.media[0].id;
         let (width, height) = (app.metadata[&id].width, app.metadata[&id].height);
-        decoded(&mut app, width, height);
-        assert!(Arc::ptr_eq(&first, &app.board_rows(key(&app))));
-        // A decode that finds the photo is wide replaces its entry; the
-        // map keeps its size, and the rows are laid out again.
-        let photos = app.metadata.len();
-        decoded(&mut app, 3000, 1000);
-        assert_eq!(app.metadata.len(), photos);
-        assert!(!Arc::ptr_eq(&first, &app.board_rows(key(&app))));
+        decoded(&mut app, id, width, height);
+        decoded(&mut app, unread, 4000, 3000);
+        app.reject(id);
+        assert!(!app.filter_dirty && !app.board.reshaped.ids.is_empty());
+        let same = app.board_rows(key(&app));
+        assert!(Arc::ptr_eq(&first, &same) && before == laid(&same));
+        drop((first, same));
+        // A decode that finds a photo is wide or tall, and a quarter turn,
+        // lay out the rows around that photo alone: the rows a layout of
+        // the whole board gives, without arranging the board again.
+        let arranged = app.board.arranged;
+        let ids: Vec<MediaId> = app.media.iter().map(|m| m.id).collect();
+        let mut reshaped = 0;
+        for n in 0..ids.len() {
+            // Its neighbour and a photo further on change in the same frame.
+            for (id, shape) in [
+                (ids[n], n),
+                (ids[(n + 1) % 40], n + 1),
+                (ids[(n + 17) % 40], n + 2),
+            ] {
+                match shape % 3 {
+                    0 => decoded(&mut app, id, 3000, 1000),
+                    1 => decoded(&mut app, id, 1000, 2000),
+                    _ => {
+                        decoded(&mut app, id, 1600, 900);
+                        app.stage_manual([id], crate::core::decisions::Change::Rotate(1));
+                    }
+                }
+            }
+            let was = app.board.rows.as_ref().map(Arc::as_ptr);
+            let patched = laid(&app.board_rows(key(&app)));
+            reshaped += usize::from(app.board.rows.as_ref().map(Arc::as_ptr) == was);
+            app.board.rows = None;
+            assert_eq!(patched, laid(&app.board_rows(key(&app))), "photo {n}");
+            assert_ne!(patched, before);
+        }
+        assert_eq!((reshaped, app.board.arranged), (40, arranged));
         app.runtime.shutdown();
     }
 }

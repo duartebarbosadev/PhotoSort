@@ -185,7 +185,7 @@ impl PhotoSortApp {
         .on_hover_text(name)
         .clicked()
         {
-            self.select_folder();
+            self.select_folder(ui.ctx());
         }
     }
 

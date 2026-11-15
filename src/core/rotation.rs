@@ -39,10 +39,18 @@ pub struct Review {
     suggestions: HashMap<MediaId, Suggestion>,
     /// Photos whose suggestion was staged once; see `Session::rotations_staged`.
     staged: HashSet<MediaId>,
+    /// The stamp of the last change to the review itself.
+    revision: u64,
 }
 impl Review {
     pub fn ids(&self) -> &[MediaId] {
         &self.order
+    }
+    /// Changes whenever the review does, never with the decisions: what
+    /// was worked out from its suggestions stays good while this is the
+    /// same. A copy keeps its stamp until one of the two changes.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
     pub fn suggestion(&self, id: MediaId) -> Option<Suggestion> {
         self.suggestions.get(&id).copied()
@@ -52,6 +60,7 @@ impl Review {
     }
     pub fn restore_staged(&mut self, ids: HashSet<MediaId>) {
         self.staged = ids;
+        self.revision = super::revision::next();
     }
     pub fn replace_suggestions(&mut self, suggestions: Vec<(MediaId, u8)>) {
         self.replace_predictions(
@@ -73,6 +82,7 @@ impl Review {
                 self.suggestions.insert(id, Suggestion { turns, uncertain });
             }
         }
+        self.revision = super::revision::next();
     }
     /// Stages the turns of certain suggestions seen for the first time.
     /// Never repeats for a photo: a later detection leaves the user's
@@ -89,6 +99,7 @@ impl Review {
                 turned.push(*id);
             }
         }
+        self.revision = super::revision::next();
         turned
     }
     /// The turns a photo starts from: its suggestion once staged, otherwise
@@ -122,6 +133,7 @@ impl Review {
             .into_iter()
             .map(at)
             .collect();
+        self.revision = super::revision::next();
     }
     pub fn complete(&mut self, completed: &HashSet<MediaId>) {
         self.retain(|id| !completed.contains(&id));
@@ -130,6 +142,7 @@ impl Review {
         self.order.retain(|id| keep(*id));
         let ids: HashSet<_> = self.order.iter().copied().collect();
         self.suggestions.retain(|id, _| ids.contains(id));
+        self.revision = super::revision::next();
     }
 }
 

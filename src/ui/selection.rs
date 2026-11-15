@@ -89,6 +89,8 @@ impl PhotoSortApp {
         // time they open.
         self.delete_review.restore_suggested(Default::default());
         self.pick_review.restore_suggested(Default::default());
+        // Starting over: nothing counts as decided by hand any more.
+        self.by_hand.clear();
         self.pending_bookmark = None;
         // A closed preview is a derived snapshot; unfinished recovery stays guarded.
         self.set_review_plan(None);
@@ -115,6 +117,10 @@ impl PhotoSortApp {
         );
         if changed.is_empty() {
             return;
+        }
+        // A Trash mark set or taken back here is the user's own choice.
+        if matches!(change, Change::Trash(_) | Change::ToggleTrash) {
+            self.by_hand.extend(changed.iter().copied());
         }
         self.changed_items(changed);
     }

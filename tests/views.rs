@@ -50,6 +50,7 @@ fn views_round_trip_separately_from_decisions_and_drain_across_navigation() {
         pick_suggested: Default::default(),
         rotations_staged: Default::default(),
         trash_steps: Default::default(),
+        by_hand: Default::default(),
         organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),

@@ -725,21 +725,30 @@ impl ImageWorker {
             return;
         }
         match loaded {
-            Ok(asset) => self.publisher.send(
-                epoch,
-                Event::Asset {
-                    id: media.id,
-                    preview,
-                    decoder_warning: asset.decoder_warning,
-                    pixels: if preview {
-                        asset.pixels
-                    } else {
-                        asset.thumbnail
+            Ok(asset) => {
+                let pixels = if preview {
+                    asset.pixels
+                } else {
+                    asset.thumbnail
+                };
+                // Converted here: for a 2048 px preview that is a copy of
+                // 11 MB the UI thread would otherwise make between frames.
+                let pixels = Arc::new(eframe::egui::ColorImage::from_rgba_unmultiplied(
+                    [pixels.width() as usize, pixels.height() as usize],
+                    pixels.as_raw(),
+                ));
+                self.publisher.send(
+                    epoch,
+                    Event::Asset {
+                        id: media.id,
+                        preview,
+                        decoder_warning: asset.decoder_warning,
+                        pixels,
+                        metadata: asset.metadata,
+                        stats: self.pipeline.stats,
                     },
-                    metadata: asset.metadata,
-                    stats: self.pipeline.stats,
-                },
-            ),
+                )
+            }
             Err(e) => self.publisher.send(
                 epoch,
                 Event::AssetError {

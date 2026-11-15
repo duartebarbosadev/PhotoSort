@@ -271,11 +271,12 @@ fn real_application_reopen_restores_groups_and_bookmark_without_ai() {
         manual_groups: manual,
         scene_groups: Default::default(),
         decisions: Default::default(),
-        fingerprints: fingerprints.clone(),
+        fingerprints: fingerprints.clone().into(),
         suggested: Default::default(),
         pick_suggested: Default::default(),
         rotations_staged: Default::default(),
         trash_steps: Default::default(),
+        by_hand: Default::default(),
     }
     .save(&catalog.root)
     .unwrap();

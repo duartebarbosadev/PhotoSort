@@ -70,6 +70,36 @@ fn global_key_mapping_is_exact_and_platform_independent() {
     assert_eq!(application_key(egui::Key::O, egui::Modifiers::NONE), None);
 }
 #[test]
+fn open_folder_key_shows_the_picker_on_every_press() {
+    let mut app = app(Step::Organize);
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    // The picker has the keyboard while it is open, so letting go of O never
+    // reaches egui: each press arrives with no release before it.
+    for press in 1..=3 {
+        let _ = ctx.run_test(input(&[(egui::Key::O, egui::Modifiers::COMMAND)]), |ui| {
+            let ctx = &ui.ctx().clone();
+            app.keyboard(ctx)
+        });
+        assert_eq!(native_dialog::shown(), press, "press {press}");
+    }
+    // A key held where no picker opens still acts once: F12 shows About,
+    // and its repeat does not reach the keys behind it.
+    let _ = ctx.run_test(input(&[(egui::Key::F12, egui::Modifiers::NONE)]), |ui| {
+        let ctx = &ui.ctx().clone();
+        app.keyboard(ctx)
+    });
+    assert!(app.about);
+    app.about = false;
+    let _ = ctx.run_test(input(&[(egui::Key::F12, egui::Modifiers::NONE)]), |ui| {
+        let ctx = &ui.ctx().clone();
+        app.keyboard(ctx)
+    });
+    assert!(!app.about, "a held key repeating opened About again");
+    app.runtime.shutdown();
+}
+
+#[test]
 fn organize_mode_keys_share_toolbar_state_without_repeating_expensive_work() {
     for width in [640.0, 1440.0] {
         let (_temp, mut app) = super::super::compact_cull_tests::fixture();
@@ -792,6 +822,42 @@ fn guided_keys_match_their_cards_and_trash_keys_only_mark_where_marks_show() {
         press(&mut app, key);
         assert_ne!(app.decision(photo).rejected, before, "{key:?}");
     }
+    // The card shows none of its photos as the active one, so it has no
+    // toolbar stars, and the rating and rotation keys change no photo.
+    let rate = |app: &mut PhotoSortApp| {
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let keys = [
+            (egui::Key::Num3, egui::Modifiers::COMMAND),
+            (egui::Key::R, egui::Modifiers::ALT),
+        ];
+        let output = ctx.run_test(input(&keys), |ui| {
+            app.keyboard(&ui.ctx().clone());
+            egui::CentralPanel::default().show(ui, |ui| app.review_ratings(ui, MediaId(1)));
+        });
+        let tree = output.platform_output.accesskit_update.unwrap();
+        let stars = tree
+            .nodes
+            .iter()
+            .any(|(_, node)| node.label() == Some("Rate 3 stars"));
+        (stars, app.decision(MediaId(1)).rating)
+    };
+    app.active = Some(MediaId(1));
+    assert_eq!(rate(&mut app), (false, None));
+    assert_eq!(app.decision(MediaId(1)).turns, 0);
+    // A photo alone on its card is the one shown: it can be rated.
+    app.delete_review.replace(vec![Entry {
+        subject: MediaId(1),
+        companion: None,
+        category: Category::Blur,
+        tag: "Blurry".into(),
+        reason: String::new(),
+        keep_why: String::new(),
+        eyes: Vec::new(),
+        extra: Vec::new(),
+    }]);
+    assert_eq!(rate(&mut app), (true, Some(3)));
     app.runtime.shutdown();
     // Fix Rotation shows no Trash marks, so D and Delete stage none.
     let mut app = super::tests::app(Step::Rotation);
