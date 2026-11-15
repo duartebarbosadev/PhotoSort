@@ -1018,7 +1018,7 @@ fn cleanup_text(
     };
     let mut parts = Vec::new();
     if !trashed.is_empty() {
-        parts.push(format!("Sent to the {TRASH}: {}", listed(&trashed, "; ")));
+        parts.push(format!("Going to the {TRASH}: {}", listed(&trashed, "; ")));
     }
     if !removed.is_empty() {
         parts.push(format!(
@@ -2146,6 +2146,9 @@ impl PhotoSortApp {
             ui.add(egui::Label::new(RichText::new(self.review_sentence(&plan, &rows)).font(medium(15.0)).color(INK)).wrap());
             if retry {
                 ui.label(RichText::new("Changes that finished are already applied. These are the ones left.").color(MUTED));
+                for line in self.waiting_lines() {
+                    ui.add(egui::Label::new(RichText::new(line).color(MUTED)).wrap());
+                }
             }
             if let Some(output) = &plan.output_root && self.root.as_ref() != Some(output) {
                 ui.add(egui::Label::new(RichText::new(format!("Photos go to {}", folder_text(output, Some(output)))).color(MUTED)).truncate())
@@ -2209,21 +2212,26 @@ impl PhotoSortApp {
             self.discard_remaining_operations();
         }
         if apply {
-            // A Retry from the Review step ends there like an Apply: with
-            // what it did once it is done, or with what is still left.
-            let retried = self.retry_plan.is_some() && self.step == Step::Review;
-            if retried {
-                self.review_outcome = Some(super::review_step::Outcome {
-                    applied: self.plan_rows.applied(),
-                    done: false,
-                    left_behind: None,
-                    kept_folders: Vec::new(),
-                });
-            }
-            self.apply_reviewed_plan();
-            if retried && !self.busy {
-                self.review_outcome = None;
-            }
+            self.apply_listed_plan();
+        }
+    }
+    /// Apply in the list of changes. A Retry from the Review step ends
+    /// there like an Apply: with what it did once it is done, or with what
+    /// is still left.
+    pub(super) fn apply_listed_plan(&mut self) {
+        let retried = self.retry_plan.is_some() && self.step == Step::Review;
+        if retried {
+            self.review_outcome = Some(super::review_step::Outcome {
+                applied: self.plan_rows.applied(),
+                done: false,
+                left_behind: None,
+                kept_folders: Vec::new(),
+                kept_before: Vec::new(),
+            });
+        }
+        self.apply_reviewed_plan();
+        if retried && !self.busy {
+            self.review_outcome = None;
         }
     }
 }

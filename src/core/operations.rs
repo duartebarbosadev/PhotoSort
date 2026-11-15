@@ -305,6 +305,9 @@ pub struct KeptFolder {
 pub enum Kept {
     /// The drive has no Trash, or the system refused the folder.
     TrashRefused,
+    /// The system refused the folder and the folder said why: a program
+    /// has a file in it open, named here, or the folder itself.
+    InUse(Option<String>),
     /// It now holds something the review did not list: the name of one such
     /// file or folder, when it could be read.
     Holds(Option<String>),
@@ -1559,7 +1562,7 @@ struct FolderKept(Kept);
 impl std::fmt::Display for FolderKept {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self.0 {
-            Kept::TrashRefused => "Could not move the folder to the Trash",
+            Kept::TrashRefused | Kept::InUse(_) => "Could not move the folder to the Trash",
             Kept::Holds(_) => "The folder holds something the review did not list",
         })
     }
@@ -2063,7 +2066,11 @@ fn apply(
                 Err(_) if !leftovers.is_empty() && holds_only_listed(path, leftovers) => {
                     move_to_trash(path).map_err(|error| {
                         tracing::warn!(%error, "could not trash a folder left with only system files");
-                        anyhow::Error::new(FolderKept(Kept::TrashRefused))
+                        // With the reason, when the folder gave one.
+                        let why = error
+                            .downcast_ref::<TrashRefused>()
+                            .map_or(Kept::TrashRefused, |refused| refused.kept.clone());
+                        anyhow::Error::new(FolderKept(why))
                     })?;
                 }
                 // Anything else in it keeps the folder, and the result says
@@ -3039,6 +3046,8 @@ struct TrashRefused {
     lead: String,
     folder: Option<String>,
     system: String,
+    /// The same reason for a folder that is kept, whose result is one line.
+    kept: Kept,
 }
 impl TrashRefused {
     /// `system` is what the Trash answered. `held` is what the file itself
@@ -3057,6 +3066,10 @@ impl TrashRefused {
             lead: trash_refusal(&Self::said(path), TRASH, cause),
             folder: Self::folder(path).map(super::text::shown),
             system: held.map_or_else(|| system.to_owned(), Held::words),
+            kept: match held {
+                Some(held) if held.in_use() => Kept::InUse(held.inside.clone()),
+                _ => Kept::TrashRefused,
+            },
         }
     }
     fn folder(path: &Path) -> Option<&Path> {
@@ -3266,9 +3279,12 @@ mod trash_refusal_tests {
             }],
         };
         assert_eq!(action.failure_message(&refusal), refusal);
-        // A folder kept back by a file inside it names that file.
+        // A folder kept back by a file inside it names that file, and the
+        // line that says the folder stayed is given the same reason.
         let held = in_use(Some("Thumbs.db"));
-        let refusal = TrashRefused::new(path, aborted, Some(&held)).to_string();
+        let refusal = TrashRefused::new(path, aborted, Some(&held));
+        assert_eq!(refusal.kept, Kept::InUse(Some("Thumbs.db".into())));
+        let refusal = refusal.to_string();
         assert!(
             refusal.starts_with(&format!("{said} A program has a file in it open.\n"))
                 && refusal.ends_with(&format!("System message: Thumbs.db: {system}")),
@@ -3279,7 +3295,9 @@ mod trash_refusal_tests {
             error: std::io::Error::from_raw_os_error(5),
             inside: None,
         };
-        let refusal = TrashRefused::new(path, aborted, Some(&held)).to_string();
+        let refusal = TrashRefused::new(path, aborted, Some(&held));
+        assert_eq!(refusal.kept, Kept::TrashRefused);
+        let refusal = refusal.to_string();
         assert!(refusal.starts_with(&format!("{said}\n")), "{refusal}");
         // Nothing learned from the file: the Trash's words, and what to look at.
         let refusal = TrashRefused::new(path, aborted, None).to_string();

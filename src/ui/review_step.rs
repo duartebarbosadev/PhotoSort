@@ -23,6 +23,9 @@ pub(super) struct Outcome {
     /// Folders the list removed or sent to the Trash that are still on
     /// disk, each with the reason.
     pub kept_folders: Vec<KeptFolder>,
+    /// The same, kept by the runs before the Retry this is the result of.
+    /// They are named with the others; this run's list never counted them.
+    pub kept_before: Vec<KeptFolder>,
 }
 impl Outcome {
     /// What the Apply did. A folder listed for the Trash that is still
@@ -30,6 +33,46 @@ impl Outcome {
     pub(super) fn sentence(&self) -> String {
         let kept = self.kept_folders.iter().filter(|k| k.for_trash).count();
         self.applied.sentence(kept)
+    }
+    /// Every folder that was listed as going and is still there.
+    pub(super) fn kept(&self) -> Vec<KeptFolder> {
+        [self.kept_before.as_slice(), self.kept_folders.as_slice()].concat()
+    }
+}
+
+/// What the changes that wait for Retry do not say themselves, kept with
+/// them so that nothing the list named goes unsaid: the "did not finish"
+/// card and the list of what is left show it, and the result of the Retry
+/// names the folders again.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Waiting {
+    /// Folders the list removed or sent to the Trash that the runs so far
+    /// kept. Their step is over, so what is left to retry never names them.
+    pub kept_folders: Vec<KeptFolder>,
+    /// The Apply that stopped also listed Trash marks, ratings or
+    /// rotations. They wait for the moves, so none of them was applied.
+    pub staged: bool,
+}
+impl Waiting {
+    /// One line each. `elsewhere` is the folder the photos move to when it
+    /// is not the one that is open: the choices of the photos that already
+    /// moved went there with them.
+    pub(super) fn lines(&self, elsewhere: Option<&Path>) -> Vec<String> {
+        let mut lines = kept_lines(&self.kept_folders);
+        if self.staged {
+            let staged = "Trash marks, ratings and rotations are still staged.";
+            lines.push(match elsewhere {
+                Some(folder) => format!(
+                    "{staged} Those of photos that already moved wait with them in {}.",
+                    folder.file_name().map_or_else(
+                        || crate::core::text::shown(folder),
+                        |name| name.to_string_lossy().into_owned()
+                    )
+                ),
+                None => staged.to_owned(),
+            });
+        }
+        lines
     }
 }
 
@@ -257,6 +300,15 @@ impl PhotoSortApp {
     /// status bar, the step tabs and the Review step ask every time they
     /// are drawn. Counting indexes every row of the plan, so the number is
     /// kept until the plan is replaced.
+    /// What the changes that wait for Retry leave unsaid, one line each.
+    pub(super) fn waiting_lines(&self) -> Vec<String> {
+        let elsewhere = self
+            .retry_plan
+            .as_ref()
+            .and_then(|plan| plan.output_root.as_deref())
+            .filter(|output| Some(*output) != self.root.as_deref());
+        self.waiting.lines(elsewhere)
+    }
     pub(super) fn unfinished(&self) -> Option<Unfinished> {
         let plan = self.retry_plan.as_ref()?;
         if self.unfinished.get().is_none() {
@@ -450,6 +502,7 @@ impl PhotoSortApp {
             done: false,
             left_behind: None,
             kept_folders: Vec::new(),
+            kept_before: Vec::new(),
         });
         self.error = None;
         if moves {
@@ -635,10 +688,16 @@ impl PhotoSortApp {
         // A Retry at work is an Apply at work: the card that says some
         // changes did not finish waits until it is known whether they did.
         if self.retry_plan.is_some() && !applying {
-            let body = self.unfinished().map_or_else(
+            let mut body = self.unfinished().map_or_else(
                 || "The changes that finished are applied. Retry the rest, choose another destination or discard them.".to_owned(),
                 |unfinished| unfinished.sentence(),
             );
+            // What Retry will not name: a folder that stayed, and the
+            // choices that wait for the moves.
+            for line in self.waiting_lines() {
+                body.push('\n');
+                body.push_str(&line);
+            }
             let mut open = false;
             state_card(
                 ui,
@@ -841,7 +900,7 @@ impl PhotoSortApp {
 }
 
 /// "2 photos stayed in Holidays, still staged there."
-fn left_behind_text(outcome: &Outcome) -> Option<String> {
+pub(super) fn left_behind_text(outcome: &Outcome) -> Option<String> {
     let name = |folder: &Path| {
         folder
             .file_name()
@@ -860,7 +919,7 @@ fn left_behind_text(outcome: &Outcome) -> Option<String> {
             name(folder)
         ));
     }
-    lines.extend(kept_lines(&outcome.kept_folders));
+    lines.extend(kept_lines(&outcome.kept()));
     (!lines.is_empty()).then(|| lines.join(" "))
 }
 
@@ -884,14 +943,27 @@ pub(super) fn kept_lines(kept: &[KeptFolder]) -> Vec<String> {
     };
     let (refused, holding): (Vec<&KeptFolder>, Vec<&KeptFolder>) = kept
         .iter()
-        .partition(|folder| folder.why == Kept::TrashRefused);
+        .partition(|folder| !matches!(folder.why, Kept::Holds(_)));
+    // Why, when the folder itself said: a program has a file in it open.
+    let because = |folder: &KeptFolder| match &folder.why {
+        Kept::InUse(Some(file)) => format!(" because a program has {file} open"),
+        Kept::InUse(None) => " because a program has it open".to_owned(),
+        _ => String::new(),
+    };
+    let reasons = refused.iter().any(|folder| !because(folder).is_empty());
     let mut lines = Vec::new();
     match refused.as_slice() {
         [] => {}
-        [folder] => lines.push(format!(
-            "{} could not be moved to the {TRASH}, so it is still there with its leftover files.",
-            name(folder)
-        )),
+        // Each with its reason, while that stays short enough to read.
+        folders if folders.len() == 1 || (reasons && folders.len() <= 3) => {
+            lines.extend(folders.iter().map(|folder| {
+                format!(
+                    "{} could not be moved to the {TRASH}{}, so it is still there with its leftover files.",
+                    name(folder),
+                    because(folder)
+                )
+            }))
+        }
         folders => lines.push(format!(
             "{} folders could not be moved to the {TRASH}, so they are still there with their leftover files: {}.",
             folders.len(),

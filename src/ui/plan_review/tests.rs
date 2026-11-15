@@ -232,7 +232,7 @@ fn organize_review_reads_as_plain_sentences_without_full_paths() {
             "You're about to move 3 photos into a new folder \"h\" and send 1 folder to the {TRASH}."
         ),
         &format!(
-            "Sent to the {TRASH}: 2025-10-25 / group-6, with .DS_Store and @eaDir. Folders left empty are removed: 2025-10-25 / group-2, 2025-10-25"
+            "Going to the {TRASH}: 2025-10-25 / group-6, with .DS_Store and @eaDir. Folders left empty are removed: 2025-10-25 / group-2, 2025-10-25"
         ),
         "Apply all changes",
     ] {
@@ -1282,7 +1282,7 @@ fn trash_marks_alone_remove_the_folders_they_empty_and_the_list_names_them_first
     assert_eq!(
         cleanup_text(plan, &app.plan_rows, Some(&root), 3, false),
         format!(
-            "Sent to the {TRASH}: Roll, with Thumbs.db; Solo, with .DS_Store. Folders left empty are removed: Deep / Inner, Deep"
+            "Going to the {TRASH}: Roll, with Thumbs.db; Solo, with .DS_Store. Folders left empty are removed: Deep / Inner, Deep"
         )
     );
     // (An empty folder inside one that is removed is named too: no folder
