@@ -458,15 +458,7 @@ impl Store {
             header.version == 1 && header.context.root == root,
             "Recovery plan version or library does not match"
         );
-        let mut report = Report {
-            remaining: Plan {
-                actions: vec![],
-                description: header.plan.description.clone(),
-                output_root: header.plan.output_root.clone(),
-                completed_dependencies: header.plan.completed_dependencies.clone(),
-            },
-            ..Default::default()
-        };
+        let mut report = Report::of(&header.plan);
         let mut completed = HashSet::new();
         let mut partial = HashMap::new();
         let mut pending = HashSet::new();
