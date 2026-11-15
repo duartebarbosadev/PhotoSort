@@ -2,6 +2,7 @@ use super::*;
 use crate::core::{
     operations::{Action, Report},
     organize::Draft,
+    text::TRASH,
 };
 use crate::test_support::worker_patience;
 
@@ -231,7 +232,9 @@ fn a_folder_made_only_for_photos_that_go_to_the_trash_is_not_left_behind() {
     let plan = app.plan.as_ref().unwrap();
     assert_eq!(
         app.review_sentence(plan, &app.plan_rows),
-        "You're about to move 1 photo into the folder \"Kept\" and send 2 photos to the Trash."
+        format!(
+            "You're about to move 1 photo into the folder \"Kept\" and send 2 photos to the {TRASH}."
+        )
     );
     assert_eq!(app.plan_rows.apply_label(), "Move 1 and trash 2");
     assert!(plan.actions.iter().any(|action| matches!(
@@ -255,7 +258,7 @@ fn a_folder_made_only_for_photos_that_go_to_the_trash_is_not_left_behind() {
     assert!(app.retry_plan.is_none() && !app.review_applying());
     assert_eq!(
         app.review_outcome.as_ref().map(|o| o.sentence()).as_deref(),
-        Some("Moved 1 photo and sent 2 photos to the Trash.")
+        Some(format!("Moved 1 photo and sent 2 photos to the {TRASH}.").as_str())
     );
     // Moved first, so both went to the Trash from where the list said.
     let trashed = |name: &str| trash.path().join(name).is_file();

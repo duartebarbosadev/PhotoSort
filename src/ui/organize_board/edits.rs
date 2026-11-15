@@ -112,8 +112,22 @@ impl PhotoSortApp {
             Ok(renamed) => self.board_refocus(&path, &renamed),
             Err(error) => {
                 self.board_unmake_folder(made, &path);
-                self.navigation_notice = Some(error.to_string());
+                self.board_refuse_name(error.to_string());
             }
+        }
+    }
+    /// Says why a typed name was not taken, until the next name field opens.
+    fn board_refuse_name(&mut self, why: String) {
+        self.board.name_refusal = Some(why.clone());
+        self.navigation_notice = Some(why);
+    }
+    /// A name field opening is a fresh start: what the status bar says about
+    /// the last refused name goes. Anything else it says stays.
+    fn board_forget_refusal(&mut self) {
+        if let Some(refusal) = self.board.name_refusal.take()
+            && self.navigation_notice.as_deref() == Some(refusal.as_str())
+        {
+            self.navigation_notice = None;
         }
     }
     /// Escape in a folder's name field, or the field going away half-typed:
@@ -232,6 +246,7 @@ impl PhotoSortApp {
         // An old folder: whoever made this one a moment ago says so after.
         self.board.made_to_name = None;
         if !path.is_empty() {
+            self.board_forget_refusal();
             self.board.editing = Some((path.to_owned(), leaf(path).to_owned()));
             self.board.edit_focus = true;
             self.board.reveal_editing = true;
@@ -437,6 +452,7 @@ impl PhotoSortApp {
         if self.active != Some(id) {
             self.set_active(id);
         }
+        self.board_forget_refusal();
         self.board.renaming = Some((id, stem));
         self.board.rename_focus = true;
         // The name is edited in the preview's title, so a folded-away
@@ -466,7 +482,7 @@ impl PhotoSortApp {
                 self.dirty = Some(Instant::now());
                 self.board_epoch += 1;
             }
-            Err(error) => self.navigation_notice = Some(error.to_string()),
+            Err(error) => self.board_refuse_name(error.to_string()),
         }
     }
     /// The library folder a sidebar folder started as, when that is exactly

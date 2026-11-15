@@ -1,5 +1,6 @@
 use super::*;
 use crate::core::operations::Source;
+use crate::core::text::TRASH;
 
 fn source(name: &str) -> Source {
     Source {
@@ -129,7 +130,9 @@ fn plain_view_counts_photos_and_groups_them_by_folder() {
     // The sentence and the button read the same counts.
     assert_eq!(
         app.review_sentence(app.plan.as_ref().unwrap(), rows),
-        "You're about to rename 1 photo and 1 other file, create 1 empty folder and send 1 photo to the Trash."
+        format!(
+            "You're about to rename 1 photo and 1 other file, create 1 empty folder and send 1 photo to the {TRASH}."
+        )
     );
     assert_eq!(rows.summary.apply_label(), "Apply all changes");
     app.runtime.shutdown();
@@ -225,8 +228,12 @@ fn organize_review_reads_as_plain_sentences_without_full_paths() {
     app.set_review_plan(Some(plan));
     let texts = dialog_texts(&mut app, &ctx, egui::vec2(1280.0, 800.0));
     for expected in [
-        "You're about to move 3 photos into a new folder \"h\" and send 1 folder to the Trash.",
-        "Sent to the Trash: 2025-10-25 / group-6, with .DS_Store and @eaDir. Folders left empty are removed: 2025-10-25 / group-2, 2025-10-25",
+        &format!(
+            "You're about to move 3 photos into a new folder \"h\" and send 1 folder to the {TRASH}."
+        ),
+        &format!(
+            "Sent to the {TRASH}: 2025-10-25 / group-6, with .DS_Store and @eaDir. Folders left empty are removed: 2025-10-25 / group-2, 2025-10-25"
+        ),
         "Apply all changes",
     ] {
         assert!(texts.iter().any(|t| t == expected), "{expected}: {texts:?}");
@@ -418,10 +425,11 @@ fn shared_review_exposes_names_and_keeps_apply_visible_in_compact_and_retry_view
                 }
                 let tree = output.unwrap().platform_output.accesskit_update.unwrap();
                 // Retries open every file operation; a first review shows photos.
+                let going = format!("Going to the {TRASH}");
                 let names: &[&str] = if retry {
                     &["From  sample.ARW", "To    keepers.ARW"]
                 } else {
-                    &["Going to the Trash", "rejected.jpg"]
+                    &[going.as_str(), "rejected.jpg"]
                 };
                 if retry {
                     assert!(tree.nodes.iter().any(|(_, n)| {
@@ -647,7 +655,9 @@ fn one_review_applies_moves_then_staged_choices_without_a_second_review() {
     );
     assert_eq!(
         app.review_sentence(app.plan.as_ref().unwrap(), &app.plan_rows),
-        "You're about to rename 1 photo, change the rating or rotation of 2 photos and send 1 photo to the Trash."
+        format!(
+            "You're about to rename 1 photo, change the rating or rotation of 2 photos and send 1 photo to the {TRASH}."
+        )
     );
     assert_eq!(app.plan_rows.apply_label(), "Apply all changes");
     assert_eq!(app.plan_rows.followers[&d], "+ XMP");
@@ -704,7 +714,7 @@ fn one_review_applies_moves_then_staged_choices_without_a_second_review() {
     let outcome = app.review_outcome.as_ref().unwrap();
     assert_eq!(
         outcome.sentence(),
-        "Renamed 1 photo, rotated 1 photo, rated 1 photo and sent 1 photo to the Trash."
+        format!("Renamed 1 photo, rotated 1 photo, rated 1 photo and sent 1 photo to the {TRASH}.")
     );
     assert!(outcome.done && outcome.left_behind.is_none() && outcome.kept_folders.is_empty());
     app.runtime.shutdown();
@@ -801,6 +811,32 @@ fn card_sentences_name_one_source_or_count_several() {
             .iter()
             .any(|p| matches!(p.block, Block::SourceHead(..)))
     );
+    // Organized into another folder, where each folder keeps its name: the
+    // destination is named after that folder, not "from Big move to Big".
+    let to = |name: &str| Path::new("/sorted").join(name);
+    app.set_review_plan(Some(Plan {
+        actions: ["Big/a.jpg", "Big/b.jpg", "c.jpg"]
+            .into_iter()
+            .map(|name| Action::Move {
+                files: vec![(source(name), to(name))],
+            })
+            .collect(),
+        output_root: Some("/sorted".into()),
+        ..Default::default()
+    }));
+    let sentences: Vec<String> = app
+        .plan_rows
+        .folders
+        .iter()
+        .map(|folder| app.card_sentence(app.plan.as_ref().unwrap(), folder))
+        .collect();
+    assert_eq!(
+        sentences,
+        [
+            "1 photo from library moves to sorted",
+            "2 photos from Big move to sorted / Big"
+        ]
+    );
     app.runtime.shutdown();
 }
 
@@ -843,7 +879,9 @@ fn the_review_step_lists_changes_from_every_step_and_undoes_one_at_a_time() {
     let nodes = list(&mut app);
     let has = |nodes: &[(String, egui::Rect)], label: &str| nodes.iter().any(|(l, _)| l == label);
     for label in [
-        "You're about to rename 1 photo, change the rating or rotation of 2 photos and send 1 photo to the Trash.",
+        &format!(
+            "You're about to rename 1 photo, change the rating or rotation of 2 photos and send 1 photo to the {TRASH}."
+        ),
         "Apply all changes",
         &format!("Keep {}", names[0]),
         &format!("Don't change the rating of {}", names[1]),
@@ -1009,7 +1047,7 @@ fn a_listed_trash_mark_names_the_raw_and_xmp_that_go_with_it() {
     assert!(app.plan_rows.ratings.is_empty());
     assert_eq!(
         app.review_outcome.as_ref().map(|o| o.sentence()).as_deref(),
-        Some("Sent 2 photos to the Trash.")
+        Some(format!("Sent 2 photos to the {TRASH}.").as_str())
     );
     assert!(app.busy && app.raw_question.is_none());
     assert_eq!(
@@ -1094,7 +1132,9 @@ fn a_photo_that_moves_and_goes_to_the_trash_is_listed_once_under_trash() {
     assert_eq!(moving(&app), [("IMG_2.JPG".to_owned(), String::new())]);
     assert_eq!(
         sentence(&app),
-        "You're about to move 1 photo into the folder \"Kept\" and send 1 photo to the Trash."
+        format!(
+            "You're about to move 1 photo into the folder \"Kept\" and send 1 photo to the {TRASH}."
+        )
     );
     assert_eq!(app.plan_rows.apply_label(), "Move 1 and trash 1");
     let moves = app
@@ -1241,14 +1281,16 @@ fn trash_marks_alone_remove_the_folders_they_empty_and_the_list_names_them_first
     assert!(plan.actions.is_empty(), "nothing moves");
     assert_eq!(
         cleanup_text(plan, &app.plan_rows, Some(&root), 3, false),
-        "Sent to the Trash: Roll, with Thumbs.db; Solo, with .DS_Store. Folders left empty are removed: Deep / Inner, Deep"
+        format!(
+            "Sent to the {TRASH}: Roll, with Thumbs.db; Solo, with .DS_Store. Folders left empty are removed: Deep / Inner, Deep"
+        )
     );
     // (An empty folder inside one that is removed is named too: no folder
     // goes without being listed.)
     // The folders that go to the Trash are counted, as the sentence says.
     assert_eq!(
         app.review_sentence(plan, &app.plan_rows),
-        "You're about to send 5 photos and 2 folders to the Trash."
+        format!("You're about to send 5 photos and 2 folders to the {TRASH}.")
     );
     assert_eq!(app.staged_change_count(), 7);
     // Nothing has changed on disk while the changes are only listed.
@@ -1263,7 +1305,7 @@ fn trash_marks_alone_remove_the_folders_they_empty_and_the_list_names_them_first
     let outcome = app.review_outcome.as_ref().unwrap();
     assert_eq!(
         outcome.sentence(),
-        "Sent 5 photos and 1 folder to the Trash."
+        format!("Sent 5 photos and 1 folder to the {TRASH}.")
     );
     assert_eq!(
         review_step::kept_lines(&outcome.kept_folders),
@@ -1480,7 +1522,9 @@ fn the_review_badge_says_the_number_the_sentence_and_the_button_say() {
     let plan = app.plan.as_ref().unwrap();
     assert_eq!(
         app.review_sentence(plan, &app.plan_rows),
-        "You're about to move 3 photos and 1 other file into the folder \"trip2\" and send 1 photo to the Trash."
+        format!(
+            "You're about to move 3 photos and 1 other file into the folder \"trip2\" and send 1 photo to the {TRASH}."
+        )
     );
     assert_eq!(app.plan_rows.apply_label(), "Move 4 and trash 1");
     assert_eq!(app.plan_rows.total(), 5);

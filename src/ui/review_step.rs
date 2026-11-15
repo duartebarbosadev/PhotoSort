@@ -5,6 +5,7 @@ use super::plan_review::ReviewAction;
 use super::states::{state_card, state_frame};
 use super::*;
 use crate::core::operations::{Kept, KeptFolder};
+use crate::core::text::TRASH;
 use egui_phosphor::regular as icon;
 use std::path::{Path, PathBuf};
 
@@ -521,10 +522,10 @@ impl PhotoSortApp {
                 "Trash the RAW files you kept?"
             });
             let body = if one {
-                "1 RAW file that you rated, rotated or chose to keep shares its name with a photo marked for Trash. RAW and JPEG files stay together, so it would go to the Trash too.".to_owned()
+                format!("1 RAW file that you rated, rotated or chose to keep shares its name with a photo marked for Trash. RAW and JPEG files stay together, so it would go to the {TRASH} too.")
             } else {
                 format!(
-                    "{} RAW files that you rated, rotated or chose to keep share their names with photos marked for Trash. RAW and JPEG files stay together, so they would go to the Trash too.",
+                    "{} RAW files that you rated, rotated or chose to keep share their names with photos marked for Trash. RAW and JPEG files stay together, so they would go to the {TRASH} too.",
                     question.count
                 )
             };
@@ -540,7 +541,7 @@ impl PhotoSortApp {
                 }
                 if ui
                     .button(if one { "Trash it too" } else { "Trash them too" })
-                    .on_hover_text("Each goes to the Trash with its JPEG")
+                    .on_hover_text(format!("Each goes to the {TRASH} with its JPEG"))
                     .clicked()
                 {
                     answer = Some(WantedRaw::Trash);
@@ -551,7 +552,7 @@ impl PhotoSortApp {
                     } else {
                         "Keep the RAW files"
                     }))
-                    .on_hover_text("Only the JPEGs go to the Trash")
+                    .on_hover_text(format!("Only the JPEGs go to the {TRASH}"))
                     .clicked()
                 {
                     answer = Some(WantedRaw::Keep);
@@ -888,11 +889,11 @@ pub(super) fn kept_lines(kept: &[KeptFolder]) -> Vec<String> {
     match refused.as_slice() {
         [] => {}
         [folder] => lines.push(format!(
-            "{} could not be moved to the Trash, so it is still there with its leftover files.",
+            "{} could not be moved to the {TRASH}, so it is still there with its leftover files.",
             name(folder)
         )),
         folders => lines.push(format!(
-            "{} folders could not be moved to the Trash, so they are still there with their leftover files: {}.",
+            "{} folders could not be moved to the {TRASH}, so they are still there with their leftover files: {}.",
             folders.len(),
             names(folders)
         )),

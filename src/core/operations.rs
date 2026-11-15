@@ -6,6 +6,7 @@ pub use directory::TrashDirectory;
 #[cfg(test)]
 mod move_tests;
 pub mod recovery;
+use super::text::{TO_TRASH, TRASH};
 use super::{catalog::Catalog, metadata, model::*, session};
 use anyhow::{Context, Result};
 pub use case_rename::DirectoryRename;
@@ -103,7 +104,7 @@ impl Action {
     /// read back from the journal as well as fresh from a failed Apply.
     fn failure_message(&self, detail: &str) -> String {
         let detail = super::text::plain_paths(detail);
-        let refused = |path: &Path| detail.starts_with(&TrashRefused::lead(path));
+        let refused = |path: &Path| detail.starts_with(&TrashRefused::said(path));
         let whole = match self {
             Self::Trash { files } => files.iter().any(|source| refused(&source.path)),
             Self::TrashDirectory(folder) => refused(&folder.path),
@@ -142,7 +143,7 @@ impl Action {
                 path, leftovers, ..
             } if !leftovers.is_empty() => {
                 format!(
-                    "Move to Trash with {}: {}",
+                    "Move {TO_TRASH} with {}: {}",
                     leftovers.join(", "),
                     crate::core::text::shown(path)
                 )
@@ -665,7 +666,9 @@ pub fn trash_plan(
     }
     Ok(Plan {
         actions,
-        description: "Move the listed files and original folders to system Trash. Folder entries include every discovered file and subfolder. Changed contents stop that operation. Unrelated marks, ratings and Organize edits remain staged.".into(),
+        description: format!(
+            "Move the listed files and original folders to the {TRASH}. Folder entries include every discovered file and subfolder. Changed contents stop that operation. Unrelated marks, ratings and Organize edits remain staged."
+        ),
         ..Default::default()
     })
 }
@@ -3026,18 +3029,11 @@ fn move_to_stand_in(path: &Path) -> Option<Result<()>> {
         Ok(fs::rename(path, to)?)
     })())
 }
-/// The system's own name for where deleted files go.
-const TRASH_NAME: &str = if cfg!(windows) {
-    "Recycle Bin"
-} else {
-    "Trash"
-};
-
 /// The system would not take a file or folder into its Trash. Its text is
 /// what the failure list shows: a first line that names the file and the
-/// folder it is in and says what may be wrong, without claiming to know.
-/// Where that folder is and what the system itself said follow on lines of
-/// their own, which the error window keeps under Details.
+/// folder it is in and says what is wrong, or what may be while that is not
+/// known. Where that folder is and what the system itself said follow on
+/// lines of their own, which the error window keeps under Details.
 #[derive(Debug)]
 struct TrashRefused {
     lead: String,
@@ -3045,34 +3041,107 @@ struct TrashRefused {
     system: String,
 }
 impl TrashRefused {
-    fn new(path: &Path, system: &str) -> Self {
+    /// `system` is what the Trash answered. `held` is what the file itself
+    /// answered when asked (see [`held`]): the real reason, shown instead.
+    fn new(path: &Path, system: &str, held: Option<&Held>) -> Self {
+        let cause = match held {
+            None => Cause::Unknown {
+                open_files_are_held: cfg!(windows),
+            },
+            Some(held) if held.in_use() => Cause::InUse {
+                inside: held.inside.is_some(),
+            },
+            Some(_) => Cause::Said,
+        };
         Self {
-            lead: Self::lead(path),
+            lead: trash_refusal(&Self::said(path), TRASH, cause),
             folder: Self::folder(path).map(super::text::shown),
-            system: system.to_owned(),
+            system: held.map_or_else(|| system.to_owned(), Held::words),
         }
     }
     fn folder(path: &Path) -> Option<&Path> {
         path.parent()
             .filter(|folder| !folder.as_os_str().is_empty())
     }
-    /// The first line for `path`. It names the folder by its own name
-    /// only, so that a long path never pushes it out of the headline; two
-    /// files of one name in different folders still read differently.
-    fn lead(path: &Path) -> String {
+    /// What every first line for `path` starts with, whatever the cause.
+    /// It names the folder by its own name only, so that a long path never
+    /// pushes it out of the headline; two files of one name in different
+    /// folders still read differently.
+    fn said(path: &Path) -> String {
         let name = path.file_name().unwrap_or(path.as_os_str());
         // A drive has no name of its own: it is shown as it is.
-        let folder = Self::folder(path).map(|folder| match folder.file_name() {
-            Some(name) => name.to_string_lossy().into_owned(),
-            None => super::text::shown(folder),
+        let place = Self::folder(path).map_or_else(String::new, |folder| {
+            let folder = match folder.file_name() {
+                Some(name) => name.to_string_lossy().into_owned(),
+                None => super::text::shown(folder),
+            };
+            format!(" in “{folder}”")
         });
-        trash_refusal(
-            &name.to_string_lossy(),
-            folder.as_deref(),
-            TRASH_NAME,
-            cfg!(windows),
+        format!(
+            "“{}”{place} could not be sent to the {TRASH}.",
+            name.to_string_lossy()
         )
     }
+}
+/// What the file itself answered when the Trash would not take it.
+#[derive(Debug)]
+struct Held {
+    error: std::io::Error,
+    /// The file inside the refused folder that answered, by name.
+    inside: Option<String>,
+}
+impl Held {
+    /// Windows' "used by another process", and a locked part of the file.
+    fn in_use(&self) -> bool {
+        matches!(self.error.raw_os_error(), Some(32 | 33))
+    }
+    fn words(&self) -> String {
+        match &self.inside {
+            Some(name) => format!("{name}: {}", self.error),
+            None => self.error.to_string(),
+        }
+    }
+}
+/// Asks the file why it cannot go. Windows tells the Recycle Bin's caller
+/// only that "some operations were aborted", in English. Opening the file
+/// for deletion, which is all the Recycle Bin needs of it, gets the
+/// system's own reason in the system's language: "used by another
+/// process". It is shared as any open file is, so a program that only
+/// reads the file and lets it be deleted is not blamed. A folder is asked
+/// first, then each file right inside it, which is where an open file
+/// keeps the folder back. `None` when all of them open: the cause stays
+/// unknown. Nothing is changed, and the file is closed again at once.
+#[cfg(windows)]
+fn held(path: &Path) -> Option<Held> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const DELETE: u32 = 0x0001_0000;
+    // A folder opens only with the first; the second asks a link itself.
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let asked = |path: &Path| {
+        fs::OpenOptions::new()
+            .access_mode(DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .err()
+    };
+    if let Some(error) = asked(path) {
+        return Some(Held {
+            error,
+            inside: None,
+        });
+    }
+    fs::read_dir(path).ok()?.flatten().find_map(|entry| {
+        Some(Held {
+            error: asked(&entry.path())?,
+            inside: Some(entry.file_name().to_string_lossy().into_owned()),
+        })
+    })
+}
+/// macOS and Linux say why in the refusal itself.
+#[cfg(not(windows))]
+fn held(_: &Path) -> Option<Held> {
+    None
 }
 /// What the system said, in its own words where the error carries them:
 /// "“locked.jpg” couldn’t be moved to the trash because you don’t have
@@ -3091,25 +3160,38 @@ fn system_words(error: &trash::Error) -> String {
         other => other.to_string(),
     }
 }
-/// Windows refuses a file that any program holds open; elsewhere an open
-/// file goes to the Trash all the same, and a locked one does not. A drive
-/// without a Trash refuses on every system. Which it was is not known, so
-/// the sentence only says what to look at.
-fn trash_refusal(
-    name: &str,
-    folder: Option<&str>,
-    trash: &str,
-    open_files_are_held: bool,
-) -> String {
-    let place = folder.map_or_else(String::new, |folder| format!(" in “{folder}”"));
-    let cause = if open_files_are_held {
-        "Another program may have it open"
-    } else {
-        "It may be locked"
-    };
-    format!(
-        "“{name}”{place} could not be sent to the {trash}. {cause}, or this drive may have no {trash}."
-    )
+/// Why the Trash would not take a file, as far as it is known.
+#[derive(Clone, Copy, Debug)]
+enum Cause {
+    /// Windows refuses a file that any program holds open; elsewhere an
+    /// open file goes to the Trash all the same, and a locked one does
+    /// not. A drive without a Trash refuses on every system. Which it was
+    /// is not known, so the sentence only says what to look at.
+    Unknown { open_files_are_held: bool },
+    /// The file said so itself: a program has it open, or one `inside`
+    /// the folder. PhotoSort can be that program, so none is named.
+    InUse { inside: bool },
+    /// The file gave another reason, which is on the "System message" line.
+    Said,
+}
+/// The first line of a refusal: `said` (see [`TrashRefused::said`]), then
+/// the cause. A cause that is known is stated, with no guess beside it.
+fn trash_refusal(said: &str, trash: &str, cause: Cause) -> String {
+    match cause {
+        Cause::Unknown {
+            open_files_are_held,
+        } => {
+            let cause = if open_files_are_held {
+                "Another program may have it open"
+            } else {
+                "It may be locked"
+            };
+            format!("{said} {cause}, or this drive may have no {trash}.")
+        }
+        Cause::InUse { inside: false } => format!("{said} A program has it open."),
+        Cause::InUse { inside: true } => format!("{said} A program has a file in it open."),
+        Cause::Said => said.to_owned(),
+    }
 }
 impl std::fmt::Display for TrashRefused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -3123,10 +3205,17 @@ impl std::fmt::Display for TrashRefused {
 impl std::error::Error for TrashRefused {}
 
 fn move_to_trash(path: &Path) -> Result<()> {
-    // The log keeps the error as the system gave it; the list shows `said`.
+    // The log keeps the error as the system gave it; the list shows `said`,
+    // or what the file answers when it is asked why.
     let refused = |raw: String, said: Option<String>| {
-        tracing::warn!(path = %path.display(), error = %raw, "the system refused to move this to its Trash");
-        anyhow::Error::new(TrashRefused::new(path, said.as_deref().unwrap_or(&raw)))
+        let held = held(path);
+        let reason = held.as_ref().map(Held::words).unwrap_or_default();
+        tracing::warn!(path = %path.display(), error = %raw, %reason, "the system refused to move this to its Trash");
+        anyhow::Error::new(TrashRefused::new(
+            path,
+            said.as_deref().unwrap_or(&raw),
+            held.as_ref(),
+        ))
     };
     #[cfg(any(test, feature = "test-isolation"))]
     if let Some(moved) = move_to_stand_in(path) {
@@ -3143,6 +3232,64 @@ fn move_to_trash(path: &Path) -> Result<()> {
     trash_context()
         .delete(path)
         .map_err(|error| refused(error.to_string(), Some(system_words(&error))))
+}
+#[cfg(test)]
+mod trash_refusal_tests {
+    use super::*;
+    /// What the file answers is the reason shown: the first line states it
+    /// with no guess beside it, and the Trash's own words give way to it.
+    #[test]
+    fn a_refusal_whose_cause_is_known_states_it_without_a_guess() {
+        let path = Path::new("/Photos/Trip/a.jpg");
+        let aborted = "Some operations were aborted";
+        let said = format!("“a.jpg” in “Trip” could not be sent to the {TRASH}.");
+        // 32 is what Windows answers for a file a program has open.
+        let in_use = |inside: Option<&str>| Held {
+            error: std::io::Error::from_raw_os_error(32),
+            inside: inside.map(str::to_owned),
+        };
+        let system = std::io::Error::from_raw_os_error(32).to_string();
+        let folder = crate::core::text::shown(Path::new("/Photos/Trip"));
+        let held = in_use(None);
+        let refusal = TrashRefused::new(path, aborted, Some(&held)).to_string();
+        assert_eq!(
+            refusal,
+            format!(
+                "{said} A program has it open.\n  Folder: {folder}\n  System message: {system}"
+            )
+        );
+        // The failure list shows it whole, fresh or read back from the journal.
+        let action = Action::Trash {
+            files: vec![Source {
+                path: path.into(),
+                fingerprint: Fingerprint::default(),
+            }],
+        };
+        assert_eq!(action.failure_message(&refusal), refusal);
+        // A folder kept back by a file inside it names that file.
+        let held = in_use(Some("Thumbs.db"));
+        let refusal = TrashRefused::new(path, aborted, Some(&held)).to_string();
+        assert!(
+            refusal.starts_with(&format!("{said} A program has a file in it open.\n"))
+                && refusal.ends_with(&format!("System message: Thumbs.db: {system}")),
+            "{refusal}"
+        );
+        // Any other answer is shown as the system gave it, and nothing is guessed.
+        let held = Held {
+            error: std::io::Error::from_raw_os_error(5),
+            inside: None,
+        };
+        let refusal = TrashRefused::new(path, aborted, Some(&held)).to_string();
+        assert!(refusal.starts_with(&format!("{said}\n")), "{refusal}");
+        // Nothing learned from the file: the Trash's words, and what to look at.
+        let refusal = TrashRefused::new(path, aborted, None).to_string();
+        assert!(
+            refusal.starts_with(&format!("{said} "))
+                && refusal.contains(&format!("or this drive may have no {TRASH}."))
+                && refusal.ends_with(&format!("System message: {aborted}")),
+            "{refusal}"
+        );
+    }
 }
 #[cfg(all(test, target_os = "macos"))]
 mod macos_trash_tests {

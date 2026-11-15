@@ -625,10 +625,11 @@ fn a_file_the_trash_refuses_is_named_with_its_folder_and_the_systems_own_words()
     let blocked = dir.path().join("trash");
     fs::write(&blocked, b"").unwrap();
     operations::trash_stand_in(&root, &blocked);
-    let (trash, cause) = if cfg!(windows) {
-        ("Recycle Bin", "Another program may have it open")
+    let trash = photosort::core::text::TRASH;
+    let cause = if cfg!(windows) {
+        "Another program may have it open"
     } else {
-        ("Trash", "It may be locked")
+        "It may be locked"
     };
     let mut said = Vec::new();
     // The same name in two folders must not read the same in the list.
@@ -643,6 +644,20 @@ fn a_file_the_trash_refuses_is_named_with_its_folder_and_the_systems_own_words()
             description: "Review Trash".into(),
             ..Default::default()
         };
+        // On Windows a program has the second one open, as a viewer does:
+        // others may read it, none may delete it. Asked why it cannot go,
+        // the file says so itself, and the first line no longer guesses.
+        #[cfg(windows)]
+        let held = (folder == "Home").then(|| {
+            use std::os::windows::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .read(true)
+                .share_mode(1)
+                .open(&photo)
+                .unwrap()
+        });
+        #[cfg(not(windows))]
+        let held: Option<fs::File> = None;
         let journal = tempfile::tempdir().unwrap();
         let report = operations::execute(&plan, journal.path(), || false, |_, _| {}).unwrap();
         let [failure] = &report.errors[..] else {
@@ -651,12 +666,18 @@ fn a_file_the_trash_refuses_is_named_with_its_folder_and_the_systems_own_words()
         let (lead, rest) = failure.split_once("\n  Folder: ").expect(failure);
         let (place, system) = rest.split_once("\n  System message: ").expect(failure);
         // However long the path, the first line names the folder itself.
+        let why = if held.is_some() {
+            // The system's reason for a file in use, in its own language.
+            assert!(system.ends_with("(os error 32)"), "{failure}");
+            "A program has it open.".to_owned()
+        } else {
+            format!("{cause}, or this drive may have no {trash}.")
+        };
         assert_eq!(
             lead,
-            format!(
-                "“held open.jpg” in “{folder}” could not be sent to the {trash}. {cause}, or this drive may have no {trash}."
-            )
+            format!("“held open.jpg” in “{folder}” could not be sent to the {trash}. {why}")
         );
+        drop(held);
         // Where it is follows, as it is shown: never with Windows' "\\?\"
         // in front.
         assert_eq!(place, photosort::core::text::shown(&root.join(folder)));

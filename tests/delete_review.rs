@@ -3,6 +3,7 @@ use photosort::core::{
     delete_review::{self, Category, Entry, FormatChoice, Review},
     model::*,
     pipeline::Asset,
+    text::TO_TRASH,
 };
 use std::{collections::HashMap, sync::Arc};
 fn id(n: u64) -> MediaId {
@@ -349,7 +350,9 @@ mod eyes_closed {
         assert_eq!(card.tag, "Keep the shot with eyes open");
         assert_eq!(
             card.reason,
-            "Eyes closed. 2.jpg shows the same moment with the eyes open. PhotoSort suggests moving the closed-eyes shot to Trash and keeping that one."
+            format!(
+                "Eyes closed. 2.jpg shows the same moment with the eyes open. PhotoSort suggests moving the closed-eyes shot {TO_TRASH} and keeping that one."
+            )
         );
         assert_eq!(card.keep_why, "Everyone's eyes are open here.");
         let crops: Vec<_> = card.eyes.iter().map(|c| (c.id.0, c.closed)).collect();
@@ -500,7 +503,7 @@ mod eyes_closed {
         );
         assert!(
             card.reason
-                .contains("moving the closed-eyes shots to Trash")
+                .contains(&format!("moving the closed-eyes shots {TO_TRASH}"))
         );
         // Each copy shows its own closed eyes on the card.
         let crops: Vec<_> = card.eyes.iter().map(|c| (c.id.0, c.closed)).collect();

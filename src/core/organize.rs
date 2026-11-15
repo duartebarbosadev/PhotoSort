@@ -1,6 +1,7 @@
 //! Editable organization intent. No scanning, decoding or filesystem mutations.
 use super::{
     model::{Media, MediaId, MediaKind, Shared},
+    names::NameRules,
     operations::safe_component,
     text,
 };
@@ -272,12 +273,13 @@ fn join(parent: &str, name: &str) -> String {
         format!("{parent}/{name}")
     }
 }
+/// A name PhotoSort would have to change is refused, with the one rule it
+/// breaks: short enough to read whole in the status bar.
 fn validate_leaf(name: &str) -> Result<()> {
-    ensure!(
-        !name.is_empty() && safe_component(name) == name,
-        "Use a folder name without slashes, reserved characters, surrounding spaces or trailing dots (up to 100 characters)"
-    );
-    Ok(())
+    match NameRules::CURRENT.refusal(name, "folder name") {
+        Some(why) => anyhow::bail!(why),
+        None => Ok(()),
+    }
 }
 impl Draft {
     pub fn new(labels: HashMap<MediaId, String>) -> Self {
@@ -901,11 +903,10 @@ pub fn set_file_name(
 }
 /// Shared validation for new base names in drafts and saved move plans.
 pub fn validate_file_stem(name: &str) -> Result<()> {
-    ensure!(
-        !name.is_empty() && safe_component(name) == name,
-        "Use a name without slashes, reserved characters, surrounding spaces or trailing dots (up to 100 characters)"
-    );
-    Ok(())
+    match NameRules::CURRENT.refusal(name, "file name") {
+        Some(why) => anyhow::bail!(why),
+        None => Ok(()),
+    }
 }
 /// Preserve the original extension and spelling, including extensionless files.
 pub fn renamed_file_name(path: &std::path::Path, stem: &std::ffi::OsStr) -> std::ffi::OsString {
