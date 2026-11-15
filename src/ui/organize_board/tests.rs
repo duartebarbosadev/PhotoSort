@@ -837,6 +837,105 @@ fn new_folder_in_a_long_tree_is_made_in_the_plan_and_renamed_in_place() {
     app.runtime.shutdown();
 }
 
+/// A folder is made in the plan first and named after, as Finder does. A
+/// name that is refused, or Escape in the name field, takes back that
+/// folder and what making it moved into it, and nothing else: whatever was
+/// done while the name field was open stays.
+#[test]
+fn a_refused_or_cancelled_new_folder_name_stages_nothing() {
+    let (_temp, mut app) = organize();
+    assert!(app.organize_drafts.is_empty());
+    // Names no system takes. On Windows "CON" and a name that ends in a
+    // dot are refused by the same check.
+    for refused in ["Trip/2024", ".."] {
+        app.board_new_folder("", &[]);
+        app.board.editing.as_mut().unwrap().1 = refused.into();
+        app.board_finish_edit();
+        let notice = app.navigation_notice.clone().unwrap_or_default();
+        assert!(
+            notice.starts_with("Use a folder name"),
+            "{refused}: {notice}"
+        );
+        assert!(app.organize_drafts.is_empty(), "{refused} left a folder");
+    }
+    // With folder edits already made, exactly those stay.
+    new_folder(&mut app, "", "Keep");
+    let before = app.organize_drafts[&GroupMode::Current].clone();
+    let (photo, other) = (app.media[0].id, app.media[1].id);
+    // Taking the folder back takes back what making it said.
+    app.board_new_folder("", &[photo]);
+    assert_eq!(
+        app.navigation_notice.as_deref(),
+        Some("Moved 1 item to New folder")
+    );
+    app.board_cancel_edit();
+    assert_eq!(app.navigation_notice, None);
+    assert_eq!(app.organize_drafts[&GroupMode::Current], before);
+    // An empty new folder says nothing: what was showing before is not
+    // its notice, and stays.
+    app.navigation_notice = Some("Folder edits undone".into());
+    app.board_new_folder("", &[]);
+    app.board_cancel_edit();
+    assert_eq!(
+        app.navigation_notice.as_deref(),
+        Some("Folder edits undone")
+    );
+    assert_eq!(app.organize_drafts[&GroupMode::Current], before);
+    app.board_new_folder("", &[photo]);
+    assert_ne!(app.organize_drafts[&GroupMode::Current], before);
+    // Dragging photos onto another folder does not end the name field.
+    app.board_move(&[other], "Keep");
+    assert_eq!(app.board.editing.as_ref().unwrap().0, "New folder");
+    app.board_cancel_edit();
+    let draft = &app.organize_drafts[&GroupMode::Current];
+    assert!(!draft.folders().contains("New folder") && app.board.editing.is_none());
+    assert_eq!(draft.labels().get(&photo), before.labels().get(&photo));
+    assert_eq!(draft.labels()[&other], "Keep", "the drag was undone");
+    assert!(
+        app.navigation_notice
+            .as_deref()
+            .is_some_and(|n| n.contains("Keep")),
+        "the drag's notice was cleared"
+    );
+    // A folder put around another is taken back the same way.
+    let before = draft.clone();
+    app.board_folder_action(FolderAction::Wrap("Keep".into()));
+    assert!(
+        app.organize_drafts[&GroupMode::Current]
+            .folders()
+            .contains("New folder/Keep")
+    );
+    app.board_cancel_edit();
+    assert_eq!(app.organize_drafts[&GroupMode::Current], before);
+    // Renaming an old folder to a refused name only keeps its old name.
+    app.board_rename_folder("Keep");
+    app.board.editing.as_mut().unwrap().1 = "..".into();
+    app.board_finish_edit();
+    assert_eq!(app.organize_drafts[&GroupMode::Current], before);
+    // A new folder that was given something more is kept, with all of it.
+    app.board_new_folder("", &[]);
+    app.board_move(&[photo], "New folder");
+    app.board_cancel_edit();
+    let draft = &app.organize_drafts[&GroupMode::Current];
+    assert_eq!(draft.labels()[&photo], "New folder");
+    // Enter on the suggested name keeps the new folder.
+    app.board_new_folder("", &[]);
+    app.board_finish_edit();
+    let folders = app.organize_drafts[&GroupMode::Current].folders();
+    assert!(folders.contains("New folder 2") && folders.contains("Keep"));
+    // The folder a photo came from was moved while the name field was open:
+    // where to put it back is not guessed, the new folder is kept.
+    new_folder(&mut app, "", "Other");
+    app.board_new_folder("", &[other]);
+    let made = app.board.editing.as_ref().unwrap().0.clone();
+    app.board_folder_action(FolderAction::Nest("Keep".into(), "Other".into()));
+    app.board_cancel_edit();
+    let draft = &app.organize_drafts[&GroupMode::Current];
+    assert!(draft.folders().contains("Other/Keep"));
+    assert_eq!(draft.labels()[&other], made);
+    app.runtime.shutdown();
+}
+
 #[test]
 fn show_in_finder_is_offered_only_for_folders_already_on_disk() {
     let (_temp, mut app) = organize();
@@ -3068,11 +3167,13 @@ fn show_original_waits_for_a_plan_that_differs_from_disk() {
     assert!(!hold(&mut app), "the key does nothing");
     assert!(!held_button(&mut app), "the button is disabled");
     // Organizing into another folder moves every photo there, and both
-    // work at once; back into this folder, nothing is planned again.
+    // work at once; back into this folder, nothing is planned again. The
+    // library's empty folder is made there too, which Review lists as one
+    // more change.
     let root = app.root.clone().unwrap();
     app.set_output(&root.with_file_name("elsewhere"));
     rendered(&mut app, &ctx, size);
-    assert_eq!(app.board.changes, ids.len());
+    assert_eq!(app.board.changes, ids.len() + 1);
     assert!(app.organize_planned() && app.organize_resettable());
     assert!(hold(&mut app));
     app.set_output(&root);

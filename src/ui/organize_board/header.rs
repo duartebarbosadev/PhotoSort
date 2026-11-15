@@ -200,6 +200,7 @@ impl PhotoSortApp {
         self.discard_organize_changes();
         self.pending_bookmark = None;
         self.board.editing = None;
+        self.board.made_to_name = None;
         self.board.renaming = None;
         self.board.marquee = None;
         self.board.focus.clear();

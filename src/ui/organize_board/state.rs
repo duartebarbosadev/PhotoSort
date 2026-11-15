@@ -91,6 +91,31 @@ pub(in crate::ui::workspace) struct NameDays {
     pub(super) days: Vec<Option<Option<i64>>>,
 }
 
+/// A folder made in the plan to be named right away, and what making it
+/// changed. Only that is taken back when the name is refused or given up:
+/// every other edit made while the name field was open stays.
+#[derive(Clone, Debug)]
+pub(in crate::ui::workspace) struct MadeToName {
+    /// The grouping whose folder edits it is part of.
+    pub(in crate::ui::workspace) mode: GroupMode,
+    /// The new folder.
+    pub(in crate::ui::workspace) path: String,
+    /// That grouping had no folder edit before it.
+    pub(in crate::ui::workspace) first_edit: bool,
+    pub(in crate::ui::workspace) holds: Made,
+    /// What making it said in the status bar ("Moved 2 items to New
+    /// folder"). It is taken back with the folder while it still shows.
+    pub(in crate::ui::workspace) notice: Option<String>,
+}
+#[derive(Clone, Debug)]
+pub(in crate::ui::workspace) enum Made {
+    /// The items moved into it, each with the folder it was in before
+    /// (`None`: it was not moving). Empty for an empty new folder.
+    Items(Vec<(MediaId, Option<String>)>),
+    /// It was put around this folder, named as it was before.
+    Around(String),
+}
+
 /// Background work (a folder being read, metadata arriving, an analysis)
 /// changed what the board would show. While that work runs the board
 /// catches up a few times a second instead of once per batch.
@@ -185,6 +210,10 @@ pub(in crate::ui::workspace) struct Board {
     pub(in crate::ui::workspace) folder_anchor: Option<String>,
     /// A folder being renamed in place: (folder, typed name).
     pub(in crate::ui::workspace) editing: Option<(String, String)>,
+    /// Set while the folder being renamed was made a moment ago to be named:
+    /// what making it changed, so a name that is refused or given up takes
+    /// back exactly that and no "New folder" is left staged.
+    pub(in crate::ui::workspace) made_to_name: Option<MadeToName>,
     pub(in crate::ui::workspace) edit_focus: bool,
     /// The sidebar scrolls the folder being renamed into view once.
     pub(in crate::ui::workspace) reveal_editing: bool,

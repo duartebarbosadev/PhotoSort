@@ -412,10 +412,11 @@ impl PhotoSortApp {
         if let Some((ids, target)) = drop {
             self.board_move(&ids, &target);
         }
-        // Enter or clicking elsewhere keeps the name; Escape keeps the old one.
+        // Enter or clicking elsewhere keeps the name; Escape keeps the old
+        // one, or gives up a folder just made.
         if finish {
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.board.editing = None;
+                self.board_cancel_edit();
             } else {
                 self.board_finish_edit();
             }
