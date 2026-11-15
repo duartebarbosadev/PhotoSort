@@ -320,6 +320,47 @@ fn stale_sources_are_rejected_before_any_move() {
     assert!(!dest.exists());
     assert_eq!(fs::read(m.path).unwrap(), b"changed");
 }
+#[cfg(unix)]
+#[test]
+fn a_saved_plan_runs_after_its_drive_is_mounted_again_but_not_on_a_replaced_file() {
+    let d = TempDir::new().unwrap();
+    let output = TempDir::new().unwrap();
+    let to = output.path().canonicalize().unwrap();
+    let kept = photo(d.path(), "a.png");
+    let replaced = photo(d.path(), "b.png");
+    // Reviewed under an earlier mount: another device number, and other
+    // inodes where the volume keeps a birth time to know its files by.
+    let saved = |m: &Media| {
+        let mut source = Source::capture(m.path.clone()).unwrap();
+        source.fingerprint.identity[0] += 12;
+        if source.fingerprint.identity[2..] != [0, 0] {
+            source.fingerprint.identity[1] += 1000;
+        }
+        source
+    };
+    let (first, second) = (saved(&kept), saved(&replaced));
+    // Another file of the same size and modified time takes b.png's place.
+    test_support::replace_keeping_modified_time(
+        &replaced.path,
+        &vec![0; replaced.fingerprint.bytes as usize],
+    );
+    let plan = Plan {
+        actions: vec![
+            Action::Move {
+                files: vec![(first, to.join("a.png"))],
+            },
+            Action::Move {
+                files: vec![(second, to.join("b.png"))],
+            },
+        ],
+        ..Default::default()
+    };
+    let result = operations::execute(&plan, output.path(), || false, |_, _| {}).unwrap();
+    assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+    assert!(result.errors[0].contains("File changed since review"));
+    assert!(to.join("a.png").exists() && !kept.path.exists());
+    assert!(replaced.path.exists() && !to.join("b.png").exists());
+}
 #[test]
 fn late_destination_collision_is_never_overwritten() {
     let d = TempDir::new().unwrap();
@@ -426,6 +467,55 @@ fn session_drops_stale_decisions() {
     changed.fingerprint.bytes += 1;
     s.reconcile(&[changed]);
     assert!(s.decisions.is_empty());
+}
+#[cfg(unix)]
+#[test]
+fn session_keeps_choices_when_only_the_device_and_inode_numbers_changed() {
+    // As saved by the version that compared all of the identity, which is
+    // [device, inode, birth seconds, birth nanoseconds].
+    let mut s: Session = serde_json::from_str(
+        r#"{"decisions":{"1":{"rejected":true,"rating":null,"turns":0},
+                         "2":{"rejected":false,"rating":4,"turns":1},
+                         "3":{"rejected":false,"rating":2,"turns":0}},
+            "staged_suggestions":[1],
+            "fingerprints":{
+                "1":{"bytes":10,"modified_ns":5,"identity":[16777237,9,1794395126,7]},
+                "2":{"bytes":20,"modified_ns":6,"identity":[16777237,11,1794395126,8]},
+                "3":{"bytes":30,"modified_ns":7,"identity":[16777237,12,0,0]}}}"#,
+    )
+    .unwrap();
+    let seen = |id, bytes, modified_ns, identity| Media {
+        id: MediaId(id),
+        path: format!("/missing/{id}.jpg").into(),
+        kind: MediaKind::Photo,
+        fingerprint: Fingerprint {
+            bytes,
+            modified_ns,
+            identity,
+        },
+    };
+    // The drive was plugged in again: a new device number and other inodes.
+    // The third file's volume keeps no birth time, so its inode is all that
+    // tells it from another file of its size and modified time.
+    let mut now = vec![
+        seen(1, 10, 5, [16777249, 40, 1794395126, 7]),
+        seen(2, 20, 6, [16777249, 41, 1794395126, 8]),
+        seen(3, 30, 7, [16777249, 12, 0, 0]),
+    ];
+    s.reconcile(&now);
+    assert!(s.decisions[&MediaId(1)].rejected);
+    assert_eq!(s.decisions[&MediaId(2)].rating, Some(4));
+    assert_eq!(s.decisions[&MediaId(3)].rating, Some(2));
+    assert!(s.suggested.contains(&MediaId(1)));
+    assert_eq!(s.fingerprints[&MediaId(1)], now[0].fingerprint);
+    // Same size and modified time, born at another moment: a different file.
+    now[0].fingerprint.identity[3] += 1;
+    // With no birth time to go by, another inode is a different file too.
+    now[2].fingerprint.identity[1] = 42;
+    s.reconcile(&now);
+    assert!(!s.decisions.contains_key(&MediaId(1)) && !s.suggested.contains(&MediaId(1)));
+    assert_eq!(s.decisions[&MediaId(2)].rating, Some(4));
+    assert!(!s.decisions.contains_key(&MediaId(3)));
 }
 #[test]
 fn blur_detection_prefers_detailed_over_uniform_images() {

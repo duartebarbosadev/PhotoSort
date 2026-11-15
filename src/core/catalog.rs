@@ -163,7 +163,10 @@ impl Catalog {
                     Err(error) => catalog.warnings.push(error.to_string()),
                 }
             }
-            if !entry.file_type().is_file() {
+            // A copy still being written, or left by a crash, is not a library file.
+            if !entry.file_type().is_file()
+                || super::operations::is_temporary_name(entry.file_name())
+            {
                 continue;
             }
             let path = entry.into_path();

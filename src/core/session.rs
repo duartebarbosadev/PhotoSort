@@ -9,13 +9,50 @@ use std::{
 /// Application data (preferences, sessions, saved views, models). Set
 /// `PHOTOSORT_DATA_ROOT` to relocate it, e.g. for portable or isolated runs.
 pub fn data_dir() -> PathBuf {
-    root_override("PHOTOSORT_DATA_ROOT")
-        .or_else(|| isolated_root("data"))
-        .unwrap_or_else(|| {
+    if let Some(root) = root_override("PHOTOSORT_DATA_ROOT") {
+        return resolved(root);
+    }
+    isolated_root("data").unwrap_or_else(|| {
+        resolved(
             dirs::data_local_dir()
                 .unwrap_or_else(std::env::temp_dir)
-                .join("PhotoSort-Rust")
-        })
+                .join("PhotoSort-Rust"),
+        )
+    })
+}
+/// Operation journals refuse a path that passes through a link, and the data
+/// folder can sit behind one: `C:\Users` moved through a junction, a linked
+/// `/home` or `~/.local/share`, a linked `PHOTOSORT_DATA_ROOT`. The links are
+/// followed once, the first time the folder is asked for, so every path
+/// derived from it is a real one for the rest of the run.
+fn resolved(path: PathBuf) -> PathBuf {
+    static RESOLVED: std::sync::Mutex<Option<(PathBuf, PathBuf)>> = std::sync::Mutex::new(None);
+    let mut known = RESOLVED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((asked, real)) = &*known
+        && *asked == path
+    {
+        return real.clone();
+    }
+    let real = without_links(&path);
+    *known = Some((path, real.clone()));
+    real
+}
+/// The folder may not exist yet on a first run: the deepest part that does is
+/// resolved and the rest is appended as written.
+fn without_links(path: &Path) -> PathBuf {
+    for ancestor in path.ancestors() {
+        // Not `Path::canonicalize`: on Windows that returns a `\\?\` path, which
+        // the model runtime and other native code do not all accept.
+        if let Ok(real) = dunce::canonicalize(ancestor) {
+            return match path.strip_prefix(ancestor) {
+                Ok(rest) if !rest.as_os_str().is_empty() => real.join(rest),
+                _ => real,
+            };
+        }
+    }
+    path.to_path_buf()
 }
 /// Regenerable caches. `PHOTOSORT_CACHE_ROOT` relocates them.
 pub fn cache_dir() -> PathBuf {
@@ -217,7 +254,7 @@ impl Session {
                 self.fingerprints
                     .get(&id)
                     .zip(fingerprints.get(&id))
-                    .is_some_and(|(a, b)| a == b)
+                    .is_some_and(|(saved, current)| current.unchanged(saved))
             });
         }
         // An edited file is a new photo: its suggestion may be staged again.
@@ -230,7 +267,7 @@ impl Session {
                 self.fingerprints
                     .get(id)
                     .zip(fingerprints.get(id))
-                    .is_some_and(|(a, b)| a == b)
+                    .is_some_and(|(saved, current)| current.unchanged(saved))
             });
         }
         fingerprints.extend(
@@ -246,7 +283,7 @@ impl Session {
             self.fingerprints
                 .get(id)
                 .zip(fingerprints.get(id))
-                .is_some_and(|(saved, current)| saved == current)
+                .is_some_and(|(saved, current)| current.unchanged(saved))
         });
         self.fingerprints = fingerprints;
     }
@@ -255,6 +292,42 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_data_folder_behind_a_link_still_takes_operation_journals() {
+        use crate::core::operations::{self, recovery};
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path().canonicalize().unwrap();
+        std::fs::create_dir(home.join("disk")).unwrap();
+        std::os::unix::fs::symlink(home.join("disk"), home.join("share")).unwrap();
+        // Nothing below the link exists yet, as on a first run.
+        let linked = home.join("share/PhotoSort-Rust");
+        assert!(operations::reject_symlink_components(&linked.join("operations")).is_err());
+        let data = without_links(&linked);
+        assert_eq!(data, home.join("disk/PhotoSort-Rust"));
+
+        let library = home.join("library");
+        std::fs::create_dir(&library).unwrap();
+        let context = recovery::Context {
+            root: library.clone(),
+            rotation_only: false,
+            media: vec![],
+            session: Session::default(),
+            views: Default::default(),
+        };
+        let plan = operations::Plan {
+            actions: vec![operations::Action::CreateDirectory {
+                path: library.join("2024"),
+            }],
+            ..Default::default()
+        };
+        let report = recovery::Store::new(data.join("operations"))
+            .execute(&context, &plan, None, || false, |_, _| {})
+            .unwrap();
+        assert!(report.errors.is_empty() && report.remaining.actions.is_empty());
+        assert!(library.join("2024").is_dir());
+    }
 
     #[test]
     fn damaged_session_is_set_aside_instead_of_blocking_the_library() {
