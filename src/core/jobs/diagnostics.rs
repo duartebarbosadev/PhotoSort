@@ -26,9 +26,18 @@ impl Event {
                 tracing::info!(epoch, actions = plan.actions.len(), "file plan prepared");
             }
             Self::PlanningCancelled => tracing::info!(epoch, "file planning cancelled"),
+            Self::Applied(report) if !report.errors.is_empty() => {
+                tracing::warn!(epoch, completed = report.completed.len(), remaining = report.remaining.actions.len(),
+                    cancelled = report.cancelled, errors = ?report.errors, "file plan finished with failures");
+            }
             Self::Applied(report) => {
-                tracing::info!(epoch, completed = report.completed.len(), remaining = report.remaining.actions.len(),
-                    cancelled = report.cancelled, errors = ?report.errors, "file plan finished");
+                tracing::info!(
+                    epoch,
+                    completed = report.completed.len(),
+                    remaining = report.remaining.actions.len(),
+                    cancelled = report.cancelled,
+                    "file plan finished"
+                );
             }
             Self::Error(error)
             | Self::ApplyFailed(error)
