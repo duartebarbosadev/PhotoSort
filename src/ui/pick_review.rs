@@ -1,6 +1,7 @@
 use super::review_card::{Badge, CardEvent, CardPhoto, Fact, GridClick, ReviewCard};
 use super::*;
 use crate::core::pick_review::{Cluster, Reason, Review};
+use crate::core::text::TO_TRASH;
 
 /// Photos a card shows, best first; the panel beside the grid shows them all.
 const CARD_PHOTOS: usize = 3;
@@ -334,7 +335,7 @@ impl PhotoSortApp {
                     super::review_card::summary_label(
                         ui,
                         &format!(
-                            "{} going to Trash · frees {}",
+                            "{} going {TO_TRASH} · frees {}",
                             count(trash, "photo", "photos"),
                             super::review_card::size_text(freed),
                         ),
@@ -898,7 +899,10 @@ mod tests {
         for text in ["Confirm", "Provisional", "Keep all", "Round"] {
             assert!(!shown.contains(text), "{text} in:\n{shown}");
         }
-        assert!(shown.contains("3 photos going to Trash"), "{shown}");
+        assert!(
+            shown.contains(&format!("3 photos going {TO_TRASH}")),
+            "{shown}"
+        );
     }
 
     #[test]

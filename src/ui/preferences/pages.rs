@@ -698,8 +698,11 @@ impl PhotoSortApp {
                     draft.cache.originals_mib = defaults.originals_mib;
                 }
             });
-            let prompts = "Questions you answered with \"Don't ask again\": about memory and cache limits, and about RAW files you kept whose JPEG goes to the Trash.";
-            rows.row("Prompts you turned off", "", Some(prompts), |ui| {
+            let prompts = format!(
+                "Questions you answered with \"Don't ask again\": about memory and cache limits, and about RAW files you kept whose JPEG goes to the {}.",
+                crate::core::text::TRASH
+            );
+            rows.row("Prompts you turned off", "", Some(&prompts), |ui| {
                 if ui
                     .add_enabled(draft.limit_prompts.any(), egui::Button::new("Show again"))
                     .clicked()

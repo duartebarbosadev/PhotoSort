@@ -214,6 +214,10 @@ pub(in crate::ui::workspace) struct Board {
     /// what making it changed, so a name that is refused or given up takes
     /// back exactly that and no "New folder" is left staged.
     pub(in crate::ui::workspace) made_to_name: Option<MadeToName>,
+    /// What the status bar says about the last name typed, when it was
+    /// refused. It is about that name field only: the next one to open
+    /// clears it.
+    pub(in crate::ui::workspace) name_refusal: Option<String>,
     pub(in crate::ui::workspace) edit_focus: bool,
     /// The sidebar scrolls the folder being renamed into view once.
     pub(in crate::ui::workspace) reveal_editing: bool,

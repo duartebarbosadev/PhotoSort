@@ -3,6 +3,7 @@ use super::library::shimmer;
 use super::*;
 use crate::core::metadata::WriteTarget;
 use crate::core::operations::Action;
+use crate::core::text::{SYSTEM_TRASH, TRASH};
 use egui::text::{LayoutJob, TextFormat};
 use egui_phosphor::regular as icon;
 use std::collections::BTreeMap;
@@ -269,13 +270,13 @@ impl Applied {
             trash.push(count(folders, "folder", "folders"));
         }
         if !trash.is_empty() {
-            parts.push(format!("sent {} to the Trash", and_list(&trash)));
+            parts.push(format!("sent {} to the {TRASH}", and_list(&trash)));
         }
         let text = and_list(&parts);
         let mut chars = text.chars();
         match chars.next() {
             Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
-            None if kept > 0 => "Nothing was sent to the Trash.".into(),
+            None if kept > 0 => format!("Nothing was sent to the {TRASH}."),
             None => "Your changes are applied.".into(),
         }
     }
@@ -347,7 +348,7 @@ impl Summary {
             1 if renamed > 0 => format!("Rename {}", self.renamed.text()),
             1 if self.updated > 0 => capital(self.updates_text(photos(self.updated))),
             1 if trashed > 0 && self.trashed_folders == 0 => {
-                format!("Move {} to the Trash", self.trashed.text())
+                format!("Move {} to the {TRASH}", self.trashed.text())
             }
             2 if moved > 0 && trashed > 0 && self.trashed_folders == 0 => {
                 format!("Move {moved} and trash {trashed}")
@@ -1017,7 +1018,7 @@ fn cleanup_text(
     };
     let mut parts = Vec::new();
     if !trashed.is_empty() {
-        parts.push(format!("Sent to the Trash: {}", listed(&trashed, "; ")));
+        parts.push(format!("Going to the {TRASH}: {}", listed(&trashed, "; ")));
     }
     if !removed.is_empty() {
         parts.push(format!(
@@ -1105,7 +1106,7 @@ impl PhotoSortApp {
             trash.push(count(summary.trashed_folders, "folder", "folders"));
         }
         if !trash.is_empty() {
-            parts.push(format!("send {} to the Trash", and_list(&trash)));
+            parts.push(format!("send {} to the {TRASH}", and_list(&trash)));
         }
         if parts.is_empty() {
             return if summary.cleanup.is_empty() {
@@ -1362,10 +1363,11 @@ impl PhotoSortApp {
         match placed.block {
             Block::Section(section) => {
                 // The counts are in the sentence at the top.
+                let trash = format!("Going to the {TRASH}");
                 let (glyph, title, color) = match section {
                     Section::Moving => (icon::FOLDER_SIMPLE, "Moving", ACCENT),
                     Section::Folders => (icon::PENCIL_SIMPLE, "Renaming folders", INK),
-                    Section::Trash => (icon::TRASH, "Going to the Trash", RED),
+                    Section::Trash => (icon::TRASH, trash.as_str(), RED),
                     Section::Rotate => (icon::ARROW_CLOCKWISE, "Rotating", INK),
                     Section::Rate => (icon::STAR, "Rating", INK),
                 };
@@ -1478,11 +1480,19 @@ impl PhotoSortApp {
     /// where its photos come from and where they go:
     /// "3 photos from 2025-10-24 / group-1 move to group-5 (in 2025-10-25)" or
     /// "group-5 (in 2025-10-25) gets 16 photos from 5 folders".
+    /// Photos organized into another folder go to folders named after
+    /// that one, "Sorted / Big": the folder they leave is often a "Big" too,
+    /// and "from Big move to Big" would read as nothing happening.
     fn card_sentence(&self, plan: &Plan, folder: &Folder) -> String {
         let output = plan.output_root.as_deref().or(self.root.as_deref());
+        let elsewhere =
+            output.filter(|output| Some(*output) != self.root.as_deref() && folder.path != *output);
         let leaf = folder_text(&folder.path, Some(&folder.path));
-        let dest = match folder.path.parent() {
-            Some(parent) if Some(folder.path.as_path()) != output && Some(parent) != output => {
+        let dest = match (elsewhere, folder.path.parent()) {
+            (Some(output), _) => folder_text(&folder.path, output.parent()),
+            (None, Some(parent))
+                if Some(folder.path.as_path()) != output && Some(parent) != output =>
+            {
                 format!("{leaf} (in {})", folder_text(parent, output))
             }
             _ => leaf,
@@ -1827,7 +1837,7 @@ fn row_ui(
         }
         Action::Trash { files } if !files.is_empty() => {
             source_line(ui, "Trash", RED, "From  ", &files[file].path, root);
-            note_line(ui, "→  System Trash");
+            note_line(ui, &format!("→  {SYSTEM_TRASH}"));
         }
         Action::TrashDirectory(folder) => {
             if file == 0 {
@@ -1853,7 +1863,7 @@ fn row_ui(
                     root,
                 );
             }
-            note_line(ui, "→  System Trash, with the whole folder");
+            note_line(ui, &format!("→  {SYSTEM_TRASH}, with the whole folder"));
         }
         Action::RenameFile { source, to } => {
             source_line(ui, "Rename", INK, "From  ", &source.path, root);
@@ -2136,6 +2146,9 @@ impl PhotoSortApp {
             ui.add(egui::Label::new(RichText::new(self.review_sentence(&plan, &rows)).font(medium(15.0)).color(INK)).wrap());
             if retry {
                 ui.label(RichText::new("Changes that finished are already applied. These are the ones left.").color(MUTED));
+                for line in self.waiting_lines() {
+                    ui.add(egui::Label::new(RichText::new(line).color(MUTED)).wrap());
+                }
             }
             if let Some(output) = &plan.output_root && self.root.as_ref() != Some(output) {
                 ui.add(egui::Label::new(RichText::new(format!("Photos go to {}", folder_text(output, Some(output)))).color(MUTED)).truncate())
@@ -2199,21 +2212,26 @@ impl PhotoSortApp {
             self.discard_remaining_operations();
         }
         if apply {
-            // A Retry from the Review step ends there like an Apply: with
-            // what it did once it is done, or with what is still left.
-            let retried = self.retry_plan.is_some() && self.step == Step::Review;
-            if retried {
-                self.review_outcome = Some(super::review_step::Outcome {
-                    applied: self.plan_rows.applied(),
-                    done: false,
-                    left_behind: None,
-                    kept_folders: Vec::new(),
-                });
-            }
-            self.apply_reviewed_plan();
-            if retried && !self.busy {
-                self.review_outcome = None;
-            }
+            self.apply_listed_plan();
+        }
+    }
+    /// Apply in the list of changes. A Retry from the Review step ends
+    /// there like an Apply: with what it did once it is done, or with what
+    /// is still left.
+    pub(super) fn apply_listed_plan(&mut self) {
+        let retried = self.retry_plan.is_some() && self.step == Step::Review;
+        if retried {
+            self.review_outcome = Some(super::review_step::Outcome {
+                applied: self.plan_rows.applied(),
+                done: false,
+                left_behind: None,
+                kept_folders: Vec::new(),
+                kept_before: Vec::new(),
+            });
+        }
+        self.apply_reviewed_plan();
+        if retried && !self.busy {
+            self.review_outcome = None;
         }
     }
 }

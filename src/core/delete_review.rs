@@ -9,6 +9,7 @@ use super::faces::EyeState;
 use super::model::{Decision, MediaId, update_trash};
 use super::near_duplicates::batch::{Keeper, Kind};
 use super::pick_review::Review as PickReview;
+use super::text::TO_TRASH;
 use std::collections::{HashMap, HashSet};
 
 #[derive(
@@ -437,7 +438,7 @@ pub fn from_analysis(
                 eyes: Vec::new(),
                 extra: Vec::new(),
                 reason: format!(
-                    "{issue}: sharpness {:.1}, brightness {:.1}/255. PhotoSort suggests moving it to Trash.",
+                    "{issue}: sharpness {:.1}, brightness {:.1}/255. PhotoSort suggests moving it {TO_TRASH}.",
                     a.sharpness, a.brightness
                 ),
             });
@@ -748,7 +749,7 @@ fn eyes_entries(
                 category: Category::EyesClosed,
                 tag: "Keep the shot with eyes open".into(),
                 reason: format!(
-                    "{lead} {} shows the same moment {everyone}. PhotoSort suggests moving the closed-eyes {} to Trash and keeping that one.",
+                    "{lead} {} shows the same moment {everyone}. PhotoSort suggests moving the closed-eyes {} {TO_TRASH} and keeping that one.",
                     names[&other.id],
                     if extra.is_empty() { "shot" } else { "shots" }
                 ),

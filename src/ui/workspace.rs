@@ -363,6 +363,8 @@ pub struct PhotoSortApp {
     review_blocked: Option<review_step::Blocked>,
     /// What the Review step's last Apply did, shown once nothing is left.
     review_outcome: Option<review_step::Outcome>,
+    /// What the changes that wait for Retry leave unsaid: see `Waiting`.
+    waiting: review_step::Waiting,
     /// The Review step's Apply waits for an answer: what to do with the
     /// RAW files the user kept whose JPEG goes to the Trash.
     raw_question: Option<review_step::RawQuestion>,
@@ -696,6 +698,7 @@ impl PhotoSortApp {
             review_preview: false,
             review_stale: false,
             review_outcome: None,
+            waiting: Default::default(),
             raw_question: None,
             raw_answer: None,
             review_listed: HashMap::new(),
@@ -963,6 +966,7 @@ impl PhotoSortApp {
         self.set_review_plan(None);
         self.retry_plan = None;
         self.unfinished.set(None);
+        self.waiting = Default::default();
         self.recovery_ticket = None;
         self.applying_plan = None;
         self.apply_stop = None;

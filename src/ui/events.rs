@@ -1030,14 +1030,31 @@ impl PhotoSortApp {
         }
         let retry = (!report.remaining.actions.is_empty()).then_some(report.remaining);
         // A folder the list removed or sent to the Trash that is still
-        // there: the result says so, and why.
-        let kept: String = super::review_step::kept_lines(&report.kept_folders)
+        // there: the result says so, and why. While changes wait for Retry
+        // there is no result, and what is left never names the folder: it
+        // is kept with them, for the "did not finish" card now and for the
+        // result of the Retry.
+        let mut waiting = std::mem::take(&mut self.waiting);
+        let kept_before = std::mem::take(&mut waiting.kept_folders);
+        let mut kept_all = [kept_before.as_slice(), report.kept_folders.as_slice()].concat();
+        let kept: String = super::review_step::kept_lines(&kept_all)
             .iter()
             .map(|line| format!(" · {}", line.trim_end_matches('.')))
             .collect();
         if let Some(outcome) = &mut self.review_outcome {
             outcome.kept_folders.extend(report.kept_folders);
+            outcome.kept_before = kept_before;
+            // With what the moves kept, when these are the choices after them.
+            kept_all = outcome.kept();
         }
+        let waiting = if retry.is_some() {
+            review_step::Waiting {
+                kept_folders: kept_all,
+                staged: waiting.staged || staged_kept,
+            }
+        } else {
+            Default::default()
+        };
         let message = format!(
             "{finished} {} applied{}{kept}",
             if finished == 1 { "change" } else { "changes" },
@@ -1060,6 +1077,7 @@ impl PhotoSortApp {
                 self.error = Some(error);
                 self.retry_plan = retry;
                 self.unfinished.set(unfinished);
+                self.waiting = waiting;
                 self.review_after_moves = None;
                 self.review_outcome = None;
                 return ControlFlow::Break(());
@@ -1073,6 +1091,7 @@ impl PhotoSortApp {
                 self.error = Some(error);
                 self.retry_plan = retry;
                 self.unfinished.set(unfinished);
+                self.waiting = waiting;
                 self.review_after_moves = None;
                 self.review_outcome = None;
                 return ControlFlow::Break(());
@@ -1087,6 +1106,7 @@ impl PhotoSortApp {
         self.retry_plan = retry;
         // After the folder is read again above, which forgets the old plan.
         self.unfinished.set(unfinished);
+        self.waiting = waiting;
         self.recovery_ticket = recovery_ticket;
         if self.retry_plan.is_some() {
             self.rotation_plan = retry_rotation;
