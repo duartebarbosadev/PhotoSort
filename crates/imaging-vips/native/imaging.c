@@ -12,8 +12,8 @@
  * decompression bomb. Memory, not these, bounds real photos. */
 #define MAX_EDGE (1 << 20)
 #define MAX_PIXELS ((uint64_t)1 << 32)
-/* Previews run unattended (grid, thumbnails) while holding the render lock:
- * past a gigapixel a hostile header would stream for minutes. */
+/* Previews run unattended (grid, thumbnails): past a gigapixel a hostile
+ * header would stream for minutes. */
 #define MAX_PREVIEW_PIXELS ((uint64_t)1 << 30)
 
 typedef int (*Cancel)(void *);
@@ -23,17 +23,27 @@ typedef struct {
     uint32_t width, height, source_width, source_height, sample_bytes, profiled, source_sample_bytes;
     /* Set when a full-size render was refused for memory: what it needs. */
     uint64_t needed;
+    /* The warning text is a copy of libvips' error buffer, which every thread
+     * writes to: with other renders running it may not be this file's. */
+    uint32_t warning_from_buffer;
 } Output;
 typedef struct { Cancel check; void *context; } Progress;
 
-typedef struct { char *text; size_t capacity; } Warnings;
+typedef struct { char *text; size_t capacity; int summarized, from_buffer; } Warnings;
 static GPrivate current_warnings = G_PRIVATE_INIT(NULL);
 static void warning_log(const gchar *domain, GLogLevelFlags level,
     const gchar *message, gpointer unused) {
     (void)unused;
     Warnings *warnings = g_private_get(&current_warnings);
     if (warnings) {
-        if (!warnings->text[0]) g_strlcpy(warnings->text, message, warnings->capacity);
+        /* The JPEG loader logs "read gave N warnings" and then what they
+         * were: keep the first message that names a problem. What they were
+         * is a copy of libvips' error buffer, shared by all threads. */
+        if (!warnings->text[0] || g_str_has_prefix(warnings->text, "read gave ")) {
+            g_strlcpy(warnings->text, message, warnings->capacity);
+            warnings->from_buffer = warnings->summarized;
+        }
+        warnings->summarized = g_str_has_prefix(message, "read gave ");
     } else g_log_default_handler(domain, level, message, NULL);
 }
 
@@ -46,6 +56,10 @@ static int fail(char *error, size_t capacity, const char *message) {
     g_strlcpy(error, message, capacity);
     return -1;
 }
+/* Returned when the message is libvips' own. libvips keeps one error buffer
+ * for all threads, so with other renders running the text may be theirs; the
+ * caller renders again on its own to read it (see RENDERS in lib.rs). */
+#define NATIVE_ERROR (-2)
 static int native_failure(char *error, size_t capacity) {
     char *message = vips_error_buffer_copy();
     int result = fail(error, capacity, message && message[0] ? message : "Native image preparation failed");
@@ -72,10 +86,36 @@ int photosort_vips_init(char *error, size_t capacity) {
     return 0;
 }
 void photosort_vips_free(void *pixels) { g_free(pixels); }
+/* The warning a loader logs while opening `path`, as the render keeps it.
+ * Called with no render running (see RENDERS in lib.rs), so the text is
+ * this file's even where it comes from libvips' error buffer. */
+void photosort_vips_open_warning(const char *path, char *warning, size_t capacity) {
+    Warnings warnings = {warning, capacity, 0, 0};
+    void *previous_warnings = g_private_get(&current_warnings);
+    warning[0] = '\0';
+    g_private_set(&current_warnings, &warnings);
+    vips_error_clear();
+    VipsSource *source = vips_source_new_from_file(path);
+    VipsImage *header = source ? vips_image_new_from_source(source, "",
+        "access", VIPS_ACCESS_SEQUENTIAL, "fail_on", VIPS_FAIL_ON_ERROR, NULL) : NULL;
+    /* The loader warns when it starts decoding, not on the header alone:
+     * the first pixel is enough to start it. */
+    VipsImage *corner = NULL;
+    if (header && !vips_crop(header, &corner, 0, 0, 1, 1, NULL)) {
+        size_t length = 0;
+        g_free(vips_image_write_to_memory(corner, &length));
+    }
+    VIPS_UNREF(corner); VIPS_UNREF(header); VIPS_UNREF(source);
+    vips_error_clear();
+    g_private_set(&current_warnings, previous_warnings);
+}
+/* For a thread that rendered and is about to exit: frees what libvips keeps
+ * for it. Threads of libvips' own pool do this themselves. */
+void photosort_vips_thread_exit(void) { vips_thread_shutdown(); }
 
 int photosort_vips_render(const char *path, uint32_t edge,
     uint32_t x, uint32_t y, uint32_t width, uint32_t height,
-    uint32_t orientation, uint32_t tile_edge, uint64_t max_bytes,
+    uint32_t orientation, uint32_t tile_edge, uint64_t max_bytes, uint32_t workers,
     Cancel cancelled, void *context, Output *output, char *error, size_t capacity,
     char *warning, size_t warning_capacity) {
     VipsSource *source = NULL;
@@ -87,7 +127,7 @@ int photosort_vips_render(const char *path, uint32_t edge,
     int result = -1;
     gulong signal = 0;
     Progress p = {cancelled, context};
-    Warnings warnings = {warning, warning_capacity};
+    Warnings warnings = {warning, warning_capacity, 0, 0};
     void *previous_warnings = g_private_get(&current_warnings);
     warning[0] = '\0';
     g_private_set(&current_warnings, &warnings);
@@ -97,8 +137,11 @@ int photosort_vips_render(const char *path, uint32_t edge,
     /* A VipsSource treats bracket characters as literal filename bytes. */
     source = vips_source_new_from_file(path);
     if (!source) goto native_error;
+    /* Stop on errors and truncation, not on warnings: a decoder warns about
+     * files every viewer opens (a phone's odd JPEG scan header). The warning
+     * still reaches the caller through the log handler above. */
     header = vips_image_new_from_source(source, "", "access", VIPS_ACCESS_SEQUENTIAL,
-        "fail_on", VIPS_FAIL_ON_WARNING, NULL);
+        "fail_on", VIPS_FAIL_ON_ERROR, NULL);
     if (!header) goto native_error;
     int w = vips_image_get_width(header), h = vips_image_get_height(header);
     int bands = vips_image_get_bands(header);
@@ -185,7 +228,7 @@ int photosort_vips_render(const char *path, uint32_t edge,
         if (shrink > 1) {
             VipsImage *shrunk = NULL;
             if (vips_jpegload_source(source, &shrunk, "shrink", shrink,
-                "access", VIPS_ACCESS_SEQUENTIAL, "fail_on", VIPS_FAIL_ON_WARNING, NULL))
+                "access", VIPS_ACCESS_SEQUENTIAL, "fail_on", VIPS_FAIL_ON_ERROR, NULL))
                 goto native_error;
             int failed = vips_thumbnail_image(shrunk, &working, edge,
                 "height", edge, "size", VIPS_SIZE_DOWN, "no_rotate", TRUE,
@@ -195,7 +238,7 @@ int photosort_vips_render(const char *path, uint32_t edge,
         } else if (vips_thumbnail_source(source, &working, edge,
             "height", edge, "size", VIPS_SIZE_DOWN, "no_rotate", TRUE,
             "output_profile", "srgb", "intent", VIPS_INTENT_RELATIVE,
-            "fail_on", VIPS_FAIL_ON_WARNING, NULL)) goto native_error;
+            "fail_on", VIPS_FAIL_ON_ERROR, NULL)) goto native_error;
         colored = g_object_ref(working);
     } else working = g_object_ref(header);
     if (!colored) {
@@ -218,6 +261,10 @@ int photosort_vips_render(const char *path, uint32_t edge,
     if (vips_image_get_bands(rgba) != 4) {
         fail(error, capacity, "Image cannot be represented as RGBA"); goto done;
     }
+    /* A caller that already runs one render per core asks for fewer worker
+     * threads than the process-wide setting: libvips sizes the pool of an
+     * evaluation from this field of the image it writes. */
+    if (workers) vips_image_set_int(rgba, VIPS_META_CONCURRENCY, (int)workers);
     if (orientation != 1) {
         /* Rotation/mirroring may request scanlines backwards. Materialize
          * only the requested crop after any display-size reduction. */
@@ -249,6 +296,7 @@ int photosort_vips_render(const char *path, uint32_t edge,
     output->sample_bytes = format == VIPS_FORMAT_USHORT ? 2 : 1;
     uint64_t expected = (uint64_t)output->width * output->height * 4 * output->sample_bytes;
     if (expected > max_bytes) { fail(error, capacity, "Output needs more memory than allowed"); goto done; }
+    if (workers) vips_image_set_int(rgba, VIPS_META_CONCURRENCY, (int)workers);
     vips_image_set_progress(rgba, TRUE);
     signal = g_signal_connect(rgba, "eval", G_CALLBACK(progress), &p);
     output->pixels = vips_image_write_to_memory(rgba, &output->length);
@@ -259,6 +307,7 @@ int photosort_vips_render(const char *path, uint32_t edge,
     goto done;
 native_error:
     native_failure(error, capacity);
+    result = NATIVE_ERROR;
 done:
     if (signal) g_signal_handler_disconnect(rgba, signal);
     VIPS_UNREF(rgba); VIPS_UNREF(cast); VIPS_UNREF(sized); VIPS_UNREF(colored);
@@ -270,6 +319,7 @@ done:
         g_free(output->pixels); memset(output, 0, sizeof(*output));
         output->needed = needed;
     }
+    output->warning_from_buffer = (uint32_t)warnings.from_buffer;
     vips_error_clear();
     g_private_set(&current_warnings, previous_warnings);
     return result;

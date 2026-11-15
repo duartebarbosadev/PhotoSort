@@ -1,5 +1,9 @@
 //! Explicit spelling changes, planned from shared inventory and executed exclusively.
+//! A spelling change keeps the name and changes its letter case, or the form
+//! of its accents (composed or decomposed): the same entry where the volume
+//! ignores that difference, never a second one.
 use super::*;
+use crate::core::text;
 #[derive(Clone, Debug, Serialize)]
 pub struct DirectoryRename {
     pub from: PathBuf,
@@ -20,6 +24,8 @@ impl<'de> Deserialize<'de> for DirectoryRename {
             to: PathBuf,
             files: Vec<Source>,
             directories: Vec<(PathBuf, super::directory::DirectoryStamp)>,
+            #[serde(default)]
+            system_folders: Option<Vec<PathBuf>>,
         }
         let wire = Wire::deserialize(deserializer)?;
         Ok(Self {
@@ -28,6 +34,7 @@ impl<'de> Deserialize<'de> for DirectoryRename {
             inventory: super::directory::Inventory {
                 files: wire.files,
                 directories: wire.directories,
+                system_folders: wire.system_folders,
             },
         })
     }
@@ -110,7 +117,7 @@ pub(super) fn prepare(
     let mut renamed: Vec<_> = edits
         .renamed
         .iter()
-        .filter(|(from, to)| from != to && from.to_lowercase() == to.to_lowercase())
+        .filter(|(from, to)| from != to && text::folded(from) == text::folded(to))
         .collect();
     renamed.sort_by_key(|(from, _)| from.split('/').count());
     for (original, target) in renamed {
@@ -156,7 +163,7 @@ pub(super) fn file_spelling_change(from: &Path, to: &Path) -> bool {
             .file_name()
             .and_then(|s| s.to_str())
             .zip(to.file_name().and_then(|s| s.to_str()))
-            .is_some_and(|(a, b)| a.to_lowercase() == b.to_lowercase())
+            .is_some_and(|(a, b)| text::folded(a) == text::folded(b))
 }
 
 /// One directory listing per parent for alias checks in an accepted planning
@@ -217,7 +224,7 @@ pub(super) fn apply_file(
 ) -> Result<()> {
     anyhow::ensure!(
         source.path.is_absolute() && file_spelling_change(&source.path, to),
-        "File spelling change must keep its parent and change only letter case"
+        "File spelling change must keep its parent and change only letter case or accent form"
     );
     anyhow::ensure!(!cancelled(), "File rename cancelled");
     source.verify()?;

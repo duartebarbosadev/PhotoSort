@@ -90,6 +90,68 @@ fn hidden_media_discovery_is_batched_and_supporting_inventory_is_shared() {
 }
 
 #[test]
+fn system_folders_and_appledouble_files_are_never_photos() {
+    let base = tempfile::tempdir().unwrap();
+    let root = base.path().canonicalize().unwrap();
+    let files = [
+        "Trip/IMG_0001.JPG",
+        "Trip/._IMG_0001.JPG",
+        "Trip/._IMG_0001.xmp",
+        "Trip/IMG_0002.HIF",
+        ".photos/hidden.jpg",
+        "Trip/@eaDir/IMG_0001.JPG/SYNOFILE_THUMB_XL.jpg",
+        ".Trashes/501/trashed.jpg",
+        ".Trash-1000/files/trashed.jpg",
+        "$RECYCLE.BIN/S-1-5-21/$RABC123.jpg",
+        "$RECYCLE.BIN/S-1-5-21/$IABC123.jpg",
+        "System Volume Information/thumb.png",
+        ".Spotlight-V100/Store-V2/preview.png",
+    ];
+    for name in files {
+        let path = root.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, name).unwrap();
+    }
+    let catalog = Catalog::scan(&root, || false, |_| {}).unwrap();
+    let relative = |path: &std::path::Path| {
+        path.strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/")
+    };
+    let media: Vec<_> = catalog.media.iter().map(|m| relative(&m.path)).collect();
+    assert_eq!(
+        media,
+        [
+            ".photos/hidden.jpg",
+            "Trip/IMG_0001.JPG",
+            "Trip/IMG_0002.HIF"
+        ]
+    );
+    assert!(catalog.media.iter().all(|m| m.kind == MediaKind::Photo));
+    let mut folders: Vec<_> = catalog.directories.iter().map(|p| relative(p)).collect();
+    folders.sort();
+    assert_eq!(folders, ["", ".photos", "Trip"]);
+    // AppleDouble files stay in the inventory and pair with nothing. They
+    // follow their folder as supporting files, except on a volume where
+    // macOS moves each one with its own file.
+    let mut inventory: Vec<_> = catalog.inventory.iter().map(|p| relative(p)).collect();
+    inventory.sort();
+    let mut expected = files[..5].to_vec();
+    expected.sort();
+    assert_eq!(inventory, expected);
+    let supporting = if catalog.system_moves_apple_double {
+        0
+    } else {
+        2
+    };
+    assert_eq!(catalog.organize_files().len(), 3 + supporting);
+    let index = catalog.companion_index();
+    assert_eq!(index[&root.join("Trip/IMG_0001")].len(), 1);
+    assert!(!index.contains_key(&root.join("Trip/._IMG_0001")));
+}
+
+#[test]
 fn hidden_current_folders_are_a_noop_and_subtree_moves_keep_names_and_companions() {
     let base = tempfile::tempdir().unwrap();
     let root = base.path().canonicalize().unwrap();

@@ -1,4 +1,5 @@
-//! Checked native image preparation, for the application's single image owner.
+//! Checked native image preparation. Any thread may render; renders of
+//! different files run side by side.
 //!
 //! No cache, filesystem mutations, worker pool or workflow state lives here.
 //! Coordinates are in the unrotated source. The caller owns EXIF/sidecar rotation.
@@ -6,7 +7,7 @@ use std::{
     ffi::{CString, c_char, c_int, c_void},
     path::Path,
     sync::{
-        Mutex, OnceLock, TryLockError,
+        OnceLock, PoisonError, RwLock,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -87,6 +88,7 @@ struct NativeOutput {
     profiled: u32,
     source_sample_bytes: u32,
     needed: u64,
+    warning_from_buffer: u32,
 }
 impl Drop for NativeOutput {
     fn drop(&mut self) {
@@ -97,6 +99,8 @@ impl Drop for NativeOutput {
 unsafe extern "C" {
     fn photosort_vips_init(error: *mut c_char, capacity: usize) -> c_int;
     fn photosort_vips_free(pixels: *mut c_void);
+    fn photosort_vips_thread_exit();
+    fn photosort_vips_open_warning(path: *const c_char, warning: *mut c_char, capacity: usize);
     fn photosort_vips_render(
         path: *const c_char,
         edge: u32,
@@ -107,6 +111,7 @@ unsafe extern "C" {
         orientation: u32,
         tile_edge: u32,
         max_bytes: u64,
+        workers: u32,
         cancelled: unsafe extern "C" fn(*mut c_void) -> c_int,
         context: *mut c_void,
         output: *mut NativeOutput,
@@ -120,8 +125,8 @@ fn error_text(error: &[u8]) -> Error {
     let end = error.iter().position(|c| *c == 0).unwrap_or(error.len());
     Error::new(String::from_utf8_lossy(&error[..end]).trim().to_owned())
 }
+static INIT: OnceLock<Result<(), Error>> = OnceLock::new();
 fn initialize() -> Result<(), Error> {
-    static INIT: OnceLock<Result<(), Error>> = OnceLock::new();
     INIT.get_or_init(|| {
         let mut error = [0u8; 2048];
         // SAFETY: the writable error buffer remains alive for the native call.
@@ -135,6 +140,30 @@ fn initialize() -> Result<(), Error> {
     .clone()
     // No vips_shutdown: process-wide initialization outlives all image owners.
 }
+/// Call on a thread that rendered and is about to exit (a worker being
+/// stopped): libvips keeps a little per thread and asks to be told. The
+/// thread may render again afterwards.
+pub fn release_thread() {
+    // Nothing to release, and nothing to start, if no thread ever rendered.
+    if INIT.get().is_some_and(Result::is_ok) {
+        // SAFETY: libvips is initialized; the call only frees this thread's state.
+        unsafe { photosort_vips_thread_exit() };
+    }
+}
+/// The adapter's code for a failure whose message is libvips' own.
+const NATIVE_ERROR: c_int = -2;
+/// libvips runs operations on different images from any number of threads
+/// ("Using threads" in its documentation), so renders share this lock and
+/// run side by side. What it does not have is an error message per thread:
+/// errors are "logged in a single global error buffer shared by all threads",
+/// and after a failure "you can't be sure that what's in the error buffer is
+/// the message that matches your error". A render that fails inside libvips
+/// therefore runs once more holding the lock alone, with the buffer cleared
+/// first, and reports that message. The JPEG loader words its warnings from
+/// the same buffer, so a JPEG that warns is opened once more alone, far
+/// enough to start its decoder, for the warning's exact text. Broken files are
+/// rare and files that warn uncommon; everything else never waits here.
+static RENDERS: RwLock<()> = RwLock::new(());
 struct Cancellation<'a, F> {
     check: &'a F,
     panicked: AtomicBool,
@@ -161,7 +190,18 @@ pub fn render<F: Fn() -> bool + Sync>(
     request: Request,
     cancelled: F,
 ) -> Result<Image, Error> {
-    render_inner(path, request, 1, 0, cancelled)
+    render_inner(path, request, 1, 0, 0, cancelled)
+}
+/// `render` on at most `workers` libvips threads (1 to 4) instead of its
+/// usual four, for callers that already render one photo per core. The
+/// pixels are the same.
+pub fn render_with_workers<F: Fn() -> bool + Sync>(
+    path: &Path,
+    request: Request,
+    workers: usize,
+    cancelled: F,
+) -> Result<Image, Error> {
+    render_inner(path, request, 1, 0, workers.clamp(1, 4) as u32, cancelled)
 }
 /// Render a region expressed in EXIF/sidecar-oriented source coordinates.
 /// Pixels are cropped before rotation and returned in display orientation.
@@ -179,13 +219,14 @@ pub fn render_region<F: Fn() -> bool + Sync>(
     if request.region.is_none() || !(1..=8).contains(&orientation) || tile_edge > 4096 {
         return Err(Error::new("Invalid oriented inspection request".into()));
     }
-    render_inner(path, request, orientation.into(), tile_edge, cancelled)
+    render_inner(path, request, orientation.into(), tile_edge, 0, cancelled)
 }
 fn render_inner<F: Fn() -> bool + Sync>(
     path: &Path,
     request: Request,
     orientation: u32,
     tile_edge: u32,
+    workers: u32,
     cancelled: F,
 ) -> Result<Image, Error> {
     if request.edge.is_some_and(|edge| !(1..=4096).contains(&edge)) {
@@ -215,29 +256,6 @@ fn render_inner<F: Fn() -> bool + Sync>(
         return Err(Error::new("Image preparation cancelled".into()));
     }
     initialize()?;
-    // libvips has one process-global error buffer. The application's image actor
-    // is already serial; this guard also prevents accidental concurrent callers
-    // from clearing or borrowing each other's error text.
-    static RENDER: Mutex<()> = Mutex::new(());
-    let _permit = loop {
-        match RENDER.try_lock() {
-            Ok(permit) => break permit,
-            Err(TryLockError::Poisoned(error)) => break error.into_inner(),
-            Err(TryLockError::WouldBlock) => {
-                if unsafe { check_cancel::<F>(context_ptr) } != 0 {
-                    return Err(Error::new(
-                        if context.panicked.load(Ordering::Relaxed) {
-                            "Cancellation callback panicked; image preparation stopped"
-                        } else {
-                            "Image preparation cancelled"
-                        }
-                        .into(),
-                    ));
-                }
-                std::thread::sleep(std::time::Duration::from_millis(2));
-            }
-        }
-    };
     let budget = request.memory.unwrap_or(512 * 1024 * 1024);
     let mut output = NativeOutput::default();
     let mut error = [0u8; 2048];
@@ -248,28 +266,57 @@ fn render_inner<F: Fn() -> bool + Sync>(
         width: 0,
         height: 0,
     });
-    // SAFETY: pointers remain valid until the synchronous call has joined its
-    // evaluation workers. NativeOutput owns any returned buffer on every path.
-    let result = unsafe {
-        photosort_vips_render(
-            path.as_ptr(),
-            request.edge.unwrap_or(0),
-            region.x,
-            region.y,
-            region.width,
-            region.height,
-            orientation,
-            tile_edge,
-            budget,
-            check_cancel::<F>,
-            context_ptr,
-            &mut output,
-            error.as_mut_ptr().cast(),
-            error.len(),
-            warning.as_mut_ptr().cast(),
-            warning.len(),
-        )
+    let native = |output: &mut NativeOutput, error: &mut [u8], warning: &mut [u8]| {
+        // SAFETY: pointers remain valid until the synchronous call has joined its
+        // evaluation workers. NativeOutput owns any returned buffer on every path.
+        unsafe {
+            photosort_vips_render(
+                path.as_ptr(),
+                request.edge.unwrap_or(0),
+                region.x,
+                region.y,
+                region.width,
+                region.height,
+                orientation,
+                tile_edge,
+                budget,
+                workers,
+                check_cancel::<F>,
+                context_ptr,
+                output,
+                error.as_mut_ptr().cast(),
+                error.len(),
+                warning.as_mut_ptr().cast(),
+                warning.len(),
+            )
+        }
     };
+    let mut result = {
+        let _shared = RENDERS.read().unwrap_or_else(PoisonError::into_inner);
+        native(&mut output, &mut error, &mut warning)
+    };
+    if result == NATIVE_ERROR {
+        // A cancelled render fails inside libvips too; that needs no message.
+        if unsafe { check_cancel::<F>(context_ptr) } != 0
+            && !context.panicked.load(Ordering::Relaxed)
+        {
+            return Err(Error::new("Image preparation cancelled".into()));
+        }
+        // Alone, so the message libvips leaves is this file's (see `RENDERS`).
+        let _alone = RENDERS.write().unwrap_or_else(PoisonError::into_inner);
+        output = NativeOutput::default();
+        result = native(&mut output, &mut error, &mut warning);
+    } else if result == 0 && output.warning_from_buffer != 0 {
+        let _alone = RENDERS.write().unwrap_or_else(PoisonError::into_inner);
+        let mut exact = [0u8; 1024];
+        // SAFETY: both buffers outlive the synchronous call.
+        unsafe {
+            photosort_vips_open_warning(path.as_ptr(), exact.as_mut_ptr().cast(), exact.len())
+        };
+        if exact[0] != 0 {
+            warning = exact;
+        }
+    }
     if context.panicked.load(Ordering::Relaxed) {
         return Err(Error::new(
             "Cancellation callback panicked; image preparation stopped".into(),

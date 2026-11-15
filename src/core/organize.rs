@@ -2,6 +2,7 @@
 use super::{
     model::{Media, MediaId, MediaKind},
     operations::safe_component,
+    text,
 };
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -299,6 +300,17 @@ impl Draft {
                 .collect(),
         }
     }
+    /// Folders this draft gives the same name in other capital letters, or
+    /// with its accents in the other form (composed or decomposed). Their
+    /// files are renamed with the folder, not left as they are.
+    pub fn respelled_folders(&self) -> impl Iterator<Item = &str> {
+        self.directory_origins
+            .iter()
+            .filter(|(source, target)| {
+                source != target && text::folded(source) == text::folded(target)
+            })
+            .map(|(_, target)| target.as_str())
+    }
     fn include_parents(&mut self, path: &str) {
         self.folders.insert(path.into());
         let mut parent = path;
@@ -551,19 +563,25 @@ impl Draft {
         }
         self.relocate_into(source, target)
     }
-    /// macOS and Windows treat `Trip` and `trip` as one folder, so a new or
-    /// moved folder may not differ from another only in letter case: the two
-    /// would silently merge on disk. Changing the case of `except` itself is
-    /// a spelling change and stays allowed.
+    /// macOS and Windows treat `Trip` and `trip` as one folder, and macOS
+    /// an accent typed as one character and the same accent stored as a
+    /// letter and a combining mark. So a new or moved folder may not differ
+    /// from another only in letter case or in that form: the two would
+    /// silently merge on disk. Changing the spelling of `except` itself
+    /// stays allowed.
     fn ensure_no_case_alias(&self, path: &str, except: &str) -> Result<()> {
-        let folded = path.to_lowercase();
+        let folded = text::folded(path);
+        let alias = self
+            .folders
+            .iter()
+            .find(|f| *f != path && *f != except && text::folded(f) == folded);
+        // Told apart for the message: two names that only differ in the form
+        // of their accents look the same.
         ensure!(
-            !self
-                .folders
-                .iter()
-                .any(|f| f != path && f != except && f.to_lowercase() == folded),
+            alias.is_none_or(|f| f.to_lowercase() != path.to_lowercase()),
             "A folder with that name already exists, spelled with different capital letters"
         );
+        ensure!(alias.is_none(), "A folder with that name already exists");
         Ok(())
     }
     /// Combines `source` into the existing folder `target`: everything in
@@ -835,4 +853,27 @@ pub fn renamed_file_name(path: &std::path::Path, stem: &std::ffi::OsStr) -> std:
         name.push(extension);
     }
     name
+}
+/// [`renamed_file_name`] for files that move as one. A sidecar named after a
+/// whole file ("IMG.CR2.xmp" beside "IMG.CR2") follows that file's new name:
+/// "Lisbon.CR2.xmp", not "Lisbon.xmp".
+pub fn renamed_file_names<P: AsRef<std::path::Path>>(
+    paths: &[P],
+    stem: &std::ffi::OsStr,
+) -> Vec<std::ffi::OsString> {
+    let mut names: Vec<_> = paths
+        .iter()
+        .map(|path| renamed_file_name(path.as_ref(), stem))
+        .collect();
+    for (i, path) in paths.iter().enumerate() {
+        let path = path.as_ref();
+        let owner = super::catalog::is_xmp(path)
+            .then(|| path.with_extension(""))
+            .filter(|named| MediaKind::from_path(named).is_some())
+            .and_then(|named| paths.iter().position(|other| other.as_ref() == named));
+        if let Some(owner) = owner {
+            names[i] = renamed_file_name(path, &names[owner].clone());
+        }
+    }
+    names
 }

@@ -155,14 +155,70 @@ fn date_preference_uses_metadata_filename_then_catalog_time_without_io() {
         dates::label(&photo, &day("invalid")),
         Some("2025-03-17".into())
     );
-    let fallback = media(2, "/nonexistent/no-date.jpg");
+    // A file with no date of its own is filed under the earlier of its creation
+    // and modified times, the same in Organize, Cull and Details.
+    let mut fallback = media(2, "/nonexistent/no-date.jpg");
+    assert_eq!(dates::label(&fallback, &Metadata::default()), None);
     use chrono::{Local, TimeZone};
+    let (taken, copied) = (1_600_000_000_000_i64, 1_700_000_000_000_i64);
     let expected = Local
-        .timestamp_opt(0, 0)
+        .timestamp_millis_opt(taken)
         .single()
         .unwrap()
         .format("%Y-%m-%d")
         .to_string();
+    for (modified, created) in [(taken, copied), (copied, taken)] {
+        fallback.fingerprint.modified_ns = modified as u128 * 1_000_000;
+        let meta = Metadata {
+            created_ms: Some(created),
+            ..Default::default()
+        };
+        assert_eq!(dates::label(&fallback, &meta), Some(expected.clone()));
+        let millis = dates::capture_millis(&fallback, Some(&meta));
+        assert_eq!(millis, Some(taken));
+        assert_eq!(dates::calendar(millis, Some(&meta)), Some(expected.clone()));
+        let details = photosort::core::details::sections(&[(&fallback, &meta)]);
+        let shown = details
+            .iter()
+            .flat_map(|section| &section.rows)
+            .find(|row| row.label == "Created")
+            .unwrap();
+        assert!(shown.values[0].starts_with(&expected), "{:?}", shown.values);
+    }
+    // A file dated only by its name: Details shows that day, as Cull and
+    // Organize file it, not the time the file was copied.
+    let mut named = media(3, "/nonexistent/IMG_20240501_101500.jpg");
+    named.fingerprint.modified_ns = copied as u128 * 1_000_000;
+    let none = Metadata::default();
+    let created = |media: &Media, meta: &Metadata| {
+        photosort::core::details::sections(&[(media, meta)])
+            .iter()
+            .flat_map(|section| &section.rows)
+            .find(|row| row.label == "Created")
+            .unwrap()
+            .values[0]
+            .clone()
+    };
+    assert_eq!(created(&named, &none), "2024-05-01");
+    assert_eq!(
+        dates::calendar(dates::capture_millis(&named, Some(&none)), Some(&none)),
+        Some("2024-05-01".into())
+    );
+    // A capture time reads back as the clock time it was written as.
+    let written = Metadata {
+        captured_ms: dates::timestamp("2024:07:01 12:34:56"),
+        ..Default::default()
+    };
+    assert_eq!(created(&named, &written), "2024-07-01 12:34");
+    assert_eq!(
+        dates::clock(written.captured_ms.unwrap())
+            .unwrap()
+            .format("%H:%M:%S")
+            .to_string(),
+        "12:34:56"
+    );
+    // Before its metadata is read, a copied file is already under that day.
+    fallback.fingerprint.modified_ns = taken as u128 * 1_000_000;
     assert_eq!(
         dates::label(&fallback, &Metadata::default()),
         Some(expected)

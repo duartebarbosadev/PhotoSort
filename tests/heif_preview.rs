@@ -131,7 +131,8 @@ fn bounded_heif_previews_preserve_geometry_alpha_orientation_and_request_order()
 #[test]
 fn heif_analysis_geometry_restarts_without_pixels_and_cancelled_work_is_not_cached() {
     let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("large.heic");
+    // ".hif" is how Canon, Sony and Fujifilm cameras name HEIF files.
+    let path = root.path().join("large.hif");
     std::fs::write(path, include_bytes!("fixtures/heif/large-alpha.heic")).unwrap();
     let media = Catalog::scan(root.path(), || false, |_| {})
         .unwrap()

@@ -120,14 +120,14 @@ fn chronological_sort_preserves_time_offsets_ties_and_unknown_last_without_file_
         (
             MediaId(1),
             Metadata {
-                captured: "2026-09-27T03:00:00Z".into(),
+                captured: "2026-09-27T11:00:00-03:00".into(),
                 ..Default::default()
             },
         ),
         (
             MediaId(2),
             Metadata {
-                captured: "2026-09-27T03:00:00Z".into(),
+                captured: "2026-09-27T11:00:00-03:00".into(),
                 ..Default::default()
             },
         ),
@@ -160,9 +160,10 @@ fn chronological_sort_preserves_time_offsets_ties_and_unknown_last_without_file_
         ..Default::default()
     };
     assert_eq!(dates::capture_millis(&m, Some(&meta)), Some(1000));
+    // A written offset names the place: the time sorts as that place's clock showed it.
     assert_eq!(
         dates::timestamp("2026-09-27T12:00:00+08:00"),
-        dates::timestamp("2026-09-27T04:00:00Z")
+        dates::timestamp("2026:09:27 12:00:00")
     );
 }
 #[test]
@@ -207,7 +208,7 @@ fn xmp_capture_time_preserves_hours_and_offsets_for_both_attributes_and_elements
         std::fs::write(path.with_extension("xmp"), xml).unwrap();
         let meta = metadata::read(&path);
         assert_eq!(meta.grouping_date.as_deref(), Some("2026-09-27"));
-        assert_eq!(meta.captured_ms, dates::timestamp("2026-09-27T04:34:56Z"));
+        assert_eq!(meta.captured_ms, dates::timestamp("2026:09:27 12:34:56"));
     }
 }
 #[test]

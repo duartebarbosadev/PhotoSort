@@ -35,11 +35,13 @@ pub enum MediaKind {
 }
 impl MediaKind {
     pub fn from_path(path: &Path) -> Option<Self> {
+        if is_apple_double(path) {
+            return None;
+        }
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         Some(match ext.as_str() {
-            "jpg" | "jpeg" | "png" | "tif" | "tiff" | "webp" | "bmp" | "gif" | "heic" | "heif" => {
-                Self::Photo
-            }
+            "jpg" | "jpeg" | "png" | "tif" | "tiff" | "webp" | "bmp" | "gif" | "heic" | "heif"
+            | "hif" => Self::Photo,
             "arw" | "cr2" | "cr3" | "nef" | "nrw" | "dng" | "orf" | "raf" | "rw2" | "pef"
             | "srw" | "raw" | "ptx" | "cap" | "iiq" | "eip" | "fff" | "mef" | "mdc" | "mos"
             | "mrw" | "erf" | "kdc" | "dcs" | "dcr" | "x3f" | "rwl" => Self::Raw,
@@ -47,6 +49,22 @@ impl MediaKind {
             _ => return None,
         })
     }
+}
+
+/// A Mac keeps a file's extended attributes in a "._name" sibling on exFAT,
+/// FAT and network volumes. "._IMG_0001.JPG" is that sidecar, never a photo.
+pub fn is_apple_double(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.as_encoded_bytes().starts_with(b"._"))
+}
+
+/// HEIF by extension. Canon, Sony and Fujifilm cameras write ".hif".
+pub fn is_heif(path: &Path) -> bool {
+    path.extension().is_some_and(|e| {
+        ["heic", "heif", "hif"]
+            .iter()
+            .any(|name| e.eq_ignore_ascii_case(name))
+    })
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]

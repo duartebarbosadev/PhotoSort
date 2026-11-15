@@ -18,7 +18,10 @@ at full size for a 2048 px preview. The adapter also reads ICC-profiled CMYK TIF
 ## What the adapter guarantees
 
 - libvips initializes once per process, with four evaluation threads and no operation
-  cache. Native calls are serialized; waiting for one stays cancellable.
+  cache. Renders of different files run side by side on any thread
+  (`render_with_workers` caps one render's evaluation threads). libvips has one error
+  buffer for all threads, so a render that fails inside libvips, or a JPEG whose decoder
+  warns, is run or opened once more on its own to read its message.
 - Native errors, null pointers and buffer lengths are checked before Rust builds slices,
   and a failed or cancelled render never returns pixels.
 - Full-size and region renders are limited to 32768 px on an edge and 512 MiB; previews

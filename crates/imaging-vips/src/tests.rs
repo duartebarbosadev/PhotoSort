@@ -313,6 +313,125 @@ fn cancellation_and_callback_panics_never_publish_pixels_or_poison_next_job() {
         32
     );
 }
+/// A gradient JPEG, and the same with a scan header libjpeg warns about.
+fn odd_scan_jpeg(width: u16, height: u16) -> (Vec<u8>, Vec<u8>) {
+    let source: Vec<u8> = (0..u32::from(height))
+        .flat_map(|y| (0..u32::from(width)).flat_map(move |x| [(x / 4) as u8, (y / 2) as u8, 128]))
+        .collect();
+    let mut jpeg = Vec::new();
+    jpeg_encoder::Encoder::new(&mut jpeg, 90)
+        .encode(&source, width, height, jpeg_encoder::ColorType::Rgb)
+        .unwrap();
+    let scan = jpeg.windows(2).position(|w| w == [0xFF, 0xDA]).unwrap();
+    // After the component table: spectral start, spectral end (63), approximation.
+    let spectral_end = scan + 5 + usize::from(jpeg[scan + 4]) * 2 + 1;
+    assert_eq!(jpeg[spectral_end], 63);
+    let mut odd = jpeg.clone();
+    odd[spectral_end] = 0;
+    (jpeg, odd)
+}
+#[test]
+fn renders_on_many_threads_keep_each_files_pixels_error_and_warning() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = |name: &str| temp.path().join(name);
+    let mut files = Vec::new();
+    // Photos that open, each with its own size and colour.
+    for n in 0..4u8 {
+        let path = file(&format!("good-{n}.png"));
+        let pixels = RgbaImage::from_pixel(40 + u32::from(n), 30, Rgba([n * 60, 200, 17, 255]));
+        png(&path, &pixels, None);
+        files.push(path);
+    }
+    for n in 0..3u16 {
+        let (clean, odd) = odd_scan_jpeg(160 + n * 16, 120);
+        // Opens, with a warning.
+        std::fs::write(file(&format!("warns-{n}.jpg")), &odd).unwrap();
+        // Cut short: fails inside the JPEG decoder.
+        std::fs::write(file(&format!("cut-{n}.jpg")), &clean[..clean.len() / 2]).unwrap();
+        files.extend([
+            file(&format!("warns-{n}.jpg")),
+            file(&format!("cut-{n}.jpg")),
+        ]);
+    }
+    // Fails inside the PNG decoder, is no image at all, does not exist.
+    png(
+        &file("cut.png"),
+        &RgbaImage::from_pixel(300, 200, Rgba([1, 2, 3, 255])),
+        None,
+    );
+    let whole = std::fs::read(file("cut.png")).unwrap();
+    std::fs::write(file("cut.png"), &whole[..whole.len() / 2]).unwrap();
+    std::fs::write(file("notes.jpg"), b"not an image at all").unwrap();
+    files.extend(["cut.png", "notes.jpg", "missing-a.jpg", "missing-b.png"].map(file));
+
+    type Outcome = Result<(u32, u32, Vec<u8>, Option<String>), String>;
+    let outcome = |path: &Path| -> Outcome {
+        render(path, Request::default(), || false)
+            .map(|image| {
+                let warning = image.decoder_warning.clone();
+                (image.width, image.height, rgba(image), warning)
+            })
+            .map_err(|error| error.to_string())
+    };
+    // One at a time first: what each file gives when nothing else runs.
+    let alone: Vec<Outcome> = files.iter().map(|path| outcome(path)).collect();
+    let error = |name: &str| {
+        let index = files.iter().position(|path| path.ends_with(name)).unwrap();
+        alone[index].clone().unwrap_err()
+    };
+    // The failures differ, so a message that went to the wrong file shows.
+    let kinds = [
+        "cut-0.jpg",
+        "cut.png",
+        "notes.jpg",
+        "missing-a.jpg",
+        "missing-b.png",
+    ]
+    .map(error);
+    for (index, kind) in kinds.iter().enumerate() {
+        assert!(
+            !kind.is_empty() && !kinds[..index].contains(kind),
+            "{kinds:?}"
+        );
+    }
+    assert!(
+        error("missing-a.jpg").contains("missing-a.jpg"),
+        "{kinds:?}"
+    );
+    for (path, outcome) in files.iter().zip(&alone) {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        match outcome {
+            Ok((.., warning)) if name.starts_with("warns") => {
+                assert!(
+                    warning
+                        .as_deref()
+                        .is_some_and(|w| w.contains("Invalid SOS"))
+                );
+            }
+            Ok((.., warning)) => assert!(name.starts_with("good") && warning.is_none()),
+            Err(_) => assert!(!name.starts_with("good") && !name.starts_with("warns")),
+        }
+    }
+    // Then on eight threads at once, each starting at another file.
+    std::thread::scope(|scope| {
+        for thread in 0..8 {
+            let (files, alone, outcome) = (&files, &alone, &outcome);
+            scope.spawn(move || {
+                for round in 0..30 {
+                    for step in 0..files.len() {
+                        let index = (thread * 3 + round + step) % files.len();
+                        assert_eq!(
+                            outcome(&files[index]),
+                            alone[index],
+                            "{:?} on thread {thread}",
+                            files[index]
+                        );
+                    }
+                }
+            });
+        }
+    });
+}
 #[test]
 fn truncated_input_returns_error_and_next_job_still_works() {
     let temp = tempfile::tempdir().unwrap();
@@ -327,6 +446,36 @@ fn truncated_input_returns_error_and_next_job_still_works() {
     assert!(render(&path, Request::default(), || false).is_err());
     std::fs::write(&path, bytes).unwrap();
     assert!(render(&path, Request::default(), || false).is_ok());
+    // A JPEG the decoder only warns about opens, and says what it warned
+    // about: some phones write a scan header libjpeg calls invalid.
+    let path = temp.path().join("odd-scan-header.jpg");
+    let (jpeg, odd) = odd_scan_jpeg(640, 480);
+    std::fs::write(&path, odd).unwrap();
+    // Full size, a preview decoded at a fraction, and one only reduced.
+    for (edge, size) in [
+        (None, (640, 480)),
+        (Some(100), (100, 75)),
+        (Some(500), (500, 375)),
+    ] {
+        let request = Request {
+            edge,
+            region: None,
+            memory: None,
+        };
+        let image = render(&path, request, || false).unwrap();
+        assert_eq!((image.width, image.height), size);
+        assert!(
+            image
+                .decoder_warning
+                .as_deref()
+                .is_some_and(|s| s.contains("Invalid SOS parameters")),
+            "{:?}",
+            image.decoder_warning
+        );
+    }
+    // One cut short still fails.
+    std::fs::write(&path, &jpeg[..jpeg.len() / 2]).unwrap();
+    assert!(render(&path, Request::default(), || false).is_err());
 }
 #[cfg(target_os = "macos")]
 #[test]

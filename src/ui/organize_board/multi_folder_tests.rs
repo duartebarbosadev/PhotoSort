@@ -310,6 +310,12 @@ fn folders_shown_together_follow_renames_moves_and_searches() {
     rendered(&mut app, &ctx, SIZE);
     assert_eq!(app.board.focus, ["A/Day1", "B/Trip"]);
     assert_eq!(shown(&mut app, &ctx), ["B/Trip"]);
+    // The folders above the library are not searched: every photo has them.
+    let library = app.root.as_ref().unwrap().file_name().unwrap();
+    app.query = library.to_string_lossy().to_uppercase();
+    app.filter_dirty = true;
+    app.refilter();
+    assert!(app.filtered.is_empty());
     app.query.clear();
     app.filter_dirty = true;
     app.refilter();
@@ -326,6 +332,49 @@ fn folders_shown_together_follow_renames_moves_and_searches() {
     // New folders go inside the folder shown last clicked.
     app.board_choose_folder("B", egui::Modifiers::COMMAND);
     assert_eq!(app.board_focus_folder(), "B");
+    app.runtime.shutdown();
+}
+
+/// "é" is one character when typed and, in names copied from an older Mac
+/// volume, "e" and a combining accent. Both read the same and macOS takes
+/// them for one name, so the board and the search do too.
+#[test]
+fn a_folder_name_with_its_accents_in_the_other_form_is_the_same_name() {
+    let (_temp, mut app, ids) = board();
+    let (decomposed, composed) = ("Fe\u{301}rias", "F\u{e9}rias");
+    app.board_rename_folder("C");
+    app.board.editing.as_mut().unwrap().1 = decomposed.into();
+    app.board_finish_edit();
+    // A second folder may not take the name in the other form, in any case.
+    app.board_new_folder("", &[]);
+    app.board.editing.as_mut().unwrap().1 = composed.to_uppercase();
+    app.board_finish_edit();
+    assert_eq!(
+        app.navigation_notice.take().as_deref(),
+        Some("A folder with that name already exists")
+    );
+    let folders = |app: &PhotoSortApp| -> Vec<String> {
+        let draft = &app.organize_drafts[&app.group_mode];
+        draft.folders().iter().cloned().collect()
+    };
+    assert!(folders(&app).iter().any(|f| f == decomposed));
+    assert!(!folders(&app).contains(&composed.to_uppercase()));
+    // The folder itself may be respelled.
+    app.board_rename_folder(decomposed);
+    app.board.editing.as_mut().unwrap().1 = composed.into();
+    app.board_finish_edit();
+    assert_eq!(app.navigation_notice, None);
+    assert!(folders(&app).iter().any(|f| f == composed));
+    // The search finds a folder on disk in either form.
+    let photo = app.index[&ids[8]];
+    let stored = app.root.as_ref().unwrap().join(decomposed).join("x.png");
+    app.media[photo].path = stored;
+    for query in [composed.to_uppercase(), decomposed.to_owned()] {
+        app.query = query;
+        app.filter_dirty = true;
+        app.refilter();
+        assert_eq!(app.filtered, [photo], "{:?}", app.query);
+    }
     app.runtime.shutdown();
 }
 

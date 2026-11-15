@@ -88,7 +88,7 @@ impl Index {
             rows.push(Row {
                 embedding: update.and_then(|u| u.embedding.clone()),
                 name: m.name().to_lowercase(),
-                search: m.path.to_string_lossy().to_lowercase(),
+                search: super::search_text(&seed.catalog.root, &m.path),
                 captured,
                 date: dates::calendar(captured, metadata),
                 rating: metadata.map(|m| m.rating),
@@ -241,7 +241,7 @@ impl Index {
             }
             self.group_choices = Some(Arc::new(choices));
         }
-        let text = query.text.to_lowercase();
+        let text = super::search_key(&query.text);
         let in_folder = query.options.folder.matcher();
         let mut indices = Vec::new();
         let mut groups = std::collections::BTreeSet::new();

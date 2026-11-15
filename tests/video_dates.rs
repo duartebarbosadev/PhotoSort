@@ -90,7 +90,7 @@ fn sidecar_dates_override_movie_headers_and_invalidate_one_shared_snapshot() {
     );
     fs::write(metadata::sidecar(&path), r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:xmp="http://ns.adobe.com/xap/1.0/"><xmp:CreateDate>2020-01-02T23:30:00-05:00</xmp:CreateDate></x:xmpmeta>"#).unwrap();
     let meta = pipeline.metadata(item).unwrap();
-    assert_eq!(meta.captured_ms, dates::timestamp("2020-01-03T04:30:00Z"));
+    assert_eq!(meta.captured_ms, dates::timestamp("2020:01:02 23:30:00"));
     assert_eq!(dates::label(item, &meta).as_deref(), Some("2020-01-02"));
     assert_eq!(
         dates::calendar(meta.captured_ms, Some(&meta)).as_deref(),
@@ -115,6 +115,70 @@ fn sidecar_dates_override_movie_headers_and_invalidate_one_shared_snapshot() {
     );
     assert_eq!(pipeline.stats.metadata_reads, 3);
     assert_eq!(pipeline.stats.decodes, 0);
+}
+#[test]
+fn a_video_with_a_written_offset_sits_beside_the_photos_taken_with_it() {
+    fn atom(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut out = (body.len() as u32 + 8).to_be_bytes().to_vec();
+        out.extend(kind);
+        out.extend(body);
+        out
+    }
+    // The header holds the UTC instant, as cameras write it.
+    let header = |written: &str| {
+        let utc = DateTime::parse_from_rfc3339(written).unwrap().timestamp() as u32;
+        let mut body = vec![0; 4];
+        body.extend((utc + 2_082_844_800).to_be_bytes());
+        atom(b"mvhd", &body)
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let photo = temp.path().join("photo.jpg");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/metadata/mixed.jpg"),
+        &photo,
+    )
+    .unwrap();
+    assert_eq!(metadata::read(&photo).captured, "2024:02:03 04:05:06");
+    // An iPhone clip: the creation date item, five minutes after the photo in Tokyo.
+    let key = b"com.apple.quicktime.creationdate";
+    let mut keys = vec![0; 4];
+    keys.extend(1_u32.to_be_bytes());
+    keys.extend((key.len() as u32 + 8).to_be_bytes());
+    keys.extend(b"mdta");
+    keys.extend(key);
+    let mut value = vec![0, 0, 0, 1, 0, 0, 0, 0];
+    value.extend(b"2024-02-03T04:10:06+0900");
+    let mut meta = atom(b"hdlr", &[0; 24]);
+    meta.extend(atom(b"keys", &keys));
+    meta.extend(atom(
+        b"ilst",
+        &atom(&1_u32.to_be_bytes(), &atom(b"data", &value)),
+    ));
+    let mut body = header("2024-02-03T04:10:06+09:00");
+    body.extend(atom(b"meta", &meta));
+    fs::write(temp.path().join("tokyo.mov"), atom(b"moov", &body)).unwrap();
+    // An older camera: the classic date text, ten minutes after, clock on Pacific time.
+    let text = b"2024-02-03T04:15:06-08:00";
+    let mut day = (text.len() as u16).to_be_bytes().to_vec();
+    day.extend([0; 2]);
+    day.extend(text);
+    let mut body = header("2024-02-03T04:15:06-08:00");
+    body.extend(atom(b"udta", &atom(b"\xA9day", &day)));
+    fs::write(temp.path().join("pacific.mov"), atom(b"moov", &body)).unwrap();
+
+    let catalog = Catalog::scan(temp.path(), || false, |_| {}).unwrap();
+    let mut taken = HashMap::new();
+    for item in &catalog.media {
+        let meta = metadata::read(&item.path);
+        let millis = dates::capture_millis(item, Some(&meta));
+        // Whatever zone this computer is in, all three share the day they were taken on.
+        let day = Some("2024-02-03".to_owned());
+        assert_eq!(dates::calendar(millis, Some(&meta)), day, "{}", item.name());
+        assert_eq!(dates::label(item, &meta), day, "{}", item.name());
+        taken.insert(item.name(), millis.unwrap());
+    }
+    assert_eq!(taken["tokyo.mov"] - taken["photo.jpg"], 5 * 60 * 1000);
+    assert_eq!(taken["pacific.mov"] - taken["photo.jpg"], 10 * 60 * 1000);
 }
 #[test]
 fn cancelled_video_metadata_is_not_cached_and_retry_succeeds() {

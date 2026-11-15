@@ -26,19 +26,22 @@ struct Dates {
     time: [Option<i64>; 4],
 }
 impl Dates {
+    /// The day and the sort time are read from one clock, the one at the place
+    /// of capture, so a photo is always listed under the day it sorts in.
     fn assign(&mut self, slot: usize, raw: Option<&str>) {
-        self.day[slot] = raw.and_then(super::dates::parse);
-        self.time[slot] = raw.and_then(super::dates::timestamp);
+        let clock = raw.and_then(super::dates::wall_clock);
+        self.day[slot] = clock.map(day);
+        self.time[slot] = clock.and_then(super::dates::local_millis);
     }
     /// A sidecar value replaces an embedded one only when it parses.
     fn overlay(&mut self, slot: usize, raw: Option<&str>) {
-        if let Some(day) = raw.and_then(super::dates::parse) {
-            self.day[slot] = Some(day);
-        }
-        if let Some(time) = raw.and_then(super::dates::timestamp) {
-            self.time[slot] = Some(time);
+        if raw.and_then(super::dates::wall_clock).is_some() {
+            self.assign(slot, raw);
         }
     }
+}
+fn day(clock: chrono::NaiveDateTime) -> String {
+    clock.format("%Y-%m-%d").to_string()
 }
 
 /// EXIF SubSecTime digits are a decimal fraction of a second: "4" is 400 ms.
@@ -59,13 +62,22 @@ fn subsec_ms(raw: &str) -> Option<u16> {
     Some(ms)
 }
 
+/// The XMP file a photo's rating and orientation are read from and written
+/// to: "IMG.xmp", or when only that one exists "IMG.CR2.xmp", as darktable
+/// and digiKam name it. A new sidecar is "IMG.xmp".
 pub fn sidecar(path: &Path) -> PathBuf {
     let upper = path.with_extension("XMP");
     if upper.is_file() {
-        upper
-    } else {
-        path.with_extension("xmp")
+        return upper;
     }
+    let lower = path.with_extension("xmp");
+    if lower.is_file() {
+        return lower;
+    }
+    let mut named = path.as_os_str().to_os_string();
+    named.push(".xmp");
+    let named = PathBuf::from(named);
+    if named.is_file() { named } else { lower }
 }
 
 pub fn read(path: &Path) -> Metadata {
@@ -88,17 +100,11 @@ pub fn read_cancellable(path: &Path, cancelled: &impl Fn() -> bool) -> Result<Me
         snapshot.apply(&mut result, &mut dates);
     }
     #[cfg(target_os = "macos")]
-    if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("heic") || e.eq_ignore_ascii_case("heif"))
-    {
+    if super::model::is_heif(path) {
         result.orientation = super::apple_image::orientation(path);
     }
     #[cfg(not(target_os = "macos"))]
-    if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("heic") || e.eq_ignore_ascii_case("heif"))
-    {
+    if super::model::is_heif(path) {
         result.container_orientation = super::heif::orientation(path);
         if let Some(orientation) = result.container_orientation {
             result.orientation = orientation;
@@ -132,13 +138,20 @@ pub fn read_cancellable(path: &Path, cancelled: &impl Fn() -> bool) -> Result<Me
             result.width = width;
             result.height = height;
         }
-        if result.captured_ms.is_none()
-            && result.grouping_date.is_none()
-            && let Some(created) = movie.created
-        {
-            result.captured = created.to_rfc3339();
-            result.captured_ms = Some(created.timestamp_millis());
-            result.grouping_date = Some(created.format("%Y-%m-%d").to_string());
+        if result.captured_ms.is_none() && result.grouping_date.is_none() {
+            if let Some(written) = movie.written {
+                // The camera wrote its own clock time: the video sits beside the
+                // photos taken with it, like a photo's naive EXIF time does.
+                let clock = written.naive_local();
+                result.captured = written.to_rfc3339();
+                result.captured_ms = super::dates::local_millis(clock);
+                result.grouping_date = Some(day(clock));
+            } else if let Some(created) = movie.created {
+                // Only the UTC instant is known: this computer's clock stands in.
+                result.captured = created.to_rfc3339();
+                result.captured_ms = Some(created.timestamp_millis());
+                result.grouping_date = Some(created.format("%Y-%m-%d").to_string());
+            }
         }
     }
     anyhow::ensure!(!cancelled(), "Metadata read cancelled");
