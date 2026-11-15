@@ -34,7 +34,7 @@ impl PhotoSortApp {
         let request = self.cache_folder_request();
         let description = request.as_ref().map_or_else(
             || "The cache location is unavailable.".into(),
-            |request| request.path.display().to_string(),
+            |request| crate::core::text::shown(&request.path),
         );
         if ui
             .add_enabled(
@@ -283,7 +283,7 @@ impl PhotoSortApp {
                     for (path, label) in recent.into_iter().zip(labels) {
                         if ui
                             .add_enabled(!self.busy, egui::Button::new(label))
-                            .on_hover_text(path.display().to_string())
+                            .on_hover_text(crate::core::text::shown(path))
                             .clicked()
                         {
                             selected = Some(path.clone());

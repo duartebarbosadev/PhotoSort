@@ -296,7 +296,7 @@ impl Files<'_> {
         if let Some(kept) = damaged {
             notices.push(format!(
                 "Staged choices for this folder could not be read and start empty. The damaged file was kept at {}",
-                kept.display()
+                crate::core::text::shown(&kept)
             ));
         }
         if !notices.is_empty() {
@@ -521,7 +521,10 @@ fn unresumable_notice(lost: &operations::recovery::Unresumable) -> String {
         // Nothing was dropped. Apply refuses to run over a plan it has not
         // restored, so the user must know why until a later open reads it.
         let record = match &lost.kept {
-            Some(kept) => format!(" Its record is unchanged at {}.", kept.display()),
+            Some(kept) => format!(
+                " Its record is unchanged at {}.",
+                crate::core::text::shown(kept)
+            ),
             None => String::new(),
         };
         return format!(
@@ -532,7 +535,7 @@ fn unresumable_notice(lost: &operations::recovery::Unresumable) -> String {
     let record = match &lost.kept {
         Some(kept) => format!(
             "its record could not be read and was kept at {}",
-            kept.display()
+            crate::core::text::shown(kept)
         ),
         None => "its record is missing".to_owned(),
     };
@@ -610,7 +613,8 @@ mod tests {
                 assert_eq!(scan(&mut notice), 1);
                 let notice = notice.expect("the user is told the operation is still pending");
                 assert!(
-                    notice.contains("try again") && notice.contains(&journal.display().to_string()),
+                    notice.contains("try again")
+                        && notice.contains(&crate::core::text::shown(&journal)),
                     "{notice}"
                 );
                 assert!(Store::standard().has_pending(&root));
@@ -632,7 +636,7 @@ mod tests {
             .filter(|path| std::fs::read(path).is_ok_and(|bytes| bytes.ends_with(b"{tru")))
             .collect();
         assert_eq!(kept.len(), 1);
-        assert!(!journal.exists() && notice.contains(&kept[0].display().to_string()));
+        assert!(!journal.exists() && notice.contains(&crate::core::text::shown(&kept[0])));
         // The plan is dropped: the next open is quiet and nothing was run.
         assert!(!Store::standard().has_pending(&root));
         let mut again = None;

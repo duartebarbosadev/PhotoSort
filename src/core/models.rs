@@ -605,7 +605,7 @@ fn start_runtime() -> Result<()> {
     anyhow::ensure!(
         runtime.is_file(),
         "ONNX Runtime library is missing: {}",
-        runtime.display()
+        crate::core::text::shown(&runtime)
     );
     #[cfg(target_os = "windows")]
     search_runtime_directory(&runtime);

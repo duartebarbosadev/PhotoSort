@@ -501,7 +501,7 @@ impl PhotoSortApp {
         }
         self.library_response(
             ui,
-            response.on_hover_text(media.path.display().to_string()),
+            response.on_hover_text(crate::core::text::shown(&media.path)),
             id,
             Some(check),
         );
@@ -619,7 +619,7 @@ impl PhotoSortApp {
         );
         self.library_response(
             ui,
-            response.on_hover_text(media.path.display().to_string()),
+            response.on_hover_text(crate::core::text::shown(&media.path)),
             id,
             None,
         );
