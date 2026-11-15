@@ -31,12 +31,16 @@ impl Source {
     /// the saved device and inode are not compared. Returns the file as it is
     /// now, for the exact checks that follow within this run.
     fn verify(&self) -> Result<Fingerprint> {
-        let fingerprint = Fingerprint::read(&self.path)
-            .with_context(|| format!("Could not verify reviewed source {}", self.path.display()))?;
+        let fingerprint = Fingerprint::read(&self.path).with_context(|| {
+            format!(
+                "Could not verify reviewed source {}",
+                crate::core::text::shown(&self.path)
+            )
+        })?;
         anyhow::ensure!(
             fingerprint.unchanged(&self.fingerprint),
             "File changed since review: {}",
-            self.path.display()
+            crate::core::text::shown(&self.path)
         );
         Ok(fingerprint)
     }
@@ -85,47 +89,78 @@ pub enum Action {
         orientation: Option<u8>,
     },
 }
+/// "1 file", "3 files".
+fn files_text(count: usize) -> String {
+    match count {
+        1 => "1 file".into(),
+        n => format!("{n} files"),
+    }
+}
 impl Action {
+    /// What the failure list shows for this action. `detail` can quote a
+    /// path as the system spelled it, so it is cleaned like the label's own.
+    /// The Trash refusing a file is already a whole sentence that names it,
+    /// read back from the journal as well as fresh from a failed Apply.
     fn failure_message(&self, detail: &str) -> String {
-        format!("{}: {detail}", self.label())
+        let detail = super::text::plain_paths(detail);
+        let refused = |path: &Path| detail.starts_with(&TrashRefused::lead(path));
+        let whole = match self {
+            Self::Trash { files } => files.iter().any(|source| refused(&source.path)),
+            Self::TrashDirectory(folder) => refused(&folder.path),
+            _ => false,
+        };
+        if whole {
+            detail.into_owned()
+        } else {
+            format!("{}: {detail}", self.label())
+        }
     }
 
     pub fn label(&self) -> String {
         match self {
             Self::TrashDirectory(folder) => format!(
                 "Trash folder {} ({} files)",
-                folder.path.display(),
+                crate::core::text::shown(&folder.path),
                 folder.inventory.files.len()
             ),
             Self::RenameFile { source, to } => {
-                format!("Rename file {} → {}", source.path.display(), to.display())
+                format!(
+                    "Rename file {} → {}",
+                    crate::core::text::shown(&source.path),
+                    crate::core::text::shown(to)
+                )
             }
             Self::RenameDirectory(rename) => format!(
                 "Rename folder {} → {}",
-                rename.from.display(),
-                rename.to.display()
+                crate::core::text::shown(&rename.from),
+                crate::core::text::shown(&rename.to)
             ),
-            Self::CreateDirectory { path } => format!("Create folder {}", path.display()),
+            Self::CreateDirectory { path } => {
+                format!("Create folder {}", crate::core::text::shown(path))
+            }
             Self::RemoveEmptyDirectory {
                 path, leftovers, ..
             } if !leftovers.is_empty() => {
                 format!(
                     "Move to Trash with {}: {}",
                     leftovers.join(", "),
-                    path.display()
+                    crate::core::text::shown(path)
                 )
             }
             Self::RemoveEmptyDirectory { path, .. } => {
-                format!("Remove only if empty: {}", path.display())
+                format!("Remove only if empty: {}", crate::core::text::shown(path))
             }
-            Self::FinishMove { files } => format!("Finish {} staged file move(s)", files.len()),
+            Self::FinishMove { files } => match files.len() {
+                1 => "Finish 1 staged file move".into(),
+                n => format!("Finish {n} staged file moves"),
+            },
             Self::Move { files } => files.first().map_or_else(
                 || "Move 0 files".into(),
                 |(_, destination)| {
                     format!(
-                        "Move {} file(s) to {}",
-                        files.len(),
-                        destination.parent().unwrap_or(Path::new("")).display()
+                        "Move {} to {}",
+                        files_text(files.len()),
+                        crate::core::text::shown(destination.parent().unwrap_or(Path::new("")))
                     )
                 },
             ),
@@ -133,8 +168,8 @@ impl Action {
                 || "Trash 0 files".into(),
                 |source| {
                     format!(
-                        "Trash {} file(s): {}",
-                        files.len(),
+                        "Trash {}: {}",
+                        files_text(files.len()),
                         source
                             .path
                             .file_name()
@@ -237,9 +272,13 @@ pub struct Report {
     pub remaining: Plan,
     /// Verified identity transitions; embedded edits retain their path ID.
     pub relocated: Vec<(MediaId, MediaId, Fingerprint)>,
-    /// Folders the review sent to the Trash with their leftovers that are
-    /// still there: the drive has no Trash, or the system refused.
-    pub kept_folders: Vec<PathBuf>,
+    /// Folders the review listed as removed, or as sent to the Trash with
+    /// their leftovers, that are still there, each with the reason.
+    pub kept_folders: Vec<KeptFolder>,
+    /// Trash groups a failure cut in two: the files that went are in
+    /// `completed`, the ones the Trash refused in `remaining`. Such a photo
+    /// is one change, and it is not done.
+    pub split_trash_groups: usize,
     /// Folders this run made, parents included: a destination that was not
     /// there before its first photo arrived, or a folder the plan creates.
     pub created_folders: Vec<PathBuf>,
@@ -247,6 +286,27 @@ pub struct Report {
     /// is found without scanning every earlier one. Rebuilt when stale.
     #[doc(hidden)]
     pub relocation_index: RelocationIndex,
+}
+/// A folder the review listed as going that is still there. Keeping it is
+/// the safe end of its step, not a failure: a retry would end the same way.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeptFolder {
+    pub path: PathBuf,
+    /// The review listed it as sent to the Trash with its leftovers, which
+    /// it counts as one change. An empty folder that is only removed is not
+    /// counted.
+    pub for_trash: bool,
+    pub why: Kept,
+}
+/// Why a folder the review listed as going is still there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kept {
+    /// The drive has no Trash, or the system refused the folder.
+    TrashRefused,
+    /// It now holds something the review did not list: the name of one such
+    /// file or folder, when it could be read.
+    Holds(Option<String>),
 }
 /// Positions in [`Report::relocated`] by current destination.
 #[derive(Debug, Default)]
@@ -315,6 +375,21 @@ impl Report {
             _ => {}
         }
         self.completed.push(action.clone());
+    }
+
+    /// The step of `action` is over with its folder still there.
+    fn keep(&mut self, action: &Action, why: Kept) {
+        if let Action::RemoveEmptyDirectory {
+            path, leftovers, ..
+        } = action
+        {
+            self.kept_folders.push(KeptFolder {
+                path: path.clone(),
+                for_trash: !leftovers.is_empty(),
+                why,
+            });
+        }
+        self.complete(action, &[]);
     }
 
     /// Verified final identities whose completed move destination is in this
@@ -530,10 +605,13 @@ fn trash_actions(
                         anyhow::ensure!(
                             source.fingerprint == *expected,
                             "File changed since discovery: {}",
-                            source.path.display()
+                            crate::core::text::shown(&source.path)
                         );
                     } else if MediaId::for_path(&source.path) == id {
-                        anyhow::bail!("File identity is unavailable: {}", source.path.display());
+                        anyhow::bail!(
+                            "File identity is unavailable: {}",
+                            crate::core::text::shown(&source.path)
+                        );
                     }
                     Ok(source)
                 })
@@ -692,7 +770,7 @@ pub fn decisions_plan_with_followers(
             anyhow::ensure!(
                 old == values,
                 "RAW/JPEG pair has conflicting sidecar edits: {}",
-                sidecar.display()
+                crate::core::text::shown(&sidecar)
             );
             continue;
         }
@@ -855,7 +933,7 @@ pub fn folders_emptied_by_trash(
 /// - a folder of `listed`, which the review named as left empty by the
 ///   Trash marks, with the leftovers it listed for it. It goes when it
 ///   holds nothing, or to the Trash when it holds only those leftovers.
-///   Anything else in it keeps it.
+///   Anything else in it keeps it, which the report then says.
 ///
 /// Every other folder stays, and so does the library's own. Each removal
 /// waits for the Trash actions that empty the folder: where one fails or is
@@ -906,20 +984,26 @@ pub fn remove_folders_emptied_by_trash(
     let mut going = HashSet::new();
     for (path, after) in folders {
         anyhow::ensure!(!cancelled(), "File planning cancelled");
-        let Some(left) = leftovers_after(path, &trashed, &going, catalog.system_moves_apple_double)
-        else {
-            continue;
-        };
         // Only what the review listed may go with the folder.
-        if left.iter().all(|name| allowed[path].contains(name)) {
-            going.insert(path.to_path_buf());
-            plan.actions.push(Action::RemoveEmptyDirectory {
-                path: path.to_path_buf(),
-                root: catalog.root.clone(),
-                after,
-                leftovers: left,
-            });
-        }
+        let left = leftovers_after(path, &trashed, &going, catalog.system_moves_apple_double)
+            .filter(|left| left.iter().all(|name| allowed[path].contains(name)));
+        let leftovers = match left {
+            Some(left) => {
+                going.insert(path.to_path_buf());
+                left
+            }
+            // Something else is in it now. A folder the review named still
+            // gets its step, with what was listed for it: applying it finds
+            // the folder kept, and the result says so.
+            None if listed.iter().any(|(folder, _)| folder == path) => allowed[path].to_vec(),
+            None => continue,
+        };
+        plan.actions.push(Action::RemoveEmptyDirectory {
+            path: path.to_path_buf(),
+            root: catalog.root.clone(),
+            after,
+            leftovers,
+        });
     }
     Ok(())
 }
@@ -1293,13 +1377,22 @@ fn add_directory_actions(
             .next()
             .is_some_and(|folder| folder.starts_with(path))
     };
+    // A folder the plan keeps or makes is there afterwards, and so is
+    // every folder above it: none of those is left empty, whatever is in
+    // it now. One made by this plan is not on disk yet to tell.
+    let keeps = |path: &Path| {
+        required
+            .range::<Path, _>((std::ops::Bound::Included(path), std::ops::Bound::Unbounded))
+            .next()
+            .is_some_and(|folder| folder.starts_with(path))
+    };
     let mut cleanup = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
     let mut candidate = |folder: &Path, dependency: &Path| {
         for path in folder.ancestors() {
             if path == catalog.root || !path.starts_with(&catalog.root) {
                 break;
             }
-            if !required.contains(path) && !receives(path) {
+            if !keeps(path) && !receives(path) {
                 cleanup
                     .entry(path.into())
                     .or_default()
@@ -1338,7 +1431,7 @@ fn add_directory_actions(
             anyhow::ensure!(
                 path.is_dir(),
                 "A file occupies folder destination {}",
-                path.display()
+                crate::core::text::shown(path)
             );
         }
         if (!path.exists() && !known.contains(path.as_path())) || moved_targets.contains(path) {
@@ -1443,13 +1536,29 @@ fn holds_only_listed(folder: &Path, listed: &[String]) -> bool {
     })
 }
 
-/// A reviewed folder with leftovers that could not go to the Trash. It
-/// stays as it is; the result says so instead of failing the whole apply.
+/// The name of something in `folder` that the review did not list for it:
+/// a file made after the review, or a folder inside that stayed.
+fn unlisted_in(folder: &Path, listed: &[String]) -> Option<String> {
+    let mut names: Vec<String> = fs::read_dir(folder)
+        .ok()?
+        .filter_map(|entry| Some(entry.ok()?.file_name().to_string_lossy().into_owned()))
+        .filter(|name| !listed.contains(name))
+        .collect();
+    names.sort();
+    names.into_iter().next()
+}
+
+/// A reviewed folder that stays: its leftovers could not go to the Trash,
+/// or it holds something the review did not list. It stays as it is; the
+/// result says so instead of failing the whole apply.
 #[derive(Debug)]
-struct FolderKept;
+struct FolderKept(Kept);
 impl std::fmt::Display for FolderKept {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Could not move the folder to the Trash")
+        f.write_str(match self.0 {
+            Kept::TrashRefused => "Could not move the folder to the Trash",
+            Kept::Holds(_) => "The folder holds something the review did not list",
+        })
     }
 }
 impl std::error::Error for FolderKept {}
@@ -1466,7 +1575,7 @@ fn normalized_destination(path: &Path) -> Result<PathBuf> {
             anyhow::ensure!(
                 ancestor.is_dir(),
                 "A file occupies folder destination {}",
-                ancestor.display()
+                crate::core::text::shown(ancestor)
             );
             let suffix = path.strip_prefix(ancestor)?;
             let canonical = ancestor.canonicalize()?;
@@ -1491,7 +1600,7 @@ pub(crate) fn reject_symlink_components(path: &Path) -> Result<()> {
             anyhow::ensure!(
                 !meta.file_type().is_symlink(),
                 "Symlink destination is not allowed: {}",
-                part.display()
+                crate::core::text::shown(part)
             );
         }
     }
@@ -1674,12 +1783,14 @@ fn execute_logged(
             }
             Err(error) if error.is::<FolderKept>() => {
                 // The tidy step is over either way: the folder stays, a retry
-                // would only fail the same way. The result names it.
-                if let Action::RemoveEmptyDirectory { path, .. } = action {
-                    report.kept_folders.push(path.clone());
-                }
-                report.complete(action, &[]);
-                write_record(journal, "completed", i, &[], None)?;
+                // would only end the same way. The result names it, and so
+                // does the journal, which says why it is still there.
+                let why = match error.downcast::<FolderKept>() {
+                    Ok(FolderKept(why)) => why,
+                    Err(_) => Kept::Holds(None),
+                };
+                write_kept(journal, i, &why)?;
+                report.keep(action, why);
             }
             Err(error) if error.is::<MoveCancelled>() => {
                 report.cancelled = true;
@@ -1744,6 +1855,7 @@ fn execute_logged(
                         if let Some((done, rest)) = split_trash(action, trashed) {
                             report.complete(&done, &[]);
                             report.remaining.actions.push(rest);
+                            report.split_trash_groups += 1;
                         } else {
                             report.remaining.actions.push(action.clone());
                         }
@@ -1839,6 +1951,24 @@ fn write_record(
         },
     )
 }
+/// A folder's step that ended with the folder kept: completed, so nothing
+/// retries it, with the reason beside it.
+fn write_kept(journal: &mut File, index: usize, kept: &Kept) -> Result<()> {
+    #[derive(Serialize)]
+    struct Record<'a> {
+        status: &'a str,
+        index: usize,
+        kept: &'a Kept,
+    }
+    write_line(
+        journal,
+        &Record {
+            status: "completed",
+            index,
+            kept,
+        },
+    )
+}
 fn write_failure(journal: &mut File, index: usize, trashed: usize, error: &str) -> Result<()> {
     if trashed == 0 {
         return write_record(journal, "failed", index, &[], Some(error));
@@ -1922,17 +2052,32 @@ fn apply(
             match fs::remove_dir(path) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) if e.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
-                    // Only what the review listed goes to the Trash with the
-                    // folder. Anything else in it keeps the folder, as before.
-                    if !leftovers.is_empty() && holds_only_listed(path, leftovers) {
-                        move_to_trash(path).map_err(|error| {
-                            tracing::warn!(%error, "could not trash a folder left with only system files");
-                            anyhow::Error::new(FolderKept)
-                        })?;
-                    }
+                // Only what the review listed goes to the Trash with the
+                // folder. Whatever the system gave as its reason: Windows
+                // refuses a folder marked read-only, as one with a
+                // "desktop.ini" usually is, with "access denied" and not
+                // with "not empty".
+                Err(_) if !leftovers.is_empty() && holds_only_listed(path, leftovers) => {
+                    move_to_trash(path).map_err(|error| {
+                        tracing::warn!(%error, "could not trash a folder left with only system files");
+                        anyhow::Error::new(FolderKept(Kept::TrashRefused))
+                    })?;
                 }
-                Err(e) => return Err(e.into()),
+                // Anything else in it keeps the folder, and the result says
+                // what: the review listed it as going. Again whatever the
+                // system gave as its reason.
+                Err(e) => {
+                    let holds = unlisted_in(path, leftovers);
+                    if holds.is_none() && e.kind() != std::io::ErrorKind::DirectoryNotEmpty {
+                        return Err(e.into());
+                    }
+                    tracing::warn!(
+                        folder = %path.display(),
+                        holds = holds.as_deref().unwrap_or("something that could not be read"),
+                        "kept a folder that now holds something the review did not list"
+                    );
+                    return Err(anyhow::Error::new(FolderKept(Kept::Holds(holds))));
+                }
             }
         }
         Action::FinishMove { files } => {
@@ -1952,7 +2097,7 @@ fn apply(
                 anyhow::ensure!(
                     Fingerprint::read(destination)? == staged,
                     "Staged move destination changed: {}",
-                    destination.display()
+                    crate::core::text::shown(destination)
                 );
                 fs::remove_file(&source.path)?;
             }
@@ -1963,18 +2108,14 @@ fn apply(
                 source.verify()?;
             }
             for (trashed, source) in files.iter().enumerate() {
-                move_to_trash(&source.path)
-                    .with_context(|| {
-                        format!("Could not move {} to OS Trash", source.path.display())
-                    })
-                    .map_err(|error| match trashed {
-                        0 => error,
-                        _ => PartialTrash {
-                            trashed,
-                            detail: format!("{error:#}"),
-                        }
-                        .into(),
-                    })?;
+                move_to_trash(&source.path).map_err(|error| match trashed {
+                    0 => error,
+                    _ => PartialTrash {
+                        trashed,
+                        detail: format!("{error:#}"),
+                    }
+                    .into(),
+                })?;
             }
         }
         Action::Metadata {
@@ -2043,7 +2184,11 @@ fn apply_move(
         check_move_cancelled(cancelled)?;
         s.verify()?;
         reject_symlink_components(d)?;
-        anyhow::ensure!(!d.exists(), "Destination already exists: {}", d.display());
+        anyhow::ensure!(
+            !d.exists(),
+            "Destination already exists: {}",
+            crate::core::text::shown(d)
+        );
     }
     // Members whose destination exists beside the still-present source.
     let mut staged: Vec<usize> = Vec::new();
@@ -2055,7 +2200,7 @@ fn apply_move(
         for &member in staged {
             let d = &files[member].1;
             if let Err(cleanup) = fs::remove_file(d) {
-                cleanup_errors.push(format!("{}: {cleanup}", d.display()));
+                cleanup_errors.push(format!("{}: {cleanup}", crate::core::text::shown(d)));
             }
         }
         if cleanup_errors.is_empty() {
@@ -2108,7 +2253,7 @@ fn apply_move(
         };
         let moved = verified
             .and_then(|_| staging.rename(&s.path, d))
-            .with_context(|| format!("Could not move {}", s.path.display()));
+            .with_context(|| format!("Could not move {}", crate::core::text::shown(&s.path)));
         match moved {
             Ok(()) => {
                 states[member] = State::Completed;
@@ -2160,7 +2305,7 @@ fn apply_move(
                 states,
                 detail: format!(
                     "Copied safely but could not remove source {}: {error}",
-                    s.path.display()
+                    crate::core::text::shown(&s.path)
                 ),
             }
             .into());
@@ -2192,7 +2337,7 @@ fn verify_staged_move(source: &Source, destination: &Path) -> Result<Fingerprint
     anyhow::ensure!(
         staged == Fingerprint::read(&source.path)? && staged.same_file(&source.fingerprint),
         "Staged move destination changed: {}",
-        destination.display()
+        crate::core::text::shown(destination)
     );
     Ok(staged)
 }
@@ -2216,7 +2361,7 @@ fn verify_finishable_move(
         staged.bytes == source.fingerprint.bytes
             && content_hash(&source.path, cancelled)? == content_hash(destination, cancelled)?,
         "Staged move destination changed: {}",
-        destination.display()
+        crate::core::text::shown(destination)
     );
     Ok(staged)
 }
@@ -2711,7 +2856,10 @@ fn copied_times(metadata: &fs::Metadata) -> std::io::Result<(fs::FileTimes, fs::
 fn copy_contents_once(source: &Path, dest: &Path, cancelled: &dyn Fn() -> bool) -> Result<()> {
     check_move_cancelled(cancelled)?;
     match fs::symlink_metadata(dest) {
-        Ok(_) => anyhow::bail!("Destination already exists: {}", dest.display()),
+        Ok(_) => anyhow::bail!(
+            "Destination already exists: {}",
+            crate::core::text::shown(dest)
+        ),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
@@ -2765,7 +2913,7 @@ fn copy_contents_once(source: &Path, dest: &Path, cancelled: &dyn Fn() -> bool) 
         if let Err(cleanup) = fs::remove_file(&temporary) {
             anyhow::bail!(
                 "{error}; could not remove partial destination {}: {cleanup}",
-                temporary.display()
+                crate::core::text::shown(&temporary)
             );
         }
         return Err(error);
@@ -2777,7 +2925,12 @@ fn copy_contents_once(source: &Path, dest: &Path, cancelled: &dyn Fn() -> bool) 
 /// only if free, then the temporary name goes), else a reserved rename.
 fn place_temporary(temporary: &Path, dest: &Path) -> Result<()> {
     let exists = |error: &std::io::Error| error.kind() == std::io::ErrorKind::AlreadyExists;
-    let taken = || anyhow::anyhow!("Destination already exists: {}", dest.display());
+    let taken = || {
+        anyhow::anyhow!(
+            "Destination already exists: {}",
+            crate::core::text::shown(dest)
+        )
+    };
     match exclusive_rename(temporary, dest) {
         Ok(()) => return Ok(()),
         Err(error) if exists(&error) => return Err(taken()),
@@ -2873,10 +3026,111 @@ fn move_to_stand_in(path: &Path) -> Option<Result<()>> {
         Ok(fs::rename(path, to)?)
     })())
 }
+/// The system's own name for where deleted files go.
+const TRASH_NAME: &str = if cfg!(windows) {
+    "Recycle Bin"
+} else {
+    "Trash"
+};
+
+/// The system would not take a file or folder into its Trash. Its text is
+/// what the failure list shows: a first line that names the file and the
+/// folder it is in and says what may be wrong, without claiming to know.
+/// Where that folder is and what the system itself said follow on lines of
+/// their own, which the error window keeps under Details.
+#[derive(Debug)]
+struct TrashRefused {
+    lead: String,
+    folder: Option<String>,
+    system: String,
+}
+impl TrashRefused {
+    fn new(path: &Path, system: &str) -> Self {
+        Self {
+            lead: Self::lead(path),
+            folder: Self::folder(path).map(super::text::shown),
+            system: system.to_owned(),
+        }
+    }
+    fn folder(path: &Path) -> Option<&Path> {
+        path.parent()
+            .filter(|folder| !folder.as_os_str().is_empty())
+    }
+    /// The first line for `path`. It names the folder by its own name
+    /// only, so that a long path never pushes it out of the headline; two
+    /// files of one name in different folders still read differently.
+    fn lead(path: &Path) -> String {
+        let name = path.file_name().unwrap_or(path.as_os_str());
+        // A drive has no name of its own: it is shown as it is.
+        let folder = Self::folder(path).map(|folder| match folder.file_name() {
+            Some(name) => name.to_string_lossy().into_owned(),
+            None => super::text::shown(folder),
+        });
+        trash_refusal(
+            &name.to_string_lossy(),
+            folder.as_deref(),
+            TRASH_NAME,
+            cfg!(windows),
+        )
+    }
+}
+/// What the system said, in its own words where the error carries them:
+/// "“locked.jpg” couldn’t be moved to the trash because you don’t have
+/// permission to access it." Not the error's debug form, which wraps them
+/// in a type name and escapes every quote.
+fn system_words(error: &trash::Error) -> String {
+    match error {
+        trash::Error::Unknown { description } | trash::Error::Os { description, .. } => {
+            // macOS: "While deleting '"/path"', `trashItemAtURL` failed: ...".
+            // The path is shown on its own line already.
+            match description.split_once("`trashItemAtURL` failed: ") {
+                Some((_, words)) if !words.trim().is_empty() => words.trim().to_owned(),
+                _ => description.trim().to_owned(),
+            }
+        }
+        other => other.to_string(),
+    }
+}
+/// Windows refuses a file that any program holds open; elsewhere an open
+/// file goes to the Trash all the same, and a locked one does not. A drive
+/// without a Trash refuses on every system. Which it was is not known, so
+/// the sentence only says what to look at.
+fn trash_refusal(
+    name: &str,
+    folder: Option<&str>,
+    trash: &str,
+    open_files_are_held: bool,
+) -> String {
+    let place = folder.map_or_else(String::new, |folder| format!(" in “{folder}”"));
+    let cause = if open_files_are_held {
+        "Another program may have it open"
+    } else {
+        "It may be locked"
+    };
+    format!(
+        "“{name}”{place} could not be sent to the {trash}. {cause}, or this drive may have no {trash}."
+    )
+}
+impl std::fmt::Display for TrashRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.lead)?;
+        if let Some(folder) = &self.folder {
+            write!(f, "\n  Folder: {folder}")?;
+        }
+        write!(f, "\n  System message: {}", self.system)
+    }
+}
+impl std::error::Error for TrashRefused {}
+
 fn move_to_trash(path: &Path) -> Result<()> {
+    // The log keeps the error as the system gave it; the list shows `said`.
+    let refused = |raw: String, said: Option<String>| {
+        tracing::warn!(path = %path.display(), error = %raw, "the system refused to move this to its Trash");
+        anyhow::Error::new(TrashRefused::new(path, said.as_deref().unwrap_or(&raw)))
+    };
     #[cfg(any(test, feature = "test-isolation"))]
     if let Some(moved) = move_to_stand_in(path) {
-        return moved;
+        return moved.map_err(|error| refused(format!("{error:#}"), None));
     }
     // trash 5.2.9 percent-encodes non-UTF-8 bytes before fileURLWithPath. That
     // can name a different literal %-encoded sibling. Refuse rather than target
@@ -2886,8 +3140,9 @@ fn move_to_trash(path: &Path) -> Result<()> {
         path.to_str().is_some(),
         "macOS Trash cannot safely represent this file name; rename it to valid Unicode before retrying"
     );
-    trash_context().delete(path)?;
-    Ok(())
+    trash_context()
+        .delete(path)
+        .map_err(|error| refused(error.to_string(), Some(system_words(&error))))
 }
 #[cfg(all(test, target_os = "macos"))]
 mod macos_trash_tests {
@@ -2915,5 +3170,19 @@ mod macos_trash_tests {
                 .contains("safely represent")
         );
         assert_eq!(fs::read(&encoded).unwrap(), b"unrelated sibling");
+        // A refusal is shown in the system's own words, not as the error's
+        // debug form with its type name, the path again and escaped quotes.
+        let refusal = trash::Error::Unknown {
+            description: "While deleting '\"/Photos/Trip/locked.jpg\"', `trashItemAtURL` failed: “locked.jpg” couldn’t be moved to the trash because you don’t have permission to access it.".into(),
+        };
+        assert_eq!(
+            system_words(&refusal),
+            "“locked.jpg” couldn’t be moved to the trash because you don’t have permission to access it."
+        );
+        let other = trash::Error::Os {
+            code: 32,
+            description: "The process cannot access the file.".into(),
+        };
+        assert_eq!(system_words(&other), "The process cannot access the file.");
     }
 }

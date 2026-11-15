@@ -609,3 +609,64 @@ fn a_folder_the_moves_made_is_removed_once_the_trash_empties_it() {
     assert!(!c.root.join("Old").exists());
     assert!(c.root.is_dir());
 }
+
+/// The system can refuse to take a file into its Trash: Windows does for one
+/// another program holds open, any system for a drive that has none. The
+/// failure list says so in a plain sentence that names the file and the
+/// folder it is in, by that folder's own name, and does not claim to know
+/// the cause; where the folder is and what the system itself said follow on
+/// lines of their own. Nothing is lost: the files stay and the group waits
+/// for Retry.
+#[test]
+fn a_file_the_trash_refuses_is_named_with_its_folder_and_the_systems_own_words() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("library");
+    // The stand-in Trash cannot be made: a file is in its place.
+    let blocked = dir.path().join("trash");
+    fs::write(&blocked, b"").unwrap();
+    operations::trash_stand_in(&root, &blocked);
+    let (trash, cause) = if cfg!(windows) {
+        ("Recycle Bin", "Another program may have it open")
+    } else {
+        ("Trash", "It may be locked")
+    };
+    let mut said = Vec::new();
+    // The same name in two folders must not read the same in the list.
+    for folder in ["Trip", "Home"] {
+        let photo = root.join(folder).join("held open.jpg");
+        fs::create_dir_all(photo.parent().unwrap()).unwrap();
+        fs::write(&photo, b"photo").unwrap();
+        let plan = operations::Plan {
+            actions: vec![Action::Trash {
+                files: vec![operations::Source::capture(photo.clone()).unwrap()],
+            }],
+            description: "Review Trash".into(),
+            ..Default::default()
+        };
+        let journal = tempfile::tempdir().unwrap();
+        let report = operations::execute(&plan, journal.path(), || false, |_, _| {}).unwrap();
+        let [failure] = &report.errors[..] else {
+            panic!("{:?}", report.errors);
+        };
+        let (lead, rest) = failure.split_once("\n  Folder: ").expect(failure);
+        let (place, system) = rest.split_once("\n  System message: ").expect(failure);
+        // However long the path, the first line names the folder itself.
+        assert_eq!(
+            lead,
+            format!(
+                "“held open.jpg” in “{folder}” could not be sent to the {trash}. {cause}, or this drive may have no {trash}."
+            )
+        );
+        // Where it is follows, as it is shown: never with Windows' "\\?\"
+        // in front.
+        assert_eq!(place, photosort::core::text::shown(&root.join(folder)));
+        assert!(
+            !system.is_empty() && !lead.contains("Retry will"),
+            "{failure}"
+        );
+        assert!(photo.is_file());
+        assert_eq!(report.remaining.actions.len(), 1);
+        said.push(lead.to_owned());
+    }
+    assert_ne!(said[0], said[1]);
+}
