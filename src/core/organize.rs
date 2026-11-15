@@ -197,6 +197,22 @@ impl Selection {
             .collect()
     }
 }
+/// The folders that hold a file, at any depth. What a file manager keeps in
+/// a folder for itself does not make the folder any less empty: Finder and
+/// Explorer show it as empty, and those files never move. Such a folder is
+/// carried along as an empty one is, made again at its new place.
+pub(crate) fn occupied_folders(catalog: &super::catalog::Catalog) -> HashSet<&std::path::Path> {
+    catalog
+        .inventory
+        .iter()
+        .filter(|path| {
+            !path.file_name().is_some_and(|name| {
+                super::catalog::stays_behind(name, catalog.system_moves_apple_double)
+            })
+        })
+        .flat_map(|path| path.parent().into_iter().flat_map(|p| p.ancestors()))
+        .collect()
+}
 /// Directory intent travels with the same file plan; no UI filesystem actions.
 #[derive(Clone, Debug, Default)]
 pub struct DirectoryEdits {
@@ -246,11 +262,7 @@ impl Draft {
         labels: HashMap<MediaId, String>,
     ) -> Self {
         let mut draft = Self::new(labels);
-        let occupied: HashSet<_> = catalog
-            .inventory
-            .iter()
-            .flat_map(|path| path.parent().into_iter().flat_map(|p| p.ancestors()))
-            .collect();
+        let occupied = occupied_folders(catalog);
         for path in &catalog.directories {
             // A folder whose name is not valid Unicode has no exact label; it
             // stays out of the editable layout and is never created or moved.
@@ -310,12 +322,17 @@ impl Draft {
     /// with its accents in the other form (composed or decomposed). Their
     /// files are renamed with the folder, not left as they are.
     pub fn respelled_folders(&self) -> impl Iterator<Item = &str> {
+        self.respellings().map(|(_, target)| target)
+    }
+    /// The same folders, each as it is spelled now and as the draft spells
+    /// it. The plan renames such a folder as one, with everything in it.
+    pub fn respellings(&self) -> impl Iterator<Item = (&str, &str)> {
         self.directory_origins
             .iter()
             .filter(|(source, target)| {
                 source != target && text::folded(source) == text::folded(target)
             })
-            .map(|(_, target)| target.as_str())
+            .map(|(source, target)| (source.as_str(), target.as_str()))
     }
     fn include_parents(&mut self, path: &str) {
         self.folders.insert(path.into());
