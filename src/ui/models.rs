@@ -236,9 +236,9 @@ impl PhotoSortApp {
                         if let Some((path, valid)) = &snapshot.orientation_override {
                             ui.label(
                                 RichText::new(if *valid {
-                                    format!("Orientation override in use: {}", path.display())
+                                    format!("Orientation override in use: {}", crate::core::text::shown(path))
                                 } else {
-                                    format!("Orientation override unavailable: {} · correct or remove PHOTOSORT_ROTATION_MODEL", path.display())
+                                    format!("Orientation override unavailable: {} · correct or remove PHOTOSORT_ROTATION_MODEL", crate::core::text::shown(path))
                                 })
                                 .small()
                                 .color(if *valid { MUTED } else { RED }),
@@ -407,10 +407,13 @@ impl PhotoSortApp {
                         let pill = status_pill(ui, &text, color);
                         match &row.health {
                             Health::Verified(path) => {
-                                pill.on_hover_text(path.display().to_string());
+                                pill.on_hover_text(crate::core::text::shown(path));
                             }
                             Health::Invalid(path, why) => {
-                                pill.on_hover_text(format!("{why}\n{}", path.display()));
+                                pill.on_hover_text(format!(
+                                    "{why}\n{}",
+                                    crate::core::text::shown(path)
+                                ));
                             }
                             Health::Missing => {}
                         }
@@ -484,7 +487,7 @@ impl PhotoSortApp {
                 &format!(
                     "{:.1} MB · {}",
                     copy.bytes() as f64 / 1e6,
-                    copy.path().display()
+                    crate::core::text::shown(copy.path())
                 ),
             );
             let editable = !state.running && !self.busy && self.analysis_run.is_none();
@@ -571,7 +574,7 @@ impl PhotoSortApp {
                         .color(GREEN)
                         .small(),
                 )
-                .on_hover_text(path.display().to_string());
+                .on_hover_text(crate::core::text::shown(path));
             }
             None => match runtime::info(Package::Cpu) {
                 Some(info) => {
@@ -632,7 +635,7 @@ impl PhotoSortApp {
                     .color(GREEN)
                     .small(),
                 )
-                .on_hover_text(path.display().to_string());
+                .on_hover_text(crate::core::text::shown(path));
                 ui.add_enabled_ui(editable, |ui| {
                     if ui.small_button("Remove").clicked() {
                         self.start_model_operation(Work::RemoveRuntime(Package::Cuda));
@@ -692,7 +695,7 @@ fn manual_runtime_help(ui: &mut egui::Ui) {
         .on_hover_text(format!(
             "Copy {name} from ONNX Runtime {} into {}, or set ORT_DYLIB_PATH to its full path, then check again.",
             crate::core::model_assets::runtime::ORT_VERSION,
-            folder.display()
+            crate::core::text::shown(&folder)
         ));
 }
 

@@ -298,10 +298,10 @@ fn failed_or_stale_embedded_writes_preserve_sources_and_retry_plan() {
     }));
 }
 #[test]
-fn image_actor_reuses_indexed_metadata_while_planning_embedded_edits() {
-    use photosort::core::jobs::{Event, ImageWork, Runtime};
+fn the_file_worker_plans_embedded_edits_and_the_image_actor_reads_nothing_again() {
+    use photosort::core::jobs::{Event, ImageWork, IoWork, Runtime};
     use std::{
-        sync::Arc,
+        sync::{Arc, atomic::AtomicBool},
         time::{Duration, Instant},
     };
     let temp = tempfile::tempdir().unwrap();
@@ -328,7 +328,8 @@ fn image_actor_reuses_indexed_metadata_while_planning_embedded_edits() {
             Err(e) => panic!("{e}"),
         }
     }
-    rt.image(ImageWork::PlanDecisions {
+    // The file worker plans it, from the file itself.
+    rt.io(IoWork::PlanDecisions {
         catalog: c,
         decisions: HashMap::from([(
             media.id,
@@ -339,7 +340,10 @@ fn image_actor_reuses_indexed_metadata_while_planning_embedded_edits() {
         )]),
         companions: false,
         followers: None,
+        created: Vec::new(),
+        tidy: Vec::new(),
         policy: WritePolicy::EmbedWhenSupported,
+        cancelled: Arc::new(AtomicBool::new(false)),
     })
     .unwrap();
     let deadline = Instant::now() + crate::test_support::worker_patience();

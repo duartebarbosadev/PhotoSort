@@ -89,6 +89,7 @@ impl PhotoSortApp {
             .or(self.plan.as_ref())
             .is_some_and(|plan| plan.output_root.is_some());
         self.retry_plan = None;
+        self.unfinished.set(None);
         self.review_after_moves = None;
         self.apply_planned = false;
         self.set_review_plan(None);
@@ -116,6 +117,8 @@ impl PhotoSortApp {
             return;
         }
         if let Some(plan) = self.plan.take() {
+            // A new Apply: nothing of an earlier one counts toward it.
+            self.applied_before = 0;
             self.runtime.cancel_analysis();
             self.analysis_run = None;
             let Some(_) = &self.root else {
@@ -284,7 +287,12 @@ impl PhotoSortApp {
             modal(egui::Id::new("pending_changes")).show(ctx, |ui| {
                 ui.set_max_width(460.0);
                 ui.heading("Resolve staged changes");
-                ui.label(format!("{} photos have staged ratings, rotations or Trash marks.",self.staged_choice_count()));
+                let staged = self.staged_choice_tally();
+                ui.label(format!(
+                    "{} {} staged ratings, rotations or Trash marks.",
+                    staged.text(),
+                    if staged.total() == 1 { "has" } else { "have" }
+                ));
                 ui.label("Discard clears these staged choices. Your files remain unchanged until you apply them on the Review step.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancel").clicked() { action = 1; }
@@ -391,6 +399,40 @@ impl PhotoSortApp {
             }
         }
     }
+    /// Organize's changes as the plan made for leaving lists them, once it
+    /// is on hand: with the folders that go to the Trash with their
+    /// leftover files, which only reading the disk tells. The Review badge
+    /// counts them the same way while that plan waits for an answer.
+    pub(super) fn departure_listed_count(&self) -> Option<usize> {
+        (self.organize_departure.is_some()
+            && self.plan.is_some()
+            && !self.plan_rows.editable
+            && self.retry_plan.is_none())
+        .then(|| self.plan_rows.total())
+    }
+    /// How many changes wait, in the Review badge's own numbers: Organize's
+    /// changes, and the badge's total when other staged choices add to it.
+    fn waiting_changes_text(&self) -> String {
+        let all = self.staged_change_count();
+        let Some(folders) = self.departure_listed_count() else {
+            return match all {
+                0 => "Folder changes are waiting to be applied.".to_owned(),
+                1 => "1 change is waiting to be applied.".to_owned(),
+                n => format!("{n} changes are waiting to be applied."),
+            };
+        };
+        let mut text = match folders {
+            0 => "Folder changes are waiting to be applied.".to_owned(),
+            1 => "1 change from Organize is waiting to be applied.".to_owned(),
+            n => format!("{n} changes from Organize are waiting to be applied."),
+        };
+        if folders > 0 && all != folders {
+            text.push_str(&format!(
+                " With your Trash marks, ratings and rotations, Review lists {all}."
+            ));
+        }
+        text
+    }
     pub(super) fn organize_departure_dialog(&mut self, ctx: &egui::Context) {
         if self.organize_departure.is_none() || self.busy {
             return;
@@ -399,8 +441,8 @@ impl PhotoSortApp {
         modal(egui::Id::new("pending_organize_changes")).show(ctx, |ui| {
             ui.set_max_width(460.0);
             ui.heading("Resolve folder changes");
-            if let Some(plan) = &self.plan {
-                ui.label(format!("{} file and folder operations are waiting to be applied.", plan.actions.len()));
+            if self.plan.is_some() {
+                ui.label(self.waiting_changes_text());
             }
             if let Some(error) = &self.error { ui.colored_label(RED, error); }
             if !self.organize_metadata_ready() { self.metadata_status(ui); }

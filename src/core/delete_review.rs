@@ -197,6 +197,17 @@ impl Review {
     pub fn keeps(decisions: &HashMap<MediaId, Decision>, candidate: MediaId) -> bool {
         kept(decisions, candidate)
     }
+    /// The photos kept on a card that has a photo marked for Trash: each
+    /// was chosen over that one, by the suggestion or by hand.
+    pub fn chosen(&self, decisions: &HashMap<MediaId, Decision>) -> HashSet<MediaId> {
+        self.entries
+            .iter()
+            .map(Entry::candidates)
+            .filter(|ids| ids.iter().any(|id| !kept(decisions, *id)))
+            .flatten()
+            .filter(|id| kept(decisions, *id))
+            .collect()
+    }
     /// Whether a card's decisions differ from its suggestion.
     pub fn changed(&self, id: MediaId, decisions: &HashMap<MediaId, Decision>) -> bool {
         self.entry(id).is_some_and(|e| {

@@ -55,7 +55,7 @@ impl DirectoryRename {
         rename_exclusive(&self.from, &self.to).with_context(|| {
             format!(
                 "Cannot rename {} without overwriting a destination",
-                self.from.display()
+                crate::core::text::shown(&self.from)
             )
         })
     }
@@ -237,7 +237,7 @@ pub(super) fn apply_file(
     anyhow::ensure!(
         !names.contains(to, cancelled)?,
         "Destination already exists: {}",
-        to.display()
+        crate::core::text::shown(to)
     );
     anyhow::ensure!(!cancelled(), "File rename cancelled");
     // The OS primitive rejects a destination created after our preflight. No
@@ -246,7 +246,7 @@ pub(super) fn apply_file(
     rename_exclusive(&source.path, to).with_context(|| {
         format!(
             "Cannot rename {} without overwriting a destination",
-            source.path.display()
+            crate::core::text::shown(&source.path)
         )
     })?;
     let entries = names

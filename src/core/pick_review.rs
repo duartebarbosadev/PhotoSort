@@ -135,6 +135,16 @@ impl Review {
     pub fn keeps(decisions: &HashMap<MediaId, Decision>, id: MediaId) -> bool {
         kept(decisions, id)
     }
+    /// The photos kept in a group that has a photo marked for Trash: each
+    /// was chosen over that one, by the suggestion or by hand.
+    pub fn chosen(&self, decisions: &HashMap<MediaId, Decision>) -> HashSet<MediaId> {
+        self.clusters
+            .iter()
+            .filter(|c| c.ordered.iter().any(|id| !kept(decisions, *id)))
+            .flat_map(|c| c.ordered.iter().copied())
+            .filter(|id| kept(decisions, *id))
+            .collect()
+    }
     /// Whether a group's decisions differ from its suggestion.
     pub fn changed(&self, group: usize, decisions: &HashMap<MediaId, Decision>) -> bool {
         self.clusters

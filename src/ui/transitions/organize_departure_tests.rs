@@ -182,6 +182,92 @@ fn choices_staged_after_the_review_lists_are_never_applied_with_it() {
     assert_eq!(trash(&app), 1);
     assert!(app.review_outcome.as_ref().is_some_and(|o| o.done));
 }
+/// A photo marked for Trash that Organize also moves is moved first, then
+/// trashed from its new folder. A folder this Apply made only for such
+/// photos is not left behind empty. A folder that was there before and that
+/// the moves and the marks empty together is named by the list first, then
+/// removed too.
+#[test]
+fn a_folder_made_only_for_photos_that_go_to_the_trash_is_not_left_behind() {
+    let (dir, mut app) = fixture();
+    let root = dir.path().canonicalize().unwrap();
+    let trash = tempfile::tempdir().unwrap();
+    crate::core::operations::trash_stand_in(&root, trash.path());
+    for name in ["c.jpg", "d.jpg"] {
+        std::fs::write(root.join("Before").join(name), name).unwrap();
+    }
+    let catalog = Catalog::scan(&root, || false, |_| {}).unwrap();
+    app.media = catalog.media.clone();
+    app.catalog = Some(Arc::new(catalog));
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+    let id = |name: &str| MediaId::for_path(&root.join(name));
+    let (a, c, d) = (id("Before/a.jpg"), id("Before/c.jpg"), id("Before/d.jpg"));
+    // "Gone/2024" gets only a photo marked for Trash, "Kept" one that stays.
+    // The third is marked where it is, in a folder that was already there.
+    app.step = Step::Organize;
+    app.organize_drafts.insert(
+        app.group_mode,
+        Draft::new(HashMap::from([
+            (a, "Gone/2024".to_owned()),
+            (c, "Kept".to_owned()),
+            (d, "Before".to_owned()),
+        ])),
+    );
+    for marked in [a, d] {
+        app.decisions.entry(marked).or_default().rejected = true;
+    }
+    app.changed_items([a, d]);
+    app.review_changes();
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    // The list counts it once, under Trash, and the plan still moves it.
+    let plan = app.plan.as_ref().unwrap();
+    assert_eq!(
+        app.review_sentence(plan, &app.plan_rows),
+        "You're about to move 1 photo into the folder \"Kept\" and send 2 photos to the Trash."
+    );
+    assert_eq!(app.plan_rows.apply_label(), "Move 1 and trash 2");
+    assert!(plan.actions.iter().any(|action| matches!(
+        action,
+        Action::Move { files } if files[0].1 == root.join("Gone/2024/a.jpg")
+    )));
+    // "Before" still holds the photo marked where it is once the moves are
+    // done, so the moves do not remove it. The Trash marks finish emptying
+    // it, and the list names it before anything is applied.
+    assert!(!plan.actions.iter().any(|action| matches!(
+        action,
+        Action::RemoveEmptyDirectory { path, .. } if *path == root.join("Before")
+    )));
+    assert_eq!(
+        app.plan_rows.emptied(),
+        [(root.join("Before"), Vec::<String>::new())]
+    );
+    app.apply_review();
+    settle(&mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.retry_plan.is_none() && !app.review_applying());
+    assert_eq!(
+        app.review_outcome.as_ref().map(|o| o.sentence()).as_deref(),
+        Some("Moved 1 photo and sent 2 photos to the Trash.")
+    );
+    // Moved first, so both went to the Trash from where the list said.
+    let trashed = |name: &str| trash.path().join(name).is_file();
+    assert!(trashed("a.jpg") && trashed("d.jpg"));
+    assert!(root.join("Kept/c.jpg").is_file());
+    assert!(
+        !root.join("Gone").exists(),
+        "made by this Apply and empty once its photo is in the Trash"
+    );
+    // As the list said: emptied by the moves and the marks together.
+    assert!(!root.join("Before").exists());
+    assert!(root.is_dir());
+    assert!(app.decisions.values().all(Decision::is_empty));
+}
 /// The Review step's Apply finishes in the folder it listed: opening another
 /// folder waits for it, and a folder opened anyway never gets its choices.
 #[test]
@@ -215,6 +301,8 @@ fn the_review_steps_apply_never_applies_choices_in_another_folder() {
     app.apply_review();
     until_moves_applied(&mut app);
     assert!(app.scanning && app.review_applying());
+    // The photo that moved is kept for the result of the whole Apply.
+    assert_eq!(app.applied_before, 1);
     app.open(other_root.clone());
     assert!(app.departure.is_none() && app.review_applying());
     assert!(app.root.as_ref().is_some_and(|r| r.starts_with(&root)));
@@ -225,6 +313,8 @@ fn the_review_steps_apply_never_applies_choices_in_another_folder() {
     assert!(other_root.join("Before/a.jpg").is_file());
     assert!(app.decisions[&marked].rejected, "still staged");
     assert!(!app.review_applying() && app.review_outcome.is_none());
+    // The Apply ended without its second half: the next one starts at zero.
+    assert_eq!(app.applied_before, 0);
 }
 fn smoke_frame(app: &mut PhotoSortApp, ctx: &egui::Context, now: Instant) -> egui::FullOutput {
     ctx.run_test(egui::RawInput::default(), |ui| {
@@ -463,6 +553,14 @@ fn existing_folder_names_with_reserved_characters_are_not_changes() {
 #[test]
 fn changing_steps_keeps_edits_and_closing_asks_to_keep_or_discard_them() {
     let (dir, mut app) = fixture();
+    // Finder's file beside the photo and in a folder with nothing else,
+    // and a folder that holds nothing at all: the scan knows all three.
+    let root = app.root.clone().unwrap();
+    std::fs::create_dir_all(root.join("Before/Seen")).unwrap();
+    std::fs::create_dir_all(root.join("Before/Blank")).unwrap();
+    std::fs::write(root.join("Before/.DS_Store"), b"finder").unwrap();
+    std::fs::write(root.join("Before/Seen/.DS_Store"), b"finder").unwrap();
+    app.catalog = Some(Arc::new(Catalog::scan(&root, || false, |_| {}).unwrap()));
     edit(&mut app);
     let before = app.organize_drafts.clone();
     // Another step asks nothing, plans nothing and keeps the folder edits.
@@ -470,7 +568,6 @@ fn changing_steps_keeps_edits_and_closing_asks_to_keep_or_discard_them() {
     assert!(app.step == Step::Cull && app.organize_departure.is_none());
     assert!(app.plan.is_none() && !app.busy && app.organize_drafts == before);
     assert!(app.organize_changes_pending());
-    assert_eq!(app.staged_change_count(), 1);
     app.request_departure(Destination::Close);
     settle(&mut app);
     assert!(app.organize_departure.is_some() && !app.plan_open && !app.close_authorized);
@@ -482,6 +579,14 @@ fn changing_steps_keeps_edits_and_closing_asks_to_keep_or_discard_them() {
             .iter()
             .any(|a| matches!(a, Action::Move { .. }))
     );
+    // The guard, the Review badge and the list Review will show count
+    // alike, and as the badge did before the plan was made.
+    assert_eq!(
+        app.waiting_changes_text(),
+        "5 changes from Organize are waiting to be applied."
+    );
+    assert_eq!(app.staged_change_count(), 5);
+    assert_eq!(app.plan_rows.total(), 5);
     app.resolve_organize_departure(OrganizeResolution::Cancel);
     assert!(app.organize_drafts == before);
     assert!(app.organize_departure.is_none() && app.after_apply.is_none());
@@ -518,6 +623,19 @@ fn generated_plan_requires_resolution_and_discard_preserves_other_review_marks()
     app.request_departure(Destination::Close);
     settle(&mut app);
     assert!(app.organize_departure.is_some());
+    // With a rating staged as well, the guard says how the badge adds up.
+    let (folders, all) = (app.plan_rows.total(), app.staged_change_count());
+    assert!(folders > 0 && all == folders + 1);
+    let organize = match folders {
+        1 => "1 change from Organize is".to_owned(),
+        n => format!("{n} changes from Organize are"),
+    };
+    assert_eq!(
+        app.waiting_changes_text(),
+        format!(
+            "{organize} waiting to be applied. With your Trash marks, ratings and rotations, Review lists {all}."
+        )
+    );
     app.resolve_organize_departure(OrganizeResolution::Discard);
     assert!(!app.close_authorized && app.departure.is_some());
     assert_eq!(app.decisions[&id].rating, Some(4));
@@ -623,6 +741,20 @@ fn case_only_file_edit_uses_shared_review_and_preserves_staged_rating_after_relo
 fn case_only_folder_edit_uses_shared_plan_and_preserves_staged_rating_after_reload() {
     let (_dir, mut app) = fixture();
     let root = app.root.clone().unwrap();
+    // A second photo, and a folder with only Finder's file in it: they are
+    // renamed with their folder, not moved or made again.
+    std::fs::write(root.join("Before/b.jpg"), b"second photo").unwrap();
+    std::fs::create_dir_all(root.join("Before/Seen")).unwrap();
+    std::fs::write(root.join("Before/Seen/.DS_Store"), b"finder").unwrap();
+    let catalog = Catalog::scan(&root, || false, |_| {}).unwrap();
+    app.media = catalog.media.clone();
+    app.index = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.id, i))
+        .collect();
+    app.catalog = Some(Arc::new(catalog));
     let old_id = app.media[0].id;
     app.decisions.insert(
         old_id,
@@ -642,6 +774,7 @@ fn case_only_folder_edit_uses_shared_plan_and_preserves_staged_rating_after_relo
         app.plan.as_ref().unwrap().actions.as_slice(),
         [Action::RenameDirectory(_)]
     ));
+    assert_eq!(app.plan_rows.total(), 1);
     app.apply_reviewed_plan();
     settle(&mut app);
     assert!(
@@ -976,6 +1109,13 @@ fn worker_error_retains_the_inflight_plan_and_explicit_discard_clears_its_draft(
     .unwrap();
     app.poll(&egui::Context::default());
     assert!(!app.busy && app.retry_plan.is_some() && app.applying_plan.is_none());
+    // What is left was counted when the plan was kept, not by the bar and
+    // the step tabs, which read the number on every frame.
+    assert_eq!(
+        app.unfinished.get().map(|unfinished| unfinished.left),
+        Some(1)
+    );
+    assert_eq!(app.staged_change_count(), 1);
     assert!(!app.organize_drafts.is_empty());
     app.request_departure(Destination::Step(Step::Cull));
     app.discard_remaining_operations();
@@ -1097,14 +1237,16 @@ fn recovery_details_show_interruption_and_every_failure_in_all_workflows() {
             ],
         });
         let error = app.error.as_ref().unwrap();
-        assert!(error.starts_with("1 operation(s) were interrupted"));
+        assert!(
+            error.starts_with("1 file operation of the unfinished changes was interrupted partway")
+        );
         assert!(error.contains(&original));
         assert!(error.ends_with("Second failure: café\nPermission denied"));
         let recovered_error = error.clone();
         app.report_scan_warnings(&["Cannot read café/locked".into()]);
         assert_eq!(
             app.error.as_deref(),
-            Some(format!("{recovered_error}\n1 scan warning(s). Cannot read café/locked").as_str())
+            Some(format!("{recovered_error}\n1 scan warning. Cannot read café/locked").as_str())
         );
         let with_warning = app.error.clone();
         app.report_scan_warnings(&[]);

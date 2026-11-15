@@ -541,7 +541,7 @@ impl PhotoSortApp {
                                         )
                                         .truncate(),
                                     )
-                                    .on_hover_text(folder.path.display().to_string())
+                                    .on_hover_text(crate::core::text::shown(&folder.path))
                                     .clicked()
                                 {
                                     self.browse.folder.show_only(Some(folder.path.clone()));

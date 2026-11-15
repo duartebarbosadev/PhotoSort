@@ -520,7 +520,7 @@ impl PhotoSortApp {
         let media = self.index.get(&id).map(|i| &self.media[*i]);
         let caption = media.map(Media::name).unwrap_or_default();
         let path = media
-            .map(|m| m.path.display().to_string())
+            .map(|m| crate::core::text::shown(&m.path))
             .unwrap_or_default();
         let staged = turns(&self.decisions, id);
         let enabled = self.rotation_enabled();

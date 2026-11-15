@@ -51,10 +51,11 @@ pub struct Preferences {
     pub photo_size: f32,
     /// The first-run intro has played. Menu → Watch the intro replays it.
     pub intro_shown: bool,
-    /// Prompts about memory and cache limits the user turned off.
+    /// Prompts the user turned off: about memory and cache limits, and
+    /// about RAW files they kept whose JPEG goes to the Trash.
     pub limit_prompts: LimitPrompts,
 }
-/// Prompts about memory and cache limits the user answered for good.
+/// Prompts the user answered for good. Settings shows them all again.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LimitPrompts {
@@ -62,11 +63,22 @@ pub struct LimitPrompts {
     pub quiet: std::collections::BTreeSet<LimitPrompt>,
     /// Open photos that need more than half the memory without asking.
     pub open_large: bool,
+    /// What Review's Apply does, without asking, with a RAW file the user
+    /// rated, rotated or chose to keep when its JPEG goes to the Trash.
+    pub wanted_raw: Option<WantedRaw>,
 }
 impl LimitPrompts {
     pub fn any(&self) -> bool {
-        self.open_large || !self.quiet.is_empty()
+        self.open_large || !self.quiet.is_empty() || self.wanted_raw.is_some()
     }
+}
+/// The answer to "Trash the RAW files you kept?".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WantedRaw {
+    /// They stay, with their XMP, rating and rotation; only the JPEG goes.
+    Keep,
+    /// They go to the Trash with their JPEG.
+    Trash,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum LimitPrompt {

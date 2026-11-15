@@ -34,7 +34,7 @@ impl PhotoSortApp {
         let request = self.cache_folder_request();
         let description = request.as_ref().map_or_else(
             || "The cache location is unavailable.".into(),
-            |request| request.path.display().to_string(),
+            |request| crate::core::text::shown(&request.path),
         );
         if ui
             .add_enabled(
@@ -140,8 +140,10 @@ impl PhotoSortApp {
         let pick_auto_on = next.pick_best_auto && !self.preferences.pick_best_auto;
         let rotation_auto_on = next.rotation_auto && !self.preferences.rotation_auto;
         // The Review step says how ratings and rotations are written.
-        self.review_stale |=
-            self.step == Step::Review && next.metadata_writes != self.preferences.metadata_writes;
+        // It also lists a kept RAW by the answer remembered for it.
+        self.review_stale |= self.step == Step::Review
+            && (next.metadata_writes != self.preferences.metadata_writes
+                || next.limit_prompts.wanted_raw != self.preferences.limit_prompts.wanted_raw);
         self.preferences = next;
         // A new cache limit or RAW look: build what that now needs.
         self.build_previews();
@@ -281,7 +283,7 @@ impl PhotoSortApp {
                     for (path, label) in recent.into_iter().zip(labels) {
                         if ui
                             .add_enabled(!self.busy, egui::Button::new(label))
-                            .on_hover_text(path.display().to_string())
+                            .on_hover_text(crate::core::text::shown(path))
                             .clicked()
                         {
                             selected = Some(path.clone());

@@ -4,19 +4,71 @@
 use super::plan_review::ReviewAction;
 use super::states::{state_card, state_frame};
 use super::*;
+use crate::core::operations::{Kept, KeptFolder};
 use egui_phosphor::regular as icon;
 use std::path::{Path, PathBuf};
 
 /// What the last Apply on the Review step did.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Outcome {
-    /// "Moved 3 photos and sent 2 photos to the Trash."
-    pub sentence: String,
+    /// What the list said it would do: "Moved 3 photos and sent 2 photos to
+    /// the Trash.", once the folders that stayed are known.
+    pub applied: super::plan_review::Applied,
     /// Every part finished, nothing is left to retry.
     pub done: bool,
     /// Listed photos that stayed in the folder they were listed in while
     /// the rest moved to another: their choices are still staged there.
     pub left_behind: Option<(usize, PathBuf)>,
+    /// Folders the list removed or sent to the Trash that are still on
+    /// disk, each with the reason.
+    pub kept_folders: Vec<KeptFolder>,
+}
+impl Outcome {
+    /// What the Apply did. A folder listed for the Trash that is still
+    /// there is not said to have gone.
+    pub(super) fn sentence(&self) -> String {
+        let kept = self.kept_folders.iter().filter(|k| k.for_trash).count();
+        self.applied.sentence(kept)
+    }
+}
+
+/// What an Apply or a Retry left to do, counted as the Review list counts
+/// changes (see `plan_review::plan_changes`), so the status bar, the "did
+/// not finish" card and the list of what is left say the same numbers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Unfinished {
+    /// Changes the run that stopped had finished. `None` when the plan was
+    /// found saved by an earlier session, which did not say.
+    pub finished: Option<usize>,
+    /// Changes still to do.
+    pub left: usize,
+}
+impl Unfinished {
+    /// The status bar's line while changes wait for Retry.
+    pub(super) fn status(&self) -> String {
+        match self.left {
+            // Only folders to make or tidy away are left.
+            0 => "Unfinished changes · Review changes to resolve".into(),
+            1 => "1 unfinished change · Review changes to resolve".into(),
+            n => format!("{n} unfinished changes · Review changes to resolve"),
+        }
+    }
+    /// The "did not finish" card's line: how many finished, how many did not.
+    pub(super) fn sentence(&self) -> String {
+        let changes = |n: usize| match n {
+            1 => "1 change".to_owned(),
+            n => format!("{n} changes"),
+        };
+        let counted = match (self.finished, self.left) {
+            (_, 0) => "The changes that finished are applied.".to_owned(),
+            (Some(0), left) => format!("{} did not finish.", changes(left)),
+            (Some(done), left) => {
+                format!("{} finished and {left} did not.", changes(done))
+            }
+            (None, left) => format!("{} did not finish.", changes(left)),
+        };
+        format!("{counted} Retry the rest, choose another destination or discard them.")
+    }
 }
 
 /// Why the Review step lists nothing and waits for Organize instead.
@@ -40,10 +92,27 @@ pub(super) struct Chain {
     /// The RAW and XMP files listed as going to the Trash with those marks,
     /// by id after the moves. Nothing else follows a mark there.
     pub followers: HashSet<MediaId>,
+    /// The folders the moves made: one left empty by the Trash marks is
+    /// removed with them. Set once the moves are applied.
+    pub created: Vec<PathBuf>,
+    /// The folders listed as left empty by the Trash marks, each with the
+    /// leftovers listed for it: removed after the marks are applied.
+    pub tidy: Vec<(PathBuf, Vec<String>)>,
     /// The folder the moves were listed in.
     pub source: PathBuf,
     /// The folder read again after the moves; set once they are applied.
     pub root: Option<PathBuf>,
+}
+
+/// Asked by the Review step's Apply, before anything changes on disk: RAW
+/// files the user rated, rotated or chose to keep would go to the Trash
+/// with the JPEG that shares their name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RawQuestion {
+    /// How many RAW files it is about.
+    pub count: usize,
+    /// "Don't ask again" is ticked: the answer is remembered.
+    pub quiet: bool,
 }
 
 /// The same folder, however it is spelled: the scan resolves links, and a
@@ -111,6 +180,7 @@ impl PhotoSortApp {
         }
         self.review_stale = false;
         self.review_targets = false;
+        self.review_tidy = false;
         self.review_blocked = None;
         // Organize's folders need every photo's metadata; Organize says
         // which files could not be read and reads them again.
@@ -168,13 +238,62 @@ impl PhotoSortApp {
             && !self.organize_drafts.contains_key(&self.group_mode)
     }
 
+    /// The changes the Review step lists right now, added up as its
+    /// sentence says them. `None` while there is no current list: on another
+    /// step, while it is being made again, or during an Apply.
+    pub(super) fn review_listed_count(&self) -> Option<usize> {
+        (self.step == Step::Review
+            && self.plan.is_some()
+            && self.plan_rows.editable
+            && !self.review_stale
+            && !self.busy
+            && !self.review_applying()
+            && self.retry_plan.is_none())
+        .then(|| self.plan_rows.total())
+    }
+
+    /// What the unfinished plan leaves to do, counted once per plan: the
+    /// status bar, the step tabs and the Review step ask every time they
+    /// are drawn. Counting indexes every row of the plan, so the number is
+    /// kept until the plan is replaced.
+    pub(super) fn unfinished(&self) -> Option<Unfinished> {
+        let plan = self.retry_plan.as_ref()?;
+        if self.unfinished.get().is_none() {
+            self.unfinished.set(Some(Unfinished {
+                finished: None,
+                left: super::plan_review::plan_changes(plan),
+            }));
+        }
+        self.unfinished.get()
+    }
+
     /// How many photos `staged_choices` lists, without listing them: what
-    /// the Review badge and the folder and Close guards count.
+    /// the Review badge counts off the Review step, and the folder and
+    /// Close guards.
     pub(super) fn staged_choice_count(&self) -> usize {
         self.decisions
             .iter()
             .filter(|(id, d)| !d.is_empty() && self.index.contains_key(id))
             .count()
+    }
+
+    /// The same count in words, for the folder and Close guards: "1 photo",
+    /// "3 photos and 1 video".
+    pub(super) fn staged_choice_tally(&self) -> super::plan_review::Tally {
+        let mut tally = super::plan_review::Tally::default();
+        for (id, decision) in &self.decisions {
+            match self.index.get(id) {
+                Some(i) if !decision.is_empty() => {
+                    if self.media[*i].kind == MediaKind::Video {
+                        tally.videos += 1;
+                    } else {
+                        tally.photos += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        tally
     }
 
     /// The staged Trash marks, ratings and rotations of photos in this
@@ -190,11 +309,57 @@ impl PhotoSortApp {
         staged
     }
 
-    /// Lists Organize's `plan` with every staged choice, then asks which
-    /// rotations would re-save the image, to say so on their tiles.
+    /// Lists Organize's `plan` with every staged choice. Two details come
+    /// from the file worker a moment later, with the list already shown:
+    /// which folders the Trash marks leave empty, and which rotations would
+    /// re-save the image.
     pub(super) fn list_review(&mut self, plan: Plan) {
         self.set_review_plan(Some(plan));
         self.review_listed = self.staged_choices().into_iter().collect();
+        if !self.ask_review_tidy() {
+            self.ask_review_targets();
+        }
+    }
+
+    /// Asks which folders that were there before hold nothing once the
+    /// listed moves and Trash marks are applied, so "Tidying up" can name
+    /// them before anything changes. True when the question was sent.
+    fn ask_review_tidy(&mut self) -> bool {
+        let trashed = self.plan_rows.trash_paths();
+        let (Some(catalog), Some(plan)) = (self.catalog.clone(), &self.plan) else {
+            return false;
+        };
+        // Marks on photos organized into another folder are applied there,
+        // to folders this Apply makes.
+        let elsewhere = plan
+            .output_root
+            .as_ref()
+            .is_some_and(|output| *output != catalog.root);
+        if trashed.is_empty() || elsewhere {
+            return false;
+        }
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let asked = self
+            .runtime
+            .io(IoWork::PlanTidy {
+                catalog,
+                moves: plan.clone(),
+                trashed,
+                cancelled: cancelled.clone(),
+            })
+            .is_ok();
+        if asked {
+            self.busy = true;
+            self.review_tidy = true;
+            // Cancelling leaves the list as it is: no folder is removed.
+            self.plan_stop = Some(cancelled);
+        }
+        asked
+    }
+
+    /// Asks which listed rotations would re-save the image, to say so on
+    /// their tiles.
+    pub(super) fn ask_review_targets(&mut self) {
         let policy = self.preferences.metadata_writes;
         let updates: HashMap<MediaId, Decision> = self
             .review_listed
@@ -209,19 +374,26 @@ impl PhotoSortApp {
         let Some(catalog) = self.catalog.clone() else {
             return;
         };
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
         if self
             .runtime
-            .image(crate::core::jobs::ImageWork::PlanDecisions {
+            .io(IoWork::PlanDecisions {
                 catalog,
                 decisions: updates,
                 companions: self.companions,
                 followers: None,
+                created: Vec::new(),
+                tidy: Vec::new(),
                 policy,
+                cancelled: cancelled.clone(),
             })
             .is_ok()
         {
             self.busy = true;
             self.review_targets = true;
+            // Cancelling leaves the list as it is, without this detail.
+            self.plan_stop = Some(cancelled);
+            self.set_status("Checking how the rotations are saved…".into());
         }
     }
 
@@ -229,7 +401,12 @@ impl PhotoSortApp {
     /// folder is read again, the Trash marks, ratings and rotations of the
     /// moved photos, with no second review.
     pub(super) fn apply_review(&mut self) {
-        if self.busy || self.scanning || self.review_stale || self.retry_plan.is_some() {
+        if self.busy
+            || self.scanning
+            || self.review_stale
+            || self.retry_plan.is_some()
+            || self.raw_question.is_some()
+        {
             return;
         }
         let Some(plan) = &self.plan else {
@@ -245,20 +422,41 @@ impl PhotoSortApp {
             self.review_stale = true;
             return;
         }
+        // RAW files the user kept would follow their JPEG to the Trash:
+        // that is theirs to say, once, unless they answered for good.
+        let wanted = self.plan_rows.wanted_raws();
+        if wanted > 0
+            && self.raw_answer.is_none()
+            && self.preferences.limit_prompts.wanted_raw.is_none()
+        {
+            self.raw_question = Some(RawQuestion {
+                count: wanted,
+                quiet: false,
+            });
+            return;
+        }
         let listed = live;
         let moves = !plan.actions.is_empty();
+        // A new Apply: nothing of an earlier one counts toward it.
+        self.applied_before = 0;
         // Apply's own plan is never taken for the list's write targets.
         self.review_targets = false;
+        self.review_tidy = false;
+        // Only the folders "Tidying up" names are removed after the marks.
+        let tidy = self.plan_rows.emptied();
         self.review_outcome = Some(review_step::Outcome {
-            sentence: self.plan_rows.applied_sentence(),
+            applied: self.plan_rows.applied(),
             done: false,
             left_behind: None,
+            kept_folders: Vec::new(),
         });
         self.error = None;
         if moves {
             self.review_after_moves = (!listed.is_empty()).then(|| Chain {
                 decisions: listed,
                 followers: self.plan_rows.follower_ids(),
+                created: Vec::new(),
+                tidy,
                 source: self.root.clone().unwrap_or_default(),
                 root: None,
             });
@@ -270,7 +468,7 @@ impl PhotoSortApp {
         } else if !listed.is_empty() {
             self.apply_planned = true;
             let followers = self.plan_rows.follower_ids();
-            self.plan_decisions(listed, Some(followers));
+            self.plan_decisions(listed, Some(followers), Vec::new(), tidy);
             if !self.busy {
                 self.apply_planned = false;
                 self.review_outcome = None;
@@ -278,13 +476,102 @@ impl PhotoSortApp {
         }
     }
 
+    /// Ends the RAW question. With an answer, the changes are listed with
+    /// it and applied, and "Don't ask again" remembers it; without one,
+    /// nothing is applied.
+    pub(super) fn answer_raw_question(
+        &mut self,
+        answer: Option<crate::core::preferences::WantedRaw>,
+    ) {
+        let Some(question) = self.raw_question.take() else {
+            return;
+        };
+        let Some(answer) = answer else {
+            return;
+        };
+        if question.quiet {
+            self.preferences.limit_prompts.wanted_raw = Some(answer);
+            self.save_preferences();
+        }
+        // The list, and the result said once applied, follow the answer. The
+        // folders already named in "Tidying up" stay named: the answer only
+        // adds files to the Trash, and no folder goes that was not listed.
+        self.raw_answer = Some(answer);
+        let tidy = self.plan_rows.emptied();
+        self.set_review_plan(self.plan.clone());
+        self.plan_rows.restore_emptied(tidy);
+        self.apply_review();
+        self.raw_answer = None;
+    }
+
+    /// The RAW question, over the Review step until it is answered.
+    pub(super) fn raw_question_dialog(&mut self, ctx: &egui::Context) {
+        use crate::core::preferences::WantedRaw;
+        let Some(question) = &mut self.raw_question else {
+            return;
+        };
+        let one = question.count == 1;
+        let mut answer = None;
+        let mut cancel = false;
+        let response = modal(egui::Id::new("wanted_raw")).show(ctx, |ui| {
+            ui.set_max_width(440.0_f32.min((ctx.content_rect().width() - 60.0).max(180.0)));
+            ui.heading(if one {
+                "Trash the RAW file you kept?"
+            } else {
+                "Trash the RAW files you kept?"
+            });
+            let body = if one {
+                "1 RAW file that you rated, rotated or chose to keep shares its name with a photo marked for Trash. RAW and JPEG files stay together, so it would go to the Trash too.".to_owned()
+            } else {
+                format!(
+                    "{} RAW files that you rated, rotated or chose to keep share their names with photos marked for Trash. RAW and JPEG files stay together, so they would go to the Trash too.",
+                    question.count
+                )
+            };
+            ui.add(egui::Label::new(body).wrap());
+            ui.add(egui::Label::new(RichText::new("Nothing has changed yet.").color(MUTED)).wrap());
+            ui.add_space(S1);
+            ui.checkbox(&mut question.quiet, "Don't ask again")
+                .on_hover_text("Remembers your answer. Settings can bring the question back.");
+            ui.add_space(S1);
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+                if ui
+                    .button(if one { "Trash it too" } else { "Trash them too" })
+                    .on_hover_text("Each goes to the Trash with its JPEG")
+                    .clicked()
+                {
+                    answer = Some(WantedRaw::Trash);
+                }
+                if ui
+                    .add(primary(if one {
+                        "Keep the RAW file"
+                    } else {
+                        "Keep the RAW files"
+                    }))
+                    .on_hover_text("Only the JPEGs go to the Trash")
+                    .clicked()
+                {
+                    answer = Some(WantedRaw::Keep);
+                }
+            });
+        });
+        if answer.is_some() || cancel || response.should_close() {
+            self.answer_raw_question(answer);
+        }
+    }
+
     /// Gives up an Apply from the Review step that cannot go on: an error,
     /// a failed apply, a folder that is gone or a stopped worker. Without
     /// this, its lock on the steps and folders would stay until a restart.
     pub(super) fn abandon_review_apply(&mut self) {
+        self.applied_before = 0;
         self.review_after_moves = None;
         self.apply_planned = false;
         self.review_targets = false;
+        self.review_tidy = false;
         self.review_outcome = None;
     }
 
@@ -344,13 +631,19 @@ impl PhotoSortApp {
             || self.apply_planned
             || self.review_outcome.as_ref().is_some_and(|o| !o.done)
                 && (self.busy || self.scanning);
-        if self.retry_plan.is_some() {
+        // A Retry at work is an Apply at work: the card that says some
+        // changes did not finish waits until it is known whether they did.
+        if self.retry_plan.is_some() && !applying {
+            let body = self.unfinished().map_or_else(
+                || "The changes that finished are applied. Retry the rest, choose another destination or discard them.".to_owned(),
+                |unfinished| unfinished.sentence(),
+            );
             let mut open = false;
             state_card(
                 ui,
                 icon::WARNING_CIRCLE,
                 "Some changes did not finish",
-                "The changes that finished are applied. Retry the rest, choose another destination or discard them.",
+                &body,
                 |ui| {
                     open = ui
                         .add_enabled(!self.busy, primary("Review unfinished changes…"))
@@ -364,10 +657,15 @@ impl PhotoSortApp {
         }
         if applying {
             let total = self.applying_plan.as_ref().map(|plan| plan.actions.len());
+            let title = if self.retry_plan.is_some() {
+                "Retrying the unfinished changes"
+            } else {
+                "Applying your changes"
+            };
             state_frame(ui, |ui| {
                 ui.add(egui::Spinner::new().size(28.0).color(ACCENT));
                 ui.add_space(S3);
-                ui.label(RichText::new("Applying your changes").font(semibold(18.0)));
+                ui.label(RichText::new(title).font(semibold(18.0)));
                 ui.add_space(S1);
                 let detail = match total {
                     Some(n) => format!(
@@ -380,7 +678,10 @@ impl PhotoSortApp {
             });
             return;
         }
-        if self.review_stale || self.busy {
+        // The list stays on screen while only a detail of it is being
+        // checked: an Undo answers at once, Apply waits for the detail.
+        let detail = self.review_tidy || self.review_targets;
+        if self.review_stale || (self.busy && !detail) {
             state_frame(ui, |ui| {
                 ui.add(egui::Spinner::new().size(28.0).color(ACCENT));
                 ui.add_space(S3);
@@ -457,7 +758,7 @@ impl PhotoSortApp {
         ui.add_space(S1);
         // An Apply just finished, and this folder had choices of its own.
         if let Some(outcome) = self.review_outcome.as_ref().filter(|o| o.done) {
-            ui.add(egui::Label::new(RichText::new(&outcome.sentence).color(GREEN)).wrap());
+            ui.add(egui::Label::new(RichText::new(outcome.sentence()).color(GREEN)).wrap());
             if let Some(text) = left_behind_text(outcome) {
                 ui.add(egui::Label::new(RichText::new(text).color(MUTED)).wrap());
             }
@@ -498,7 +799,7 @@ impl PhotoSortApp {
         let mut open = None;
         match &self.review_outcome {
             Some(outcome) if outcome.done => {
-                let sentence = outcome.sentence.clone();
+                let sentence = outcome.sentence();
                 let left = left_behind_text(outcome);
                 state_frame(ui, |ui| {
                     ui.label(RichText::new(icon::CHECK_CIRCLE).size(40.0).color(GREEN));
@@ -540,17 +841,91 @@ impl PhotoSortApp {
 
 /// "2 photos stayed in Holidays, still staged there."
 fn left_behind_text(outcome: &Outcome) -> Option<String> {
-    let (n, folder) = outcome.left_behind.as_ref()?;
-    let name = folder
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| folder.display().to_string());
-    Some(format!(
-        "{n} {} in {name}, still staged there.",
-        if *n == 1 {
-            "photo stayed"
-        } else {
-            "photos stayed"
-        },
-    ))
+    let name = |folder: &Path| {
+        folder
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| crate::core::text::shown(folder))
+    };
+    let mut lines = Vec::new();
+    if let Some((n, folder)) = &outcome.left_behind {
+        lines.push(format!(
+            "{n} {} in {}, still staged there.",
+            if *n == 1 {
+                "photo stayed"
+            } else {
+                "photos stayed"
+            },
+            name(folder)
+        ));
+    }
+    lines.extend(kept_lines(&outcome.kept_folders));
+    (!lines.is_empty()).then(|| lines.join(" "))
+}
+
+/// What to say about folders the list removed or sent to the Trash that are
+/// still there: "Roll was kept: it now holds keep.txt, which Review did not
+/// list."
+pub(super) fn kept_lines(kept: &[KeptFolder]) -> Vec<String> {
+    let name = |folder: &KeptFolder| {
+        folder
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| crate::core::text::shown(&folder.path))
+    };
+    let names = |folders: &[&KeptFolder]| {
+        folders
+            .iter()
+            .map(|folder| name(folder))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let (refused, holding): (Vec<&KeptFolder>, Vec<&KeptFolder>) = kept
+        .iter()
+        .partition(|folder| folder.why == Kept::TrashRefused);
+    let mut lines = Vec::new();
+    match refused.as_slice() {
+        [] => {}
+        [folder] => lines.push(format!(
+            "{} could not be moved to the Trash, so it is still there with its leftover files.",
+            name(folder)
+        )),
+        folders => lines.push(format!(
+            "{} folders could not be moved to the Trash, so they are still there with their leftover files: {}.",
+            folders.len(),
+            names(folders)
+        )),
+    }
+    match holding.as_slice() {
+        // Each with what it holds, while that stays short enough to read.
+        folders if folders.len() <= 3 => {
+            lines.extend(folders.iter().map(|folder| {
+                match &folder.why {
+                    // A folder inside it that was kept, and is named already.
+                    Kept::Holds(Some(inside))
+                        if kept
+                            .iter()
+                            .any(|other| other.path == folder.path.join(inside)) =>
+                    {
+                        format!("{} was kept: {inside} is still in it.", name(folder))
+                    }
+                    Kept::Holds(Some(file)) => format!(
+                        "{} was kept: it now holds {file}, which Review did not list.",
+                        name(folder)
+                    ),
+                    _ => format!(
+                        "{} was kept: it now holds something Review did not list.",
+                        name(folder)
+                    ),
+                }
+            }))
+        }
+        folders => lines.push(format!(
+            "{} folders were kept because they now hold something Review did not list: {}.",
+            folders.len(),
+            names(folders)
+        )),
+    }
+    lines
 }
