@@ -2544,6 +2544,10 @@ fn trash_group_that_fails_partway_retries_only_the_files_still_present() {
     );
     // Read back after a restart, the failure is worded the same way.
     assert_eq!(restored.errors, report.errors);
+    // No folder waits for the photo that went, so neither retry plan, the
+    // one of this run or the one read back, carries its path.
+    assert!(report.remaining.completed_dependencies.is_empty());
+    assert!(restored.plan.completed_dependencies.is_empty());
     let retried = store
         .execute(
             &context,

@@ -286,6 +286,11 @@ pub struct Report {
     /// is found without scanning every earlier one. Rebuilt when stale.
     #[doc(hidden)]
     pub relocation_index: RelocationIndex,
+    /// The files and folders a folder removal of this plan waits for. A
+    /// trashed file is remembered for a retry only when it is one of them:
+    /// nothing else ever looks it up.
+    #[doc(hidden)]
+    pub awaited: HashSet<PathBuf>,
 }
 /// A folder the review listed as going that is still there. Keeping it is
 /// the safe end of its step, not a failure: a retry would end the same way.
@@ -316,6 +321,30 @@ pub struct RelocationIndex {
 }
 
 impl Report {
+    /// The report of a run of `plan`, before its first action: what earlier
+    /// attempts completed is carried over.
+    fn of(plan: &Plan) -> Self {
+        Self {
+            remaining: Plan {
+                description: plan.description.clone(),
+                output_root: plan.output_root.clone(),
+                completed_dependencies: plan.completed_dependencies.clone(),
+                ..Default::default()
+            },
+            awaited: plan
+                .actions
+                .iter()
+                .filter_map(|action| match action {
+                    Action::RemoveEmptyDirectory { after, .. } => Some(after),
+                    _ => None,
+                })
+                .flatten()
+                .cloned()
+                .collect(),
+            ..Default::default()
+        }
+    }
+
     fn record_relocation(&mut self, old: MediaId, new: MediaId, fingerprint: Fingerprint) {
         let index = &mut self.relocation_index;
         if index.indexed != self.relocated.len() {
@@ -367,11 +396,16 @@ impl Report {
             Action::CreateDirectory { path } => {
                 self.remaining.completed_dependencies.insert(path.clone());
             }
-            // A folder made for them is removed once they are in the Trash.
-            Action::Trash { files } => self
-                .remaining
-                .completed_dependencies
-                .extend(files.iter().map(|source| source.path.clone())),
+            // A folder made for them, or one the review listed as left empty,
+            // is removed once they are in the Trash. Most trashed photos leave
+            // a folder that stays: a large cull would otherwise carry every
+            // one of their paths into the retry plan.
+            Action::Trash { files } => self.remaining.completed_dependencies.extend(
+                files
+                    .iter()
+                    .filter(|source| self.awaited.contains(&source.path))
+                    .map(|source| source.path.clone()),
+            ),
             _ => {}
         }
         self.completed.push(action.clone());
@@ -1706,15 +1740,7 @@ fn execute_logged(
     cancelled: impl Fn() -> bool,
     mut progress: impl FnMut(usize, usize),
 ) -> Result<Report> {
-    let mut report = Report {
-        remaining: Plan {
-            description: plan.description.clone(),
-            output_root: plan.output_root.clone(),
-            completed_dependencies: plan.completed_dependencies.clone(),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
+    let mut report = Report::of(plan);
     let mut unfinished_dependencies = HashSet::<PathBuf>::new();
     let mut file_names = case_rename::FileNames::default();
     let mut staging = Staging::default();

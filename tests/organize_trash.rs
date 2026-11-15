@@ -550,6 +550,14 @@ fn a_folder_the_moves_made_is_removed_once_the_trash_empties_it() {
     let report = operations::execute(&plan, journal.path(), || false, |_, _| {}).unwrap();
     assert!(report.errors.is_empty(), "{:?}", report.errors);
     assert!(report.remaining.actions.is_empty());
+    // Only the photos a folder removal waits for are remembered for a
+    // retry, not the ones trashed from folders that stay.
+    let waited = &report.remaining.completed_dependencies;
+    assert!(waited.contains(&c.root.join("New/Deep/photo.jpg")));
+    assert!(
+        !waited.contains(&c.root.join("Mixed/clip.mov"))
+            && !waited.contains(&c.root.join("Old/solo.jpg"))
+    );
     // The photo went to the Trash with its RAW and XMP, from its new folder.
     for name in [
         "photo.jpg",
@@ -602,6 +610,16 @@ fn a_folder_the_moves_made_is_removed_once_the_trash_empties_it() {
     assert!(stopped.cancelled);
     assert_eq!(stopped.remaining.actions.len(), 2);
     assert!(c.root.join("Old").is_dir(), "a photo is still in it");
+    // The retry plan remembers the photo that went: the folder waits for it.
+    assert_eq!(
+        stopped.remaining.completed_dependencies,
+        marked
+            .iter()
+            .filter(|path| !path.exists())
+            .cloned()
+            .collect()
+    );
+    assert_eq!(stopped.remaining.completed_dependencies.len(), 1);
     let retried =
         operations::execute(&stopped.remaining, journal.path(), || false, |_, _| {}).unwrap();
     assert!(retried.errors.is_empty(), "{:?}", retried.errors);
