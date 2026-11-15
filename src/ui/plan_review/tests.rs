@@ -1229,6 +1229,11 @@ fn trash_marks_alone_remove_the_folders_they_empty_and_the_list_names_them_first
             std::thread::sleep(Duration::from_millis(5));
         }
     };
+    // Before the changes are listed, the Review button and the step tabs
+    // already count what the list will: the five photos, and the two
+    // folders left with only a leftover file once they are gone. Solo's RAW
+    // and XMP go with its photo; Deep is only removed, and not counted.
+    assert_eq!(app.staged_change_count(), 7);
     app.review_changes();
     settle(&mut app);
     assert!(app.error.is_none(), "{:?}", app.error);

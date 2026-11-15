@@ -374,6 +374,10 @@ pub struct PhotoSortApp {
     review_from: Step,
     /// Organize's change count and what it was worked out from.
     organize_count: std::cell::RefCell<Option<(organize::ChangeCountKey, organize::Changes)>>,
+    /// Goes up each time `organize_count` is worked out again.
+    organize_generation: std::cell::Cell<u64>,
+    /// See [`PhotoSortApp::marks_folder_count`].
+    marks_folders: std::cell::Cell<Option<(organize::MarksKey, usize)>>,
     /// The open catalog's fingerprints and folder identities, read once: a
     /// save shares them instead of walking every photo again.
     catalog_identities: std::cell::RefCell<Option<CatalogIdentities>>,
@@ -701,6 +705,8 @@ impl PhotoSortApp {
             review_action: None,
             review_from: Step::Cull,
             organize_count: Default::default(),
+            organize_generation: Default::default(),
+            marks_folders: Default::default(),
             catalog_identities: Default::default(),
             trash_steps: HashMap::new(),
             by_hand: HashSet::new(),
@@ -947,6 +953,7 @@ impl PhotoSortApp {
         self.held.clear();
         self.prefetched_for = None;
         self.board.editing = None;
+        self.board.made_to_name = None;
         self.board.focus.clear();
         self.requested.clear();
         self.failures.clear();
@@ -2616,6 +2623,7 @@ impl PhotoSortApp {
             .collect();
         self.board_new_folder("", &ids);
         self.board.editing = None;
+        self.board.made_to_name = None;
         self.review_changes();
     }
     /// Groups Organize by capture date.

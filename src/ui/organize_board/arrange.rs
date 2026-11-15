@@ -174,8 +174,8 @@ impl PhotoSortApp {
             return;
         }
         if on {
+            self.board_cancel_edit();
             self.board.focus_before = Some(std::mem::take(&mut self.board.focus));
-            self.board.editing = None;
         } else {
             self.board.focus = self.board.focus_before.take().unwrap_or_default();
         }
@@ -279,9 +279,7 @@ impl PhotoSortApp {
             if let Some(count) = counted {
                 self.board.changes = count;
             } else if let Some(labels) = labels {
-                let none = std::collections::BTreeSet::new();
-                let count =
-                    self.organize_changes_in(labels, draft.map_or(&none, |d| d.created_folders()));
+                let count = self.organize_changes_in(labels, draft);
                 inputs.changes = Some((self.output.clone(), names, self.companions, count));
                 self.board.changes = count;
             }

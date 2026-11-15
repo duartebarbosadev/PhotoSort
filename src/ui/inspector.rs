@@ -16,7 +16,7 @@ impl PhotoSortApp {
             egui::Label::new(RichText::new(self.shown_name(&media)).font(semibold(15.0)))
                 .truncate(),
         )
-        .on_hover_text(media.path.display().to_string());
+        .on_hover_text(crate::core::text::shown(&media.path));
         self.reveal_button(ui, id);
         ui.add_space(10.0);
         ui.separator();
@@ -189,7 +189,7 @@ impl PhotoSortApp {
                 ui.spacing_mut().item_spacing.x = S2;
                 number_badge(ui, n);
                 ui.add(egui::Label::new(self.shown_name(media)).truncate())
-                    .on_hover_text(media.path.display().to_string());
+                    .on_hover_text(crate::core::text::shown(&media.path));
             });
         }
         let names: Vec<String> = items
@@ -494,7 +494,7 @@ impl PhotoSortApp {
             let name = root
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| root.display().to_string());
+                .unwrap_or_else(|| crate::core::text::shown(root));
             return std::iter::once(name)
                 .chain(
                     relative
@@ -522,10 +522,10 @@ pub(super) fn readable_path(path: &std::path::Path) -> String {
         return if rest.as_os_str().is_empty() {
             "~".into()
         } else {
-            format!("~/{}", rest.display())
+            format!("~/{}", crate::core::text::shown(rest))
         };
     }
-    path.display().to_string()
+    crate::core::text::shown(path)
 }
 /// Sentence-case section heading for the Details panel.
 fn section_title(ui: &mut egui::Ui, title: &str) {

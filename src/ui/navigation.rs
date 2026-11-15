@@ -177,7 +177,8 @@ impl PhotoSortApp {
     /// Photos with a staged Trash mark, rating or rotation, plus Organize's
     /// planned moves, renames and new folders: everything the Review step
     /// applies. A photo marked for Trash that also moves counts once, as the
-    /// Review step lists it. While that list is on screen the count is the
+    /// Review step lists it, and a folder the Trash marks leave with only
+    /// leftover files counts too. While that list is on screen the count is the
     /// list's own, so the badge, the sentence and the Apply button always
     /// say the same number. While an Apply that did not finish waits to be
     /// resolved, the count is what it left to do, as the status bar and the
@@ -196,6 +197,7 @@ impl PhotoSortApp {
             .departure_listed_count()
             .unwrap_or_else(|| self.organize_change_count());
         (self.staged_choice_count() + organize).saturating_sub(self.moved_to_trash_count())
+            + self.marks_folder_count()
     }
     pub(super) fn switch_step(&mut self, step: Step) {
         if self.step != step && self.preferences.visible(step) {
@@ -276,9 +278,9 @@ impl PhotoSortApp {
             // it came from the dropdown or the workflow's mode shortcuts.
             self.pending_bookmark = None;
             let was_metadata = self.metadata_organize_mode();
-            self.group_mode = mode;
             // A folder being named belongs to the old grouping's plan.
-            self.board.editing = None;
+            self.board_cancel_edit();
+            self.group_mode = mode;
             self.organize_preview_requested = false;
             self.discard_stale_model_retry();
             if self.metadata_organize_mode() {

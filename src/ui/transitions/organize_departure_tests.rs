@@ -570,6 +570,11 @@ fn changing_steps_keeps_edits_and_closing_asks_to_keep_or_discard_them() {
     assert!(app.step == Step::Cull && app.organize_departure.is_none());
     assert!(app.plan.is_none() && !app.busy && app.organize_drafts == before);
     assert!(app.organize_changes_pending());
+    // Before any plan reads the disk, the badge already counts what Review
+    // will list: the photo that moves, the two empty folders made again
+    // under the new name, and the two old folders that go to the Trash
+    // with Finder's file. The old empty folder is only removed.
+    assert_eq!(app.staged_change_count(), 5);
     app.request_departure(Destination::Close);
     settle(&mut app);
     assert!(app.organize_departure.is_some() && !app.plan_open && !app.close_authorized);
@@ -591,6 +596,7 @@ fn changing_steps_keeps_edits_and_closing_asks_to_keep_or_discard_them() {
     assert_eq!(app.plan_rows.total(), 5);
     app.resolve_organize_departure(OrganizeResolution::Cancel);
     assert!(app.organize_drafts == before);
+    assert_eq!(app.staged_change_count(), 5);
     assert!(app.organize_departure.is_none() && app.after_apply.is_none());
     app.request_departure(Destination::Close);
     settle(&mut app);
@@ -769,6 +775,10 @@ fn case_only_folder_edit_uses_shared_plan_and_preserves_staged_rating_after_relo
     draft.rename_folder("Before", "BEFORE").unwrap();
     app.organize_drafts.insert(app.group_mode, draft);
     assert!(app.organize_changes_pending());
+    // One change, as Review lists it: the folder that is renamed. With the
+    // staged rating the badge says two.
+    assert_eq!(app.organize_change_count(), 1);
+    assert_eq!(app.staged_change_count(), 2);
     app.organize();
     settle(&mut app);
     assert!(app.plan_open && app.error.is_none(), "{:?}", app.error);

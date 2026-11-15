@@ -389,3 +389,158 @@ fn saving_staged_choices_shares_the_catalogs_identities_and_the_drafts_labels() 
     assert!(!std::ptr::eq(&*first.fingerprints, &*reread.fingerprints));
     assert_eq!(*first.fingerprints, *reread.fingerprints);
 }
+
+/// The accessible texts of what `draw` shows, after a few frames, with
+/// `events` sent to the last one.
+fn texts(
+    app: &mut PhotoSortApp,
+    ctx: &egui::Context,
+    events: Vec<egui::Event>,
+    draw: fn(&mut PhotoSortApp, &mut egui::Ui),
+) -> Vec<(String, egui::Rect)> {
+    let size = egui::vec2(1280., 800.);
+    let mut run = |events| {
+        ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events,
+                ..Default::default()
+            },
+            |ui| draw(app, ui),
+        )
+    };
+    run(Vec::new());
+    run(Vec::new())
+        .platform_output
+        .accesskit_update
+        .map(|_| ())
+        .unwrap();
+    let out = run(events);
+    out.platform_output
+        .accesskit_update
+        .unwrap()
+        .nodes
+        .into_iter()
+        .filter_map(|(_, n)| {
+            let label = n.label().or_else(|| n.value())?.to_owned();
+            let b = n.bounds()?;
+            Some((
+                label,
+                egui::Rect::from_min_max(
+                    egui::pos2(b.x0 as f32, b.y0 as f32),
+                    egui::pos2(b.x1 as f32, b.y1 as f32),
+                ),
+            ))
+        })
+        .collect()
+}
+fn page(app: &mut PhotoSortApp, ctx: &egui::Context) -> Vec<String> {
+    texts(app, ctx, Vec::new(), |app, ui| app.review_page(ui))
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect()
+}
+/// Opens what is left as the "did not finish" card's button does, and
+/// clicks Retry in the dialog.
+fn retry_from_the_dialog(app: &mut PhotoSortApp, ctx: &egui::Context) {
+    let dialog = |app: &mut PhotoSortApp, ui: &mut egui::Ui| {
+        let ctx = ui.ctx().clone();
+        app.plan_review_dialog(&ctx)
+    };
+    assert!(app.review_remaining_operations() && app.plan_open);
+    let shown = texts(app, ctx, Vec::new(), dialog);
+    let pos = shown
+        .iter()
+        .find(|(text, _)| text == "Retry unfinished changes")
+        .unwrap_or_else(|| panic!("{shown:?}"))
+        .1
+        .center();
+    for pressed in [true, false] {
+        texts(
+            app,
+            ctx,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            dialog,
+        );
+    }
+}
+
+/// Two moves were left unfinished. Retry runs them and is stopped after the
+/// first; a second Retry finishes. While Retry works the page says so
+/// instead of "did not finish"; what is left is one number in the status
+/// bar, on the card and in the list; and a Retry that finishes ends with
+/// what it did, not with "Nothing to apply yet".
+#[test]
+fn retry_shows_it_is_running_counts_what_is_left_once_and_ends_with_a_result() {
+    let (_temp, mut app, ready, gate) = fixture(Step::Review);
+    let release = Release(gate);
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    // As found when the folder is opened after an Apply that was cut short.
+    app.retry_plan = app.plan.clone();
+    let left = |app: &mut PhotoSortApp| {
+        let unfinished = app.unfinished().unwrap();
+        (unfinished.status(), unfinished.sentence())
+    };
+    assert_eq!(
+        left(&mut app),
+        (
+            "2 unfinished changes · Review changes to resolve".to_owned(),
+            "2 changes did not finish. Retry the rest, choose another destination or discard them."
+                .to_owned()
+        )
+    );
+    // The Review tab in the footer says that number too.
+    assert_eq!(app.staged_change_count(), 2);
+    let shown = page(&mut app, &ctx);
+    assert!(
+        shown.iter().any(|t| t == "Some changes did not finish"),
+        "{shown:?}"
+    );
+    retry_from_the_dialog(&mut app, &ctx);
+    ready.recv_timeout(worker_patience()).unwrap();
+    assert!(app.busy && app.retry_plan.is_some());
+    let shown = page(&mut app, &ctx);
+    assert!(
+        shown.iter().any(|t| t == "Retrying the unfinished changes")
+            && !shown.iter().any(|t| t == "Some changes did not finish"),
+        "{shown:?}"
+    );
+    app.stop_file_operations();
+    release.release();
+    settle(&mut app);
+    // One photo moved and one is left: the same count everywhere.
+    assert_eq!(app.retry_plan.as_ref().unwrap().actions.len(), 1);
+    let (status, sentence) = left(&mut app);
+    assert_eq!(status, "1 unfinished change · Review changes to resolve");
+    assert_eq!(app.status, status);
+    assert_eq!(app.staged_change_count(), 1);
+    assert_eq!(
+        sentence,
+        "1 change finished and 1 did not. Retry the rest, choose another destination or discard them."
+    );
+    let shown = page(&mut app, &ctx);
+    assert!(shown.contains(&sentence), "{shown:?}");
+    retry_from_the_dialog(&mut app, &ctx);
+    assert_eq!(
+        app.plan_rows.total(),
+        1,
+        "the list counts what the status counted"
+    );
+    settle(&mut app);
+    assert!(app.retry_plan.is_none());
+    assert_eq!(
+        app.review_outcome.as_ref().map(|o| (o.sentence(), o.done)),
+        Some(("Moved 1 photo.".to_owned(), true))
+    );
+    app.runtime.shutdown();
+}
