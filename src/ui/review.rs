@@ -407,12 +407,19 @@ impl PhotoSortApp {
                     // A Keep/Trash switch per photo, labelled with its number
                     // key. A long burst has more photos than keys: the rest
                     // are switched by a click on the photo, as these are too.
+                    // In a group or card nobody has decided yet they say
+                    // so, not Keep: nothing is chosen until the user does.
+                    let undecided = self.panel_undecided();
                     for (side, id) in ids.iter().enumerate().take(9) {
-                        let keep = !self.decision(*id).rejected;
+                        let keep = (!undecided).then(|| !self.decision(*id).rejected);
                         let name = format!(
                             "Photo {}: {}",
                             side + 1,
-                            if keep { "Keep" } else { "Trash" }
+                            match keep {
+                                None => "not decided",
+                                Some(true) => "Keep",
+                                Some(false) => "Trash",
+                            }
                         );
                         if named(
                             ui.add(decision_button(side, keep)),
@@ -1430,8 +1437,13 @@ impl PhotoSortApp {
             );
         }
         if pixels && matches!(self.step, Step::EasyDelete | Step::PickBest) {
-            let keep = !d.rejected;
-            let pill = decision_pill(ui.painter(), rect, keep);
+            // Nothing decided in its group or card: no Keep or Trash, only
+            // the suggestion's star, where the pill would be.
+            let pill = if self.panel_undecided() {
+                Align2::RIGHT_TOP.anchor_size(rect.right_top() + egui::vec2(-S2, S2), Vec2::ZERO)
+            } else {
+                decision_pill(ui.painter(), rect, !d.rejected)
+            };
             let suggested = if self.step == Step::PickBest {
                 self.pick_review
                     .cluster_of(id)
@@ -1614,16 +1626,30 @@ const GROUP_GUTTER: f32 = 9.0;
 
 /// Keep/Trash toggle for one side of a guided comparison: its number key
 /// and an icon, as the photo's own pill says the word.
-fn decision_button(side: usize, keep: bool) -> egui::Button<'static> {
+impl PhotoSortApp {
+    /// Whether the group (Pick Best) or card (Easy Delete) shown beside the
+    /// grid is one nobody has decided yet.
+    fn panel_undecided(&self) -> bool {
+        match self.step {
+            Step::PickBest => self.pick_group().is_some_and(|g| self.pick_undecided(g)),
+            Step::EasyDelete => self
+                .delete_current
+                .is_some_and(|id| self.delete_undecided(id)),
+            _ => false,
+        }
+    }
+}
+
+/// A compared photo's Keep/Trash switch with its number key; `None` while
+/// its group or card is not decided yet, which shows neither.
+fn decision_button(side: usize, keep: Option<bool>) -> egui::Button<'static> {
     use egui_phosphor::regular as icon;
-    egui::Button::new(
-        RichText::new(format!(
-            "{}  {}",
-            side + 1,
-            if keep { icon::CHECK } else { icon::TRASH },
-        ))
-        .color(if keep { GREEN } else { RED }),
-    )
+    let (glyph, color) = match keep {
+        None => (icon::CIRCLE_DASHED, MUTED),
+        Some(true) => (icon::CHECK, GREEN),
+        Some(false) => (icon::TRASH, RED),
+    };
+    egui::Button::new(RichText::new(format!("{}  {glyph}", side + 1)).color(color))
 }
 
 #[cfg(test)]
