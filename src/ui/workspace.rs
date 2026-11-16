@@ -2339,7 +2339,7 @@ impl PhotoSortApp {
                 keep_why: String::new(),
                 eyes: Vec::new(),
                 extra: Vec::new(),
-                reason: "Out of focus across the frame. PhotoSort suggests moving it to Trash."
+                reason: "Out of focus across the frame. PhotoSort suggests moving it to the Trash."
                     .into(),
             });
         }
@@ -2347,12 +2347,12 @@ impl PhotoSortApp {
             (
                 "DSC01310.jpg",
                 Category::Dark,
-                "Very dark: sharpness 3.2, brightness 21.4/255. PhotoSort suggests moving it to Trash.",
+                "Very dark: sharpness 3.2, brightness 21.4/255. PhotoSort suggests moving it to the Trash.",
             ),
             (
                 "DSC01320.jpg",
                 Category::Bright,
-                "Overexposed: sharpness 6.8, brightness 238.9/255. PhotoSort suggests moving it to Trash.",
+                "Overexposed: sharpness 6.8, brightness 238.9/255. PhotoSort suggests moving it to the Trash.",
             ),
         ] {
             if let Some(subject) = id(name) {

@@ -87,6 +87,14 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     ),
 ];
 
+/// The Alt key by the name on this system's keyboard, for a shortcut said in
+/// a label or a tooltip: "Option" on a Mac.
+pub(super) const ALT: &str = if cfg!(target_os = "macos") {
+    "Option"
+} else {
+    "Alt"
+};
+
 /// What a key cap shows: arrows as glyphs, modifiers in the platform's words.
 fn cap_text(key: &str) -> &str {
     use egui_phosphor::regular as icon;
@@ -97,7 +105,7 @@ fn cap_text(key: &str) -> &str {
         "Up" => icon::ARROW_UP,
         "Down" => icon::ARROW_DOWN,
         "Ctrl" if mac => "Cmd",
-        "Alt" if mac => "Option",
+        "Alt" => ALT,
         other => other,
     }
 }

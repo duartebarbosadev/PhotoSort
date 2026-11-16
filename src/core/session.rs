@@ -6,6 +6,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// The app's folder under the system's data and cache folders. The 2.x app
+/// used the same name. What it left there has other names (its own files in
+/// `models`, `folder-views`, its caches) and is never read, changed or
+/// removed: this app only touches the entries it creates itself.
+const FOLDER: &str = "PhotoSort";
+
 /// Application data (preferences, sessions, saved views, models). Set
 /// `PHOTOSORT_DATA_ROOT` to relocate it, e.g. for portable or isolated runs.
 pub fn data_dir() -> PathBuf {
@@ -16,7 +22,7 @@ pub fn data_dir() -> PathBuf {
         resolved(
             dirs::data_local_dir()
                 .unwrap_or_else(std::env::temp_dir)
-                .join("PhotoSort-Rust"),
+                .join(FOLDER),
         )
     })
 }
@@ -61,7 +67,7 @@ pub fn cache_dir() -> PathBuf {
         .unwrap_or_else(|| {
             dirs::cache_dir()
                 .unwrap_or_else(std::env::temp_dir)
-                .join("PhotoSort-Rust")
+                .join(FOLDER)
         })
         .join("proxy-v1")
 }
@@ -353,10 +359,10 @@ mod tests {
         std::fs::create_dir(home.join("disk")).unwrap();
         std::os::unix::fs::symlink(home.join("disk"), home.join("share")).unwrap();
         // Nothing below the link exists yet, as on a first run.
-        let linked = home.join("share/PhotoSort-Rust");
+        let linked = home.join("share/PhotoSort");
         assert!(operations::reject_symlink_components(&linked.join("operations")).is_err());
         let data = without_links(&linked);
-        assert_eq!(data, home.join("disk/PhotoSort-Rust"));
+        assert_eq!(data, home.join("disk/PhotoSort"));
 
         let library = home.join("library");
         std::fs::create_dir(&library).unwrap();

@@ -644,7 +644,35 @@ impl PhotoSortApp {
             if !card.buttons.is_empty() {
                 right -= S1;
             }
+            // The title comes first on a narrow card: what is beside it gives
+            // way, so it is never cut for them nor drawn under them.
+            let needs = painter
+                .layout_no_wrap(card.title.clone(), semibold(13.0), INK)
+                .size()
+                .x
+                + S3;
+            let full = card.state_text.as_deref().unwrap_or_default();
+            let short = full.split(',').next().unwrap_or_default();
             if let Some((label, hover)) = &card.undo {
+                // On a titled card the link is its arrow alone when its
+                // label would leave no room for the title and the short
+                // state text; the label is then in its hover.
+                let whole = undo_text(&painter, label, LinkStyle::Header).size().x + 8.0;
+                let beside = if short.is_empty() {
+                    0.0
+                } else {
+                    painter
+                        .layout_no_wrap(short.to_owned(), medium(11.0), MUTED)
+                        .size()
+                        .x
+                        + S3
+                };
+                let fits = needs + beside + whole + S2 <= right - header.left();
+                let style = if fits || card.title.is_empty() {
+                    LinkStyle::Header
+                } else {
+                    LinkStyle::Arrow
+                };
                 let (link, clicked) = undo_link(
                     ui,
                     &painter,
@@ -652,39 +680,51 @@ impl PhotoSortApp {
                     egui::pos2(right, header.center().y),
                     label,
                     hover,
-                    false,
+                    style,
                 );
                 if clicked {
                     event = Some(CardEvent::Undo);
                 }
                 right = link.left() - S2;
             }
-            let color = MUTED;
-            let state = painter.layout_no_wrap(
-                card.state_text.clone().unwrap_or_default(),
-                medium(11.0),
-                color,
-            );
-            painter.galley(
-                egui::pos2(
-                    right - state.size().x,
-                    header.center().y - state.size().y / 2.0,
-                ),
-                state.clone(),
-                color,
-            );
+            // The state text is shown whole, or up to its first comma, or
+            // not at all: whichever still leaves the title its room. What
+            // was left out is in the title's hover.
+            let room = (right - header.left()).max(0.0);
+            let state = [full, short]
+                .into_iter()
+                .filter(|text| !text.is_empty())
+                .map(|text| painter.layout_no_wrap(text.to_owned(), medium(11.0), MUTED))
+                .find(|state| needs + state.size().x <= room);
+            let whole = state.as_ref().is_some_and(|s| s.text() == full) || full.is_empty();
+            let mut taken = 0.0;
+            if let Some(state) = state {
+                taken = state.size().x + S3;
+                painter.galley(
+                    egui::pos2(
+                        right - state.size().x,
+                        header.center().y - state.size().y / 2.0,
+                    ),
+                    state,
+                    MUTED,
+                );
+            }
             let mut title =
                 egui::text::LayoutJob::simple_singleline(card.title.clone(), semibold(13.0), INK);
-            title.wrap = egui::text::TextWrapping::truncate_at_width(
-                (right - header.left() - state.size().x - S3).max(S6),
-            );
+            title.wrap = egui::text::TextWrapping::truncate_at_width((room - taken).max(0.0));
             let title = painter.layout_job(title);
             let title_rect = egui::Rect::from_min_size(
                 header.left_center() - egui::vec2(0.0, title.size().y / 2.0),
                 title.size(),
             );
             painter.galley(title_rect.min, title, INK);
-            if let Some(hover) = &card.title_hover {
+            let hover = match (&card.title_hover, whole) {
+                (Some(hover), true) => Some(hover.clone()),
+                (Some(hover), false) => Some(format!("{hover}\n{full}")),
+                (None, false) => Some(format!("{} · {full}", card.title)),
+                (None, true) => None,
+            };
+            if let Some(hover) = hover {
                 ui.interact(title_rect, ui.id().with("title"), Sense::hover())
                     .on_hover_text(hover);
             }
@@ -730,24 +770,34 @@ impl PhotoSortApp {
                     ),
                 )
             });
+            // One tooltip at a time: over the Suggested mark, which only
+            // watches the pointer and so leaves the photo under it hovered
+            // too, the mark's reason shows and the photo's name does not.
+            let on_mark = photo.suggested_hover.is_some()
+                && mark.is_some_and(|mark| ui.rect_contains_pointer(mark));
+            let named = |response: egui::Response, text: String| {
+                if on_mark {
+                    response
+                } else {
+                    response.on_hover_text(text)
+                }
+            };
             // A photo with a Keep/Trash switch is the switch itself; the
             // card around it selects the card.
             if let Some(toggle) = &photo.toggle {
-                let response = response
-                    .on_hover_text(format!("{}\n{toggle}", photo.name))
+                let response = named(response, format!("{}\n{toggle}", photo.name))
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
                 if response.clicked() {
                     event = Some(CardEvent::Toggle(side));
                 }
             } else {
-                let response = response.on_hover_text(&photo.name);
+                let response = named(response, photo.name.clone());
                 if response.double_clicked() {
                     event = Some(CardEvent::Open(side));
                 } else if response.clicked() {
                     event = Some(CardEvent::Select(side));
                 }
             }
-            // Over the photo's own hover area, so its tooltip wins there.
             if let (Some(mark), Some(hover)) = (mark, &photo.suggested_hover) {
                 ui.interact(mark, ui.id().with(("suggested", side)), Sense::hover())
                     .on_hover_text(hover);
@@ -840,7 +890,17 @@ impl PhotoSortApp {
             && let (Some((label, hover)), Some(last)) = (&card.undo, last)
         {
             let at = last.right_bottom() - egui::vec2(S1 + 2.0, S1 + 2.0);
-            if undo_link(ui, &painter, Align2::RIGHT_BOTTOM, at, label, hover, true).1 {
+            if undo_link(
+                ui,
+                &painter,
+                Align2::RIGHT_BOTTOM,
+                at,
+                label,
+                hover,
+                LinkStyle::OverPhoto,
+            )
+            .1
+            {
                 event = Some(CardEvent::Undo);
             }
         }
@@ -992,9 +1052,33 @@ fn paint_inset(painter: &egui::Painter, slot: egui::Rect, inset: &Inset) {
     );
 }
 
-/// A card's link back to its suggestion, placed by `align` at `at`; over a
-/// photo it gets a dark backing. Returns its rect and whether it was
-/// clicked.
+/// How a card's link back to its suggestion is drawn.
+#[derive(Clone, Copy, PartialEq)]
+enum LinkStyle {
+    /// In the card's header, with its label.
+    Header,
+    /// In a header too narrow for the label: the arrow alone, with the label
+    /// in its hover.
+    Arrow,
+    /// Over a photo, on a dark backing.
+    OverPhoto,
+}
+
+fn undo_text(painter: &egui::Painter, label: &str, style: LinkStyle) -> Arc<egui::Galley> {
+    let arrow = egui_phosphor::regular::ARROW_U_UP_LEFT;
+    painter.layout_no_wrap(
+        if style == LinkStyle::Arrow {
+            arrow.to_owned()
+        } else {
+            format!("{arrow}  {label}")
+        },
+        medium(11.0),
+        ACCENT,
+    )
+}
+
+/// The link that puts a card back to its suggestion, anchored at `at`.
+/// Returns its rect and whether it was clicked.
 fn undo_link(
     ui: &egui::Ui,
     painter: &egui::Painter,
@@ -1002,13 +1086,10 @@ fn undo_link(
     at: egui::Pos2,
     label: &str,
     hover: &str,
-    over_photo: bool,
+    style: LinkStyle,
 ) -> (egui::Rect, bool) {
-    let text = painter.layout_no_wrap(
-        format!("{}  {label}", egui_phosphor::regular::ARROW_U_UP_LEFT),
-        medium(11.0),
-        ACCENT,
-    );
+    let text = undo_text(painter, label, style);
+    let over_photo = style == LinkStyle::OverPhoto;
     let (pad, size) = if over_photo {
         (egui::vec2(8.0, 3.0), text.size() + egui::vec2(16.0, 6.0))
     } else {
@@ -1018,7 +1099,13 @@ fn undo_link(
     let mut response = ui
         .interact(link, ui.id().with("undo"), Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand);
-    if !hover.is_empty() {
+    if style == LinkStyle::Arrow {
+        response = response.on_hover_text(if hover.is_empty() {
+            label.to_owned()
+        } else {
+            format!("{label} · {hover}")
+        });
+    } else if !hover.is_empty() {
         response = response.on_hover_text(hover);
     }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
@@ -1082,11 +1169,12 @@ pub(super) fn slot_ratio(width: u32, height: u32, orientation: u8) -> f32 {
     (h as f32 / w as f32).clamp(0.56, 1.5)
 }
 
-/// The one line over a guided step's grid, cut short when the room runs out
-/// with the whole line in its tooltip.
+/// The one line over a guided step's grid, cut short when the room runs out.
+/// A label that was cut shows its whole text when hovered, by itself: asking
+/// for that here as well showed it twice, and showed it for a line that was
+/// not cut at all.
 pub(super) fn summary_label(ui: &mut egui::Ui, text: &str) {
-    ui.add(egui::Label::new(RichText::new(text).color(INK)).truncate())
-        .on_hover_text(text);
+    ui.add(egui::Label::new(RichText::new(text).color(INK)).truncate());
 }
 
 pub(super) fn size_text(bytes: u64) -> String {

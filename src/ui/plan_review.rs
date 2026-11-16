@@ -827,9 +827,14 @@ impl Rows {
         }
         self.layout.last().map_or(0.0, |p| p.top + p.height)
     }
-    /// How wide one photo's place in `list` is: a pair where rotations are.
+    /// How wide one photo's place in `list` is: a pair where rotations are,
+    /// and as much under a rating, whose caption is the stars and the name.
     fn slot(&self, list: List) -> f32 {
-        if list == List::Rotate { PAIR } else { TILE.x }
+        if matches!(list, List::Rotate | List::Rate) {
+            PAIR
+        } else {
+            TILE.x
+        }
     }
 }
 
@@ -1657,8 +1662,20 @@ impl PhotoSortApp {
             painter.rect_filled(pill, 6.0, Color32::from_black_alpha(170));
             painter.galley(pill.min + egui::vec2(S1, 2.0), galley, INK);
         }
+        // A photo that is rotated or rated also says which file it is:
+        // look-alikes cannot be told apart by eye. What gets cut first on a
+        // long name is what the photos beside it already show: the turn of
+        // a rotation, but the name under a rating, whose stars show nowhere
+        // else.
+        let shown = if thumb.name.ends_with(&thumb.caption) {
+            thumb.caption.clone()
+        } else if key.0 == List::Rate {
+            format!("{} · {}", thumb.caption, thumb.file)
+        } else {
+            format!("{} · {}", thumb.file, thumb.caption)
+        };
         let mut job = LayoutJob::single_section(
-            thumb.caption.clone(),
+            shown,
             TextFormat {
                 font_id: egui::TextStyle::Small.resolve(ui.style()),
                 color: MUTED,

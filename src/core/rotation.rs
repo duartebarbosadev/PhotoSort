@@ -15,7 +15,8 @@ use std::collections::{HashMap, HashSet};
 pub struct Suggestion {
     /// Clockwise quarter turns, never 0.
     pub turns: u8,
-    /// The rotated views disagree: never staged without the user.
+    /// The model is not sure (`RotationSuggestion::unsure`): never staged
+    /// without the user, and listed apart from the sure ones.
     pub uncertain: bool,
 }
 

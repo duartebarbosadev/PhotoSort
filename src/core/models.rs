@@ -15,7 +15,20 @@ pub struct RotationSuggestion {
     pub uncertain: bool,
     pub views: u8,
 }
+/// Below this score a suggested turn is not sure enough to make without the
+/// user. The score is a softmax, not a probability: on the photos it reads
+/// well the model answers between 0.90 and 0.93 whatever their size or turn,
+/// and on a photo it cannot read (a dark night shot) between 0.50 and 0.73,
+/// right or wrong alike. The line sits in that gap.
+pub const ROTATION_CONFIDENCE: f32 = 0.8;
+
 impl RotationSuggestion {
+    /// Whether the user should decide: the rotated views disagree, or they
+    /// agree with a score under `ROTATION_CONFIDENCE`. Worked out from the
+    /// stored evidence each time, so results cached earlier follow the line.
+    pub fn unsure(&self) -> bool {
+        self.uncertain || self.confidence < ROTATION_CONFIDENCE
+    }
     pub fn valid(&self) -> bool {
         self.turns < 4
             && (0.0..=1.0).contains(&self.confidence)
@@ -612,8 +625,40 @@ fn start_runtime() -> Result<()> {
     ort::init_from(&runtime)?
         .with_name("PhotoSort")
         .with_telemetry(false)
+        .with_logger(std::sync::Arc::new(runtime_log))
         .commit();
+    // A logger of our own starts at ONNX Runtime's most verbose level: put it
+    // back at errors only, where its own stderr logger was.
+    ort::environment::Environment::current()?.set_log_level(ort::logging::LogLevel::Error);
     Ok(())
+}
+/// ONNX Runtime's messages, which it would print to stderr itself, go to
+/// PhotoSort's log instead, so one that is no failure can be kept quiet.
+/// A real failure also fails the session or the run it belongs to, which the
+/// caller reports whatever is logged here.
+fn runtime_log(
+    level: ort::logging::LogLevel,
+    _category: &str,
+    _id: &str,
+    location: &str,
+    message: &str,
+) {
+    use ort::logging::LogLevel;
+    match level {
+        LogLevel::Error | LogLevel::Fatal if expected_runtime_message(message) => {
+            tracing::debug!(location, "ONNX Runtime: {message}")
+        }
+        LogLevel::Error | LogLevel::Fatal => tracing::error!(location, "ONNX Runtime: {message}"),
+        LogLevel::Warning => tracing::warn!(location, "ONNX Runtime: {message}"),
+        LogLevel::Info | LogLevel::Verbose => tracing::debug!(location, "ONNX Runtime: {message}"),
+    }
+}
+/// Messages ONNX Runtime logs as errors while nothing is wrong. With NVIDIA
+/// GPU support, cuDNN's newer planner declines some convolutions ("No
+/// execution plans support the graph"); ONNX Runtime logs that as an error
+/// and then runs the convolution the usual way, about a dozen times a model.
+fn expected_runtime_message(message: &str) -> bool {
+    message.contains("[cudnn_frontend]") && message.contains("No execution plans support the graph")
 }
 /// Tries each accelerator this platform offers on a tiny model, so Settings
 /// can say where AI will run before any model loads. Fails only when ONNX
@@ -975,6 +1020,23 @@ mod regional_batch_tests {
             serde_json::json!({"samples":7,"single_crop_seconds":total_single,"batched_crop_seconds":total_batch,"model_initializations":models.initializations})
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod runtime_log_tests {
+    #[test]
+    fn only_the_cudnn_planner_notice_is_kept_out_of_the_error_log() {
+        assert!(super::expected_runtime_message(
+            "[cudnn_frontend] Error: No execution plans support the graph."
+        ));
+        for failure in [
+            "CUDA failure 2: out of memory",
+            "[cudnn_frontend] Error: CUDNN_STATUS_EXECUTION_FAILED",
+            "Non-zero status code returned while running Conv node.",
+        ] {
+            assert!(!super::expected_runtime_message(failure), "{failure}");
+        }
     }
 }
 

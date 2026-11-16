@@ -60,9 +60,14 @@ pub(super) fn trash_button_width(ui: &egui::Ui, all: bool) -> f32 {
         + 2.0 * ui.spacing().button_padding.x
 }
 
+/// The menu item that clears every Trash mark, with its key.
+pub(super) fn clear_trash_marks_label() -> String {
+    format!("Clear all Trash marks · {}+D", super::dialogs::ALT)
+}
+
 impl PhotoSortApp {
     pub(super) fn clear_trash_menu_item(&mut self, ui: &mut egui::Ui) {
-        if ui.add_enabled(self.can_clear_trash_marks(), egui::Button::new("Clear all Trash marks · Alt+D"))
+        if ui.add_enabled(self.can_clear_trash_marks(), egui::Button::new(clear_trash_marks_label()))
             .on_hover_text("Across the whole library, including photos hidden by filters. Ratings and rotations stay.")
             .clicked() {
             self.clear_all_trash_marks();

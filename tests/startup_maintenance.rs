@@ -69,6 +69,28 @@ fn binary_logging_preserves_json_stdout_and_never_replaces_files() {
     // Readiness may be false in a source checkout; stdout must still be pure JSON.
     let report: serde_json::Value = serde_json::from_slice(&diagnostic.stdout).unwrap();
     assert!(report.is_object());
+    // Missing models are an answer, not a crash: the exit code says so and
+    // one plain line, with nothing that reads like a failure of the app.
+    let empty = temp.path().join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    let missing = Command::new(binary)
+        .arg("--diagnostics")
+        .env("PHOTOSORT_DATA_ROOT", &empty)
+        .env_remove("ORT_DYLIB_PATH")
+        .current_dir(&empty)
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&missing.stderr);
+    if serde_json::from_slice::<serde_json::Value>(&missing.stdout).unwrap()["files_ready"]
+        == serde_json::Value::Bool(false)
+    {
+        assert_eq!(missing.status.code(), Some(1));
+        assert!(said.contains("files are missing or invalid"), "{said}");
+        assert!(
+            !said.contains("application failed") && !said.contains("AppCreation"),
+            "{said}"
+        );
+    }
     let log = std::fs::read_to_string(&path).unwrap();
     assert!(log.contains("application started"));
     assert!(log.contains("application stopped") || log.contains("application failed"));
@@ -144,7 +166,7 @@ fn clearing_uses_catalog_names_only_and_preserves_every_other_resource() {
             .collect::<HashSet<_>>(),
         ALL.iter().map(|a| a.name.to_owned()).collect()
     );
-    assert_eq!(std::fs::read(custom).unwrap(), b"custom");
+    assert_eq!(std::fs::read(&custom).unwrap(), b"custom");
     assert_eq!(
         std::fs::read(managed.path().join("models/private/a.onnx")).unwrap(),
         b"private"
@@ -159,6 +181,12 @@ fn clearing_uses_catalog_names_only_and_preserves_every_other_resource() {
             b"managed"
         );
     }
+    // What an interrupted download kept is cleared too.
+    let partial = model_assets::partial_path(managed.path(), ALL[0].name);
+    std::fs::write(&partial, b"half").unwrap();
+    let report = model_assets::clear_managed(managed.path(), &|| false).unwrap();
+    assert_eq!((report.removed, report.bytes), (vec![partial], 4));
+    assert_eq!(std::fs::read(&custom).unwrap(), b"custom");
     assert!(
         model_assets::clear_managed(managed.path(), &|| false)
             .unwrap()

@@ -535,9 +535,12 @@ impl PhotoSortApp {
             .is_some_and(|i| self.media[*i].kind == MediaKind::Video)
         {
             ui.label(
-                RichText::new("Space: play/pause · Alt+←/→: seek 10 s")
-                    .small()
-                    .color(MUTED),
+                RichText::new(format!(
+                    "Space: play/pause · {}+←/→: seek 10 s",
+                    super::dialogs::ALT
+                ))
+                .small()
+                .color(MUTED),
             );
             return;
         }

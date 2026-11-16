@@ -619,29 +619,21 @@ impl PhotoSortApp {
         }
     }
 
-    /// Picks again the best photo of each group whose scores changed, in
-    /// one pass over the groups, by `publish_groups`'s rule: the highest
-    /// score, ties to the lower id, for groups of two or more with a score.
+    /// Picks again the best photo of each group whose scores changed, by
+    /// `publish_groups`'s rule: Pick Best's order, for groups of two or more
+    /// whose best photo has a score.
     pub(super) fn refresh_group_best(&mut self) {
         if self.group_best_stale.is_empty() {
             return;
         }
         let stale = std::mem::take(&mut self.group_best_stale);
-        let mut best: HashMap<usize, (f64, MediaId, usize)> = HashMap::new();
-        for (id, group) in self.cull_groups.iter().filter(|(_, g)| stale.contains(g)) {
-            let score = self.analysis.get(id).map_or(f64::NEG_INFINITY, |a| a.score);
-            let entry = best.entry(*group).or_insert((score, *id, 0));
-            entry.2 += 1;
-            if score > entry.0 || (score == entry.0 && id.0 < entry.1.0) {
-                (entry.0, entry.1) = (score, *id);
-            }
-        }
+        let best = super::grouping::group_best(&self.ranked_groups(Some(&stale)), &self.analysis);
         for group in stale {
             match best.get(&group) {
-                Some(&(score, id, members)) if members > 1 && score.is_finite() => {
-                    self.group_best.insert(group, (id, members));
+                Some(found) => {
+                    self.group_best.insert(group, *found);
                 }
-                _ => {
+                None => {
                     self.group_best.remove(&group);
                 }
             }

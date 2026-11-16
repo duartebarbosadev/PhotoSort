@@ -38,19 +38,35 @@ fn main() -> eframe::Result {
         println!("PhotoSort {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
-    let _logging = session_logging::start(options.log_file.as_deref(), options.log_level)
+    let logging = session_logging::start(options.log_file.as_deref(), options.log_level)
         .map_err(|e| eframe::Error::AppCreation(e.into()))?;
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "application started");
     photosort::core::crash::install(photosort::core::crash::directory());
     let result = run(options);
     match &result {
-        Ok(()) => tracing::info!("application stopped"),
+        Ok(true) => tracing::info!("application stopped"),
+        Ok(false) => tracing::info!("application stopped: diagnostics found files missing"),
         Err(error) => tracing::error!(%error, "application failed"),
     }
-    result
+    match result {
+        Ok(true) => Ok(()),
+        // `--diagnostics` answered that files are missing. That is its
+        // answer, not a failure of the app: one plain line, and the exit
+        // code for scripts, after the log is written out.
+        Ok(false) => {
+            eprintln!(
+                "PhotoSort: model or runtime files are missing or invalid; the report above says which."
+            );
+            drop(logging);
+            std::process::exit(1)
+        }
+        Err(error) => Err(error),
+    }
 }
 
-fn run(options: photosort::core::startup::Options) -> eframe::Result {
+/// Runs what was asked for. `false` when `--diagnostics` reported that
+/// required files are not ready.
+fn run(options: photosort::core::startup::Options) -> eframe::Result<bool> {
     if options.check_runtime {
         use std::io::Write;
         let mut output =
@@ -72,7 +88,7 @@ fn run(options: photosort::core::startup::Options) -> eframe::Result {
                 std::io::Error::other("Native runtime check did not pass; see JSON report").into(),
             ));
         }
-        return Ok(());
+        return Ok(true);
     }
     if options.diagnostics {
         let report = photosort::core::diagnostics::collect()
@@ -82,15 +98,7 @@ fn run(options: photosort::core::startup::Options) -> eframe::Result {
             serde_json::to_string_pretty(&report)
                 .map_err(|e| eframe::Error::AppCreation(e.into()))?
         );
-        if !report.files_ready {
-            return Err(eframe::Error::AppCreation(
-                std::io::Error::other(
-                    "Required model/runtime files are missing or invalid; see diagnostics JSON",
-                )
-                .into(),
-            ));
-        }
-        return Ok(());
+        return Ok(report.files_ready);
     }
     if options.clear_models {
         let report = photosort::core::model_assets::clear_managed(
@@ -164,6 +172,7 @@ fn run(options: photosort::core::startup::Options) -> eframe::Result {
             Ok(Box::new(app))
         }),
     )
+    .map(|()| true)
 }
 
 /// A GUI-subsystem program has no console of its own. Started from a

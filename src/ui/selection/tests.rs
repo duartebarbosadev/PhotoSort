@@ -433,7 +433,14 @@ fn clear_all_trash_after_keep_reviewing_invalidates_only_the_cached_plan() {
         "A closed cached preview blocked clearing marks"
     );
     click_label(&mut app, &ctx, size, "Menu");
-    click_label(&mut app, &ctx, size, "Clear all Trash marks · Alt+D");
+    // The key is named as this system's keyboard names it.
+    let label = clear_trash_marks_label();
+    assert_eq!(
+        label.contains("Option+D"),
+        cfg!(target_os = "macos"),
+        "{label}"
+    );
+    click_label(&mut app, &ctx, size, &label);
     assert!(!app.decision(id).rejected);
     assert_eq!(app.decision(id).rating, Some(4));
     assert_eq!(app.decision(id).turns, 1);
@@ -546,7 +553,7 @@ fn clear_all_trash_menu_clears_hidden_marks_at_compact_and_wide_sizes() {
             ctx.enable_accesskit();
             click_label(&mut app, &ctx, size, "Menu");
             let nodes = rendered(&mut app, &ctx, size);
-            let label = "Clear all Trash marks · Alt+D";
+            let label = &clear_trash_marks_label();
             let rect = nodes
                 .iter()
                 .find(|(name, _)| name == label)

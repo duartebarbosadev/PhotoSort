@@ -528,16 +528,42 @@ fn each_group_with_a_choice_marks_its_best_scoring_photo() {
         )
     })
     .collect();
-    let best = super::group_best(&groups, &analysis);
+    let mut metadata: HashMap<MediaId, Metadata> = HashMap::new();
+    let best = |analysis: &HashMap<_, _>, metadata: &HashMap<_, _>| {
+        let ranked = super::ranked_groups(&groups, analysis, metadata, |id| id.0, None);
+        super::group_best(&ranked, analysis)
+    };
     // Group 8 has one photo, so nothing to choose; group 9 ties on score
-    // and resolves to the lower id every time.
-    assert_eq!(
-        best,
-        [(7, (MediaId(2), 3)), (9, (MediaId(5), 2))]
-            .into_iter()
-            .collect()
+    // and resolves to the first in order every time.
+    let by_score: HashMap<_, _> = [(7, (MediaId(2), 3)), (9, (MediaId(5), 2))]
+        .into_iter()
+        .collect();
+    assert_eq!(best(&analysis, &metadata), by_score);
+    assert!(best(&HashMap::new(), &metadata).is_empty());
+    // The same order as Pick Best: photo 2, the top score, is a half-size
+    // copy of photo 3, so it never takes the badge from it. Its place in
+    // the group and "Go to best" follow the same list.
+    for (id, width, height) in [(1, 6000, 4000), (2, 3000, 2000), (3, 6000, 4000)] {
+        metadata.insert(
+            MediaId(id),
+            Metadata {
+                width,
+                height,
+                ..Default::default()
+            },
+        );
+    }
+    let mut with_copy = analysis.clone();
+    with_copy.get_mut(&MediaId(1)).unwrap().hash = u64::MAX;
+    assert_eq!(best(&with_copy, &metadata)[&7], (MediaId(3), 3));
+    let ranked = super::ranked_groups(&groups, &with_copy, &metadata, |id| id.0, None);
+    assert_eq!(ranked[&7], [MediaId(3), MediaId(1), MediaId(2)]);
+    let picked = crate::core::pick_review::rank(
+        &[MediaId(1), MediaId(2), MediaId(3)],
+        &with_copy,
+        &metadata,
     );
-    assert!(super::group_best(&groups, &HashMap::new()).is_empty());
+    assert_eq!(picked.ordered, ranked[&7]);
 }
 
 #[test]

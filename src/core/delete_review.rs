@@ -456,12 +456,15 @@ pub fn from_analysis(
             continue;
         }
         // A pair outranks a single-photo issue for either member: comparing the
-        // two is the more useful review, and the keeper is already the sharper
+        // two is the more useful review, and the keeper is already the better
         // one. Say so instead of hiding the duplicate behind the issue.
         let keep_why = match (pair.kind, pair.keeper) {
             (Kind::Formats, _) => "",
             (Kind::Exact, _) => {
                 "The two files are identical, so either can go. This one keeps its place in the library."
+            }
+            (Kind::Near, Keeper::FullSize) => {
+                "The other photo is a smaller copy of this one, so this one holds more detail."
             }
             (Kind::Near, Keeper::Sharper) => "It is the sharper photo of the two.",
             (Kind::Near, Keeper::MoreMetadata) => {
@@ -477,6 +480,7 @@ pub fn from_analysis(
         let (category, tag) = match (pair.kind, pair.keeper) {
             (Kind::Exact, _) => (Category::Exact, "Identical copy"),
             (Kind::Formats, _) => (Category::Formats, "JPEG + HEIC"),
+            (Kind::Near, Keeper::FullSize) => (Category::Near, "Full size kept"),
             (Kind::Near, Keeper::Sharper) => (Category::Near, "Sharper kept"),
             (Kind::Near, Keeper::MoreMetadata) => (Category::Near, "Fuller metadata kept"),
             (Kind::Near, Keeper::LargerFile) => (Category::Near, "Larger file kept"),

@@ -27,9 +27,12 @@ pub(super) struct Deck {
     stamp: u64,
     /// The review and the decisions the counts were taken from.
     counted: Option<(u64, u64)>,
-    /// Photos going to Trash, and their bytes.
+    /// The groups' photos going to Trash, and their bytes.
     trash: usize,
     freed: u64,
+    /// Photos and videos going to Trash that are in no group here: marked
+    /// in another step. With `trash`, every Trash mark Review lists.
+    elsewhere: usize,
     /// Groups Accept all suggestions would change.
     changed: usize,
 }
@@ -316,6 +319,16 @@ impl PhotoSortApp {
     fn pick_summary(&mut self, ui: &mut egui::Ui) {
         let deck = &self.grids.pick;
         let (trash, freed, changed) = (deck.trash, deck.freed, deck.changed);
+        // The line counts this step's groups and says so: Review's own
+        // count takes in what other steps marked, named after it here.
+        let mut summary = format!(
+            "{} in these groups going {TO_TRASH} · frees {}",
+            count(trash, "photo", "photos"),
+            super::review_card::size_text(freed),
+        );
+        if deck.elsewhere > 0 {
+            summary.push_str(&format!(" · {} more marked in other steps", deck.elsewhere));
+        }
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 if ui
@@ -332,14 +345,7 @@ impl PhotoSortApp {
                 self.size_slider(ui);
                 ui.add_space(S3);
                 ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
-                    super::review_card::summary_label(
-                        ui,
-                        &format!(
-                            "{} going {TO_TRASH} · frees {}",
-                            count(trash, "photo", "photos"),
-                            super::review_card::size_text(freed),
-                        ),
-                    );
+                    super::review_card::summary_label(ui, &summary);
                 });
             });
         });
@@ -423,6 +429,12 @@ impl PhotoSortApp {
                     .map_or(0, |i| self.media[*i].fingerprint.bytes);
                 (count + 1, bytes + size)
             });
+            deck.elsewhere = self
+                .decisions
+                .iter()
+                .filter(|(id, d)| d.rejected && self.index.contains_key(id))
+                .count()
+                .saturating_sub(deck.trash);
             deck.changed = (0..self.pick_review.clusters().len())
                 .filter(|group| {
                     self.pick_review
@@ -440,6 +452,9 @@ impl PhotoSortApp {
         let best = cluster.best();
         let next = cluster.ordered[1];
         let why = match cluster.reason {
+            Reason::FullSize => {
+                "Full size; the next best is a smaller or cropped copy of it.".to_owned()
+            }
             Reason::Sharper => match cluster.soft.len() {
                 1 => "Sharp; 1 other photo is softer.".to_owned(),
                 n => format!("Sharp; {n} others are softer."),
@@ -900,9 +915,109 @@ mod tests {
             assert!(!shown.contains(text), "{text} in:\n{shown}");
         }
         assert!(
-            shown.contains(&format!("3 photos going {TO_TRASH}")),
+            shown.contains(&format!("3 photos in these groups going {TO_TRASH}")),
             "{shown}"
         );
+        assert!(!shown.contains("more marked"), "{shown}");
+        // A photo marked in another step is in no group. The line names it
+        // apart, so the two add up to what Review counts.
+        app.media.push(photo(6));
+        app.index.insert(MediaId(6), 5);
+        crate::core::model::update_trash(&mut app.decisions, [(MediaId(6), true)]);
+        let shown = super::super::review_card::render_grid(&mut app);
+        assert!(
+            shown.contains(&format!("3 photos in these groups going {TO_TRASH}"))
+                && shown.contains("1 more marked in other steps"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn a_narrow_card_keeps_its_title_and_never_draws_the_count_over_it() {
+        let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+        app.media = (1..=20).map(photo).collect();
+        app.index = app
+            .media
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
+        app.pick_review.replace(vec![Cluster::new(
+            1,
+            (1..=20).map(MediaId).collect(),
+            (1..=20).map(|n| (MediaId(n), n as f64)).collect(),
+        )]);
+        app.view_data_ready.insert(Step::PickBest);
+        app.set_step(Step::PickBest);
+        app.refilter();
+        app.review = false;
+        // The header as painted for photos of a shape: whether the title
+        // was cut, the count beside it, and whether the two overlap.
+        let mut header = |width: u32, height: u32| {
+            for n in 1..=20 {
+                app.metadata.insert(
+                    MediaId(n),
+                    Metadata {
+                        width,
+                        height,
+                        ..Default::default()
+                    },
+                );
+            }
+            app.metadata_shapes += 1;
+            app.preferences.photo_size = *crate::core::preferences::PHOTO_SIZES.start();
+            let ctx = egui::Context::default();
+            theme_install(&ctx);
+            let output = ctx.run_test(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| app.library(ui));
+                },
+            );
+            fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
+                match shape {
+                    egui::Shape::Text(text) => out.push(text),
+                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+                    _ => {}
+                }
+            }
+            let mut texts = Vec::new();
+            for clipped in &output.shapes {
+                walk(&clipped.shape, &mut texts);
+            }
+            let span = |t: &egui::epaint::TextShape| (t.pos.x, t.pos.x + t.galley.size().x);
+            let title = texts
+                .iter()
+                .find(|t| t.galley.text() == "Group 1")
+                .expect("the card's title");
+            let count = texts.iter().find(|t| t.galley.text().starts_with("+17"));
+            (
+                title.galley.elided,
+                count.map(|t| t.galley.text().to_owned()),
+                count.is_some_and(|t| span(t).0 < span(title).1),
+            )
+        };
+        // Wide photos: room for the whole count.
+        assert_eq!(
+            header(3000, 2000),
+            (false, Some("+17 more, 17 kept".to_owned()), false)
+        );
+        // Narrower cards, down to the narrowest: the title stays whole and
+        // clear of the count, which is shortened where it must be.
+        let mut counts = Vec::new();
+        for width in [1600, 1400, 1000, 500] {
+            let (cut, count, over) = header(width, 2000);
+            assert!(!cut && !over, "{width}: {count:?}");
+            counts.push(count.expect("the count beside the title"));
+        }
+        assert!(counts.iter().all(|c| c.starts_with("+17 more")));
+        assert!(counts.iter().any(|c| c == "+17 more"), "{counts:?}");
     }
 
     #[test]

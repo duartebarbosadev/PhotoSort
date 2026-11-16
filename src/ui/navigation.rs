@@ -84,12 +84,18 @@ impl PhotoSortApp {
             let enabled = active || !(self.busy || applying);
             let tip = if enabled && *step == Step::Review && pending > 0 {
                 format!(
-                    "Review {pending} {} · Ctrl/Cmd+Alt+{}",
+                    "Review {pending} {} · Ctrl/Cmd+{}+{}",
                     if pending == 1 { "change" } else { "changes" },
+                    super::dialogs::ALT,
                     step.index() + 1
                 )
             } else if enabled {
-                format!("{} · Ctrl/Cmd+Alt+{}", step.title(), step.index() + 1)
+                format!(
+                    "{} · Ctrl/Cmd+{}+{}",
+                    step.title(),
+                    super::dialogs::ALT,
+                    step.index() + 1
+                )
             } else {
                 format!(
                     "{} · available when the current task finishes",

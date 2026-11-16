@@ -198,14 +198,14 @@ impl PhotoSortApp {
                                 1
                             }
                         };
-                        // Without the runtime no model can run, so its offer comes first.
-                        let runtime_first = snapshot.runtime.is_none();
-                        if runtime_first {
-                            ui.add_space(S2);
-                            ui.label(caption("Runtime"));
-                            ui.add_space(S1);
-                            self.runtime_section(ui, state, &snapshot);
-                        }
+                        self.download_all(ui, state, &snapshot);
+                        // Without the runtime no model can run, so it comes
+                        // first, and stays there once installed: the list
+                        // below never moves under the pointer.
+                        ui.add_space(S2);
+                        ui.label(caption("Runtime"));
+                        ui.add_space(S1);
+                        self.runtime_section(ui, state, &snapshot);
                         let titles = [
                             "Needed for the paused analysis",
                             "Used by Easy Delete, Pick Best, Cull and Organize",
@@ -226,12 +226,6 @@ impl PhotoSortApp {
                                 });
                                 ui.add_space(S1 + 2.0);
                             }
-                        }
-                        if !runtime_first {
-                            ui.add_space(S2);
-                            ui.label(caption("Runtime"));
-                            ui.add_space(S1);
-                            self.runtime_section(ui, state, &snapshot);
                         }
                         if let Some((path, valid)) = &snapshot.orientation_override {
                             ui.label(
@@ -262,7 +256,11 @@ impl PhotoSortApp {
                             egui::ProgressBar::new(progress.bytes as f32 / progress.total as f32)
                                 .desired_height(8.0)
                                 .text(RichText::new(format!(
-                                    "{:.1} / {:.1} MB",
+                                    "{}{:.1} / {:.1} MB",
+                                    progress
+                                        .step
+                                        .map(|(n, count)| format!("{n} of {count} · "))
+                                        .unwrap_or_default(),
                                     progress.bytes as f64 / 1e6,
                                     progress.total as f64 / 1e6
                                 )).small()),
@@ -352,6 +350,7 @@ impl PhotoSortApp {
             .flatten()
             .filter(|p| p.id == Some(row.id));
         let editable = !state.running && !self.busy && self.analysis_run.is_none();
+        let bounds = ui.clip_rect().x_range();
         egui::Frame::new()
             .fill(CARD)
             .corner_radius(R_TILE)
@@ -361,9 +360,13 @@ impl PhotoSortApp {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(asset.title).font(semibold(13.0)));
                     // The upstream page; it opens in the browser only when clicked.
-                    let link = ui
-                        .link(RichText::new(format!("Source {}", icon::ARROW_SQUARE_OUT)).small())
-                        .on_hover_text(asset.page);
+                    let link = hover_within(
+                        ui.link(
+                            RichText::new(format!("Source {}", icon::ARROW_SQUARE_OUT)).small(),
+                        ),
+                        bounds,
+                        asset.page,
+                    );
                     let name = format!("Source page for {}", asset.title);
                     link.widget_info(|| {
                         egui::WidgetInfo::labeled(egui::WidgetType::Link, true, &name)
@@ -379,13 +382,12 @@ impl PhotoSortApp {
                                     if ui.add(primary("Restore bundled copy")).clicked() {
                                         self.start_model_operation(Work::Restore(row.id));
                                     }
-                                } else if ui
-                                    .add(primary(format!(
-                                        "Download {:.1} MB",
-                                        asset.bytes as f64 / 1e6
-                                    )))
-                                    .on_hover_text(asset.url)
-                                    .clicked()
+                                } else if hover_within(
+                                    ui.add(primary(download_label(row))),
+                                    bounds,
+                                    asset.url,
+                                )
+                                .clicked()
                                 {
                                     self.start_model_operation(Work::Download(row.id));
                                 }
@@ -407,13 +409,14 @@ impl PhotoSortApp {
                         let pill = status_pill(ui, &text, color);
                         match &row.health {
                             Health::Verified(path) => {
-                                pill.on_hover_text(crate::core::text::shown(path));
+                                hover_within(pill, bounds, crate::core::text::shown(path));
                             }
                             Health::Invalid(path, why) => {
-                                pill.on_hover_text(format!(
-                                    "{why}\n{}",
-                                    crate::core::text::shown(path)
-                                ));
+                                hover_within(
+                                    pill,
+                                    bounds,
+                                    format!("{why}\n{}", crate::core::text::shown(path)),
+                                );
                             }
                             Health::Missing => {}
                         }
@@ -452,10 +455,20 @@ impl PhotoSortApp {
     ) {
         let asset = row.id.asset();
         let ready = matches!(row.health, Health::Verified(_));
+        // The value wraps in its own column, beside its label: a long path
+        // then never starts a line further left than the value itself. One
+        // with no spaces at all (a checksum) breaks where the room ends.
         let line = |ui: &mut egui::Ui, label: &str, value: &str| {
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal_top(|ui| {
                 ui.label(RichText::new(label).small().color(MUTED));
-                ui.label(RichText::new(value).small());
+                let mut job = egui::text::LayoutJob::simple(
+                    value.to_owned(),
+                    egui::TextStyle::Small.resolve(ui.style()),
+                    ui.visuals().text_color(),
+                    ui.available_width(),
+                );
+                job.wrap.break_anywhere = !value.contains(' ');
+                ui.add(egui::Label::new(job).wrap());
             });
         };
         line(ui, "Origin", asset.origin);
@@ -464,17 +477,24 @@ impl PhotoSortApp {
         if let Health::Invalid(_, why) = &row.health {
             line(ui, "Problem", why);
         }
+        if !ready && row.partial > 0 {
+            line(
+                ui,
+                "Partial download",
+                &format!(
+                    "{:.1} of {:.1} MB kept; the download continues from there",
+                    row.partial as f64 / 1e6,
+                    asset.bytes as f64 / 1e6
+                ),
+            );
+        }
         if !ready {
             ui.add_enabled_ui(editable, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if ui.small_button("Import prepared model…").clicked() {
                         self.import_model(ui.ctx(), row.id);
                     }
-                    if row.bundled.is_some()
-                        && ui
-                            .small_button(format!("Download {:.1} MB", asset.bytes as f64 / 1e6))
-                            .clicked()
-                    {
+                    if row.bundled.is_some() && ui.small_button(download_label(row)).clicked() {
                         self.start_model_operation(Work::Download(row.id));
                     }
                 });
@@ -537,6 +557,69 @@ impl PhotoSortApp {
 }
 
 impl PhotoSortApp {
+    /// Download all: one action for the runtime and every missing model,
+    /// shown while two or more are missing. Its row stays in place while it
+    /// runs, so nothing below moves.
+    fn download_all(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &model_assets::State,
+        snapshot: &model_assets::Snapshot,
+    ) {
+        let (works, bytes) = missing_downloads(snapshot);
+        if works.len() < 2 {
+            return;
+        }
+        let editable = !state.running && !self.busy && self.analysis_run.is_none();
+        let bounds = ui.clip_rect().x_range();
+        let runtime = works
+            .iter()
+            .any(|work| matches!(work, Work::InstallRuntime(_)));
+        let models = works.len() - usize::from(runtime);
+        // The terms of what it downloads, as beside each model's own action.
+        let notes: Vec<String> = works
+            .iter()
+            .filter_map(|work| match work {
+                Work::Download(id) => {
+                    let asset = id.asset();
+                    Some(format!("{}: {}", asset.title, asset.download_note?))
+                }
+                _ => None,
+            })
+            .collect();
+        ui.add_space(S1);
+        ui.horizontal_wrapped(|ui| {
+            ui.add_enabled_ui(editable, |ui| {
+                let label = if bytes > 0 {
+                    format!("Download all · {}", download_size(bytes))
+                } else {
+                    "Restore all".to_owned()
+                };
+                let hover = if model_assets::runtime::info(model_assets::runtime::Package::Cuda)
+                    .is_some()
+                {
+                    "Downloads and verifies each one in turn. NVIDIA GPU support is a separate download."
+                } else {
+                    "Downloads and verifies each one in turn."
+                };
+                if hover_within(ui.add(primary(label)), bounds, hover).clicked() {
+                    self.start_model_operation(Work::All(works));
+                }
+            });
+            ui.label(
+                RichText::new(format!(
+                    "{}{models} {}, one after another",
+                    if runtime { "The AI runtime and " } else { "" },
+                    if models == 1 { "model" } else { "models" },
+                ))
+                .small()
+                .color(MUTED),
+            );
+        });
+        for note in notes {
+            ui.add(egui::Label::new(RichText::new(note).small().color(ACCENT)).wrap());
+        }
+    }
     /// The AI runtime: found, or offered for download with its size and source,
     /// and NVIDIA GPU support where a driver is present. Nothing downloads until
     /// the user clicks; "Install it myself" explains the manual route instead.
@@ -549,6 +632,7 @@ impl PhotoSortApp {
         use egui_phosphor::regular as icon;
         use model_assets::runtime::{self, Package};
         let editable = !state.running && !self.busy && self.analysis_run.is_none();
+        let bounds = ui.clip_rect().x_range();
         let installing = state
             .progress
             .as_ref()
@@ -568,12 +652,15 @@ impl PhotoSortApp {
         };
         match snapshot.runtime.as_ref() {
             Some(path) => {
-                ui.label(
-                    RichText::new(format!("{}  AI runtime found", icon::CHECK_CIRCLE))
-                        .color(GREEN)
-                        .small(),
-                )
-                .on_hover_text(crate::core::text::shown(path));
+                hover_within(
+                    ui.label(
+                        RichText::new(format!("{}  AI runtime found", icon::CHECK_CIRCLE))
+                            .color(GREEN)
+                            .small(),
+                    ),
+                    bounds,
+                    crate::core::text::shown(path),
+                );
             }
             None => match runtime::info(Package::Cpu) {
                 Some(info) => {
@@ -592,10 +679,12 @@ impl PhotoSortApp {
                             ui.label(RichText::new(text).color(ACCENT).small());
                         } else {
                             ui.add_enabled_ui(editable, |ui| {
-                                if ui
-                                    .add(primary(format!("Download {}", info.title)))
-                                    .on_hover_text(info.archives[0].url)
-                                    .clicked()
+                                if hover_within(
+                                    ui.add(primary(format!("Download {}", info.title))),
+                                    bounds,
+                                    info.archives[0].url,
+                                )
+                                .clicked()
                                 {
                                     self.start_model_operation(Work::InstallRuntime(Package::Cpu));
                                 }
@@ -626,15 +715,18 @@ impl PhotoSortApp {
         ui.add_space(S1);
         if let Some(path) = snapshot.cuda.as_ref() {
             ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new(format!(
-                        "{}  NVIDIA GPU support installed",
-                        icon::CHECK_CIRCLE
-                    ))
-                    .color(GREEN)
-                    .small(),
-                )
-                .on_hover_text(crate::core::text::shown(path));
+                hover_within(
+                    ui.label(
+                        RichText::new(format!(
+                            "{}  NVIDIA GPU support installed",
+                            icon::CHECK_CIRCLE
+                        ))
+                        .color(GREEN)
+                        .small(),
+                    ),
+                    bounds,
+                    crate::core::text::shown(path),
+                );
                 ui.add_enabled_ui(editable, |ui| {
                     if ui.small_button("Remove").clicked() {
                         self.start_model_operation(Work::RemoveRuntime(Package::Cuda));
@@ -690,12 +782,98 @@ fn manual_runtime_help(ui: &mut egui::Ui) {
         "libonnxruntime.so"
     };
     let folder = crate::core::session::data_dir().join("runtime");
-    ui.label(RichText::new("Install it myself").small().color(MUTED))
-        .on_hover_text(format!(
+    let bounds = ui.clip_rect().x_range();
+    hover_within(
+        ui.label(RichText::new("Install it myself").small().color(MUTED)),
+        bounds,
+        format!(
             "Copy {name} from ONNX Runtime {} into {}, or set ORT_DYLIB_PATH to its full path, then check again.",
             crate::core::model_assets::runtime::ORT_VERSION,
             crate::core::text::shown(&folder)
-        ));
+        ),
+    );
+}
+
+/// A model's download action: its size, or what is left of a download that
+/// was interrupted and continues.
+fn download_label(row: &model_assets::Row) -> String {
+    let bytes = row.id.asset().bytes;
+    if row.partial > 0 {
+        format!(
+            "Continue download · {:.1} MB left",
+            (bytes - row.partial.min(bytes)) as f64 / 1e6
+        )
+    } else {
+        format!("Download {:.1} MB", bytes as f64 / 1e6)
+    }
+}
+
+/// What Download all fetches, in order, and the bytes left to download: the
+/// AI runtime when it is missing and offered for this platform, then every
+/// model that is not installed, from its bundled copy where there is one.
+/// Never NVIDIA GPU support: it is optional and far larger than the rest.
+fn missing_downloads(snapshot: &model_assets::Snapshot) -> (Vec<Work>, u64) {
+    use model_assets::runtime::{self, Package};
+    let mut works = Vec::new();
+    let mut bytes = 0;
+    if snapshot.runtime.is_none()
+        && let Some(info) = runtime::info(Package::Cpu)
+    {
+        works.push(Work::InstallRuntime(Package::Cpu));
+        bytes += info.download_bytes();
+    }
+    let overridden = snapshot
+        .orientation_override
+        .as_ref()
+        .is_some_and(|(_, valid)| *valid);
+    for row in &snapshot.rows {
+        if matches!(row.health, Health::Verified(_))
+            || (overridden && row.id == model_assets::Id::Rotation)
+        {
+            continue;
+        }
+        if row.bundled.is_some() {
+            works.push(Work::Restore(row.id));
+        } else {
+            works.push(Work::Download(row.id));
+            let size = row.id.asset().bytes;
+            bytes += size - row.partial.min(size);
+        }
+    }
+    (works, bytes)
+}
+
+/// Hover text that stays inside the panel, whose left and right edges are
+/// `bounds`: it opens toward the side of the widget with more room and wraps
+/// to fit there. A plain tooltip is as wide as its longest line allows, so a
+/// path or an address ran past the panel's edge.
+fn hover_within(
+    response: egui::Response,
+    bounds: egui::Rangef,
+    text: impl Into<egui::WidgetText>,
+) -> egui::Response {
+    static ABOVE_START: [egui::RectAlign; 1] = [egui::RectAlign::TOP_START];
+    static ABOVE_END: [egui::RectAlign; 1] = [egui::RectAlign::TOP_END];
+    let (to_right, to_left) = (
+        bounds.max - response.rect.left(),
+        response.rect.right() - bounds.min,
+    );
+    let (align, above, room) = if to_right >= to_left {
+        (egui::RectAlign::BOTTOM_START, &ABOVE_START, to_right)
+    } else {
+        (egui::RectAlign::BOTTOM_END, &ABOVE_END, to_left)
+    };
+    // The tooltip's own frame takes some of the room.
+    let width = (room - 20.0)
+        .min(response.ctx.global_style().spacing.tooltip_width)
+        .max(120.0);
+    let mut tooltip = egui::Tooltip::for_enabled(&response).width(width);
+    tooltip.popup = tooltip.popup.align(align).align_alternatives(above);
+    tooltip.show(|ui| {
+        ui.set_max_width(width);
+        ui.add(egui::Label::new(text).wrap());
+    });
+    response
 }
 
 /// A rounded message line in the model panel.

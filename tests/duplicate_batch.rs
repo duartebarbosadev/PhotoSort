@@ -26,6 +26,7 @@ fn input(n: u64) -> Input {
         group: 1,
         embedding: vec![2., 0.],
         sharpness: Some(100.),
+        pixels: 0,
         metadata_fields: 0,
         shot: None,
         camera: String::new(),
@@ -121,6 +122,19 @@ fn keeper_uses_rounded_sharpness_then_metadata_then_size_and_stable_order() {
     check(&a, &b, 1, "larger");
     b.media.fingerprint.bytes = 1000;
     check(&a, &b, 1, "library order");
+    // A smaller copy never wins, however sharp it measures.
+    (a.pixels, b.pixels) = (6_000_000, 24_000_000);
+    (a.sharpness, b.sharpness) = (Some(120.), Some(100.));
+    check(&a, &b, 2, "full-size");
+    // So does one cropped by 3%.
+    a.pixels = 22_581_600;
+    check(&a, &b, 2, "full-size");
+    // The same size but for a few rows, as a RAW file and its JPEG are, or
+    // a size unknown: the sharpness decides.
+    a.pixels = 23_800_000;
+    check(&a, &b, 1, "sharper");
+    a.pixels = 0;
+    check(&a, &b, 1, "sharper");
 }
 #[test]
 fn near_pair_cache_reuses_full_assessment_and_survives_store_restart() {
