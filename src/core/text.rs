@@ -75,12 +75,12 @@ pub const TRASH: &str = if cfg!(windows) {
 } else {
     "Trash"
 };
-/// The same after "to" in a short label, where macOS and Linux leave "the"
-/// out ("3 photos going to Trash"). Windows never does.
+/// The same after "to", as in "3 photos going to the Trash". With "the" on
+/// every system, as Review says it, so a step and Review never differ.
 pub const TO_TRASH: &str = if cfg!(windows) {
     "to the Recycle Bin"
 } else {
-    "to Trash"
+    "to the Trash"
 };
 /// The same where it is told apart from PhotoSort's own Trash mark.
 pub const SYSTEM_TRASH: &str = if cfg!(windows) {

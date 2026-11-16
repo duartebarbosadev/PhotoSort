@@ -40,19 +40,32 @@ impl PhotoSortApp {
         let (best, size) = *self.group_best.get(&group)?;
         Some((group, best, size))
     }
-    /// The photo's place in its group by score: 1 for the best photo.
+    /// The photo's place in its group, in Pick Best's order: 1 for the
+    /// best photo.
     pub(super) fn group_rank(&self, id: MediaId, group: usize) -> usize {
-        let score = |id: &MediaId| self.analysis.get(id).map_or(f64::NEG_INFINITY, |a| a.score);
-        let own = score(&id);
-        1 + self
-            .cull_groups
-            .iter()
-            .filter(|(other, g)| {
-                **g == group
-                    && **other != id
-                    && (score(other) > own || (score(other) == own && other.0 < id.0))
-            })
-            .count()
+        let only = HashSet::from([group]);
+        self.ranked_groups(Some(&only))
+            .get(&group)
+            .and_then(|ordered| ordered.iter().position(|other| *other == id))
+            .map_or(1, |place| place + 1)
+    }
+    /// Each Cull group's photos from best to worst, for the groups in
+    /// `only` or for all of them: see `ranked_groups`.
+    pub(super) fn ranked_groups(
+        &self,
+        only: Option<&HashSet<usize>>,
+    ) -> HashMap<usize, Vec<MediaId>> {
+        ranked_groups(
+            &self.cull_groups,
+            &self.analysis,
+            &self.metadata,
+            |id| {
+                self.index.get(&id).map(|i| {
+                    crate::core::dates::capture_order(&self.media[*i], self.metadata.get(&id))
+                })
+            },
+            only,
+        )
     }
     pub(super) fn publish_groups(&mut self, groups: Arc<HashMap<MediaId, usize>>) {
         // Restore a group filter by photo identity, not yesterday's AI numbering.
@@ -67,7 +80,7 @@ impl PhotoSortApp {
                 })
         });
         self.cull_groups = groups;
-        self.group_best = group_best(&self.cull_groups, &self.analysis);
+        self.group_best = group_best(&self.ranked_groups(None), &self.analysis);
         if self.browse.group.is_some() {
             self.browse.group = anchor.and_then(|id| self.cull_groups.get(&id).copied());
         }
@@ -397,25 +410,47 @@ mod tests;
 /// Photos being dragged from the grid onto a similarity group.
 pub(super) struct PhotoDrag(pub(super) Vec<MediaId>);
 
-/// The best-scoring member of every group that has a choice to make, by
-/// group, with how many photos the group holds.
-fn group_best(
+/// Each group's photos from best to worst, by the one rule Pick Best also
+/// suggests from (`pick_review::rank`): a smaller copy never over the photo
+/// it copies, then sharpness, eyes and score. `order` is what settles a tie,
+/// the capture order, as in Pick Best. Only the groups in `only`, when given.
+pub(super) fn ranked_groups<K: Ord>(
     groups: &HashMap<MediaId, usize>,
     analysis: &HashMap<MediaId, crate::core::analysis::Analysis>,
-) -> HashMap<usize, (MediaId, usize)> {
-    let mut best: HashMap<usize, (f64, MediaId, usize)> = HashMap::new();
+    metadata: &HashMap<MediaId, Metadata>,
+    order: impl Fn(MediaId) -> K,
+    only: Option<&HashSet<usize>>,
+) -> HashMap<usize, Vec<MediaId>> {
+    let mut members: HashMap<usize, Vec<MediaId>> = HashMap::new();
     for (id, group) in groups {
-        let score = analysis.get(id).map_or(f64::NEG_INFINITY, |a| a.score);
-        let entry = best.entry(*group).or_insert((score, *id, 0));
-        entry.2 += 1;
-        // Ties go to the lower id so the badge does not jump between frames.
-        if score > entry.0 || (score == entry.0 && id.0 < entry.1.0) {
-            (entry.0, entry.1) = (score, *id);
+        if only.is_none_or(|only| only.contains(group)) {
+            members.entry(*group).or_default().push(*id);
         }
     }
-    best.into_iter()
-        .filter(|(_, (score, _, members))| *members > 1 && score.is_finite())
-        .map(|(group, (_, id, members))| (group, (id, members)))
+    members
+        .into_iter()
+        .map(|(group, mut ids)| {
+            ids.sort_by_cached_key(|id| (order(*id), id.0));
+            let ranked = crate::core::pick_review::rank(&ids, analysis, metadata);
+            (group, ranked.ordered)
+        })
+        .collect()
+}
+
+/// The best photo of every ranked group that has a choice to make, by
+/// group, with how many photos the group holds: its first photo, when the
+/// group has two or more and that photo has a score.
+pub(super) fn group_best(
+    ranked: &HashMap<usize, Vec<MediaId>>,
+    analysis: &HashMap<MediaId, crate::core::analysis::Analysis>,
+) -> HashMap<usize, (MediaId, usize)> {
+    ranked
+        .iter()
+        .filter_map(|(group, ordered)| {
+            let best = *ordered.first()?;
+            let scored = analysis.get(&best).is_some_and(|a| a.score.is_finite());
+            (ordered.len() > 1 && scored).then_some((*group, (best, ordered.len())))
+        })
         .collect()
 }
 

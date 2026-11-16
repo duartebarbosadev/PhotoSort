@@ -119,6 +119,7 @@ fn model_dialog_fits_compact_and_wide_windows_without_loading_models_or_images()
             package: None,
             bytes: 10,
             total: 100,
+            step: Some((2, 7)),
         });
         state.error =
             Some("A transfer could not complete. Existing files remain available. ".repeat(8));
@@ -149,7 +150,148 @@ fn model_dialog_fits_compact_and_wide_windows_without_loading_models_or_images()
             }
         }
     }
+    // The Runtime section keeps its place over the models once the runtime
+    // is installed, so the list does not jump.
+    let mut state = app.runtime.model_assets.state();
+    for runtime in [None, Some(std::path::PathBuf::from("runtime"))] {
+        Arc::make_mut(state.snapshot.as_mut().unwrap()).runtime = runtime;
+        let out = ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800., 4000.),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let ctx = &ui.ctx().clone();
+                app.render_model_setup(ctx, &state)
+            },
+        );
+        let text = super::super::review_card::painted_text(&out);
+        let at = |what: &str| {
+            text.find(what)
+                .unwrap_or_else(|| panic!("{what} in:\n{text}"))
+        };
+        assert!(at("RUNTIME") < at("USED BY"), "{text}");
+    }
     assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
+}
+#[test]
+fn a_long_path_in_a_model_s_details_wraps_inside_the_panel() {
+    let (dir, mut app) = app();
+    let root = dir
+        .path()
+        .join("a".repeat(60))
+        .join("b".repeat(60))
+        .join("c".repeat(40));
+    let id = model_assets::Id::Detector;
+    std::fs::create_dir_all(root.join("models")).unwrap();
+    std::fs::write(root.join("models").join(id.asset().name), b"copy").unwrap();
+    let copy = model_assets::review_managed(&root, id).unwrap().unwrap();
+    let row = model_assets::Row {
+        id,
+        health: Health::Verified(copy.path().into()),
+        bundled: None,
+        managed: Some(copy),
+        partial: 0,
+    };
+    let state = model_assets::State::default();
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    let bounds = egui::Rect::from_min_size(egui::pos2(120.0, 20.0), egui::vec2(360.0, 600.0));
+    let out = ctx.run_test(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 700.0),
+            )),
+            ..Default::default()
+        },
+        |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(bounds), |ui| {
+                ui.indent("details", |ui| app.model_details(ui, &state, &row, true));
+            });
+        },
+    );
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, f32, f32)>) {
+        match shape {
+            egui::Shape::Text(text) => out.push((
+                text.galley.text().to_owned(),
+                text.pos.x,
+                text.pos.x + text.galley.size().x,
+            )),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut texts = Vec::new();
+    for clipped in &out.shapes {
+        walk(&clipped.shape, &mut texts);
+    }
+    assert!(texts.iter().any(|(text, ..)| text.contains("ccccc")));
+    for (text, left, right) in texts {
+        assert!(
+            left >= bounds.left() - 0.5 && right <= bounds.right() + 0.5,
+            "{left}..{right} outside {bounds:?}: {text}"
+        );
+    }
+}
+#[test]
+fn download_all_takes_the_runtime_and_what_is_missing_but_never_gpu_support() {
+    use model_assets::{Id, Row, runtime};
+    let row = |id, health, bundled: bool, partial| Row {
+        id,
+        health,
+        bundled: bundled.then(|| "bundled".into()),
+        managed: None,
+        partial,
+    };
+    let mut snapshot = model_assets::Snapshot {
+        rows: vec![
+            row(Id::Scene, Health::Missing, false, 1_000_000),
+            row(Id::Aesthetic, Health::Verified("model".into()), false, 0),
+            row(Id::Detector, Health::Missing, true, 0),
+            row(
+                Id::People,
+                Health::Invalid("model".into(), "Damaged".into()),
+                false,
+                0,
+            ),
+        ],
+        runtime: None,
+        orientation_override: None,
+        cuda: None,
+        hash_reads: 0,
+    };
+    let named = |snapshot: &model_assets::Snapshot| {
+        let (works, bytes) = missing_downloads(snapshot);
+        let names: Vec<String> = works
+            .iter()
+            .map(|work| match work {
+                Work::InstallRuntime(package) => format!("runtime {package:?}"),
+                Work::Download(id) => format!("download {id:?}"),
+                Work::Restore(id) => format!("restore {id:?}"),
+                _ => "other".to_owned(),
+            })
+            .collect();
+        (names, bytes)
+    };
+    // Installed models are skipped, a bundled copy is restored, and a
+    // download that was interrupted counts only what is left of it.
+    let models = ["download Scene", "restore Detector", "download People"];
+    let left = Id::Scene.asset().bytes - 1_000_000 + Id::People.asset().bytes;
+    let (names, bytes) = named(&snapshot);
+    match runtime::info(runtime::Package::Cpu) {
+        Some(info) => {
+            assert_eq!(names[0], "runtime Cpu");
+            assert_eq!(names[1..], models);
+            assert_eq!(bytes, left + info.download_bytes());
+        }
+        None => assert_eq!((names, bytes), (models.map(String::from).to_vec(), left)),
+    }
+    snapshot.runtime = Some("runtime".into());
+    assert_eq!(named(&snapshot), (models.map(String::from).to_vec(), left));
 }
 #[test]
 fn model_removal_uses_shared_worker_and_preserves_all_workflow_reviews() {
@@ -209,6 +351,7 @@ fn retry_requires_verified_prerequisites_and_the_original_workflow_context() {
                 health: Health::Missing,
                 bundled: None,
                 managed: None,
+                partial: 0,
             }],
             runtime: None,
             orientation_override: None,
@@ -244,6 +387,7 @@ fn verified_setup() -> model_assets::State {
                 health: Health::Verified("verified-model".into()),
                 bundled: None,
                 managed: None,
+                partial: 0,
             }],
             runtime: Some("verified-runtime".into()),
             orientation_override: None,
@@ -466,14 +610,17 @@ fn model_panel_groups_models_and_links_every_source() {
     let count = |pred: &dyn Fn(&str) -> bool| labels.iter().filter(|l| pred(l)).count();
     let total = model_assets::ALL.len();
     assert_eq!(
-        count(&|l| l.starts_with("Download ") && l.ends_with(" MB")),
+        count(&|l| l.starts_with("Download ") && l.ends_with(" MB") && !l.contains(" all ")),
         total
     );
+    // One action downloads them all, with the same licence note beside it.
+    assert_eq!(count(&|l| l.starts_with("Download all · ")), 1);
     assert_eq!(count(&|l| l == "Import prepared model…"), 0);
     assert_eq!(count(&|l| l.contains("no public download")), 0);
     // The aesthetic model's AGPL-3.0 licence is stated beside its download.
     let agpl = model_assets::Id::Aesthetic.asset().download_note.unwrap();
     assert_eq!(count(&|l| l == agpl), 1);
+    assert_eq!(count(&|l| l.ends_with(agpl)), 2, "Also beside Download all");
     // Every model links its upstream page; links open only when clicked.
     let links = nodes
         .iter()

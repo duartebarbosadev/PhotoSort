@@ -1537,6 +1537,7 @@ impl ImageWorker {
                 .sharpness
                 .is_finite()
                 .then_some(technical.sharpness),
+            pixels: u64::from(metadata.width) * u64::from(metadata.height),
             metadata_fields: metadata.metadata_fields,
             shot: near_duplicates::formats::Shot::new(&it.media.path, metadata),
             camera: metadata.camera.trim().to_owned(),

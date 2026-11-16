@@ -46,9 +46,34 @@ pub(super) struct Shown {
     ids: Vec<MediaId>,
     /// Each photo's place among them.
     places: HashMap<MediaId, usize>,
-    /// How many, from the first, have a suggestion.
-    suggested: usize,
+    /// How many, from the first, have a suggestion the model is sure of,
+    /// and how many after them have one to check.
+    sure: usize,
+    unsure: usize,
 }
+
+/// A part of the grid, under its own header as Easy Delete's reasons are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Part {
+    /// Suggestions the model is sure of: staged like any suggestion.
+    Sure,
+    /// Suggestions it is not sure of: shown, and left to the user.
+    Unsure,
+    /// Every other photo, when the grid shows them all.
+    Others,
+}
+impl Part {
+    fn heading(self) -> &'static str {
+        match self {
+            Part::Sure => "Sideways or upside down",
+            Part::Unsure => UNSURE,
+            Part::Others => "Other photos",
+        }
+    }
+}
+/// The header over the suggestions to check, and what it means for them.
+const UNSURE: &str = "Not sure - check these";
+const UNSURE_NOTE: &str = "Not turned unless you choose. Accept all leaves them as they are.";
 
 /// The one-click action in a card's header, beside its rotate buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,11 +155,16 @@ impl PhotoSortApp {
                     .filter(|s| s.turns % 4 != 0)
                     .map(|s| {
                         let order = crate::core::dates::capture_order(m, self.metadata.get(&m.id));
-                        (order, m.id, s.turns, s.uncertain)
+                        (order, m.id, s.turns, s.unsure())
                     })
             })
             .collect();
-        rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.0.cmp(&b.1.0)));
+        // The sure suggestions first, then the ones to check, each by date.
+        rows.sort_by(|a, b| {
+            a.3.cmp(&b.3)
+                .then_with(|| a.0.cmp(&b.0))
+                .then_with(|| a.1.0.cmp(&b.1.0))
+        });
         if self.step == Step::Rotation {
             self.trash_last = None;
         }
@@ -151,8 +181,9 @@ impl PhotoSortApp {
         self.finish_step_status(Step::Rotation);
     }
     /// The grid's photos: only the suggestions, or every photo with the
-    /// suggestions first. In each part, photos marked for Trash go last.
-    /// A card hidden by the search stops being selected.
+    /// suggestions first. The sure suggestions come before the ones to
+    /// check. In each part, photos marked for Trash go last. A card hidden
+    /// by the search stops being selected.
     pub(super) fn refilter_rotations(&mut self) {
         let queue_only = self.rotation_queue_only;
         let review = &self.rotation_review;
@@ -172,7 +203,11 @@ impl PhotoSortApp {
             .map(|i| {
                 let id = self.media[i].id;
                 let at = order.get(&id).copied();
-                ((at.is_none(), self.shown_last(id), at), i)
+                let part = match self.rotation_review.suggestion(id) {
+                    Some(suggestion) => u8::from(suggestion.uncertain),
+                    None => 2,
+                };
+                ((part, self.shown_last(id), at), i)
             })
             .collect();
         // Stable: every other photo keeps the browsing order.
@@ -232,7 +267,7 @@ impl PhotoSortApp {
             text.push_str(&format!(" · {:.0}% confident", found.confidence * 100.0));
         }
         if suggestion.uncertain {
-            text.push_str("\nUnsure, so not turned until you choose");
+            text.push_str("\nNot sure, so not turned unless you choose");
         }
         text
     }
@@ -366,12 +401,17 @@ impl PhotoSortApp {
         } else {
             area
         };
-        // Suggestions first, then, with every photo shown, the others.
-        let suggested = shown.suggested;
-        let sections: Vec<(bool, usize)> = [(true, suggested), (false, ids.len() - suggested)]
-            .into_iter()
-            .filter(|(_, n)| *n > 0)
-            .collect();
+        // The suggestions the model is sure of, then the ones to check,
+        // then, with every photo shown, the others.
+        let (sure, unsure) = (shown.sure, shown.unsure);
+        let sections: Vec<(Part, usize)> = [
+            (Part::Sure, sure),
+            (Part::Unsure, unsure),
+            (Part::Others, ids.len() - sure - unsure),
+        ]
+        .into_iter()
+        .filter(|(_, n)| *n > 0)
+        .collect();
         let lengths: Vec<usize> = sections.iter().map(|(_, n)| *n).collect();
         let current = self.active.and_then(|id| shown.places.get(&id).copied());
         let stamp = self.grids.rotation.stamp;
@@ -404,16 +444,15 @@ impl PhotoSortApp {
                         |_, _| true,
                         |_, ui, section| {
                             // The status bar counts the suggestions.
-                            let (suggestions, _) = sections[section];
+                            let (part, _) = sections[section];
                             ui.label(
-                                RichText::new(if suggestions {
-                                    "Sideways or upside down"
-                                } else {
-                                    "Other photos"
-                                })
-                                .font(semibold(14.0))
-                                .color(INK),
+                                RichText::new(part.heading())
+                                    .font(semibold(14.0))
+                                    .color(INK),
                             );
+                            if part == Part::Unsure {
+                                ui.label(RichText::new(UNSURE_NOTE).small().color(MUTED));
+                            }
                         },
                         |app, i| Some(app.rotation_card(ids[i])),
                         current,
@@ -528,11 +567,18 @@ impl PhotoSortApp {
             // in the same order: everything worked out for them stands.
             let same = deck.listed.is_some_and(|(_, _, of)| of == review) && deck.shown.ids == ids;
             if !same {
+                let part = |unsure: bool| {
+                    ids.iter()
+                        .filter(|id| {
+                            self.rotation_review
+                                .suggestion(**id)
+                                .is_some_and(|s| s.uncertain == unsure)
+                        })
+                        .count()
+                };
                 deck.shown = std::rc::Rc::new(Shown {
-                    suggested: ids
-                        .iter()
-                        .take_while(|id| self.rotation_review.suggestion(**id).is_some())
-                        .count(),
+                    sure: part(false),
+                    unsure: part(true),
                     places: ids
                         .iter()
                         .enumerate()
@@ -781,6 +827,55 @@ mod tests {
         // Accept all suggestions turns the certain one only.
         app.accept_rotation_suggestions();
         assert_eq!((staged(&app, 1), staged(&app, 2)), (1, 0));
+    }
+
+    #[test]
+    fn a_suggestion_the_model_is_not_sure_of_waits_under_its_own_header_until_chosen() {
+        let mut app = fixture(false);
+        // Two views agree on each: on 1 with a low score, on 3 with a high
+        // one. 2 is the photo whose views disagree.
+        let agreed = |turns, confidence| crate::core::models::RotationSuggestion {
+            turns,
+            confidence,
+            uncertain: false,
+            views: 2,
+        };
+        app.rotations.insert(MediaId(1), agreed(2, 0.62));
+        app.rotations.insert(MediaId(3), agreed(1, 0.92));
+        app.preferences.rotation_auto = true;
+        app.finish_rotation_detection();
+        app.refilter();
+        // The sure one first, then the two to check under their own header.
+        assert_eq!(shown(&app), [MediaId(3), MediaId(1), MediaId(2)]);
+        let painted = super::super::review_card::render_grid(&mut app);
+        for text in ["Sideways or upside down", UNSURE, "1 photo turned"] {
+            assert!(painted.contains(text), "{text} missing from:\n{painted}");
+        }
+        // Only the sure one is staged, and it is all Review counts.
+        assert_eq!(
+            (staged(&app, 1), staged(&app, 2), staged(&app, 3)),
+            (0, 0, 1)
+        );
+        assert_eq!(app.staged_change_count(), 1);
+        // Accept all has nothing to do, and does nothing to them.
+        assert!(!app.grids.rotation.left);
+        app.accept_rotation_suggestions();
+        assert_eq!((staged(&app, 1), staged(&app, 2)), (0, 0));
+        // Chosen by hand, its turn is staged like any other.
+        assert_eq!(
+            app.rotation_link(MediaId(1)),
+            Some(RotationLink::UseSuggestion)
+        );
+        assert!(
+            app.rotation_card(MediaId(1))
+                .undo
+                .is_some_and(
+                    |(_, hover)| hover.contains("62% confident") && hover.contains("Not sure")
+                )
+        );
+        app.rotation_card_event(MediaId(1), CardEvent::Undo);
+        assert_eq!(staged(&app, 1), 2);
+        assert_eq!(app.staged_change_count(), 2);
     }
 
     #[test]

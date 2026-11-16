@@ -726,10 +726,11 @@ impl PhotoSortApp {
                 ui.close();
             }
             ui.menu_button("Rotate", |ui| {
+                let half = format!("180° · {}+R", super::dialogs::ALT);
                 for (label, turns) in [
                     ("Clockwise · R", 1),
                     ("Counterclockwise · Shift+R", 3),
-                    ("180° · Alt+R", 2),
+                    (half.as_str(), 2),
                 ] {
                     if ui.button(label).clicked() {
                         self.rotate(id, turns);

@@ -17,6 +17,8 @@ pub enum Reason {
     Sharper,
     /// Someone's eyes are closed in the next best photo and open here.
     EyesOpen,
+    /// The next best photo is a smaller copy of this one.
+    FullSize,
     /// The overall score: the aesthetic model, sharpness and faces.
     Score,
 }
@@ -32,6 +34,8 @@ pub struct Cluster {
     pub eyes: HashMap<MediaId, Eyes>,
     /// Photos well below the sharpest of the group.
     pub soft: HashSet<MediaId>,
+    /// Smaller copies of another photo of the group; see `smaller_copies`.
+    pub copies: HashSet<MediaId>,
     pub reason: Reason,
 }
 impl Cluster {
@@ -48,6 +52,7 @@ impl Cluster {
             scores,
             eyes: HashMap::new(),
             soft: HashSet::new(),
+            copies: HashSet::new(),
             reason: Reason::Score,
         }
     }
@@ -274,12 +279,158 @@ impl Review {
     }
 }
 
+/// Fewer pixels than this share of another photo's make a photo its smaller
+/// copy, when the two show the same picture. Not any difference at all: a
+/// camera's RAW file and the JPEG it saved of the same shot differ by up to
+/// 1.3% (6024x4024 against 6000x4000 is 99.0%), and neither is a copy of the
+/// other. 98% still takes in a crop of 1% off each side.
+pub(crate) const COPY_PIXELS: f64 = 0.98;
+
+/// The photos of a group that are a smaller copy of another one in it: the
+/// same picture (nearly the same visual hash and average colour) with fewer
+/// pixels (see `COPY_PIXELS`), whether it was resized or cropped a little,
+/// on every side or on one. Every photo is measured after being reduced to
+/// one size, where a resized copy scores within a few percent of its
+/// original, above or below, depending only on how it was resized, and a
+/// cropped one scores a little higher because it shows the same detail
+/// larger. So the scores cannot tell the two apart, and the pixels decide.
+/// A crop of more than about a twentieth is another framing by this test and
+/// competes on its score. A photo of unknown size is never a copy and never
+/// makes one.
+fn smaller_copies(
+    members: &[MediaId],
+    analysis: &HashMap<MediaId, super::analysis::Analysis>,
+    metadata: &HashMap<MediaId, super::model::Metadata>,
+) -> HashSet<MediaId> {
+    let sized: Vec<(MediaId, f64)> = members
+        .iter()
+        .filter(|id| analysis.contains_key(id))
+        .filter_map(|id| {
+            let m = metadata.get(id).filter(|m| m.width > 0 && m.height > 0)?;
+            Some((*id, f64::from(m.width) * f64::from(m.height)))
+        })
+        .collect();
+    let same_picture = |a: &MediaId, b: &MediaId| {
+        let (a, b) = (&analysis[a], &analysis[b]);
+        (a.hash ^ b.hash).count_ones() <= 6
+            && a.color
+                .iter()
+                .zip(b.color)
+                .map(|(a, b)| (a - b).abs())
+                .sum::<f32>()
+                < 0.08
+    };
+    sized
+        .iter()
+        .filter(|(id, pixels)| {
+            sized
+                .iter()
+                .any(|(other, more)| *pixels < more * COPY_PIXELS && same_picture(id, other))
+        })
+        .map(|(id, _)| *id)
+        .collect()
+}
+
+/// One group's photos from best to worst, and what set them apart.
+pub struct Ranking {
+    pub ordered: Vec<MediaId>,
+    /// Each photo's eyes against the rest of the group.
+    pub eyes: HashMap<MediaId, Eyes>,
+    /// Photos well below the sharpest of the group.
+    pub soft: HashSet<MediaId>,
+    /// Smaller copies of another photo of the group; see `smaller_copies`.
+    pub copies: HashSet<MediaId>,
+    pub reason: Reason,
+}
+
+/// Ranks one group: the one order Pick Best suggests from and Cull's "Best
+/// of" badge, its "2nd of" place and "Go to best" follow, so the two steps
+/// never name a different best photo.
+///
+/// In order: size (a smaller copy of a photo is never ranked over it),
+/// sharpness (a photo well below the sharpest is never ranked over it),
+/// closed eyes (a photo where someone blinks ranks below one where that
+/// person's eyes are open), then the overall score. `members` come in the
+/// order that settles a tie: by capture. A photo with no analysis yet, which
+/// Cull can show and Pick Best never ranks, goes last.
+pub fn rank(
+    members: &[MediaId],
+    analysis: &HashMap<MediaId, super::analysis::Analysis>,
+    metadata: &HashMap<MediaId, super::model::Metadata>,
+) -> Ranking {
+    let sharpness = |id: &MediaId| {
+        analysis
+            .get(id)
+            .map_or(0., |a| a.quality_sharpness.unwrap_or(a.sharpness))
+    };
+    let sharpest = members.iter().map(sharpness).fold(0., f64::max);
+    let soft: HashSet<MediaId> = members
+        .iter()
+        .copied()
+        .filter(|id| analysis.contains_key(id) && sharpest > 0. && sharpness(id) < sharpest * 0.6)
+        .collect();
+    let faces: Vec<(MediaId, &[super::faces::FaceEyes])> = members
+        .iter()
+        .map(|id| {
+            let eyes = analysis
+                .get(id)
+                .and_then(|a| a.faces.as_ref())
+                .map_or(&[][..], |f| &f.eyes);
+            (*id, eyes)
+        })
+        .collect();
+    let eyes = super::eyes::compare(&faces);
+    let copies = smaller_copies(members, analysis, metadata);
+    let score = |id: &MediaId| {
+        analysis
+            .get(id)
+            .map(|a| a.score)
+            .filter(|score| score.is_finite())
+            .unwrap_or(f64::NEG_INFINITY)
+    };
+    let place = |id: &MediaId| {
+        (
+            !analysis.contains_key(id),
+            copies.contains(id),
+            soft.contains(id),
+            eyes.get(id).map_or(0, |e| e.closed),
+        )
+    };
+    let mut ordered = members.to_vec();
+    // Stable: equal photos keep the order they came in.
+    ordered.sort_by(|a, b| {
+        place(a)
+            .cmp(&place(b))
+            .then_with(|| score(b).total_cmp(&score(a)))
+    });
+    let reason = match ordered.as_slice() {
+        [best, next, ..] => {
+            let (best, next) = (place(best), place(next));
+            if best.1 != next.1 {
+                Reason::FullSize
+            } else if best.2 != next.2 {
+                Reason::Sharper
+            } else if best.3 != next.3 {
+                Reason::EyesOpen
+            } else {
+                Reason::Score
+            }
+        }
+        _ => Reason::Score,
+    };
+    Ranking {
+        ordered,
+        eyes,
+        soft,
+        copies,
+        reason,
+    }
+}
+
 /// Reuse completed shared analysis; never initialize models or read photos here.
 ///
-/// Each group is ranked by, in order: sharpness (a photo well below the
-/// sharpest is never suggested over it), closed eyes (a photo where someone
-/// blinks ranks below one where that person's eyes are open), then the
-/// overall score.
+/// Each group whose photos all have their quality analysis is ranked by
+/// `rank`.
 pub fn from_analysis(
     media: &[super::model::Media],
     analysis: &HashMap<MediaId, super::analysis::Analysis>,
@@ -311,53 +462,24 @@ pub fn from_analysis(
             continue;
         }
         members.sort_by_key(|id| &order[id]);
-        let sharpness = |id: &MediaId| {
-            analysis[id]
-                .quality_sharpness
-                .unwrap_or(analysis[id].sharpness)
-        };
-        let sharpest = members.iter().map(sharpness).fold(0., f64::max);
-        let soft: HashSet<MediaId> = members
-            .iter()
-            .copied()
-            .filter(|id| sharpest > 0. && sharpness(id) < sharpest * 0.6)
-            .collect();
-        let faces: Vec<(MediaId, &[super::faces::FaceEyes])> = members
-            .iter()
-            .map(|id| {
-                let eyes = analysis[id].faces.as_ref().map_or(&[][..], |f| &f.eyes);
-                (*id, eyes)
-            })
-            .collect();
-        let eyes = super::eyes::compare(&faces);
-        let scores: HashMap<MediaId, f64> =
-            members.iter().map(|id| (*id, analysis[id].score)).collect();
-        let rank = |id: &MediaId| (soft.contains(id), eyes.get(id).map_or(0, |e| e.closed));
-        let mut ordered = members.clone();
-        // Stable: equal photos keep capture order.
-        ordered.sort_by(|a, b| {
-            rank(a)
-                .cmp(&rank(b))
-                .then_with(|| scores[b].total_cmp(&scores[a]))
-        });
-        let (best, next) = (rank(&ordered[0]), rank(&ordered[1]));
-        let reason = if best.0 != next.0 {
-            Reason::Sharper
-        } else if best.1 != next.1 {
-            Reason::EyesOpen
-        } else {
-            Reason::Score
-        };
+        let Ranking {
+            ordered,
+            eyes,
+            soft,
+            copies,
+            reason,
+        } = rank(&members, analysis, metadata);
         clusters.push(Cluster {
             key,
+            scores: members.iter().map(|id| (*id, analysis[id].score)).collect(),
             ordered,
-            scores,
             eyes: if eyes.values().any(|e| e.closed > 0) {
                 eyes
             } else {
                 HashMap::new()
             },
             soft,
+            copies,
             reason,
         });
     }
@@ -475,6 +597,70 @@ mod tests {
         assert_eq!(c.best(), MediaId(1));
         assert_eq!(c.reason, Reason::Sharper);
         assert!(c.soft.contains(&MediaId(2)));
+    }
+
+    #[test]
+    fn a_smaller_copy_never_wins_over_the_photo_it_copies() {
+        use crate::core::model::Metadata;
+        let sized = |width, height| Metadata {
+            width,
+            height,
+            ..Default::default()
+        };
+        let media = media(3);
+        let groups: HashMap<_, _> = media.iter().map(|m| (m.id, 0)).collect();
+        // 1 is the original; 2 is its half-size copy, which measures a
+        // little sharper and scores higher; 3 is another frame of the burst.
+        let mut analysis: HashMap<_, _> = [
+            photo(70., 397., vec![]),
+            photo(72., 414., vec![]),
+            photo(60., 380., vec![]),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, a)| (MediaId(i as u64 + 1), a))
+        .collect();
+        analysis.get_mut(&MediaId(3)).unwrap().hash = u64::MAX;
+        let metadata = HashMap::from([
+            (MediaId(1), sized(6000, 4000)),
+            // Stored turned: the long side still matches.
+            (MediaId(2), sized(2000, 3000)),
+            (MediaId(3), sized(6000, 4000)),
+        ]);
+        let rank = |analysis: &HashMap<_, _>, metadata: &HashMap<_, _>| {
+            from_analysis(&media, analysis, &groups, metadata)
+                .pop()
+                .unwrap()
+        };
+        let c = rank(&analysis, &metadata);
+        assert_eq!(c.ordered, vec![MediaId(1), MediaId(3), MediaId(2)]);
+        assert_eq!(c.copies, HashSet::from([MediaId(2)]));
+        assert_eq!(c.reason, Reason::Score);
+        // With only the pair, the size is what decided. So it is for a copy
+        // cropped by 3% all round, or on one side only, whose hash moved a
+        // little: each scores higher and still never wins.
+        let pair = &media[..2];
+        for copy in [sized(2000, 3000), sized(5820, 3880), sized(5820, 4000)] {
+            let mut metadata = metadata.clone();
+            metadata.insert(MediaId(2), copy);
+            analysis.get_mut(&MediaId(2)).unwrap().hash = 0b101;
+            let c = from_analysis(pair, &analysis, &groups, &metadata)
+                .pop()
+                .unwrap();
+            assert_eq!(c.best(), MediaId(1));
+            assert_eq!(c.reason, Reason::FullSize);
+        }
+        // A camera's RAW and JPEG of one shot differ by a few rows of
+        // pixels: neither is a copy. Nor is a smaller photo that shows
+        // something else, or one of unknown size. Those compete on their
+        // score as before.
+        let mut near = metadata.clone();
+        near.insert(MediaId(2), sized(5964, 3976));
+        assert_eq!(rank(&analysis, &near).best(), MediaId(2));
+        analysis.get_mut(&MediaId(2)).unwrap().hash = 0xFFFF;
+        assert_eq!(rank(&analysis, &metadata).best(), MediaId(2));
+        analysis.get_mut(&MediaId(2)).unwrap().hash = 0;
+        assert_eq!(rank(&analysis, &HashMap::new()).best(), MediaId(2));
     }
 
     fn review() -> Review {

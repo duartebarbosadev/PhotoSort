@@ -559,8 +559,32 @@ fn review_shows_rotations_before_and_after_named_by_the_turn() {
         !texts.iter().any(|t| t.contains("Set upright")),
         "{texts:?}"
     );
+    // Under each photo: its name, as in the Trash list, with the turn after
+    // it or the stars before it.
+    let output = ctx.run_test(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 700.0),
+            )),
+            ..Default::default()
+        },
+        |ui| {
+            let ctx = &ui.ctx().clone();
+            app.plan_review_dialog(ctx)
+        },
+    );
+    let painted = super::super::review_card::painted_text(&output);
+    for expected in [
+        "o1.jpg · Rotate left",
+        "o6.jpg · Rotate right",
+        "★★★ · o6.jpg",
+    ] {
+        assert!(painted.contains(expected), "{expected}: {painted}");
+    }
     assert_eq!(app.plan_rows.slot(List::Rotate), PAIR);
-    assert_eq!(app.plan_rows.slot(List::Rate), TILE.x);
+    // A rating's caption has the room of a pair, so its name is not cut.
+    assert_eq!(app.plan_rows.slot(List::Rate), PAIR);
     assert_eq!(app.plan_rows.slot(List::Trash), TILE.x);
     // A mirror or an unknown orientation is still named, without a pair.
     assert_eq!(turns_between(2, 7), Some(1));

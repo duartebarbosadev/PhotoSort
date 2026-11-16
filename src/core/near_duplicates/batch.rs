@@ -21,6 +21,8 @@ pub struct Input {
     pub group: usize,
     pub embedding: Vec<f32>,
     pub sharpness: Option<f64>,
+    /// Width times height of the stored photo; 0 when unknown.
+    pub pixels: u64,
     pub metadata_fields: usize,
     /// Capture facts for pairing the JPEG and HEIC of one shot.
     pub shot: Option<formats::Shot>,
@@ -43,6 +45,8 @@ pub enum Kind {
 /// Why `keep` was suggested over `discard`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Keeper {
+    /// The other photo is a smaller copy of this one.
+    FullSize,
     Sharper,
     MoreMetadata,
     LargerFile,
@@ -94,10 +98,29 @@ fn pair(a: &Input, b: &Input, assessment: Assessment) -> Pair {
             i.media.fingerprint.bytes.min(999_999_999),
         )
     };
-    let (keep, discard) = if score(a) >= score(b) { (a, b) } else { (b, a) };
+    // Two photos with no visible difference, one with fewer pixels than
+    // the other: a smaller copy, by the same measure as in Pick Best. Both
+    // are measured at one size, where the copy can come out a little sharper
+    // only from how it was resized or cropped, so the size decides before
+    // the sharpness does.
+    let copy = |small: &Input, large: &Input| {
+        small.pixels > 0
+            && (small.pixels as f64) < large.pixels as f64 * crate::core::pick_review::COPY_PIXELS
+    };
+    let (keep, discard) = if copy(b, a) {
+        (a, b)
+    } else if copy(a, b) {
+        (b, a)
+    } else if score(a) >= score(b) {
+        (a, b)
+    } else {
+        (b, a)
+    };
     let k = score(keep);
     let d = score(discard);
-    let (keeper, reason) = if k.0 > d.0 {
+    let (keeper, reason) = if copy(discard, keep) {
+        (Keeper::FullSize, "the full-size photo")
+    } else if k.0 > d.0 {
         (Keeper::Sharper, "the sharper photo")
     } else if k.1 > d.1 {
         (Keeper::MoreMetadata, "the copy with more metadata fields")
@@ -644,6 +667,7 @@ mod tests {
                     // Most pairs pass the similarity gate, some do not.
                     embedding: vec![1., random(28) as f32 / 100.],
                     sharpness: Some(random(4) as f64),
+                    pixels: 0,
                     metadata_fields: if n < 3 { 0 } else { random(6) as usize },
                     shot: None,
                     camera: String::new(),

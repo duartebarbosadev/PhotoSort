@@ -271,14 +271,17 @@ fn playback_controls(ui: &mut egui::Ui, player: &playback::Player, state: &playb
         }
         if ui
             .add_enabled(state.ready, egui::Button::new("−10"))
-            .on_hover_text("Back 10 seconds · Alt+Left")
+            .on_hover_text(format!("Back 10 seconds · {}+Left", super::dialogs::ALT))
             .clicked()
         {
             player.seek_relative(-10.0);
         }
         if ui
             .add_enabled(state.ready, egui::Button::new("+10"))
-            .on_hover_text("Forward 10 seconds · Alt+Right")
+            .on_hover_text(format!(
+                "Forward 10 seconds · {}+Right",
+                super::dialogs::ALT
+            ))
             .clicked()
         {
             player.seek_relative(10.0);

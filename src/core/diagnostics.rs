@@ -138,6 +138,7 @@ mod tests {
                     health: Health::Verified(a.name.into()),
                     bundled: None,
                     managed: None,
+                    partial: 0,
                 })
                 .collect(),
             runtime: Some("runtime".into()),

@@ -253,6 +253,7 @@ fn the_idle_image_worker_answers_evidence_at_once_and_cached_eyes_without_pixels
         group: 1,
         embedding: Vec::new(),
         sharpness: None,
+        pixels: 0,
         metadata_fields: 0,
         shot: None,
         camera: String::new(),

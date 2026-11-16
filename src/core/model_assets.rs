@@ -228,6 +228,8 @@ pub struct Row {
     pub health: Health,
     pub bundled: Option<PathBuf>,
     pub managed: Option<ManagedCopy>,
+    /// Bytes an interrupted download kept, which the next one continues from.
+    pub partial: u64,
 }
 #[derive(Clone)]
 pub struct Snapshot {
@@ -330,11 +332,16 @@ impl Inspector {
                 .first()
                 .and_then(|root| review_managed(root, asset.id).ok().flatten());
             let bundled = candidates.into_iter().skip(1).find(|p| p.is_file());
+            let partial = roots
+                .first()
+                .map_or(0, |root| partial_bytes(root, asset.name))
+                .min(asset.bytes);
             rows.push(Row {
                 id: asset.id,
                 health,
                 bundled,
                 managed,
+                partial,
             });
         }
         Ok(Snapshot {
@@ -465,7 +472,40 @@ pub fn clear_managed(root: &Path, cancelled: &impl Fn() -> bool) -> Result<Clear
             reviewed.push(copy);
         }
     }
-    remove_reviewed(root, &reviewed, cancelled)
+    let mut report = remove_reviewed(root, &reviewed, cancelled)?;
+    // What interrupted downloads kept goes too: known names, plain files only.
+    for asset in ALL {
+        let bytes = partial_bytes(root, asset.name);
+        if report.cancelled || bytes == 0 {
+            continue;
+        }
+        let path = partial_path(root, asset.name);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                report.bytes += bytes;
+                report.removed.push(path);
+            }
+            Err(error) => report
+                .errors
+                .push(format!("{}: {error:#}", crate::core::text::shown(&path))),
+        }
+    }
+    Ok(report)
+}
+
+/// Where an interrupted download of `name` keeps what it received, beside the
+/// model it will become. Never loaded as a model: only `Install::finish`
+/// renames it, after the whole file passed its size and SHA-256 check.
+pub fn partial_path(root: &Path, name: &str) -> PathBuf {
+    root.join("models").join(format!("{name}.part"))
+}
+/// How much of `name` an interrupted download left behind.
+fn partial_bytes(root: &Path, name: &str) -> u64 {
+    partial_path(root, name)
+        .symlink_metadata()
+        .ok()
+        .filter(|meta| meta.is_file())
+        .map_or(0, |meta| meta.len())
 }
 
 /// Streaming installation owns only a private temporary file until exact size
@@ -478,7 +518,8 @@ struct Install {
     received: u64,
 }
 impl Install {
-    fn new(root: &Path, name: &str) -> Result<Self> {
+    /// The models folder and what is installed under `name` now.
+    fn prepare(root: &Path, name: &str) -> Result<(PathBuf, PathBuf, Option<Fingerprint>)> {
         let directory = root.join("models");
         std::fs::create_dir_all(&directory)?;
         ensure!(
@@ -492,6 +533,10 @@ impl Install {
         } else {
             None
         };
+        Ok((directory, destination, prior))
+    }
+    fn new(root: &Path, name: &str) -> Result<Self> {
+        let (directory, destination, prior) = Self::prepare(root, name)?;
         Ok(Self {
             file: tempfile::NamedTempFile::new_in(directory)?,
             destination,
@@ -499,6 +544,76 @@ impl Install {
             hash: Sha256::new(),
             received: 0,
         })
+    }
+    /// A download that continues what an interrupted one kept in
+    /// `partial_path`, or starts that file. The bytes already there are read
+    /// back into the hash, so the finished file is verified whole whatever
+    /// they are; a file that cannot be continued is replaced. Unless `keep`
+    /// is called, the file is removed with this value, as in `new`.
+    fn resume(root: &Path, name: &str, bytes: u64, cancelled: &impl Fn() -> bool) -> Result<Self> {
+        let (_, destination, prior) = Self::prepare(root, name)?;
+        let path = partial_path(root, name);
+        let mut hash = Sha256::new();
+        let mut received = 0;
+        let kept = path
+            .symlink_metadata()
+            .ok()
+            .filter(|meta| meta.is_file() && (1..=bytes).contains(&meta.len()));
+        let file = if kept.is_some() {
+            let mut file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)?;
+            let mut buffer = vec![0; 1 << 20];
+            loop {
+                ensure!(!cancelled(), "Cancelled");
+                let n = file.read(&mut buffer)?;
+                if n == 0 {
+                    break;
+                }
+                hash.update(&buffer[..n]);
+                received += n as u64;
+            }
+            file
+        } else {
+            // A link, a folder or a file of the wrong size is not a partial
+            // download: only the name is removed, never what a link points to.
+            match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                _ => {}
+            }
+            let mut options = std::fs::OpenOptions::new();
+            options.read(true).write(true).create_new(true);
+            // As private as the temporary file of an import.
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            options.open(&path)?
+        };
+        Ok(Self {
+            file: tempfile::NamedTempFile::from_parts(
+                file,
+                tempfile::TempPath::try_from_path(path)?,
+            ),
+            destination,
+            prior,
+            hash,
+            received,
+        })
+    }
+    /// Forgets what was received: the server sent the file from its start.
+    fn restart(&mut self) -> Result<()> {
+        use std::io::Seek;
+        self.file.as_file().set_len(0)?;
+        self.file.as_file_mut().rewind()?;
+        self.hash = Sha256::new();
+        self.received = 0;
+        Ok(())
+    }
+    /// Leaves what was received in `partial_path` for the next `resume`.
+    fn keep(self) {
+        if self.received > 0 && self.file.as_file().sync_all().is_ok() {
+            let _ = self.file.keep();
+        }
     }
     fn write(&mut self, chunk: &[u8], expected: u64, cancelled: &impl Fn() -> bool) -> Result<()> {
         ensure!(!cancelled(), "Cancelled");
@@ -727,6 +842,12 @@ mod tests {
             time::{Duration, Instant},
         };
         let dir = tempfile::tempdir().unwrap();
+        // The 2.x app kept its own models in a folder of the same name.
+        let foreign = ["orientation_model_v2.onnx", "face_landmarker.task"];
+        std::fs::create_dir(dir.path().join("models")).unwrap();
+        for name in foreign {
+            std::fs::write(dir.path().join("models").join(name), b"2.x model").unwrap();
+        }
         let mut worker = Worker::new(vec![dir.path().into()], Arc::new(|| {}));
         assert!(!worker.state().running);
         assert!(worker.state().snapshot.is_none());
@@ -747,6 +868,18 @@ mod tests {
                 .all(|r| matches!(r.health, Health::Missing))
         );
         assert_eq!(snapshot.hash_reads, 0);
+        // Files of other names are not this app's: never read, listed as
+        // damaged, or removed, here or when its own models are cleared.
+        assert!(
+            clear_managed(dir.path(), &|| false)
+                .unwrap()
+                .removed
+                .is_empty()
+        );
+        for name in foreign {
+            let path = dir.path().join("models").join(name);
+            assert_eq!(std::fs::read(path).unwrap(), b"2.x model");
+        }
         worker.shutdown();
         assert!(worker.start(Work::Inspect).is_err());
     }
@@ -777,6 +910,65 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(2));
         assert_eq!(std::fs::read(destination).unwrap(), b"prior model");
         assert_eq!(count(&root), 1);
+    }
+    #[test]
+    fn a_queue_shows_each_finished_step_at_once_and_a_resumed_download_starts_where_it_stopped() {
+        use std::{sync::Arc, time::Instant};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("managed");
+        std::fs::create_dir_all(root.join("models")).unwrap();
+        // A quick first step, then one that takes a while: importing a file
+        // of the aesthetic model's size.
+        let quick = root.join("models").join(Id::Detector.asset().name);
+        std::fs::write(&quick, b"disposable").unwrap();
+        let copy = review_managed(&root, Id::Detector).unwrap().unwrap();
+        let source = dir.path().join("source.onnx");
+        File::create(&source)
+            .unwrap()
+            .set_len(Id::Aesthetic.asset().bytes)
+            .unwrap();
+        let mut worker = Worker::new(vec![root.clone()], Arc::new(|| {}));
+        worker
+            .start(Work::All(vec![
+                Work::Remove(copy),
+                Work::Import(Id::Aesthetic, source),
+            ]))
+            .unwrap();
+        let until = Instant::now() + worker_patience();
+        loop {
+            let state = worker.state();
+            let shown = state.snapshot.is_some_and(|snapshot| {
+                snapshot
+                    .rows
+                    .iter()
+                    .any(|row| row.id == Id::Detector && matches!(row.health, Health::Missing))
+            });
+            if shown {
+                break;
+            }
+            assert!(
+                state.running && Instant::now() < until,
+                "The first step must show before the queue ends"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        worker.shutdown();
+        // What an interrupted download kept is where the next one's
+        // progress starts; other work starts at nothing.
+        std::fs::write(partial_path(&root, Id::Scene.asset().name), b"kept").unwrap();
+        assert_eq!(Work::Download(Id::Scene).kept(Some(&root)), 4);
+        assert_eq!(Work::Download(Id::People).kept(Some(&root)), 0);
+        assert_eq!(Work::Restore(Id::Scene).kept(Some(&root)), 0);
+        // What a queue that stopped says of what it finished, for one and
+        // for several.
+        assert_eq!(
+            worker::finished_text(1, 3),
+            "1 of 3 finished and stays installed"
+        );
+        assert_eq!(
+            worker::finished_text(2, 3),
+            "2 of 3 finished and stay installed"
+        );
     }
 }
 

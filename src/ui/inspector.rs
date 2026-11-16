@@ -30,7 +30,16 @@ impl PhotoSortApp {
                     .size(24.0)
                     .color(ACCENT),
             );
-            ui.label(format!("Sharpness  {:.1}", analysis.sharpness));
+            // Two measures share the word. Easy Delete judges softness by
+            // the sharpest area, Pick Best compares the whole photo: each
+            // number is named, so it matches the one on that step's cards.
+            ui.label(match analysis.quality_sharpness {
+                Some(whole) => format!(
+                    "Sharpness  {:.0} overall · {:.0} in its sharpest area",
+                    whole, analysis.sharpness
+                ),
+                None => format!("Sharpness  {:.0} in its sharpest area", analysis.sharpness),
+            });
             ui.label(format!("Brightness  {:.0} / 255", analysis.brightness));
             if let Some(faces) = &analysis.faces {
                 ui.label(format!(
