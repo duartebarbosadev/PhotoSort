@@ -717,6 +717,7 @@ impl PhotoSortApp {
                 let (label, hover) = self.rotation_link_text(id, link);
                 (label.to_owned(), hover)
             }),
+            filled: false,
         }
     }
 

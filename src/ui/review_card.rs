@@ -105,6 +105,9 @@ pub(super) struct ReviewCard {
     /// A link in the header back to the suggestion: its label (such as
     /// "Undo") and tooltip, if any.
     pub undo: Option<(String, String)>,
+    /// The link is the card's first decision ("Accept suggestion" on a card
+    /// nobody has decided yet): drawn as a filled button, not a quiet link.
+    pub filled: bool,
 }
 
 /// What a card was asked to do this frame.
@@ -656,9 +659,16 @@ impl PhotoSortApp {
             if let Some((label, hover)) = &card.undo {
                 // On a titled card the link is its arrow alone when its
                 // label would leave no room for the title and the short
-                // state text; the label is then in its hover.
-                let whole = undo_text(&painter, label, LinkStyle::Header).size().x + 8.0;
-                let beside = if short.is_empty() {
+                // state text; the label is then in its hover. The card's
+                // first decision (filled) comes before the state text, and
+                // says its first word ("Accept") before it is an icon alone.
+                let width = |label: &str| {
+                    undo_text(&painter, label, LinkStyle::Header, card.filled)
+                        .size()
+                        .x
+                        + 8.0
+                };
+                let beside = if short.is_empty() || card.filled {
                     0.0
                 } else {
                     painter
@@ -667,20 +677,33 @@ impl PhotoSortApp {
                         .x
                         + S3
                 };
-                let fits = needs + beside + whole + S2 <= right - header.left();
-                let style = if fits || card.title.is_empty() {
-                    LinkStyle::Header
+                let room = right - header.left();
+                let fits = |label: &str| needs + beside + width(label) + S2 <= room;
+                let first = label.split_whitespace().next().unwrap_or(label);
+                let (style, shown) = if fits(label) || card.title.is_empty() {
+                    (LinkStyle::Header, label.as_str())
+                } else if card.filled && fits(first) {
+                    (LinkStyle::Header, first)
                 } else {
-                    LinkStyle::Arrow
+                    (LinkStyle::Arrow, label.as_str())
+                };
+                // A shortened label keeps the whole one in its hover.
+                let hover = if shown == label {
+                    hover.clone()
+                } else if hover.is_empty() {
+                    label.clone()
+                } else {
+                    format!("{label} · {hover}")
                 };
                 let (link, clicked) = undo_link(
                     ui,
                     &painter,
                     Align2::RIGHT_CENTER,
                     egui::pos2(right, header.center().y),
-                    label,
-                    hover,
+                    shown,
+                    &hover,
                     style,
+                    card.filled,
                 );
                 if clicked {
                     event = Some(CardEvent::Undo);
@@ -898,6 +921,7 @@ impl PhotoSortApp {
                 label,
                 hover,
                 LinkStyle::OverPhoto,
+                card.filled,
             )
             .1
             {
@@ -1064,21 +1088,35 @@ enum LinkStyle {
     OverPhoto,
 }
 
-fn undo_text(painter: &egui::Painter, label: &str, style: LinkStyle) -> Arc<egui::Galley> {
-    let arrow = egui_phosphor::regular::ARROW_U_UP_LEFT;
+/// A link's text: its icon and label, or the icon alone. A filled link
+/// (the card's first decision) leads with a check, the others with the
+/// arrow back to the suggestion.
+fn undo_text(
+    painter: &egui::Painter,
+    label: &str,
+    style: LinkStyle,
+    filled: bool,
+) -> Arc<egui::Galley> {
+    let icon = if filled {
+        egui_phosphor::regular::CHECK
+    } else {
+        egui_phosphor::regular::ARROW_U_UP_LEFT
+    };
     painter.layout_no_wrap(
         if style == LinkStyle::Arrow {
-            arrow.to_owned()
+            icon.to_owned()
         } else {
-            format!("{arrow}  {label}")
+            format!("{icon}  {label}")
         },
         medium(11.0),
-        ACCENT,
+        if filled { ON_ACCENT } else { ACCENT },
     )
 }
 
-/// The link that puts a card back to its suggestion, anchored at `at`.
+/// The link that puts a card back to its suggestion, anchored at `at`, or,
+/// `filled`, the button that accepts it on a card nobody has decided yet.
 /// Returns its rect and whether it was clicked.
+#[allow(clippy::too_many_arguments)]
 fn undo_link(
     ui: &egui::Ui,
     painter: &egui::Painter,
@@ -1087,10 +1125,11 @@ fn undo_link(
     label: &str,
     hover: &str,
     style: LinkStyle,
+    filled: bool,
 ) -> (egui::Rect, bool) {
-    let text = undo_text(painter, label, style);
+    let text = undo_text(painter, label, style, filled);
     let over_photo = style == LinkStyle::OverPhoto;
-    let (pad, size) = if over_photo {
+    let (pad, size) = if over_photo || filled {
         (egui::vec2(8.0, 3.0), text.size() + egui::vec2(16.0, 6.0))
     } else {
         (egui::vec2(4.0, 2.0), text.size() + egui::vec2(8.0, 4.0))
@@ -1109,6 +1148,16 @@ fn undo_link(
         response = response.on_hover_text(hover);
     }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    if filled {
+        let fill = if response.hovered() {
+            ACCENT.gamma_multiply(0.85)
+        } else {
+            ACCENT
+        };
+        painter.rect_filled(link, R_CONTROL, fill);
+        painter.galley(link.min + pad, text, ON_ACCENT);
+        return (link, response.clicked());
+    }
     if over_photo {
         painter.rect_filled(link, R_CONTROL, Color32::from_black_alpha(170));
     }
@@ -1125,7 +1174,14 @@ fn badge_pill(painter: &egui::Painter, slot: egui::Rect, badge: &Badge) -> egui:
     let (text, fill, ink) = match badge {
         Badge::Keep(text) => (format!("{}  {text}", icon::CHECK), GREEN, Color32::BLACK),
         Badge::Trash(text) => (format!("{}  {text}", icon::TRASH), RED, Color32::BLACK),
-        Badge::None => return Align2::RIGHT_TOP.anchor_size(slot.right_top(), Vec2::ZERO),
+        // Where the pill would be, so the Suggested mark beside it keeps
+        // its place on a photo nobody has decided yet.
+        Badge::None => {
+            return Align2::RIGHT_TOP.anchor_size(
+                slot.right_top() + egui::vec2(-S1 - 2.0, S1 + 2.0),
+                Vec2::ZERO,
+            );
+        }
     };
     let galley = painter.layout_no_wrap(text, medium(11.0), ink);
     let size = galley.size() + egui::vec2(16.0, 6.0);

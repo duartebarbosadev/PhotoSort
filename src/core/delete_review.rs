@@ -232,6 +232,27 @@ impl Review {
             .collect()
     }
     /// Whether a card's decisions differ from its suggestion.
+    /// Whether anything on a card was decided: a photo of it is marked for
+    /// Trash, or one was chosen by hand. An undecided card shows no Keep or
+    /// Trash, only its suggestion, and changes nothing on disk.
+    pub fn decided(
+        &self,
+        id: MediaId,
+        decisions: &HashMap<MediaId, Decision>,
+        by_hand: &HashSet<MediaId>,
+    ) -> bool {
+        self.entry(id).is_some_and(|e| {
+            e.candidates()
+                .iter()
+                .any(|id| !kept(decisions, *id) || by_hand.contains(id))
+        })
+    }
+    /// Whether a card suggests sending a photo to Trash. Two formats of one
+    /// shot, and a closed-eyes shot with no better one, suggest keeping all.
+    pub fn suggests_trash(&self, id: MediaId) -> bool {
+        self.entry(id)
+            .is_some_and(|e| e.suggestion().iter().any(|keep| !keep))
+    }
     pub fn changed(&self, id: MediaId, decisions: &HashMap<MediaId, Decision>) -> bool {
         self.entry(id).is_some_and(|e| {
             e.candidates()
@@ -278,10 +299,10 @@ impl Review {
     pub fn accept(&self, ids: &[MediaId], decisions: &mut HashMap<MediaId, Decision>) {
         update_trash(decisions, self.suggested_marks(ids));
     }
-    /// Accept all: every photo of these cards that was not decided by hand
-    /// takes its suggestion; a choice made by hand stays. No card of
-    /// several photos and no Pick Best group is left with no photo kept: a
-    /// photo that would be the last one to go to Trash is left as it is.
+    /// Accept all: every card of these that nobody decided by hand takes its
+    /// suggestion; a card with a choice made by hand stays as it is. No card
+    /// of several photos and no Pick Best group is left with no photo kept:
+    /// a photo that would be the last one to go to Trash is left as it is.
     /// Returns the photos changed.
     pub fn accept_sparing(
         &self,
@@ -305,20 +326,25 @@ impl Review {
             .filter(|id| seen.insert(*id))
             .collect()
     }
-    /// What Accept all sets on one card: the suggestion of each photo not
-    /// decided by hand that differs from it. On a card of several photos
-    /// none goes to Trash where that would leave no photo of it kept.
+    /// What Accept all sets on one card: the suggestion of each photo that
+    /// differs from it, unless a photo of the card was decided by hand. On a
+    /// card of several photos none goes to Trash where that would leave no
+    /// photo of it kept.
     fn undecided_marks(
         entry: &Entry,
         decisions: &HashMap<MediaId, Decision>,
         by_hand: &HashSet<MediaId>,
     ) -> Vec<(MediaId, bool)> {
         let candidates = entry.candidates();
+        // A card the user has started on stays as it is.
+        if candidates.iter().any(|id| by_hand.contains(id)) {
+            return Vec::new();
+        }
         let mut marks: Vec<(MediaId, bool)> = candidates
             .iter()
             .copied()
             .zip(entry.suggestion())
-            .filter(|(id, keep)| !by_hand.contains(id) && kept(decisions, *id) != *keep)
+            .filter(|(id, keep)| kept(decisions, *id) != *keep)
             .map(|(id, keep)| (id, !keep))
             .collect();
         let goes = |id: &MediaId| {

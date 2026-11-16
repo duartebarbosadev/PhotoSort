@@ -230,15 +230,18 @@ impl PhotoSortApp {
             self.navigate_pick(1);
         }
     }
-    /// The panel's Undo, beside its Keep/Trash switches.
+    /// The panel's Undo, beside its Keep/Trash switches: Accept suggestion
+    /// while the group is undecided, as on its card.
     pub(super) fn pick_undo_button(&mut self, ui: &mut egui::Ui) {
         if let Some(group) = self.pick_group() {
             let changed = self.pick_review.changed(group, &self.decisions);
+            let button = if self.pick_undecided(group) {
+                primary(ACCEPT)
+            } else {
+                egui::Button::new(self.pick_undo_label())
+            };
             if ui
-                .add_enabled(
-                    changed && self.pick_enabled(),
-                    egui::Button::new(self.pick_undo_label()),
-                )
+                .add_enabled(changed && self.pick_enabled(), button)
                 .on_hover_text("R")
                 .clicked()
             {
@@ -255,7 +258,20 @@ impl PhotoSortApp {
             "Use suggestion"
         }
     }
+    /// A group nobody has decided yet: no photo of it marked for Trash and
+    /// none chosen by hand. It shows its suggestion and nothing else.
+    pub(super) fn pick_undecided(&self, group: usize) -> bool {
+        !self
+            .pick_review
+            .decided(group, &self.decisions, &self.by_hand)
+    }
 }
+
+/// The card's first decision. Its wording matches Accept all suggestions.
+pub(super) const ACCEPT: &str = "Accept suggestion";
+/// The line over the grid while nothing is marked: what to do.
+const HINT: &str =
+    "Nothing marked yet: accept a group's suggestion, or click a photo to mark it for Trash.";
 
 impl PhotoSortApp {
     /// Pick Best's only view: a summary with Accept all suggestions, then
@@ -328,6 +344,10 @@ impl PhotoSortApp {
         );
         if deck.elsewhere > 0 {
             summary.push_str(&format!(" · {} more marked in other steps", deck.elsewhere));
+        }
+        // Before anything is marked, the line says what to do instead.
+        if trash == 0 && deck.elsewhere == 0 && !self.pick_review.clusters().is_empty() {
+            summary = HINT.to_owned();
         }
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
@@ -576,12 +596,15 @@ impl PhotoSortApp {
             .collect()
     }
 
-    /// The card for one group: its best photos with a Keep/Trash pill each
-    /// and their deciding facts, the suggested one marked, and Undo once it
-    /// differs from the suggestion.
+    /// The card for one group: its best photos and their deciding facts,
+    /// the suggested one marked. A group nobody has decided yet shows no
+    /// Keep or Trash, only that mark and Accept suggestion; once anything
+    /// in it is decided, each photo has its Keep/Trash pill, and Undo shows
+    /// once it differs from the suggestion.
     fn pick_card(&self, group: usize) -> ReviewCard {
         let cluster = &self.pick_review.clusters()[group];
         let enabled = self.pick_enabled();
+        let undecided = self.pick_undecided(group);
         let order = self.pick_order(cluster);
         let shown: Vec<MediaId> = order.iter().take(CARD_PHOTOS).copied().collect();
         let facts = self.pick_facts(cluster, &shown);
@@ -596,7 +619,11 @@ impl PhotoSortApp {
                 CardPhoto {
                     id: *id,
                     turns: self.preview_turns(*id),
-                    badge: Badge::keep(keep),
+                    badge: if undecided {
+                        Badge::None
+                    } else {
+                        Badge::keep(keep)
+                    },
                     suggested,
                     suggested_hover: suggested.then(|| self.pick_keep_why(cluster)),
                     caption: media.map(|m| self.shown_name(m)).unwrap_or_default(),
@@ -610,7 +637,9 @@ impl PhotoSortApp {
                     toggle: enabled.then(|| {
                         format!(
                             "{} · {}",
-                            if keep {
+                            if undecided {
+                                "Mark for Trash"
+                            } else if keep {
                                 "Move to Trash instead"
                             } else {
                                 "Keep instead"
@@ -621,19 +650,29 @@ impl PhotoSortApp {
                 }
             })
             .collect();
-        // Only the photos the card leaves out, and any of them kept.
+        // Only the photos the card leaves out, and any of them kept, which
+        // means something once the group is decided.
         let hidden = &order[shown.len()..];
         let state_text = (!hidden.is_empty()).then(|| {
             let kept = hidden
                 .iter()
                 .filter(|id| Review::keeps(&self.decisions, **id))
                 .count();
-            if kept > 0 {
+            if kept > 0 && !undecided {
                 format!("+{} more, {kept} kept", hidden.len())
             } else {
                 format!("+{} more", hidden.len())
             }
         });
+        let others = cluster.ordered.len() - 1;
+        let accept = format!(
+            "Keep the starred photo and mark the {} for Trash · R",
+            if others == 1 {
+                "other one".to_owned()
+            } else {
+                format!("other {others}")
+            }
+        );
         ReviewCard {
             title: self.pick_title(group),
             state_text,
@@ -643,8 +682,16 @@ impl PhotoSortApp {
             // is enough: no outline that could be read as Keep or Trash.
             shown: self.pick_panel && self.pick_group() == Some(group),
             title_hover: None,
-            undo: (enabled && self.pick_review.changed(group, &self.decisions))
-                .then(|| (self.pick_undo_label().to_owned(), String::new())),
+            // An undecided group differs from its suggestion too: its one
+            // action accepts it.
+            undo: (enabled && self.pick_review.changed(group, &self.decisions)).then(|| {
+                if undecided {
+                    (ACCEPT.to_owned(), accept)
+                } else {
+                    (self.pick_undo_label().to_owned(), String::new())
+                }
+            }),
+            filled: undecided,
         }
     }
 
@@ -765,6 +812,7 @@ mod tests {
 
     #[test]
     fn with_automatic_suggestions_off_nothing_is_staged_until_accepted() {
+        use egui_phosphor::regular as icon;
         let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
         app.preferences.pick_best_auto = false;
         app.media = (1..=5).map(photo).collect();
@@ -774,14 +822,49 @@ mod tests {
             .enumerate()
             .map(|(i, m)| (m.id, i))
             .collect();
-        app.pick_review.replace(vec![Cluster::new(
-            1,
-            vec![MediaId(1), MediaId(2)],
-            HashMap::from([(MediaId(1), 10.), (MediaId(2), 20.)]),
-        )]);
+        app.pick_review.replace(vec![
+            Cluster::new(
+                1,
+                vec![MediaId(1), MediaId(2)],
+                HashMap::from([(MediaId(1), 10.), (MediaId(2), 20.)]),
+            ),
+            Cluster::new(
+                2,
+                vec![MediaId(3), MediaId(4), MediaId(5)],
+                HashMap::from([(MediaId(3), 10.), (MediaId(4), 30.), (MediaId(5), 20.)]),
+            ),
+        ]);
         app.view_data_ready.insert(Step::PickBest);
         app.set_step(Step::PickBest);
+        let (keep, trash) = (
+            format!("{}  Keep", icon::CHECK),
+            format!("{}  Trash", icon::TRASH),
+        );
+        // Nobody has decided anything: no Keep or Trash on any photo, only
+        // the suggested one's star and each group's Accept suggestion, and
+        // the line says what to do. Nothing counts as a change.
+        let shown = super::super::review_card::render_grid(&mut app);
+        assert!(!shown.contains(&keep) && !shown.contains(&trash), "{shown}");
+        assert!(
+            shown.contains(icon::STAR) && shown.contains(HINT),
+            "{shown}"
+        );
+        assert_eq!(shown.matches(ACCEPT).count(), 2, "{shown}");
         assert!(trashed(&app).is_empty());
+        assert_eq!(app.staged_change_count(), 0);
+        // Accepting one group stages that group only, which then shows
+        // Keep and Trash.
+        app.pick_card_event(0, CardEvent::Undo);
+        assert_eq!(trashed(&app), vec![1]);
+        assert_eq!(app.staged_change_count(), 1);
+        let shown = super::super::review_card::render_grid(&mut app);
+        assert!(shown.contains(&keep) && shown.contains(&trash), "{shown}");
+        assert_eq!(shown.matches(ACCEPT).count(), 1, "{shown}");
+        // A photo of the other group marked and unmarked by hand: that group
+        // is decided, every photo kept, and Accept all leaves it so.
+        app.pick_card_event(1, CardEvent::Toggle(1));
+        app.pick_card_event(1, CardEvent::Toggle(1));
+        assert!(!app.pick_undecided(1));
         app.accept_pick_defaults();
         assert_eq!(trashed(&app), vec![1]);
     }
@@ -847,27 +930,28 @@ mod tests {
         assert_eq!(trashed(&app), vec![1, 3, 4]);
         app.pick_card_event(0, CardEvent::Undo);
         assert_eq!(trashed(&app), vec![1, 2, 4]);
-        // Accept all leaves photos kept by hand as they are (1 and 4) and
-        // marks the one nobody decided (2).
+        // Accept all leaves a group the user has started on as it is: photos
+        // 1 and 4 were kept by hand, so the rest of their groups stays too,
+        // photo 2 included, which nobody decided.
         app.pick_card_event(1, CardEvent::Toggle(1));
         app.pick_card_event(0, CardEvent::Toggle(2));
         app.decisions.remove(&MediaId(2));
         assert_eq!(trashed(&app), Vec::<u64>::new());
         app.accept_pick_defaults();
-        assert_eq!(trashed(&app), vec![2]);
+        assert_eq!(trashed(&app), Vec::<u64>::new());
         // A group whose suggested photo is marked for Trash, by hand or by
         // Easy Delete, is left as it is until its own Undo: marking the
         // undecided photo 4 would leave it with no photo kept.
         app.pick_card_event(1, CardEvent::Undo);
         app.decisions.remove(&MediaId(4));
         app.pick_card_event(1, CardEvent::Toggle(0));
-        assert_eq!(trashed(&app), vec![2, 5]);
+        assert_eq!(trashed(&app), vec![5]);
         app.accept_pick_defaults();
-        assert_eq!(trashed(&app), vec![2, 5]);
+        assert_eq!(trashed(&app), vec![5]);
         app.pick_deck();
         assert_eq!(app.grids.pick.changed, 0, "Accept all has nothing to do");
         app.pick_card_event(1, CardEvent::Undo);
-        assert_eq!(trashed(&app), vec![2, 4]);
+        assert_eq!(trashed(&app), vec![4]);
     }
 
     #[test]
@@ -951,6 +1035,8 @@ mod tests {
         app.set_step(Step::PickBest);
         app.refilter();
         app.review = false;
+        // Decided by hand, kept as it is: its count says how many it keeps.
+        app.by_hand.insert(MediaId(20));
         // The header as painted for photos of a shape: whether the title
         // was cut, the count beside it, and whether the two overlap.
         let mut header = |width: u32, height: u32| {

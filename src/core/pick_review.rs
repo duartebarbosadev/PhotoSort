@@ -160,6 +160,22 @@ impl Review {
             .filter(|id| kept(decisions, *id))
             .collect()
     }
+    /// Whether anything in a group was decided: a photo of it is marked for
+    /// Trash (here, in another step, or by its suggestion being accepted),
+    /// or one was chosen by hand. An undecided group shows no Keep or Trash,
+    /// only its suggestion, and changes nothing on disk.
+    pub fn decided(
+        &self,
+        group: usize,
+        decisions: &HashMap<MediaId, Decision>,
+        by_hand: &HashSet<MediaId>,
+    ) -> bool {
+        self.clusters.get(group).is_some_and(|c| {
+            c.ordered
+                .iter()
+                .any(|id| !kept(decisions, *id) || by_hand.contains(id))
+        })
+    }
     /// Whether a group's decisions differ from its suggestion.
     pub fn changed(&self, group: usize, decisions: &HashMap<MediaId, Decision>) -> bool {
         self.clusters
@@ -217,10 +233,10 @@ impl Review {
             .collect();
         marks.retain(|(id, trash)| !(*trash && spared.contains(id)));
     }
-    /// Whether Accept all acts on a group: a photo not decided by hand
-    /// differs from its suggestion, and the group's suggested photo is not
-    /// marked for Trash. A group whose suggested photo is marked is left as
-    /// it is, as when suggestions are staged.
+    /// Whether Accept all acts on a group: no photo of it was decided by
+    /// hand, a photo differs from its suggestion, and the group's suggested
+    /// photo is not marked for Trash. A group whose suggested photo is
+    /// marked is left as it is, as when suggestions are staged.
     pub fn pending(
         &self,
         group: usize,
@@ -231,16 +247,19 @@ impl Review {
             .get(group)
             .is_some_and(|c| !Self::undecided_marks(c, decisions, by_hand).is_empty())
     }
-    /// What Accept all sets in one group: the suggestion of each photo not
-    /// decided by hand that differs from it. Nothing where the suggested
-    /// photo is marked for Trash: its suggestions assume that photo stays,
-    /// and the group would be left with no photo kept.
+    /// What Accept all sets in one group: the suggestion of each photo that
+    /// differs from it. Nothing in a group where a photo was decided by
+    /// hand: the user has started on that group, and every photo of it then
+    /// shows Keep or Trash as it is. Nothing where the suggested photo is
+    /// marked for Trash either: its suggestions assume that photo stays, and
+    /// the group would be left with no photo kept.
     fn undecided_marks(
         cluster: &Cluster,
         decisions: &HashMap<MediaId, Decision>,
         by_hand: &HashSet<MediaId>,
     ) -> Vec<(MediaId, bool)> {
-        if !kept(decisions, cluster.best()) {
+        if !kept(decisions, cluster.best()) || cluster.ordered.iter().any(|id| by_hand.contains(id))
+        {
             return Vec::new();
         }
         cluster
@@ -249,10 +268,10 @@ impl Review {
             .map(|(id, keep)| (id, !keep))
             .collect()
     }
-    /// Accept all: every photo not decided by hand takes its suggestion. A
-    /// choice made by hand stays, and so does every group whose suggested
-    /// photo is marked for Trash, so no group is left with no photo kept.
-    /// Returns the photos changed.
+    /// Accept all: every group nobody decided by hand takes its suggestion.
+    /// A group with a choice made by hand stays as it is, and so does every
+    /// group whose suggested photo is marked for Trash, so no group is left
+    /// with no photo kept. Returns the photos changed.
     pub fn accept_undecided(
         &self,
         decisions: &mut HashMap<MediaId, Decision>,

@@ -8,6 +8,9 @@ use crate::core::text::TO_TRASH;
 
 /// How the star on a suggested keeper explains itself.
 pub(super) const SUGGESTED: &str = "Suggested by PhotoSort.";
+/// The line over the grid while nothing is marked: what to do.
+const HINT: &str =
+    "Nothing marked yet: accept a suggestion, or click a photo to mark it for Trash.";
 
 /// On a photo PhotoSort suggests moving to Trash and left unmarked: every
 /// other photo of its Pick Best group is going there already.
@@ -449,21 +452,31 @@ impl PhotoSortApp {
             "Use suggestion"
         }
     }
-    /// The comparison panel's Undo, beside its Keep/Trash switches.
+    /// The comparison panel's Undo, beside its Keep/Trash switches: Accept
+    /// suggestion while the card is undecided, as on the card.
     pub(super) fn delete_undo_button(&mut self, ui: &mut egui::Ui) {
         if let Some(id) = self.delete_current {
             let changed = self.delete_review.changed(id, &self.decisions);
+            let button = if self.delete_undecided(id) {
+                primary(super::pick_review::ACCEPT)
+            } else {
+                egui::Button::new(self.delete_undo_label())
+            };
             if ui
-                .add_enabled(
-                    changed && self.delete_enabled(),
-                    egui::Button::new(self.delete_undo_label()),
-                )
+                .add_enabled(changed && self.delete_enabled(), button)
                 .on_hover_text("R")
                 .clicked()
             {
                 self.undo_delete();
             }
         }
+    }
+    /// A card nobody has decided yet: no photo of it marked for Trash and
+    /// none chosen by hand. It shows its suggestion and nothing else.
+    pub(super) fn delete_undecided(&self, id: MediaId) -> bool {
+        !self
+            .delete_review
+            .decided(id, &self.decisions, &self.by_hand)
     }
 }
 
@@ -811,14 +824,17 @@ impl PhotoSortApp {
                 self.size_slider(ui);
                 ui.add_space(S3);
                 ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
-                    summary_label(
-                        ui,
-                        &format!(
+                    // Before anything is marked, the line says what to do.
+                    let summary = if trash == 0 && !self.delete_review.entries().is_empty() {
+                        HINT.to_owned()
+                    } else {
+                        format!(
                             "{} going {TO_TRASH} · frees {}",
                             count(trash, "photo", "photos"),
                             size_text(freed),
-                        ),
-                    );
+                        )
+                    };
+                    summary_label(ui, &summary);
                 });
             });
         });
@@ -1190,6 +1206,8 @@ impl PhotoSortApp {
     fn delete_card(&mut self, entry: &Entry) -> ReviewCard {
         let subject = entry.subject;
         let enabled = self.delete_enabled();
+        // Nobody has decided it yet: no Keep or Trash, only the suggestion.
+        let undecided = self.delete_undecided(subject);
         let leaders = entry.candidates();
         let mut facts = self.delete_facts(entry, &leaders);
         // A suggestion held back says why, first, where it is not cut off.
@@ -1221,7 +1239,11 @@ impl PhotoSortApp {
                 CardPhoto {
                     id: *id,
                     turns: self.preview_turns(*id),
-                    badge: Badge::keep(keep),
+                    badge: if undecided {
+                        Badge::None
+                    } else {
+                        Badge::keep(keep)
+                    },
                     // This card's own reason: its keeper may keep others too.
                     suggested: keeps_for(entry, *id),
                     suggested_hover: keeps_for(entry, *id)
@@ -1237,7 +1259,9 @@ impl PhotoSortApp {
                     toggle: enabled.then(|| {
                         format!(
                             "{} · {}",
-                            if keep {
+                            if undecided {
+                                "Mark for Trash"
+                            } else if keep {
                                 "Move to Trash instead"
                             } else {
                                 "Keep instead"
@@ -1249,6 +1273,24 @@ impl PhotoSortApp {
                 }
             })
             .collect();
+        // What accepting the suggestion does, said on its button.
+        let marked = entry.suggestion().iter().filter(|keep| !**keep).count();
+        let accept = match (entry.companion.is_some(), marked) {
+            (true, 1) => "Keep the starred photo and mark the other one for Trash · R".to_owned(),
+            (true, n) => format!("Keep the starred photo and mark the other {n} for Trash · R"),
+            (false, 1) => "Mark this photo for Trash · R".to_owned(),
+            (false, n) => format!("Mark these {n} photos for Trash · R"),
+        };
+        // An undecided card whose suggestion marks a photo accepts it with
+        // its one action; one held back to keep a Pick Best group has none.
+        let acceptable = undecided
+            && self.delete_review.suggests_trash(subject)
+            && self.delete_review.pending(
+                subject,
+                &self.decisions,
+                &self.grids.delete.last_kept,
+                &self.by_hand,
+            );
         ReviewCard {
             title: card_title(entry),
             state_text: None,
@@ -1256,8 +1298,16 @@ impl PhotoSortApp {
             buttons: Vec::new(),
             shown: self.delete_panel && self.delete_current == Some(subject),
             title_hover: Some(self.delete_reason(entry)),
-            undo: (enabled && self.delete_review.changed(subject, &self.decisions))
-                .then(|| (self.delete_undo_label().to_owned(), String::new())),
+            undo: if !enabled {
+                None
+            } else if undecided {
+                acceptable.then(|| (super::pick_review::ACCEPT.to_owned(), accept))
+            } else {
+                self.delete_review
+                    .changed(subject, &self.decisions)
+                    .then(|| (self.delete_undo_label().to_owned(), String::new()))
+            },
+            filled: undecided,
         }
     }
 
@@ -1527,17 +1577,36 @@ mod tests {
         app.refilter();
         app.set_active(MediaId(1));
         assert!(app.decisions.values().all(|d| !d.rejected));
+        // Nobody has decided anything: no Keep or Trash on any card, each
+        // card that suggests a photo for Trash offers to accept it, and the
+        // line says what to do. Two formats suggest keeping both: nothing to
+        // accept there. Nothing counts as a change.
         let shown = super::super::review_card::render_grid(&mut app);
-        assert!(shown.contains("Use suggestion"), "{shown}");
-        assert!(!shown.contains("Undo"), "{shown}");
-        // One card at a time, or all at once.
+        let (keep, trash) = (
+            format!("{}  Keep", egui_phosphor::regular::CHECK),
+            format!("{}  Trash", egui_phosphor::regular::TRASH),
+        );
+        assert!(!shown.contains(&keep) && !shown.contains(&trash), "{shown}");
+        assert!(shown.contains(HINT), "{shown}");
+        assert_eq!(
+            shown.matches(super::super::pick_review::ACCEPT).count(),
+            2,
+            "{shown}"
+        );
+        assert!(!shown.contains("Undo") && !shown.contains("Use suggestion"));
+        assert_eq!(app.staged_change_count(), 0);
+        // One card at a time: only it is staged.
         app.undo_delete();
-        assert!(trashed(&app, 1));
-        app.accept_delete_defaults();
-        assert!(trashed(&app, 3));
-        // Turning the setting on stages what is left at once.
+        assert!(trashed(&app, 1) && !trashed(&app, 3));
+        assert_eq!(app.staged_change_count(), 1);
+        // The dark photo kept by hand: Accept all leaves it as it is.
         app.delete_current = Some(MediaId(3));
         app.toggle_delete_candidate(0);
+        app.toggle_delete_candidate(0);
+        assert!(!app.delete_undecided(MediaId(3)));
+        app.accept_delete_defaults();
+        assert!(!trashed(&app, 3));
+        // Turning the setting on stages what is left at once.
         let mut on = app.preferences.clone();
         on.easy_delete_auto = true;
         app.save_settings(on);
