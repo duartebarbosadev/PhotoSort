@@ -127,6 +127,11 @@ impl PhotoSortApp {
         if matches!(change, Change::Trash(_) | Change::ToggleTrash) {
             self.by_hand.extend(changed.iter().copied());
         }
+        // So is a turn: Fix Rotation's Accept all leaves it.
+        if matches!(change, Change::Rotate(_)) {
+            self.rotation_review
+                .decided_by_hand(changed.iter().copied());
+        }
         self.changed_items(changed);
     }
     pub(super) fn selection_ready(&self) -> bool {

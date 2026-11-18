@@ -468,6 +468,7 @@ fn embedded_rotation_preserves_unapplied_ratings_and_saved_focus_across_reload()
         suggested: Default::default(),
         pick_suggested: Default::default(),
         rotations_staged: Default::default(),
+        rotations_by_hand: Default::default(),
         trash_steps: Default::default(),
         by_hand: Default::default(),
         organize: None,

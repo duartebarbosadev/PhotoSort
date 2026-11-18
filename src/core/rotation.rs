@@ -40,6 +40,8 @@ pub struct Review {
     suggestions: HashMap<MediaId, Suggestion>,
     /// Photos whose suggestion was staged once; see `Session::rotations_staged`.
     staged: HashSet<MediaId>,
+    /// Photos whose turns were chosen by hand; see `Session::rotations_by_hand`.
+    by_hand: HashSet<MediaId>,
     /// The stamp of the last change to the review itself.
     revision: u64,
 }
@@ -62,6 +64,22 @@ impl Review {
     pub fn restore_staged(&mut self, ids: HashSet<MediaId>) {
         self.staged = ids;
         self.revision = super::revision::next();
+    }
+    pub fn by_hand(&self) -> &HashSet<MediaId> {
+        &self.by_hand
+    }
+    pub fn restore_by_hand(&mut self, ids: HashSet<MediaId>) {
+        self.by_hand = ids;
+        self.revision = super::revision::next();
+    }
+    /// The user chose these photos' turns by hand: Accept all suggestions
+    /// leaves them as they are from now on.
+    pub fn decided_by_hand(&mut self, ids: impl IntoIterator<Item = MediaId>) {
+        let before = self.by_hand.len();
+        self.by_hand.extend(ids);
+        if self.by_hand.len() != before {
+            self.revision = super::revision::next();
+        }
     }
     pub fn replace_suggestions(&mut self, suggestions: Vec<(MediaId, u8)>) {
         self.replace_predictions(
@@ -130,10 +148,9 @@ impl Review {
             .into_iter()
             .map(|(id, suggestion)| (at(id), suggestion))
             .collect();
-        self.staged = std::mem::take(&mut self.staged)
-            .into_iter()
-            .map(at)
-            .collect();
+        for ids in [&mut self.staged, &mut self.by_hand] {
+            *ids = std::mem::take(ids).into_iter().map(at).collect();
+        }
         self.revision = super::revision::next();
     }
     pub fn complete(&mut self, completed: &HashSet<MediaId>) {

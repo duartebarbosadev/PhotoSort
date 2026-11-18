@@ -8,7 +8,7 @@ use super::eyes::{self, Blink};
 use super::faces::EyeState;
 use super::model::{Decision, MediaId, update_trash};
 use super::near_duplicates::batch::{Keeper, Kind};
-use super::pick_review::Review as PickReview;
+use super::pick_review::{Accepted, Review as PickReview};
 use super::text::TO_TRASH;
 use std::collections::{HashMap, HashSet};
 
@@ -303,28 +303,38 @@ impl Review {
     /// suggestion; a card with a choice made by hand stays as it is. No card
     /// of several photos and no Pick Best group is left with no photo kept:
     /// a photo that would be the last one to go to Trash is left as it is.
-    /// Returns the photos changed.
+    /// Returns the photos changed, and the cards.
     pub fn accept_sparing(
         &self,
         ids: &[MediaId],
         groups: &PickReview,
         decisions: &mut HashMap<MediaId, Decision>,
         by_hand: &HashSet<MediaId>,
-    ) -> Vec<MediaId> {
-        let mut marks: Vec<(MediaId, bool)> = ids
+    ) -> Accepted {
+        let cards: Vec<Vec<(MediaId, bool)>> = ids
             .iter()
             .filter_map(|id| self.entry(*id))
-            .flat_map(|entry| Self::undecided_marks(entry, decisions, by_hand))
+            .map(|entry| Self::undecided_marks(entry, decisions, by_hand))
             .collect();
+        let mut marks: Vec<(MediaId, bool)> = cards.iter().flatten().copied().collect();
         groups.spare(decisions, &mut marks);
         update_trash(decisions, marks.iter().copied());
+        // A card counts when a mark of it is left after sparing.
+        let left: HashSet<(MediaId, bool)> = marks.iter().copied().collect();
+        let suggestions = cards
+            .iter()
+            .filter(|card| card.iter().any(|mark| left.contains(mark)))
+            .count();
         // A better shot can be on two cards: it is counted once.
         let mut seen = HashSet::new();
-        marks
-            .into_iter()
-            .map(|(id, _)| id)
-            .filter(|id| seen.insert(*id))
-            .collect()
+        Accepted {
+            photos: marks
+                .into_iter()
+                .map(|(id, _)| id)
+                .filter(|id| seen.insert(*id))
+                .collect(),
+            suggestions,
+        }
     }
     /// What Accept all sets on one card: the suggestion of each photo that
     /// differs from it, unless a photo of the card was decided by hand. On a

@@ -255,7 +255,7 @@ def main():
                 resolved = resolve_dependency(dependency, binary, exe, loader_paths(binary, exe))
                 if not resolved.is_relative_to(contents.resolve()) or not resolved.is_file():
                     raise RuntimeError(f'Bundle still depends on host or missing file: {dependency}')
-        plist = dict(CFBundleExecutable='photosort', CFBundleIdentifier='dev.duartebarbosa.photosort.rust',
+        plist = dict(CFBundleExecutable='photosort', CFBundleIdentifier='dev.duartebarbosa.photosort',
                      CFBundleName='PhotoSort', CFBundleDisplayName='PhotoSort', CFBundleIconFile=icon.stem,
                      CFBundleVersion='1', CFBundleShortVersionString=VERSION, CFBundlePackageType='APPL',
                      NSHighResolutionCapable=True, LSMinimumSystemVersion=minimum_macos(visited))

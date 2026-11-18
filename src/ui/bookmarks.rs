@@ -115,6 +115,7 @@ impl PhotoSortApp {
         // they wait to be accepted.
         self.delete_review.restore_suggested(Default::default());
         self.rotation_review.restore_staged(Default::default());
+        self.rotation_review.restore_by_hand(Default::default());
         self.pick_review.restore_suggested(Default::default());
         self.changed();
     }

@@ -450,6 +450,7 @@ fn session_drops_stale_decisions() {
         suggested: Default::default(),
         pick_suggested: Default::default(),
         rotations_staged: Default::default(),
+        rotations_by_hand: Default::default(),
         trash_steps: Default::default(),
         by_hand: Default::default(),
         organize: None,

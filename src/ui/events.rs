@@ -252,6 +252,8 @@ impl PhotoSortApp {
         self.pick_review.restore_suggested(session.pick_suggested);
         self.rotation_review
             .restore_staged(session.rotations_staged);
+        self.rotation_review
+            .restore_by_hand(session.rotations_by_hand);
         if let Some(intent) = session.organize {
             self.organize_drafts = intent.drafts;
             self.file_names = intent.names;
@@ -301,6 +303,7 @@ impl PhotoSortApp {
             review.retain(|id| self.index.contains_key(&id));
             // The library's session knows which files changed since.
             review.restore_staged(self.rotation_review.staged().clone());
+            review.restore_by_hand(self.rotation_review.by_hand().clone());
             self.rotation_review = review;
             self.rotation_queue_only = true;
         }
@@ -987,6 +990,8 @@ impl PhotoSortApp {
         // The session's set is already remapped once; it wins.
         self.rotation_review
             .restore_staged(session.rotations_staged.clone());
+        self.rotation_review
+            .restore_by_hand(session.rotations_by_hand.clone());
         let remaining_rotations = self.rotation_review.clone();
         let retry_rotation = self.rotation_plan;
         self.rotation_plan = false;

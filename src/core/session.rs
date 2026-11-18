@@ -137,6 +137,10 @@ pub struct Session {
     /// from Easy Delete's: one photo can be a suggestion in both steps.
     #[serde(default, rename = "staged_rotations")]
     pub rotations_staged: HashSet<MediaId>,
+    /// Photos whose turns were chosen by hand, in Fix Rotation or any other
+    /// step. Fix Rotation's Accept all suggestions leaves them as they are.
+    #[serde(default, rename = "rotated_by_hand")]
+    pub rotations_by_hand: HashSet<MediaId>,
     /// The step each Trash mark was made in; other steps show it dimmed.
     #[serde(default)]
     pub trash_steps: HashMap<MediaId, super::model::Step>,
@@ -257,6 +261,7 @@ impl Session {
                 &mut self.suggested,
                 &mut self.pick_suggested,
                 &mut self.rotations_staged,
+                &mut self.rotations_by_hand,
                 &mut self.by_hand,
             ] {
                 if staged.remove(old) {
@@ -289,6 +294,7 @@ impl Session {
         self.suggested.extend(other.suggested);
         self.pick_suggested.extend(other.pick_suggested);
         self.rotations_staged.extend(other.rotations_staged);
+        self.rotations_by_hand.extend(other.rotations_by_hand);
         self.by_hand.extend(other.by_hand);
         self.fingerprints
             .extend(other.fingerprints.iter().map(|(id, f)| (*id, *f)));
@@ -318,6 +324,7 @@ impl Session {
             &mut self.suggested,
             &mut self.pick_suggested,
             &mut self.rotations_staged,
+            &mut self.rotations_by_hand,
             &mut self.by_hand,
         ] {
             staged.retain(|id| {

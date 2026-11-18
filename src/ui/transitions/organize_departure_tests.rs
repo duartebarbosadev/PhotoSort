@@ -1211,6 +1211,7 @@ fn external_output_retry_preserves_earlier_moves_and_existing_destination_marks(
         suggested: Default::default(),
         pick_suggested: Default::default(),
         rotations_staged: Default::default(),
+        rotations_by_hand: Default::default(),
         trash_steps: Default::default(),
         by_hand: Default::default(),
         waiting: None,
