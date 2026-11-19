@@ -70,7 +70,7 @@ impl PhotoSortApp {
             }
             ApplicationKey::About => self.about = true,
             ApplicationKey::Settings => self.open_settings(preferences::Section::General),
-            ApplicationKey::Analyze => self.analyze_current_workflow(),
+            ApplicationKey::Analyze => self.request_analysis(),
         }
         true
     }

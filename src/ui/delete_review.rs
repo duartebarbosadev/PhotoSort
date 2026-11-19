@@ -1,6 +1,6 @@
 use super::review_card::{
-    Badge, CardEvent, CardPhoto, Fact, GridClick, Inset, ReviewCard, size_text, slot_ratio,
-    summary_label,
+    Badge, CardEvent, CardPhoto, Fact, GridClick, GroupLink, Inset, ReviewCard, size_text,
+    slot_ratio, summary_label,
 };
 use super::*;
 use crate::core::delete_review::{self, Category, Entry, FormatChoice, Review};
@@ -298,19 +298,18 @@ impl PhotoSortApp {
             .filter(|id| seen.insert(*id))
             .collect()
     }
-    /// Undoes the user's changes to the current card. One card, asked for
-    /// by hand: its suggestion applies in full, and its photos count as
-    /// undecided again.
+    /// The current card's Accept or Undo. One card, asked for by hand:
+    /// Accept takes its suggestion in full, and Undo takes it back to where
+    /// the step started it. Its photos count as undecided again.
     pub(super) fn undo_delete(&mut self) {
         if let Some(id) = self.delete_current
             && self.delete_enabled()
         {
-            self.delete_review.accept(&[id], &mut self.decisions);
-            let photos = self.delete_candidates(&[id]);
-            for photo in &photos {
-                self.by_hand.remove(photo);
+            let clear = !self.delete_undecided(id) && !self.preferences.easy_delete_auto;
+            if !clear {
+                self.delete_review.accept(&[id], &mut self.decisions);
             }
-            self.changed_items(photos);
+            self.undo_group(self.delete_candidates(&[id]), clear);
         }
     }
     /// Every card shown back to its suggestion.
@@ -444,27 +443,38 @@ impl PhotoSortApp {
         ui.add_space(S1);
         self.review_canvas(ui);
     }
-    /// With suggestions applied automatically, going back to one undoes the
-    /// user's change; otherwise it applies the suggestion for the first time.
-    fn delete_undo_label(&self) -> &'static str {
-        if self.preferences.easy_delete_auto {
-            "Undo"
-        } else {
-            "Use suggestion"
-        }
+    /// What a card's header offers, if anything: Accept while nobody has
+    /// decided it and its suggestion marks a photo (none held back to keep
+    /// a Pick Best group), then Undo.
+    fn delete_link(&self, subject: MediaId) -> Option<GroupLink> {
+        let undecided = self.delete_undecided(subject);
+        let acceptable = undecided
+            && self.delete_review.suggests_trash(subject)
+            && self.delete_review.pending(
+                subject,
+                &self.decisions,
+                &self.grids.delete.last_kept,
+                &self.by_hand,
+            );
+        GroupLink::of(
+            self.delete_enabled(),
+            undecided,
+            acceptable,
+            self.preferences.easy_delete_auto,
+            self.delete_review.changed(subject, &self.decisions),
+        )
     }
     /// The comparison panel's Undo, beside its Keep/Trash switches: Accept
     /// suggestion while the card is undecided, as on the card.
     pub(super) fn delete_undo_button(&mut self, ui: &mut egui::Ui) {
         if let Some(id) = self.delete_current {
-            let changed = self.delete_review.changed(id, &self.decisions);
             let button = if self.delete_undecided(id) {
                 primary(super::pick_review::ACCEPT)
             } else {
-                egui::Button::new(self.delete_undo_label())
+                egui::Button::new("Undo")
             };
             if ui
-                .add_enabled(changed && self.delete_enabled(), button)
+                .add_enabled(self.delete_link(id).is_some(), button)
                 .on_hover_text("R")
                 .clicked()
             {
@@ -1203,7 +1213,7 @@ impl PhotoSortApp {
 
     /// The card for one suggestion: a short tag (the full reason in its
     /// tooltip), its photos with a Keep/Trash pill each and their deciding
-    /// facts, and Undo once it differs from the suggestion.
+    /// facts, and Accept or Undo as `delete_link` says.
     fn delete_card(&mut self, entry: &Entry) -> ReviewCard {
         let subject = entry.subject;
         let enabled = self.delete_enabled();
@@ -1282,16 +1292,6 @@ impl PhotoSortApp {
             (false, 1) => "Mark this photo for Trash · R".to_owned(),
             (false, n) => format!("Mark these {n} photos for Trash · R"),
         };
-        // An undecided card whose suggestion marks a photo accepts it with
-        // its one action; one held back to keep a Pick Best group has none.
-        let acceptable = undecided
-            && self.delete_review.suggests_trash(subject)
-            && self.delete_review.pending(
-                subject,
-                &self.decisions,
-                &self.grids.delete.last_kept,
-                &self.by_hand,
-            );
         ReviewCard {
             title: card_title(entry),
             state_text: None,
@@ -1299,15 +1299,10 @@ impl PhotoSortApp {
             buttons: Vec::new(),
             shown: self.delete_panel && self.delete_current == Some(subject),
             title_hover: Some(self.delete_reason(entry)),
-            undo: if !enabled {
-                None
-            } else if undecided {
-                acceptable.then(|| (super::pick_review::ACCEPT.to_owned(), accept))
-            } else {
-                self.delete_review
-                    .changed(subject, &self.decisions)
-                    .then(|| (self.delete_undo_label().to_owned(), String::new()))
-            },
+            undo: self.delete_link(subject).map(|link| match link {
+                GroupLink::Accept => (super::pick_review::ACCEPT.to_owned(), accept),
+                GroupLink::Undo => ("Undo".to_owned(), String::new()),
+            }),
             filled: undecided,
         }
     }
@@ -1596,10 +1591,26 @@ mod tests {
         );
         assert!(!shown.contains("Undo") && !shown.contains("Use suggestion"));
         assert_eq!(app.staged_change_count(), 0);
-        // One card at a time: only it is staged.
+        // One card at a time: only it is staged, and it can always be
+        // taken back to nothing marked, its Accept showing again.
         app.undo_delete();
         assert!(trashed(&app, 1) && !trashed(&app, 3));
         assert_eq!(app.staged_change_count(), 1);
+        let shown = super::super::review_card::render_grid(&mut app);
+        assert!(shown.contains("Undo") && shown.contains(&trash), "{shown}");
+        app.delete_card_event(MediaId(1), CardEvent::Undo);
+        assert!(app.delete_undecided(MediaId(1)) && !trashed(&app, 1));
+        assert_eq!(app.staged_change_count(), 0);
+        let shown = super::super::review_card::render_grid(&mut app);
+        assert!(!shown.contains(&keep) && !shown.contains(&trash), "{shown}");
+        assert!(!shown.contains("Undo"), "{shown}");
+        assert_eq!(
+            shown.matches(super::super::pick_review::ACCEPT).count(),
+            2,
+            "{shown}"
+        );
+        app.undo_delete();
+        assert!(trashed(&app, 1));
         // The dark photo kept by hand: Accept all leaves it as it is.
         app.delete_current = Some(MediaId(3));
         app.toggle_delete_candidate(0);

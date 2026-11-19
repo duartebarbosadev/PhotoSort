@@ -372,7 +372,8 @@ impl PhotoSortApp {
     }
     /// The status line: what is happening, then the Shortcuts button.
     fn footer_status(&mut self, ui: &mut egui::Ui) {
-        let recovery_status = self.model_recovery_status(&self.runtime.model_assets.state());
+        let models = self.runtime.model_assets.state();
+        let recovery_status = self.model_recovery_status(&models);
         let scoped_status = self.workflow_status();
         let status = self
             .navigation_notice
@@ -387,6 +388,8 @@ impl PhotoSortApp {
         {
             ui.add(egui::Spinner::new().size(12.0));
         }
+        // A download whose panel was closed stays in sight here.
+        self.model_work_chip(ui, &models);
         let font = egui::TextStyle::Small.resolve(ui.style());
         let status_width = ui
             .painter()

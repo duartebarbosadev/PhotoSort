@@ -188,6 +188,21 @@ impl PhotoSortApp {
         }
         let next = self.preferences.neighbor(self.step, true);
         let can_analyze = self.can_start_analysis();
+        // While the analysis waits for a model download, its button says so
+        // and shows the download.
+        let models = self.runtime.model_assets.state();
+        let waiting = self.analysis_waits_for_models() && models.running;
+        let analyze_label = |label: &str| {
+            if waiting {
+                match model_setup::download_percent(&models) {
+                    Some(percent) => format!("Waiting for model download · {percent}%"),
+                    None => "Waiting for model download".to_owned(),
+                }
+            } else {
+                label.to_owned()
+            }
+        };
+        let waiting_note = "Starts when the AI model download finishes.";
         let mut action = None;
         if self.media.is_empty() {
             state_card(
@@ -215,13 +230,18 @@ impl PhotoSortApp {
                 // cannot be pressed yet.
                 if !detected && self.analysis_run.is_some() {
                     "Available when the current analysis finishes."
+                } else if !detected && waiting {
+                    waiting_note
                 } else {
                     ""
                 },
                 |ui| {
                     if !detected
                         && ui
-                            .add_enabled(can_analyze, primary("Detect rotations"))
+                            .add_enabled(
+                                can_analyze || waiting,
+                                primary(analyze_label("Detect rotations")),
+                            )
                             .clicked()
                     {
                         action = Some(Empty::Analyze);
@@ -238,9 +258,13 @@ impl PhotoSortApp {
             } else {
                 "No similar photos to compare"
             };
-            state_card(ui, icon::STACK, title, "", |ui| {
+            let note = if waiting { waiting_note } else { "" };
+            state_card(ui, icon::STACK, title, note, |ui| {
                 if ui
-                    .add_enabled(can_analyze, primary("Analyze library"))
+                    .add_enabled(
+                        can_analyze || waiting,
+                        primary(analyze_label("Analyze library")),
+                    )
                     .clicked()
                 {
                     action = Some(Empty::Analyze);
@@ -261,6 +285,8 @@ impl PhotoSortApp {
                 },
                 if hidden {
                     "The search or the selected group hides every suggestion."
+                } else if waiting {
+                    waiting_note
                 } else {
                     ""
                 },
@@ -270,7 +296,10 @@ impl PhotoSortApp {
                             action = Some(Empty::ShowAllCategories);
                         }
                     } else if ui
-                        .add_enabled(can_analyze, primary("Analyze library"))
+                        .add_enabled(
+                            can_analyze || waiting,
+                            primary(analyze_label("Analyze library")),
+                        )
                         .clicked()
                     {
                         action = Some(Empty::Analyze);
@@ -293,7 +322,7 @@ impl PhotoSortApp {
         }
         match action {
             Some(Empty::OpenFolder) => self.select_folder(ui.ctx()),
-            Some(Empty::Analyze) => self.analyze_current_workflow(),
+            Some(Empty::Analyze) => self.request_analysis(),
             Some(Empty::ShowAllRotations) => {
                 self.rotation_queue_only = false;
                 self.filter_dirty = true;

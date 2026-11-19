@@ -124,7 +124,7 @@ fn model_dialog_fits_compact_and_wide_windows_without_loading_models_or_images()
         state.error =
             Some("A transfer could not complete. Existing files remain available. ".repeat(8));
         for (width, height) in [(480., 640.), (800., 600.), (1200., 900.)] {
-            for _ in 0..2 {
+            for pass in 0..2 {
                 let out = ctx.run_test(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
@@ -139,6 +139,16 @@ fn model_dialog_fits_compact_and_wide_windows_without_loading_models_or_images()
                     },
                 );
                 assert!(out.shapes.len() < 500);
+                // What went wrong is in sight, above the footer, however
+                // many cards there are.
+                // The first frame only measures the panel.
+                assert!(
+                    pass == 0
+                        || super::super::review_card::painted_text(&out)
+                            .contains("A transfer could not complete")
+                            != running,
+                    "{width}x{height}"
+                );
                 let rect = ctx
                     .memory(|memory| memory.area_rect(egui::Id::new("model_setup")))
                     .unwrap();
@@ -150,30 +160,42 @@ fn model_dialog_fits_compact_and_wide_windows_without_loading_models_or_images()
             }
         }
     }
-    // The Runtime section keeps its place over the models once the runtime
-    // is installed, so the list does not jump.
+    // The runtime is the first card, over the models, installed or not, and
+    // the two sections never change, so the list does not jump.
     let mut state = app.runtime.model_assets.state();
     for runtime in [None, Some(std::path::PathBuf::from("runtime"))] {
         Arc::make_mut(state.snapshot.as_mut().unwrap()).runtime = runtime;
-        let out = ctx.run_test(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(800., 4000.),
-                )),
-                ..Default::default()
-            },
-            |ui| {
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        ctx.enable_accesskit();
+        let mut nodes = Vec::new();
+        for _ in 0..3 {
+            let out = ctx.run_test(egui::RawInput::default(), |ui| {
                 let ctx = &ui.ctx().clone();
                 app.render_model_setup(ctx, &state)
-            },
-        );
-        let text = super::super::review_card::painted_text(&out);
+            });
+            nodes = out.platform_output.accesskit_update.unwrap().nodes;
+        }
+        // Where each label sits, top to bottom.
         let at = |what: &str| {
-            text.find(what)
-                .unwrap_or_else(|| panic!("{what} in:\n{text}"))
+            nodes
+                .iter()
+                .find(|(_, n)| n.label().or_else(|| n.value()) == Some(what))
+                .and_then(|(_, n)| n.bounds())
+                .unwrap_or_else(|| panic!("{what}"))
+                .y0
         };
-        assert!(at("RUNTIME") < at("USED BY"), "{text}");
+        let order = [
+            "RUNTIME AND SHARED MODELS",
+            model_assets::runtime::info(model_assets::runtime::Package::Cpu)
+                .map_or("ONNX Runtime", |info| info.title),
+            model_assets::Id::Scene.asset().title,
+            "FOR PEOPLE FOLDERS AND FIX ROTATION",
+            model_assets::Id::Rotation.asset().title,
+        ];
+        for pair in order.windows(2) {
+            assert!(at(pair[0]) < at(pair[1]), "{pair:?}");
+        }
     }
     assert_eq!((app.stats.decodes, app.stats.metadata_reads), (0, 0));
 }
@@ -597,36 +619,37 @@ fn model_panel_groups_models_and_links_every_source() {
         .filter(|(role, _)| *role != egui::accesskit::Role::TextRun)
         .filter_map(|(_, l)| l.clone())
         .collect();
-    // What the paused analysis needs comes first, then the shared and
-    // single-step groups; nothing is said twice.
+    // The same two sections whatever the paused analysis needs; what it
+    // needs (here the runtime and the scene model) says so on its card.
     for group in [
-        "NEEDED FOR THE PAUSED ANALYSIS",
-        "USED BY PEOPLE FOLDERS AND FIX ROTATION",
+        "RUNTIME AND SHARED MODELS",
+        "FOR PEOPLE FOLDERS AND FIX ROTATION",
     ] {
         assert!(labels.iter().any(|l| l == group), "{group}: {labels:?}");
     }
-    assert_eq!(labels.iter().filter(|l| *l == "Missing").count(), 7);
+    assert_eq!(labels.iter().filter(|l| *l == "Needed now").count(), 2);
+    assert_eq!(labels.iter().filter(|l| *l == "Missing").count(), 6);
+    let runtime = model_assets::runtime::info(model_assets::runtime::Package::Cpu);
     // Every model downloads from its pinned file; Import stays in Details.
     let count = |pred: &dyn Fn(&str) -> bool| labels.iter().filter(|l| pred(l)).count();
-    let total = model_assets::ALL.len();
+    let total = model_assets::ALL.len() + usize::from(runtime.is_some());
     assert_eq!(
         count(&|l| l.starts_with("Download ") && l.ends_with(" MB") && !l.contains(" all ")),
         total
     );
-    // One action downloads them all, with the same licence note beside it.
+    // One action, in the footer, downloads them all.
     assert_eq!(count(&|l| l.starts_with("Download all · ")), 1);
     assert_eq!(count(&|l| l == "Import prepared model…"), 0);
     assert_eq!(count(&|l| l.contains("no public download")), 0);
     // The aesthetic model's AGPL-3.0 licence is stated beside its download.
     let agpl = model_assets::Id::Aesthetic.asset().download_note.unwrap();
-    assert_eq!(count(&|l| l == agpl), 1);
-    assert_eq!(count(&|l| l.ends_with(agpl)), 2, "Also beside Download all");
+    assert_eq!(count(&|l| l.ends_with(agpl)), 1, "Said once, on its card");
     // Every model links its upstream page; links open only when clicked.
     let links = nodes
         .iter()
         .filter(|(role, _)| *role == egui::accesskit::Role::Link)
         .count();
-    assert_eq!(links, model_assets::ALL.len());
+    assert_eq!(links, model_assets::ALL.len() + 1, "and the runtime's");
     for asset in model_assets::ALL {
         assert!(asset.page.starts_with("https://"));
         let name = format!("Source page for {}", asset.title);
@@ -675,22 +698,19 @@ fn a_missing_runtime_is_offered_for_download_and_gpu_support_only_with_an_nvidia
     Arc::make_mut(state.snapshot.as_mut().unwrap()).runtime = None;
     let labels = model_panel_labels(&mut app, &state);
     let offered = |labels: &[String], prefix: &str| labels.iter().any(|l| l.starts_with(prefix));
-    if let Some(cpu) = runtime::info(Package::Cpu) {
+    // The runtime is a card like the models': its title, Source, status and
+    // its own Download.
+    let download = runtime::info(Package::Cpu)
+        .map(|cpu| format!("Download {}", download_size(cpu.download_bytes())));
+    if let (Some(cpu), Some(download)) = (runtime::info(Package::Cpu), &download) {
+        assert!(labels.iter().any(|l| l == cpu.title), "{labels:?}");
+        assert!(labels.contains(download), "{labels:?}");
         assert!(
-            offered(&labels, &format!("Download {}", cpu.title)),
+            labels.contains(&format!("Source page for {}", cpu.title)),
             "{labels:?}"
         );
-        assert!(
-            offered(&labels, "The AI steps need ONNX Runtime"),
-            "{labels:?}"
-        );
-        assert!(!offered(&labels, "AI runtime not found"), "{labels:?}");
     }
-    assert!(
-        !cfg!(not(target_os = "macos")) || !offered(&labels, "AI runtime not found · restore"),
-        "only the macOS bundle is restored: {labels:?}"
-    );
-    let gpu_offered = offered(&labels, "Download GPU support");
+    let gpu_offered = labels.iter().any(|l| l == "NVIDIA GPU support");
     assert_eq!(
         gpu_offered,
         runtime::info(Package::Cuda).is_some() && runtime::nvidia_driver_present(),
@@ -703,18 +723,116 @@ fn a_missing_runtime_is_offered_for_download_and_gpu_support_only_with_an_nvidia
         snapshot.cuda = Some("runtime-cuda".into());
     }
     let labels = model_panel_labels(&mut app, &state);
-    assert!(
-        offered(&labels, "AI runtime found")
-            || labels.iter().any(|l| l.contains("AI runtime found")),
-        "{labels:?}"
-    );
+    if let Some(download) = &download {
+        assert!(!labels.contains(download), "{labels:?}");
+    }
     if runtime::info(Package::Cuda).is_some() {
         assert!(
-            labels
-                .iter()
-                .any(|l| l.contains("NVIDIA GPU support installed")),
+            labels.iter().any(|l| l == "NVIDIA GPU support"),
             "{labels:?}"
         );
-        assert!(!offered(&labels, "Download GPU support"), "{labels:?}");
+        assert!(!offered(&labels, "Download "), "{labels:?}");
     }
+}
+/// A model download in progress, with its panel closed.
+fn downloading() -> model_assets::State {
+    model_assets::State {
+        running: true,
+        mutating: true,
+        progress: Some(model_assets::Progress {
+            id: Some(model_assets::Id::Scene),
+            package: None,
+            bytes: 45,
+            total: 100,
+            step: None,
+        }),
+        message: "Downloading and verifying model…".into(),
+        ..verified_setup()
+    }
+}
+fn footer_labels(app: &mut PhotoSortApp, state: &model_assets::State) -> Vec<String> {
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    ctx.enable_accesskit();
+    let mut labels = Vec::new();
+    for _ in 0..2 {
+        let out = ctx.run_test(egui::RawInput::default(), |ui| {
+            ui.horizontal(|ui| app.model_work_chip(ui, state));
+        });
+        labels = out
+            .platform_output
+            .accesskit_update
+            .unwrap()
+            .nodes
+            .iter()
+            .filter_map(|(_, n)| n.label().map(str::to_owned))
+            .collect();
+    }
+    labels
+}
+#[test]
+fn analyze_during_a_model_download_waits_for_it_and_then_starts() {
+    for step in [Step::PickBest, Step::EasyDelete, Step::Cull] {
+        let (dir, mut app) = app();
+        app.media.push(Media {
+            id: MediaId(8),
+            path: dir.path().join("photo.jpg"),
+            kind: MediaKind::Photo,
+            fingerprint: Default::default(),
+        });
+        app.step = step;
+        let state = downloading();
+        // Pressed during the download: it waits, says so, and shows the download.
+        assert!(app.wait_for_model_work(&state), "{step:?}");
+        assert!(app.analysis_waits_for_models() && app.analysis_run.is_none());
+        assert!(
+            app.workflow_status()
+                .contains("Waiting for the AI model download")
+        );
+        assert!(footer_labels(&mut app, &state).contains(&"AI model download".to_owned()));
+        app.request_analysis();
+        assert!(app.model_dialog, "pressed again, it shows the download");
+        app.model_dialog = false;
+        app.follow_model_work(&state);
+        assert!(app.analysis_run.is_none());
+        // The download ends: the analysis starts on its own.
+        app.follow_model_work(&verified_setup());
+        assert!(app.analysis_run.is_some(), "{step:?}");
+        assert!(!app.analysis_waits_for_models() && app.error.is_none());
+        assert!(footer_labels(&mut app, &verified_setup()).is_empty());
+        app.cancel_analysis();
+    }
+}
+#[test]
+fn a_failed_model_download_is_reported_and_its_waiting_analysis_does_not_start() {
+    let (dir, mut app) = app();
+    app.media.push(Media {
+        id: MediaId(8),
+        path: dir.path().join("photo.jpg"),
+        kind: MediaKind::Photo,
+        fingerprint: Default::default(),
+    });
+    app.step = Step::Rotation;
+    assert!(app.wait_for_model_work(&downloading()));
+    app.follow_model_work(&downloading());
+    let failed = model_assets::State {
+        error: Some("Connection reset".into()),
+        message: "Model operation did not complete".into(),
+        ..verified_setup()
+    };
+    app.follow_model_work(&failed);
+    let error = app.error.clone().unwrap();
+    assert!(error.contains("did not complete") && error.contains("Connection reset"));
+    assert!(app.analysis_run.is_none() && !app.analysis_waits_for_models());
+    // A cancelled download starts nothing and reports no error.
+    app.error = None;
+    assert!(app.wait_for_model_work(&downloading()));
+    let cancelled = model_assets::State {
+        cancelled: true,
+        message: "Download cancelled".into(),
+        ..verified_setup()
+    };
+    app.follow_model_work(&cancelled);
+    assert!(app.error.is_none() && app.analysis_run.is_none());
+    assert!(!app.analysis_waits_for_models());
 }

@@ -1,4 +1,4 @@
-use super::review_card::{Badge, CardEvent, CardPhoto, Fact, GridClick, ReviewCard};
+use super::review_card::{Badge, CardEvent, CardPhoto, Fact, GridClick, GroupLink, ReviewCard};
 use super::*;
 use crate::core::pick_review::{Cluster, Reason, Review};
 use crate::core::text::{TO_TRASH, TRASH};
@@ -158,9 +158,9 @@ impl PhotoSortApp {
             self.toggle_pick(id);
         }
     }
-    /// Undoes the user's changes to the selected group: one group, asked
-    /// for by hand, so its suggestion applies in full and its photos count
-    /// as undecided again.
+    /// The selected group's Accept or Undo: one group, asked for by hand.
+    /// Accept takes its suggestion in full, and Undo takes it back to where
+    /// the step started it. Its photos count as undecided again.
     pub(super) fn undo_pick(&mut self) {
         if let Some(group) = self.pick_group() {
             self.undo_pick_group(group);
@@ -178,11 +178,11 @@ impl PhotoSortApp {
         else {
             return;
         };
-        self.pick_review.accept(&[group], &mut self.decisions);
-        for id in &members {
-            self.by_hand.remove(id);
+        let clear = !self.pick_undecided(group) && !self.preferences.pick_best_auto;
+        if !clear {
+            self.pick_review.accept(&[group], &mut self.decisions);
         }
-        self.changed_items(members);
+        self.undo_group(members, clear);
     }
     /// Accept all suggestions: every photo not decided by hand takes its
     /// suggestion. A choice made by hand stays as it is, and a group whose
@@ -234,14 +234,13 @@ impl PhotoSortApp {
     /// while the group is undecided, as on its card.
     pub(super) fn pick_undo_button(&mut self, ui: &mut egui::Ui) {
         if let Some(group) = self.pick_group() {
-            let changed = self.pick_review.changed(group, &self.decisions);
             let button = if self.pick_undecided(group) {
                 primary(ACCEPT)
             } else {
-                egui::Button::new(self.pick_undo_label())
+                egui::Button::new("Undo")
             };
             if ui
-                .add_enabled(changed && self.pick_enabled(), button)
+                .add_enabled(self.pick_link(group).is_some(), button)
                 .on_hover_text("R")
                 .clicked()
             {
@@ -249,14 +248,18 @@ impl PhotoSortApp {
             }
         }
     }
-    /// With suggestions applied automatically, going back to one undoes the
-    /// user's change; otherwise it applies the suggestion for the first time.
-    fn pick_undo_label(&self) -> &'static str {
-        if self.preferences.pick_best_auto {
-            "Undo"
-        } else {
-            "Use suggestion"
-        }
+    /// What a group's header offers, if anything: Accept while nobody has
+    /// decided it (an undecided group differs from its suggestion), then
+    /// Undo.
+    fn pick_link(&self, group: usize) -> Option<GroupLink> {
+        let changed = self.pick_review.changed(group, &self.decisions);
+        GroupLink::of(
+            self.pick_enabled(),
+            self.pick_undecided(group),
+            changed,
+            self.preferences.pick_best_auto,
+            changed,
+        )
     }
     /// A group nobody has decided yet: no photo of it marked for Trash and
     /// none chosen by hand. It shows its suggestion and nothing else.
@@ -602,8 +605,8 @@ impl PhotoSortApp {
     /// The card for one group: its best photos and their deciding facts,
     /// the suggested one marked. A group nobody has decided yet shows no
     /// Keep or Trash, only that mark and Accept suggestion; once anything
-    /// in it is decided, each photo has its Keep/Trash pill, and Undo shows
-    /// once it differs from the suggestion.
+    /// in it is decided, each photo has its Keep/Trash pill, and Undo as
+    /// `pick_link` says.
     fn pick_card(&self, group: usize) -> ReviewCard {
         let cluster = &self.pick_review.clusters()[group];
         let enabled = self.pick_enabled();
@@ -685,14 +688,9 @@ impl PhotoSortApp {
             // is enough: no outline that could be read as Keep or Trash.
             shown: self.pick_panel && self.pick_group() == Some(group),
             title_hover: None,
-            // An undecided group differs from its suggestion too: its one
-            // action accepts it.
-            undo: (enabled && self.pick_review.changed(group, &self.decisions)).then(|| {
-                if undecided {
-                    (ACCEPT.to_owned(), accept)
-                } else {
-                    (self.pick_undo_label().to_owned(), String::new())
-                }
+            undo: self.pick_link(group).map(|link| match link {
+                GroupLink::Accept => (ACCEPT.to_owned(), accept),
+                GroupLink::Undo => ("Undo".to_owned(), String::new()),
             }),
             filled: undecided,
         }
@@ -856,13 +854,22 @@ mod tests {
         assert!(trashed(&app).is_empty());
         assert_eq!(app.staged_change_count(), 0);
         // Accepting one group stages that group only, which then shows
-        // Keep and Trash.
+        // Keep and Trash, and Undo, which takes it back to nothing marked.
         app.pick_card_event(0, CardEvent::Undo);
         assert_eq!(trashed(&app), vec![1]);
         assert_eq!(app.staged_change_count(), 1);
         let shown = super::super::review_card::render_grid(&mut app);
         assert!(shown.contains(&keep) && shown.contains(&trash), "{shown}");
         assert_eq!(shown.matches(ACCEPT).count(), 1, "{shown}");
+        assert!(shown.contains("Undo"), "{shown}");
+        app.pick_card_event(0, CardEvent::Undo);
+        assert!(trashed(&app).is_empty() && app.pick_undecided(0));
+        assert_eq!(app.staged_change_count(), 0);
+        let shown = super::super::review_card::render_grid(&mut app);
+        assert!(!shown.contains(&keep) && !shown.contains(&trash), "{shown}");
+        assert_eq!(shown.matches(ACCEPT).count(), 2, "{shown}");
+        app.pick_card_event(0, CardEvent::Undo);
+        assert_eq!(trashed(&app), vec![1]);
         // A photo of the other group marked and unmarked by hand: that group
         // is decided, every photo kept, and Accept all leaves it so.
         app.pick_card_event(1, CardEvent::Toggle(1));
