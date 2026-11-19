@@ -263,6 +263,12 @@ impl PhotoSortApp {
                 format!("Grouping by {what} could not finish."),
                 Some("Group again"),
             ),
+            Pending::Waiting if self.analysis_waits_for_models() => (
+                icon::DOWNLOAD_SIMPLE,
+                "Grouping is next".into(),
+                format!("Grouping by {what} starts when the AI model download finishes."),
+                Some("AI models…"),
+            ),
             Pending::Waiting if self.model_issue.is_some() || self.model_dialog => (
                 icon::CPU,
                 "AI models needed".into(),

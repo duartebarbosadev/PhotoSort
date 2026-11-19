@@ -32,6 +32,9 @@ pub struct Info {
     pub publisher: &'static str,
     /// The installed folder's name inside the data folder.
     pub directory: &'static str,
+    /// The project page, linked as its Source.
+    pub page: &'static str,
+    pub license: &'static str,
     pub archives: &'static [Archive],
 }
 
@@ -50,6 +53,8 @@ const CATALOG: &[Info] = &[
         title: "ONNX Runtime 1.29.0",
         publisher: "Microsoft",
         directory: "runtime",
+        page: "https://onnxruntime.ai",
+        license: "MIT",
         archives: &[Archive {
             url: "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-win-x64-1.29.0.zip",
             bytes: 79_645_520,
@@ -71,6 +76,8 @@ const CATALOG: &[Info] = &[
         title: "NVIDIA GPU support (CUDA 12, cuDNN 9)",
         publisher: "Microsoft and NVIDIA",
         directory: "runtime-cuda",
+        page: "https://onnxruntime.ai",
+        license: "MIT · NVIDIA CUDA and cuDNN licences",
         archives: &[
             Archive {
                 url: "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-win-x64-gpu_cuda12-1.29.0.zip",
@@ -140,6 +147,8 @@ const CATALOG: &[Info] = &[Info {
     title: "ONNX Runtime 1.29.0",
     publisher: "Microsoft",
     directory: "runtime",
+    page: "https://onnxruntime.ai",
+    license: "MIT",
     archives: &[Archive {
         url: "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-osx-arm64-1.29.0.tgz",
         bytes: 41_578_864,
@@ -157,6 +166,8 @@ const CATALOG: &[Info] = &[Info {
     title: "ONNX Runtime 1.29.0",
     publisher: "Microsoft",
     directory: "runtime",
+    page: "https://onnxruntime.ai",
+    license: "MIT",
     archives: &[Archive {
         url: "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-linux-x64-1.29.0.tgz",
         bytes: 11_082_880,
@@ -321,21 +332,29 @@ fn extract(
     let scratch = tempfile::Builder::new()
         .prefix(".unpack-")
         .tempdir_in(into)?;
-    let mut command = std::process::Command::new(tar_program());
-    command
-        .arg("-xf")
-        .arg(archive)
-        .arg("-C")
-        .arg(scratch.path());
-    for (member, _) in spec.members {
-        command.arg(member.trim_end_matches('/'));
-    }
-    let output = command.output().context("Run tar to unpack the download")?;
-    ensure!(
-        output.status.success(),
-        "tar failed: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
+    // Unpacks these members of the archive into the scratch folder.
+    let unpack = |members: &[&str]| -> Result<()> {
+        let mut command = std::process::Command::new(tar_program());
+        command
+            .arg("-xf")
+            .arg(archive)
+            .arg("-C")
+            .arg(scratch.path())
+            .args(members);
+        let output = command.output().context("Run tar to unpack the download")?;
+        ensure!(
+            output.status.success(),
+            "tar failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        Ok(())
+    };
+    let members: Vec<&str> = spec
+        .members
+        .iter()
+        .map(|(member, _)| member.trim_end_matches('/'))
+        .collect();
+    unpack(&members)?;
     for (member, name) in spec.members {
         ensure!(!cancelled(), "Cancelled");
         let source = scratch.path().join(member.trim_end_matches('/'));
@@ -356,8 +375,25 @@ fn extract(
         } else {
             let metadata = std::fs::symlink_metadata(&source)
                 .with_context(|| format!("{member} is missing from the download"))?;
+            // macOS archives name the library by a link to its versioned
+            // file beside it: unpack and keep that file instead.
+            let source = if metadata.file_type().is_symlink() {
+                let link = std::fs::read_link(&source)?;
+                let sibling = link
+                    .to_str()
+                    .filter(|name| !name.is_empty() && !name.contains(['/', '\\']) && *name != "..")
+                    .with_context(|| format!("{member} links outside its folder"))?;
+                let target = match member.rsplit_once('/') {
+                    Some((folder, _)) => format!("{folder}/{sibling}"),
+                    None => sibling.to_owned(),
+                };
+                unpack(&[&target])?;
+                scratch.path().join(target)
+            } else {
+                source
+            };
             ensure!(
-                metadata.file_type().is_file(),
+                std::fs::symlink_metadata(&source)?.file_type().is_file(),
                 "{member} is not a regular file"
             );
             std::fs::rename(&source, into.join(name))?;

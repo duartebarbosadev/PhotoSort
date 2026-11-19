@@ -117,7 +117,9 @@ impl PhotoSortApp {
         }
     }
     pub(super) fn detect_rotations(&mut self) {
-        if !self.can_start_analysis() || !self.model_install_ready() {
+        if !self.can_start_analysis()
+            || self.wait_for_model_work(&self.runtime.model_assets.state())
+        {
             return;
         }
         let Some(model) = crate::core::models::orientation_model() else {

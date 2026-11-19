@@ -88,6 +88,8 @@ pub struct State {
     pub running: bool,
     pub mutating: bool,
     pub error: Option<String>,
+    /// The last operation was cancelled before it changed anything.
+    pub cancelled: bool,
     pub message: String,
 }
 /// How far Download all got before it stopped: "1 of 3 finished and stays
@@ -260,6 +262,7 @@ impl Worker {
                         current.running = false;
                         current.mutating = false;
                         current.progress = None;
+                        current.cancelled = false;
                         if let Some(snapshot) = refreshed {
                             current.snapshot = Some(Arc::new(snapshot));
                         }
@@ -271,12 +274,14 @@ impl Worker {
                             }
                             Err(_) if cancelled() && !done => {
                                 current.error = None;
+                                current.cancelled = true;
                                 current.message = match finished {
                                     Some((n, count)) if n > 0 => format!("Download cancelled · {}", finished_text(n, count)),
                                     _ => cancelled_text.into(),
                                 };
                             }
                             Err(error) => {
+                                tracing::warn!(error = %format!("{error:#}"), "model setup did not complete");
                                 current.error = Some(format!("{error:#}"));
                                 current.message = match finished {
                                     Some((n, count)) if n > 0 => format!("Download all stopped · {}", finished_text(n, count)),
@@ -296,6 +301,7 @@ impl Worker {
             state.running = true;
             state.mutating = !matches!(work, Work::Inspect);
             state.error = None;
+            state.cancelled = false;
             if matches!(work, Work::Remove(_)) {
                 state.snapshot = None;
             }

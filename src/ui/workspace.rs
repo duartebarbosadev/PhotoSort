@@ -178,6 +178,11 @@ pub struct PhotoSortApp {
     model_removal: Option<crate::core::model_assets::ManagedCopy>,
     model_issue: Option<crate::core::model_assets::Issue>,
     model_retry: Option<model_setup::Retry>,
+    /// An analysis asked for while model files were being downloaded: it
+    /// starts when the download ends.
+    model_wait: Option<model_setup::Retry>,
+    /// A model download or change was running at the last frame.
+    model_work_seen: bool,
     saved_views: crate::core::views::Saved,
     /// Remembered folders were forgotten while this folder was open. It keeps
     /// its views for this visit but saves none, so it also opens fresh next time.
@@ -570,6 +575,8 @@ impl PhotoSortApp {
             model_removal: None,
             model_issue: None,
             model_retry: None,
+            model_wait: None,
+            model_work_seen: false,
             saved_views: Default::default(),
             switched_from: None,
             forget_scroll: false,
@@ -1247,6 +1254,11 @@ impl PhotoSortApp {
             ctx.request_repaint();
         }
         self.refresh_group_best();
+        let models = self.runtime.model_assets.state();
+        self.follow_model_work(&models);
+        if models.running {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
         if !self.requested.is_empty() || self.scanning || self.analysis_run.is_some() || self.busy {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
@@ -1513,7 +1525,9 @@ impl PhotoSortApp {
         }
     }
     fn analyze(&mut self) {
-        if !self.can_start_analysis() || !self.model_install_ready() {
+        if !self.can_start_analysis()
+            || self.wait_for_model_work(&self.runtime.model_assets.state())
+        {
             return;
         }
         self.resume_suspended = false;
@@ -1743,6 +1757,7 @@ impl PhotoSortApp {
             // Review step would run another step's profile.
             if !current && self.step != Step::Review {
                 self.analyze();
+                self.preview_after_model_wait();
             }
             self.organize_preview_requested = self
                 .analysis_run

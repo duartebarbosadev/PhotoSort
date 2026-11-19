@@ -1,6 +1,7 @@
 //! Model setup presentation; catalog, verification and transfers are shared services.
 use super::*;
 use crate::core::model_assets::{self, Health, Work};
+#[derive(Clone)]
 pub(super) struct Retry {
     root: PathBuf,
     step: Step,
@@ -30,6 +31,9 @@ impl PhotoSortApp {
         if self.model_retry.is_some() && !self.model_retry_valid() {
             self.clear_model_retry();
         }
+        if self.model_wait.is_some() && !self.analysis_waits_for_models() {
+            self.model_wait = None;
+        }
     }
     pub(super) fn model_recovery_status(
         &self,
@@ -43,7 +47,9 @@ impl PhotoSortApp {
         {
             return None;
         }
-        Some(if state.running {
+        Some(if state.running && state.mutating {
+            "Downloading AI models…"
+        } else if state.running {
             "Checking AI models…"
         } else if self.model_retry_ready(state) {
             "AI models ready · retry the analysis in AI models"
@@ -53,13 +59,130 @@ impl PhotoSortApp {
             "AI models needed · open AI models"
         })
     }
-    pub(super) fn model_install_ready(&mut self) -> bool {
-        let state = self.runtime.model_assets.state();
-        if state.running && state.mutating {
-            self.set_status("Model files are being changed · try again when done".into());
-            false
+    /// Model files are being downloaded or changed: the analysis asked for
+    /// now waits and starts when that finishes, instead of doing nothing.
+    /// True when it waits.
+    pub(super) fn wait_for_model_work(&mut self, state: &model_assets::State) -> bool {
+        if !(state.running && state.mutating) {
+            return false;
+        }
+        // Seen running, so its end is followed even when it ends before the
+        // next frame.
+        self.model_work_seen = true;
+        if !self.analysis_waits_for_models() {
+            self.model_wait = self.root.clone().map(|root| Retry {
+                root,
+                step: self.step,
+                mode: self.group_mode,
+                preview: false,
+            });
+            self.set_workflow_status(
+                self.step,
+                "Waiting for the AI model download · the analysis starts when it finishes".into(),
+            );
+        }
+        true
+    }
+    /// Analyze or Detect rotations, pressed: while the analysis already waits
+    /// for a model download, it shows that download instead.
+    pub(super) fn request_analysis(&mut self) {
+        if self.analysis_waits_for_models() {
+            self.open_model_setup();
         } else {
-            true
+            self.analyze_current_workflow();
+        }
+    }
+    /// Organize asked for a preview: an analysis waiting for the model
+    /// download shows it once grouped.
+    pub(super) fn preview_after_model_wait(&mut self) {
+        if self.analysis_waits_for_models()
+            && let Some(wait) = &mut self.model_wait
+        {
+            wait.preview = true;
+        }
+    }
+    /// An analysis of this folder and step waits for the model download.
+    pub(super) fn analysis_waits_for_models(&self) -> bool {
+        self.model_wait
+            .as_ref()
+            .is_some_and(|wait| self.retry_matches(wait))
+    }
+    /// Called every frame: when a download or other model change ends, the
+    /// analysis waiting for it starts, and a failure the panel is not open to
+    /// show is reported.
+    pub(super) fn follow_model_work(&mut self, state: &model_assets::State) {
+        if state.running && state.mutating {
+            self.model_work_seen = true;
+            return;
+        }
+        if state.running || !std::mem::take(&mut self.model_work_seen) {
+            return;
+        }
+        let wait = self
+            .model_wait
+            .take()
+            .filter(|wait| self.retry_matches(wait));
+        if let Some(error) = &state.error {
+            if !self.model_dialog {
+                self.error = Some(format!("The AI model change did not complete.\n{error}"));
+            }
+            if wait.is_some() {
+                self.set_workflow_status(
+                    self.step,
+                    "The AI models are not ready · the analysis did not start".into(),
+                );
+            }
+            return;
+        }
+        let Some(wait) = wait.filter(|_| !state.cancelled) else {
+            if !self.model_dialog && self.model_recovery_status(state).is_none() {
+                self.set_status(if state.cancelled {
+                    state.message.clone()
+                } else {
+                    "AI models updated".into()
+                });
+            }
+            return;
+        };
+        // A paused analysis whose models are still missing stays paused; its
+        // footer says what is left.
+        if self.model_issue.is_some() && !self.model_retry_ready(state) {
+            return;
+        }
+        self.model_dialog = false;
+        self.clear_model_retry();
+        self.resume_suspended = false;
+        self.analyze_current_workflow();
+        if wait.preview && self.step == Step::Organize && self.analysis_run.is_some() {
+            self.organize();
+        }
+    }
+    /// While a model download runs with its panel closed: a compact progress
+    /// chip that opens the panel again.
+    pub(super) fn model_work_chip(&mut self, ui: &mut egui::Ui, state: &model_assets::State) {
+        if !(state.running && state.mutating) || self.model_dialog {
+            return;
+        }
+        use egui_phosphor::regular as icon;
+        let percent = download_percent(state)
+            .map(|p| format!(" {p}%"))
+            .unwrap_or_default();
+        let next = if self.analysis_waits_for_models() {
+            " · analysis next"
+        } else {
+            ""
+        };
+        let text = format!("{}  AI models{percent}{next}", icon::DOWNLOAD_SIMPLE);
+        let button = ui.add(
+            egui::Button::new(RichText::new(&text).small().color(ACCENT))
+                .frame(false)
+                .min_size(egui::vec2(0.0, 22.0)),
+        );
+        if named(button, egui::WidgetType::Button, "AI model download")
+            .on_hover_text(format!("{} · show AI models", state.message))
+            .clicked()
+        {
+            self.open_model_setup();
         }
     }
     pub(super) fn open_model_setup(&mut self) {
@@ -98,11 +221,15 @@ impl PhotoSortApp {
         self.open_model_setup();
     }
     fn model_retry_valid(&self) -> bool {
-        self.model_retry.as_ref().is_some_and(|retry| {
-            self.root.as_ref() == Some(&retry.root)
-                && self.step == retry.step
-                && (self.step != Step::Organize || self.group_mode == retry.mode)
-        })
+        self.model_retry
+            .as_ref()
+            .is_some_and(|retry| self.retry_matches(retry))
+    }
+    /// The folder, step and Organize grouping are still the ones it was for.
+    fn retry_matches(&self, retry: &Retry) -> bool {
+        self.root.as_ref() == Some(&retry.root)
+            && self.step == retry.step
+            && (self.step != Step::Organize || self.group_mode == retry.mode)
     }
     fn model_retry_ready(&self, state: &model_assets::State) -> bool {
         if state.running || !self.model_retry_valid() {
@@ -162,6 +289,7 @@ impl PhotoSortApp {
     fn render_model_setup(&mut self, ctx: &egui::Context, state: &model_assets::State) {
         use egui_phosphor::regular as icon;
         let mut close = false;
+        let error = state.error.as_deref().filter(|_| !state.running);
         modal(egui::Id::new("model_setup")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 64.).clamp(260., 640.));
             ui.heading("AI models");
@@ -174,53 +302,31 @@ impl PhotoSortApp {
                 .color(MUTED),
             );
             ui.add_space(S2);
-            let reserved = if state.running { 250. } else { 200. };
+            let reserved = 200.
+                + if state.running { 50. } else { 0. }
+                + if error.is_some() { 90. } else { 0. };
             egui::ScrollArea::vertical()
                 .max_height((ctx.content_rect().height() - reserved).max(80.))
                 .show(ui, |ui| {
                     self.model_notices(ui, state);
                     if let Some(snapshot) = state.snapshot.clone() {
-                        let needed: Vec<model_assets::Id> = self
-                            .model_issue
-                            .as_ref()
-                            .filter(|_| self.model_retry_valid())
-                            .map(|issue| issue.missing.clone())
-                            .unwrap_or_default();
-                        // Group by what depends on the model: what the paused
-                        // analysis needs first, then the shared analysis,
-                        // then People folders and Fix Rotation.
-                        let group = |row: &model_assets::Row| {
-                            if needed.contains(&row.id) {
-                                0
-                            } else if row.id.asset().optional {
-                                2
-                            } else {
-                                1
-                            }
-                        };
-                        self.download_all(ui, state, &snapshot);
-                        // Without the runtime no model can run, so it comes
-                        // first, and stays there once installed: the list
-                        // below never moves under the pointer.
-                        ui.add_space(S2);
-                        ui.label(caption("Runtime"));
+                        // The same two sections every time, in the same order:
+                        // the runtime and what most steps use, then what only
+                        // People folders and Fix Rotation use.
+                        ui.label(caption("Runtime and shared models"));
                         ui.add_space(S1);
-                        self.runtime_section(ui, state, &snapshot);
-                        let titles = [
-                            "Needed for the paused analysis",
-                            "Used by Easy Delete, Pick Best, Cull and Organize",
-                            "Used by People folders and Fix Rotation",
-                        ];
-                        for (index, title) in titles.iter().enumerate() {
-                            let rows: Vec<_> =
-                                snapshot.rows.iter().filter(|r| group(r) == index).collect();
-                            if rows.is_empty() {
-                                continue;
+                        self.runtime_cards(ui, state, &snapshot);
+                        for optional in [false, true] {
+                            if optional {
+                                ui.add_space(S2);
+                                ui.label(caption("For People folders and Fix Rotation"));
+                                ui.add_space(S1);
                             }
-                            ui.add_space(S2);
-                            ui.label(caption(title));
-                            ui.add_space(S1);
-                            for row in rows {
+                            for row in snapshot
+                                .rows
+                                .iter()
+                                .filter(|r| r.id.asset().optional == optional)
+                            {
                                 ui.push_id(row.id.asset().name, |ui| {
                                     self.model_card(ui, state, row)
                                 });
@@ -242,11 +348,25 @@ impl PhotoSortApp {
                         // While checking, the footer's spinner says so.
                         ui.label("Not checked yet.");
                     }
-                    if let Some(error) = &state.error {
-                        ui.add_space(S1);
-                        ui.colored_label(RED, error);
-                    }
                 });
+            // What went wrong stays in sight above the footer, not after the
+            // last card.
+            if let Some(error) = error {
+                ui.add_space(S1);
+                egui::Frame::new()
+                    .fill(RED.gamma_multiply(0.12))
+                    .corner_radius(R_CONTROL + 1)
+                    .inner_margin(egui::Margin::symmetric(10, 6))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        egui::ScrollArea::vertical()
+                            .id_salt("model_error")
+                            .max_height(64.0)
+                            .show(ui, |ui| {
+                                ui.add(egui::Label::new(RichText::new(error).color(RED)).wrap());
+                            });
+                    });
+            }
             // Footer: progress or the last result on the left, actions right.
             ui.add_space(S2);
             if state.running {
@@ -281,6 +401,13 @@ impl PhotoSortApp {
                 }
                 ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                     let retry = self.model_retry_ready(state);
+                    let (works, bytes) = state
+                        .snapshot
+                        .as_deref()
+                        .map(missing_downloads)
+                        .unwrap_or_default();
+                    // One action for everything missing, while two or more are.
+                    let download_all = !retry && !state.running && works.len() >= 2;
                     if retry {
                         if ui
                             .add(primary("Retry analysis"))
@@ -291,8 +418,15 @@ impl PhotoSortApp {
                         if ui.button("Close").clicked() {
                             close = true;
                         }
+                    } else if download_all {
+                        if ui.button("Done").clicked() {
+                            close = true;
+                        }
                     } else if ui.add(primary("Done")).clicked() {
                         close = true;
+                    }
+                    if download_all {
+                        self.download_all_button(ui, works, bytes);
                     }
                     if state.running {
                         if ui.button("Cancel").clicked() {
@@ -312,10 +446,17 @@ impl PhotoSortApp {
         if close {
             self.model_dialog = false;
             self.model_removal = None;
+            // A paused analysis continues once the download it waits for ends.
+            if state.running
+                && state.mutating
+                && self.model_retry_valid()
+                && !self.analysis_waits_for_models()
+            {
+                self.model_wait = self.model_retry.clone();
+            }
         }
     }
-    /// Messages that apply to the whole panel. A missing runtime is said
-    /// once, in the Runtime section, with its download.
+    /// Messages that apply to the whole panel.
     fn model_notices(&mut self, ui: &mut egui::Ui, state: &model_assets::State) {
         if self.model_retry_ready(state) {
             notice(
@@ -333,6 +474,13 @@ impl PhotoSortApp {
             });
         }
     }
+    /// What the paused analysis still needs, when it is the one this panel
+    /// was opened for.
+    fn needed_now(&self) -> Option<&model_assets::Issue> {
+        self.model_issue
+            .as_ref()
+            .filter(|_| self.model_retry_valid())
+    }
     /// One model: name, what it does, status and the one action
     /// that fixes it; size, licence, source and file details underneath.
     fn model_card(
@@ -341,7 +489,6 @@ impl PhotoSortApp {
         state: &model_assets::State,
         row: &model_assets::Row,
     ) {
-        use egui_phosphor::regular as icon;
         let asset = row.id.asset();
         let ready = matches!(row.health, Health::Verified(_));
         let transferring = state
@@ -350,101 +497,55 @@ impl PhotoSortApp {
             .flatten()
             .filter(|p| p.id == Some(row.id));
         let editable = !state.running && !self.busy && self.analysis_run.is_none();
-        let bounds = ui.clip_rect().x_range();
-        egui::Frame::new()
-            .fill(CARD)
-            .corner_radius(R_TILE)
-            .inner_margin(egui::Margin::symmetric(12, 10))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(asset.title).font(semibold(13.0)));
-                    // The upstream page; it opens in the browser only when clicked.
-                    let link = hover_within(
-                        ui.link(
-                            RichText::new(format!("Source {}", icon::ARROW_SQUARE_OUT)).small(),
-                        ),
-                        bounds,
-                        asset.page,
-                    );
-                    let name = format!("Source page for {}", asset.title);
-                    link.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::WidgetType::Link, true, &name)
-                    });
-                    if link.clicked() {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(asset.page));
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        // The one action that gets this model working.
-                        if !ready && transferring.is_none() {
-                            ui.add_enabled_ui(editable, |ui| {
-                                if row.bundled.is_some() {
-                                    if ui.add(primary("Restore bundled copy")).clicked() {
-                                        self.start_model_operation(Work::Restore(row.id));
-                                    }
-                                } else if hover_within(
-                                    ui.add(primary(download_label(row))),
-                                    bounds,
-                                    asset.url,
-                                )
-                                .clicked()
-                                {
-                                    self.start_model_operation(Work::Download(row.id));
-                                }
-                            });
-                        }
-                        let (text, color) = match (&row.health, transferring) {
-                            (_, Some(p)) if p.total > 0 => (
-                                format!(
-                                    "Downloading {:.0}%",
-                                    p.bytes as f64 * 100.0 / p.total as f64
-                                ),
-                                ACCENT,
-                            ),
-                            (_, Some(_)) => ("Working…".to_owned(), ACCENT),
-                            (Health::Verified(_), None) => ("Installed".to_owned(), GREEN),
-                            (Health::Missing, None) => ("Missing".to_owned(), MUTED),
-                            (Health::Invalid(..), None) => ("Damaged".to_owned(), RED),
-                        };
-                        let pill = status_pill(ui, &text, color);
-                        match &row.health {
-                            Health::Verified(path) => {
-                                hover_within(pill, bounds, crate::core::text::shown(path));
-                            }
-                            Health::Invalid(path, why) => {
-                                hover_within(
-                                    pill,
-                                    bounds,
-                                    format!("{why}\n{}", crate::core::text::shown(path)),
-                                );
-                            }
-                            Health::Missing => {}
-                        }
-                    });
-                });
-                ui.label(RichText::new(asset.about).color(INK));
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(format!(
-                            "{:.1} MB · {}",
-                            asset.bytes as f64 / 1e6,
-                            asset.license
-                        ))
-                        .small()
-                        .color(MUTED),
-                    )
-                    .wrap(),
-                );
-                // Terms worth reading before choosing to download.
-                if let Some(note) = asset.download_note
-                    && !ready
-                {
-                    ui.add(egui::Label::new(RichText::new(note).small().color(ACCENT)).wrap());
-                }
-                egui::CollapsingHeader::new(RichText::new("Details").small().color(MUTED))
-                    .id_salt(("model-details", asset.name))
-                    .show(ui, |ui| self.model_details(ui, state, row, editable));
+        let needed = self
+            .needed_now()
+            .is_some_and(|issue| issue.missing.contains(&row.id));
+        let (text, color) = match (&row.health, transferring) {
+            (_, Some(p)) if p.total > 0 => (
+                format!(
+                    "Downloading {:.0}%",
+                    p.bytes as f64 * 100.0 / p.total as f64
+                ),
+                ACCENT,
+            ),
+            (_, Some(_)) => ("Working…".to_owned(), ACCENT),
+            (Health::Verified(_), None) => ("Installed".to_owned(), GREEN),
+            (_, None) if needed => ("Needed now".to_owned(), ACCENT),
+            (Health::Missing, None) => ("Missing".to_owned(), MUTED),
+            (Health::Invalid(..), None) => ("Damaged".to_owned(), RED),
+        };
+        let hover = match &row.health {
+            Health::Verified(path) => Some(crate::core::text::shown(path)),
+            Health::Invalid(path, why) => {
+                Some(format!("{why}\n{}", crate::core::text::shown(path)))
+            }
+            Health::Missing => None,
+        };
+        let action = (!ready && transferring.is_none()).then(|| {
+            if row.bundled.is_some() {
+                ("Restore bundled copy".to_owned(), None)
+            } else {
+                (download_label(row), Some(asset.url))
+            }
+        });
+        let card = Card {
+            title: asset.title,
+            page: asset.page,
+            about: asset.about,
+            meta: format!("{:.1} MB · {}", asset.bytes as f64 / 1e6, asset.license),
+            // Terms worth reading before choosing to download.
+            note: asset.download_note.filter(|_| !ready),
+            pill: (text, color, hover),
+            action: action.map(|(label, hover)| (label, hover, editable)),
+        };
+        let clicked = asset_card(ui, card, |ui| self.model_details(ui, state, row, editable));
+        if clicked {
+            self.start_model_operation(if row.bundled.is_some() {
+                Work::Restore(row.id)
+            } else {
+                Work::Download(row.id)
             });
+        }
     }
     fn model_details(
         &mut self,
@@ -557,213 +658,242 @@ impl PhotoSortApp {
 }
 
 impl PhotoSortApp {
-    /// Download all: one action for the runtime and every missing model,
-    /// shown while two or more are missing. Its row stays in place while it
-    /// runs, so nothing below moves.
-    fn download_all(
-        &mut self,
-        ui: &mut egui::Ui,
-        state: &model_assets::State,
-        snapshot: &model_assets::Snapshot,
-    ) {
-        let (works, bytes) = missing_downloads(snapshot);
-        if works.len() < 2 {
-            return;
-        }
-        let editable = !state.running && !self.busy && self.analysis_run.is_none();
-        let bounds = ui.clip_rect().x_range();
+    /// Download all, in the footer: the runtime and every missing model, one
+    /// after another.
+    fn download_all_button(&mut self, ui: &mut egui::Ui, works: Vec<Work>, bytes: u64) {
+        let editable = !self.busy && self.analysis_run.is_none();
         let runtime = works
             .iter()
             .any(|work| matches!(work, Work::InstallRuntime(_)));
         let models = works.len() - usize::from(runtime);
-        // The terms of what it downloads, as beside each model's own action.
-        let notes: Vec<String> = works
-            .iter()
-            .filter_map(|work| match work {
-                Work::Download(id) => {
-                    let asset = id.asset();
-                    Some(format!("{}: {}", asset.title, asset.download_note?))
-                }
-                _ => None,
-            })
-            .collect();
-        ui.add_space(S1);
-        ui.horizontal_wrapped(|ui| {
-            ui.add_enabled_ui(editable, |ui| {
-                let label = if bytes > 0 {
-                    format!("Download all · {}", download_size(bytes))
-                } else {
-                    "Restore all".to_owned()
-                };
-                let hover = if model_assets::runtime::info(model_assets::runtime::Package::Cuda)
-                    .is_some()
-                {
-                    "Downloads and verifies each one in turn. NVIDIA GPU support is a separate download."
-                } else {
-                    "Downloads and verifies each one in turn."
-                };
-                if hover_within(ui.add(primary(label)), bounds, hover).clicked() {
-                    self.start_model_operation(Work::All(works));
-                }
-            });
-            ui.label(
-                RichText::new(format!(
-                    "{}{models} {}, one after another",
-                    if runtime { "The AI runtime and " } else { "" },
-                    if models == 1 { "model" } else { "models" },
-                ))
-                .small()
-                .color(MUTED),
-            );
-        });
-        for note in notes {
-            ui.add(egui::Label::new(RichText::new(note).small().color(ACCENT)).wrap());
+        let label = if bytes > 0 {
+            format!("Download all · {}", download_size(bytes))
+        } else {
+            "Restore all".to_owned()
+        };
+        let hover = format!(
+            "{}{models} {}, downloaded and verified one after another.{}",
+            if runtime { "The AI runtime and " } else { "" },
+            if models == 1 { "model" } else { "models" },
+            if model_assets::runtime::info(model_assets::runtime::Package::Cuda).is_some() {
+                " NVIDIA GPU support is a separate download."
+            } else {
+                ""
+            }
+        );
+        let bounds = ui.clip_rect().x_range();
+        if hover_within(ui.add_enabled(editable, primary(label)), bounds, hover).clicked() {
+            self.start_model_operation(Work::All(works));
         }
     }
-    /// The AI runtime: found, or offered for download with its size and source,
-    /// and NVIDIA GPU support where a driver is present. Nothing downloads until
-    /// the user clicks; "Install it myself" explains the manual route instead.
-    fn runtime_section(
+    /// The AI runtime as a card like the models', and NVIDIA GPU support
+    /// where it can work. Nothing downloads until the user clicks; Details
+    /// says how to install the runtime by hand.
+    fn runtime_cards(
         &mut self,
         ui: &mut egui::Ui,
         state: &model_assets::State,
         snapshot: &model_assets::Snapshot,
     ) {
-        use egui_phosphor::regular as icon;
         use model_assets::runtime::{self, Package};
         let editable = !state.running && !self.busy && self.analysis_run.is_none();
-        let bounds = ui.clip_rect().x_range();
-        let installing = state
-            .progress
-            .as_ref()
-            .and_then(|p| p.package.map(|k| (k, p)));
-        let progress_text = |package: Package| {
-            installing.filter(|(k, _)| *k == package).map(|(_, p)| {
-                if p.total > 0 {
-                    format!(
-                        "Downloading {:.0}% of {}",
-                        p.bytes as f64 * 100.0 / p.total as f64,
-                        download_size(p.total)
-                    )
-                } else {
-                    "Working…".to_owned()
-                }
-            })
+        let installing = |package: Package| {
+            state
+                .running
+                .then_some(state.progress.as_ref())
+                .flatten()
+                .filter(|p| p.package == Some(package))
         };
-        match snapshot.runtime.as_ref() {
-            Some(path) => {
-                hover_within(
-                    ui.label(
-                        RichText::new(format!("{}  AI runtime found", icon::CHECK_CIRCLE))
-                            .color(GREEN)
-                            .small(),
-                    ),
-                    bounds,
-                    crate::core::text::shown(path),
-                );
-            }
-            None => match runtime::info(Package::Cpu) {
-                Some(info) => {
-                    notice(
-                        ui,
-                        ACCENT,
-                        &format!(
-                            "The AI steps need {} from {} ({:.0} MB).",
-                            info.title,
-                            info.publisher,
-                            info.download_bytes() as f64 / 1e6
-                        ),
-                    );
-                    ui.horizontal_wrapped(|ui| {
-                        if let Some(text) = progress_text(Package::Cpu) {
-                            ui.label(RichText::new(text).color(ACCENT).small());
-                        } else {
-                            ui.add_enabled_ui(editable, |ui| {
-                                if hover_within(
-                                    ui.add(primary(format!("Download {}", info.title))),
-                                    bounds,
-                                    info.archives[0].url,
-                                )
-                                .clicked()
-                                {
-                                    self.start_model_operation(Work::InstallRuntime(Package::Cpu));
-                                }
-                            });
-                        }
-                        manual_runtime_help(ui);
-                    });
+        let pill = |installed: Option<&PathBuf>, package: Package, needed: bool| match (
+            installed,
+            installing(package),
+        ) {
+            (_, Some(p)) if p.total > 0 => (
+                format!(
+                    "Downloading {:.0}%",
+                    p.bytes as f64 * 100.0 / p.total as f64
+                ),
+                ACCENT,
+                None,
+            ),
+            (_, Some(_)) => ("Working…".to_owned(), ACCENT, None),
+            (Some(path), None) => (
+                "Installed".to_owned(),
+                GREEN,
+                Some(crate::core::text::shown(path)),
+            ),
+            (None, None) if needed => ("Needed now".to_owned(), ACCENT, None),
+            (None, None) => ("Missing".to_owned(), MUTED, None),
+        };
+        let needed = self.needed_now().is_some_and(|issue| issue.runtime_missing);
+        let cpu = runtime::info(Package::Cpu);
+        let missing = snapshot.runtime.is_none();
+        let card = Card {
+            title: cpu.map_or("ONNX Runtime", |info| info.title),
+            page: cpu.map_or("https://onnxruntime.ai", |info| info.page),
+            about: "Runs the AI models on this computer. Every AI step needs it.",
+            meta: match cpu {
+                Some(info) => format!(
+                    "{} · {} · {}",
+                    download_size(info.download_bytes()),
+                    info.publisher,
+                    info.license
+                ),
+                None if cfg!(target_os = "macos") => {
+                    "Comes with the app · restore the full app bundle".to_owned()
                 }
-                _ => {
-                    ui.label(
-                        RichText::new(if cfg!(target_os = "macos") {
-                            "AI runtime not found · restore the full app bundle"
-                        } else {
-                            "AI runtime not found"
-                        })
-                        .color(RED)
-                        .small(),
-                    );
-                    manual_runtime_help(ui);
-                }
+                None => "Not offered for download on this computer".to_owned(),
             },
-        }
-        // NVIDIA GPU support: offered only where it can work (an NVIDIA driver),
-        // since it is a large download.
+            note: None,
+            pill: pill(snapshot.runtime.as_ref(), Package::Cpu, needed),
+            action: cpu
+                .filter(|_| missing && installing(Package::Cpu).is_none())
+                .map(|info| {
+                    (
+                        format!("Download {}", download_size(info.download_bytes())),
+                        Some(info.archives[0].url),
+                        editable,
+                    )
+                }),
+        };
+        ui.push_id("runtime", |ui| {
+            if asset_card(ui, card, |ui| manual_runtime_help(ui, snapshot)) {
+                self.start_model_operation(Work::InstallRuntime(Package::Cpu));
+            }
+        });
+        ui.add_space(S1 + 2.0);
+        // NVIDIA GPU support: offered only where it can work (an NVIDIA
+        // driver), since it is a large download.
         let Some(cuda) = runtime::info(Package::Cuda) else {
             return;
         };
-        ui.add_space(S1);
-        if let Some(path) = snapshot.cuda.as_ref() {
-            ui.horizontal_wrapped(|ui| {
-                hover_within(
-                    ui.label(
-                        RichText::new(format!(
-                            "{}  NVIDIA GPU support installed",
-                            icon::CHECK_CIRCLE
-                        ))
-                        .color(GREEN)
-                        .small(),
-                    ),
-                    bounds,
-                    crate::core::text::shown(path),
-                );
-                ui.add_enabled_ui(editable, |ui| {
-                    if ui.small_button("Remove").clicked() {
-                        self.start_model_operation(Work::RemoveRuntime(Package::Cuda));
-                    }
-                });
-            });
-        } else if runtime::nvidia_driver_present() {
-            ui.label(RichText::new("NVIDIA GPU").font(semibold(13.0)));
-            ui.label(
-                RichText::new(format!(
-                    "{} from {} runs the AI steps on the graphics card.",
-                    cuda.title, cuda.publisher
-                ))
-                .small()
-                .color(MUTED),
-            );
-            ui.horizontal_wrapped(|ui| {
-                if let Some(text) = progress_text(Package::Cuda) {
-                    ui.label(RichText::new(text).color(ACCENT).small());
-                } else {
-                    ui.add_enabled_ui(editable, |ui| {
-                        if ui
-                            .button(format!(
-                                "Download GPU support · {:.1} GB",
-                                cuda.download_bytes() as f64 / 1e9
-                            ))
-                            .clicked()
-                        {
-                            self.start_model_operation(Work::InstallRuntime(Package::Cuda));
-                        }
-                    });
-                }
-            });
+        if snapshot.cuda.is_none() && !runtime::nvidia_driver_present() {
+            return;
         }
+        let card = Card {
+            title: "NVIDIA GPU support",
+            page: cuda.page,
+            about: "Runs the AI steps on the graphics card.",
+            meta: format!(
+                "{} · {} · {}",
+                download_size(cuda.download_bytes()),
+                cuda.publisher,
+                cuda.license
+            ),
+            note: None,
+            pill: pill(snapshot.cuda.as_ref(), Package::Cuda, false),
+            action: (snapshot.cuda.is_none() && installing(Package::Cuda).is_none()).then(|| {
+                (
+                    format!("Download {}", download_size(cuda.download_bytes())),
+                    None,
+                    editable,
+                )
+            }),
+        };
+        let mut remove = false;
+        let installed = snapshot.cuda.is_some();
+        ui.push_id("runtime-cuda", |ui| {
+            if asset_card(ui, card, |ui| {
+                if installed {
+                    ui.add_enabled_ui(editable, |ui| {
+                        remove = ui.small_button("Remove GPU support").clicked();
+                    });
+                } else {
+                    ui.label(
+                        RichText::new("Needs an NVIDIA graphics driver, already installed here.")
+                            .small()
+                            .color(MUTED),
+                    );
+                }
+            }) {
+                self.start_model_operation(Work::InstallRuntime(Package::Cuda));
+            }
+        });
+        if remove {
+            self.start_model_operation(Work::RemoveRuntime(Package::Cuda));
+        }
+        ui.add_space(S1 + 2.0);
     }
 }
 
+/// What one card in the model panel shows.
+struct Card<'a> {
+    title: &'a str,
+    page: &'a str,
+    about: &'a str,
+    /// Size, publisher and licence.
+    meta: String,
+    /// Terms to read before downloading, in the accent colour.
+    note: Option<&'a str>,
+    /// Status text, its colour, and what hovering it says.
+    pill: (String, Color32, Option<String>),
+    /// The one action that gets it working: label, hover and whether it can
+    /// be pressed now.
+    action: Option<(String, Option<&'a str>, bool)>,
+}
+
+/// A card: title with its Source link, the status and its one action on the
+/// right, what it does, size and licence, and Details underneath. True when
+/// its action was pressed.
+fn asset_card(ui: &mut egui::Ui, card: Card, details: impl FnOnce(&mut egui::Ui)) -> bool {
+    use egui_phosphor::regular as icon;
+    let bounds = ui.clip_rect().x_range();
+    let mut clicked = false;
+    egui::Frame::new()
+        .fill(CARD)
+        .corner_radius(R_TILE)
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(card.title).font(semibold(13.0)));
+                // The upstream page; it opens in the browser only when clicked.
+                let link = hover_within(
+                    ui.link(RichText::new(format!("Source {}", icon::ARROW_SQUARE_OUT)).small()),
+                    bounds,
+                    card.page,
+                );
+                let name = format!("Source page for {}", card.title);
+                link.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Link, true, &name));
+                if link.clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(card.page));
+                }
+                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                    if let Some((label, hover, enabled)) = card.action {
+                        let button = ui.add_enabled(enabled, primary(label));
+                        let button = match hover {
+                            Some(hover) => hover_within(button, bounds, hover),
+                            None => button,
+                        };
+                        clicked = button.clicked();
+                    }
+                    let (text, color, hover) = card.pill;
+                    let pill = status_pill(ui, &text, color);
+                    if let Some(hover) = hover {
+                        hover_within(pill, bounds, hover);
+                    }
+                });
+            });
+            ui.label(RichText::new(card.about).color(INK));
+            ui.add(egui::Label::new(RichText::new(card.meta).small().color(MUTED)).wrap());
+            if let Some(note) = card.note {
+                ui.add(egui::Label::new(RichText::new(note).small().color(ACCENT)).wrap());
+            }
+            egui::CollapsingHeader::new(RichText::new("Details").small().color(MUTED))
+                .id_salt(("model-details", card.title))
+                .show(ui, details);
+        });
+    clicked
+}
+
+/// How far the running download is, when it counts bytes.
+pub(super) fn download_percent(state: &model_assets::State) -> Option<u64> {
+    state
+        .progress
+        .as_ref()
+        .filter(|p| state.running && p.total > 0)
+        .map(|p| p.bytes.min(p.total) * 100 / p.total)
+}
 /// "80 MB" or "3.0 GB".
 fn download_size(bytes: u64) -> String {
     if bytes >= 1_000_000_000 {
@@ -772,8 +902,9 @@ fn download_size(bytes: u64) -> String {
         format!("{:.0} MB", bytes as f64 / 1e6)
     }
 }
-/// The manual route: where the runtime library goes when installed by hand.
-fn manual_runtime_help(ui: &mut egui::Ui) {
+/// The runtime card's Details: where it is installed, and the manual route
+/// for installing it by hand.
+fn manual_runtime_help(ui: &mut egui::Ui, snapshot: &model_assets::Snapshot) {
     let name = if cfg!(target_os = "windows") {
         "onnxruntime.dll"
     } else if cfg!(target_os = "macos") {
@@ -781,16 +912,25 @@ fn manual_runtime_help(ui: &mut egui::Ui) {
     } else {
         "libonnxruntime.so"
     };
+    if let Some(path) = &snapshot.runtime {
+        ui.label(
+            RichText::new(format!("Installed at {}", crate::core::text::shown(path)))
+                .small()
+                .color(MUTED),
+        );
+    }
     let folder = crate::core::session::data_dir().join("runtime");
-    let bounds = ui.clip_rect().x_range();
-    hover_within(
-        ui.label(RichText::new("Install it myself").small().color(MUTED)),
-        bounds,
-        format!(
-            "Copy {name} from ONNX Runtime {} into {}, or set ORT_DYLIB_PATH to its full path, then check again.",
-            crate::core::model_assets::runtime::ORT_VERSION,
-            crate::core::text::shown(&folder)
-        ),
+    ui.add(
+        egui::Label::new(
+            RichText::new(format!(
+                "Install it myself: copy {name} from ONNX Runtime {} into {}, or set ORT_DYLIB_PATH to its full path, then Check again.",
+                crate::core::model_assets::runtime::ORT_VERSION,
+                crate::core::text::shown(&folder)
+            ))
+            .small()
+            .color(MUTED),
+        )
+        .wrap(),
     );
 }
 

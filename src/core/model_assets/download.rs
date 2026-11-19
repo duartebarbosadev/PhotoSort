@@ -46,7 +46,7 @@ async fn transfer(
             resumable = false;
             anyhow::bail!(UNUSABLE);
         }
-        let mut response = response.error_for_status()?;
+        let mut response = checked(response)?;
         if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
             // The rest of this very file, from where the partial one ends.
             let range = response
@@ -97,6 +97,22 @@ pub(super) fn run(
     };
     run_url(&pinned, asset.url, true, root, cancelled, progress)
 }
+/// The response, or why the server refused it, in words: a file the server no
+/// longer has says so, instead of only an HTTP status.
+fn checked(response: reqwest::Response) -> Result<reqwest::Response> {
+    let status = response.status();
+    if matches!(
+        status,
+        reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::GONE
+    ) {
+        let host = response.url().host_str().unwrap_or("The server").to_owned();
+        anyhow::bail!(
+            "{host} no longer offers this file (HTTP {}). It may be back later, or a newer PhotoSort may download it from elsewhere",
+            status.as_u16()
+        );
+    }
+    Ok(response.error_for_status()?)
+}
 /// Downloads one pinned file to `destination`, which must not exist yet, and
 /// keeps it only when its size and SHA-256 match. Runtime packages use this.
 pub(super) fn fetch(
@@ -121,7 +137,7 @@ pub(super) fn fetch(
             .read_timeout(Duration::from_secs(30))
             .timeout(Duration::from_secs(1800).max(Duration::from_secs(bytes / 50_000)))
             .build()?;
-        let mut response = client.get(url).send().await?.error_for_status()?;
+        let mut response = checked(client.get(url).send().await?)?;
         ensure!(
             response.content_length().is_none_or(|n| n == bytes),
             "Server returned an unexpected download size"

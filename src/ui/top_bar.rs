@@ -539,8 +539,10 @@ impl PhotoSortApp {
         if self.analysis_run.is_some() {
             return;
         }
+        // Waiting for a model download, it shows the download instead.
+        let waiting = self.analysis_waits_for_models();
         let button = ui.add_enabled(
-            self.can_start_analysis(),
+            self.can_start_analysis() || waiting,
             egui::Button::new(RichText::new(egui_phosphor::regular::SPARKLE).size(15.0))
                 .frame(false)
                 .min_size(egui::vec2(28.0, 0.0)),
@@ -551,11 +553,14 @@ impl PhotoSortApp {
         } else {
             "Analyze library · Ctrl/Cmd+S"
         };
-        if named(button, egui::WidgetType::Button, name)
-            .on_hover_text(name)
-            .clicked()
-        {
-            self.analyze_current_workflow();
+        let button = named(button, egui::WidgetType::Button, name);
+        let button = if waiting {
+            button.on_hover_text("Waiting for the AI model download · show AI models")
+        } else {
+            button.on_hover_text(name)
+        };
+        if button.clicked() {
+            self.request_analysis();
         }
     }
 
