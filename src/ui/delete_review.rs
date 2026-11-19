@@ -4,13 +4,14 @@ use super::review_card::{
 };
 use super::*;
 use crate::core::delete_review::{self, Category, Entry, FormatChoice, Review};
-use crate::core::text::TO_TRASH;
+use crate::core::text::{TO_TRASH, TRASH};
 
 /// How the star on a suggested keeper explains itself.
 pub(super) const SUGGESTED: &str = "Suggested by PhotoSort.";
 /// The line over the grid while nothing is marked: what to do.
-const HINT: &str =
-    "Nothing marked yet: accept a suggestion, or click a photo to mark it for Trash.";
+fn hint() -> String {
+    format!("Nothing marked yet: accept a suggestion, or click a photo to mark it for the {TRASH}.")
+}
 
 /// On a photo PhotoSort suggests moving to Trash and left unmarked: every
 /// other photo of its Pick Best group is going there already.
@@ -278,14 +279,14 @@ impl PhotoSortApp {
         if !self.delete_enabled() {
             return;
         }
-        let changed = self.delete_review.accept_sparing(
+        let accepted = self.delete_review.accept_sparing(
             ids,
             &self.pick_review,
             &mut self.decisions,
             &self.by_hand,
         );
-        self.accepted_status(changed.len());
-        self.changed_items(changed);
+        self.accepted_status(accepted.suggestions);
+        self.changed_items(accepted.photos);
     }
     /// The photos of the cards of `ids`, each once: an Eyes closed card's
     /// better shot can be on another card too.
@@ -826,7 +827,7 @@ impl PhotoSortApp {
                 ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
                     // Before anything is marked, the line says what to do.
                     let summary = if trash == 0 && !self.delete_review.entries().is_empty() {
-                        HINT.to_owned()
+                        hint()
                     } else {
                         format!(
                             "{} going {TO_TRASH} · frees {}",
@@ -1587,7 +1588,7 @@ mod tests {
             format!("{}  Trash", egui_phosphor::regular::TRASH),
         );
         assert!(!shown.contains(&keep) && !shown.contains(&trash), "{shown}");
-        assert!(shown.contains(HINT), "{shown}");
+        assert!(shown.contains(&hint()), "{shown}");
         assert_eq!(
             shown.matches(super::super::pick_review::ACCEPT).count(),
             2,

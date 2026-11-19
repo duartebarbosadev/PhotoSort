@@ -284,16 +284,20 @@ impl PhotoSortApp {
                 }
             }
         }
+        self.rotation_review.decided_by_hand([id]);
         self.pending_bookmark = None;
         self.changed_item(id);
     }
     /// The certain suggestions not taken yet. Uncertain ones are left to
-    /// the user, as when suggestions apply automatically.
+    /// the user, as when suggestions apply automatically, and so is every
+    /// photo whose turns the user chose by hand.
     fn rotation_suggestions_left(&self) -> Vec<MediaId> {
+        let by_hand = self.rotation_review.by_hand();
         self.rotation_review
             .ids()
             .iter()
             .copied()
+            .filter(|id| !by_hand.contains(id))
             .filter(|id| {
                 self.rotation_review
                     .suggestion(*id)
@@ -301,7 +305,8 @@ impl PhotoSortApp {
             })
             .collect()
     }
-    /// Accept all suggestions: every certain suggestion is staged.
+    /// Accept all suggestions: every certain suggestion is staged, except
+    /// where the user chose the turns by hand.
     pub(super) fn accept_rotation_suggestions(&mut self) {
         if !self.rotation_enabled() {
             return;
@@ -312,6 +317,7 @@ impl PhotoSortApp {
                 set_turns(&mut self.decisions, *id, suggestion.turns);
             }
         }
+        self.accepted_status(ids.len());
         if !ids.is_empty() {
             self.pending_bookmark = None;
             self.changed_items(ids);
@@ -797,7 +803,7 @@ mod tests {
 
     #[test]
     fn certain_suggestions_are_staged_at_once_without_confirm() {
-        let app = fixture(true);
+        let mut app = fixture(true);
         assert_eq!(staged(&app, 1), 1);
         // Uncertain: listed, but not turned until the user chooses.
         assert_eq!(staged(&app, 2), 0);
@@ -814,6 +820,25 @@ mod tests {
         // What Review changes plans: the staged decisions.
         assert!(app.decisions.values().all(|d| !d.is_empty()));
         assert_eq!(app.decisions.len(), 1);
+        // Kept as it is by hand, then a new certain suggestion that waits,
+        // as with the setting turned off: Accept all turns the new one only.
+        app.rotation_card_event(MediaId(1), CardEvent::Undo);
+        assert_eq!(staged(&app, 1), 0);
+        app.preferences.rotation_auto = false;
+        app.rotations.insert(
+            MediaId(4),
+            crate::core::models::RotationSuggestion {
+                turns: 3,
+                confidence: 0.9,
+                uncertain: false,
+                views: 3,
+            },
+        );
+        app.finish_rotation_detection();
+        assert_eq!(staged(&app, 4), 0);
+        app.accept_rotation_suggestions();
+        assert_eq!((staged(&app, 1), staged(&app, 4)), (0, 3));
+        assert_eq!(app.status, "Accepted 1 suggestion");
     }
 
     #[test]
@@ -825,9 +850,11 @@ mod tests {
         assert_eq!(app.rotation_link(MediaId(1)), Some(RotationLink::Undo));
         app.rotation_card_event(MediaId(1), CardEvent::Undo);
         assert!(app.decisions.is_empty());
-        // Accept all suggestions turns the certain one only.
+        // Used and taken back by hand, the suggestion is the user's call:
+        // Accept all leaves it, and the uncertain one too.
         app.accept_rotation_suggestions();
-        assert_eq!((staged(&app, 1), staged(&app, 2)), (1, 0));
+        assert_eq!((staged(&app, 1), staged(&app, 2)), (0, 0));
+        assert!(app.status.starts_with("No suggestion left to accept"));
     }
 
     #[test]

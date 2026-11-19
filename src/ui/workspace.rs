@@ -770,6 +770,7 @@ impl PhotoSortApp {
             suggested: self.delete_review.suggested().clone(),
             pick_suggested: self.pick_review.suggested().clone(),
             rotations_staged: self.rotation_review.staged().clone(),
+            rotations_by_hand: self.rotation_review.by_hand().clone(),
             trash_steps: self.trash_steps.clone(),
             by_hand: self.by_hand.clone(),
             waiting: (!self.waiting.is_empty()).then(|| self.waiting.clone()),
@@ -1059,6 +1060,8 @@ impl PhotoSortApp {
         };
     }
     /// What Accept all suggestions says when it is done, in the status line.
+    /// It counts suggestions, not photos: a Pick Best group, an Easy Delete
+    /// card or a Fix Rotation photo is one, however many photos it changed.
     fn accepted_status(&mut self, accepted: usize) {
         self.set_status(match accepted {
             0 => "No suggestion left to accept · choices made by hand stay as they are".into(),
@@ -1159,6 +1162,7 @@ impl PhotoSortApp {
                 // Back to how it is on disk, nothing stays staged.
                 let staged = crate::core::rotation::turns(&self.decisions, id);
                 crate::core::rotation::set_turns(&mut self.decisions, id, staged + turns);
+                self.rotation_review.decided_by_hand([id]);
                 self.pending_bookmark = None;
             } else {
                 self.stage_manual([id], crate::core::decisions::Change::Rotate(turns));

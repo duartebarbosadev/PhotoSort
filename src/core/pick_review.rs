@@ -271,19 +271,24 @@ impl Review {
     /// Accept all: every group nobody decided by hand takes its suggestion.
     /// A group with a choice made by hand stays as it is, and so does every
     /// group whose suggested photo is marked for Trash, so no group is left
-    /// with no photo kept. Returns the photos changed.
+    /// with no photo kept. Returns the photos changed, and the groups.
     pub fn accept_undecided(
         &self,
         decisions: &mut HashMap<MediaId, Decision>,
         by_hand: &HashSet<MediaId>,
-    ) -> Vec<MediaId> {
-        let marks: Vec<_> = self
+    ) -> Accepted {
+        let groups: Vec<_> = self
             .clusters
             .iter()
-            .flat_map(|c| Self::undecided_marks(c, decisions, by_hand))
+            .map(|c| Self::undecided_marks(c, decisions, by_hand))
+            .filter(|marks| !marks.is_empty())
             .collect();
+        let marks: Vec<_> = groups.iter().flatten().copied().collect();
         update_trash(decisions, marks.iter().copied());
-        marks.into_iter().map(|(id, _)| id).collect()
+        Accepted {
+            photos: marks.into_iter().map(|(id, _)| id).collect(),
+            suggestions: groups.len(),
+        }
     }
     /// Puts each group back to its suggestion in full: one group, asked for
     /// by hand.
@@ -296,6 +301,13 @@ impl Review {
             .collect();
         update_trash(decisions, marks);
     }
+}
+
+/// What Accept all changed: the photos, and how many suggestions it took,
+/// one per Pick Best group or Easy Delete card.
+pub struct Accepted {
+    pub photos: Vec<MediaId>,
+    pub suggestions: usize,
 }
 
 /// Fewer pixels than this share of another photo's make a photo its smaller
@@ -817,7 +829,9 @@ mod tests {
         // Easy Delete first, with nothing marked yet: the best of the
         // group is the one left.
         let mut decisions = HashMap::new();
-        delete.accept_sparing(&cards, &pick, &mut decisions, &HashSet::new());
+        let accepted = delete.accept_sparing(&cards, &pick, &mut decisions, &HashSet::new());
         assert_eq!(trashed(&decisions), vec![1, 3]);
+        // Two cards accepted; the spared one is not counted.
+        assert_eq!(accepted.suggestions, 2);
     }
 }

@@ -260,6 +260,7 @@ class BundleIntegrityTests(unittest.TestCase):
                 built = any(command[0] == 'cargo' for command in commands)
                 self.assertEqual(built, '--no-build' not in flag)
                 self.assertEqual(staged['plist']['CFBundleIconFile'], 'AppIcon')
+                self.assertEqual(staged['plist']['CFBundleIdentifier'], 'dev.duartebarbosa.photosort')
                 self.assertEqual(staged['icon'], b'icns')
                 self.assertEqual((output/'Contents/Info.plist').read_bytes(), b'old bundle sentinel')
                 self.assertEqual((target/'release/photosort').read_bytes(), b'fixture executable')

@@ -49,6 +49,7 @@ fn views_round_trip_separately_from_decisions_and_drain_across_navigation() {
         suggested: Default::default(),
         pick_suggested: Default::default(),
         rotations_staged: Default::default(),
+        rotations_by_hand: Default::default(),
         trash_steps: Default::default(),
         by_hand: Default::default(),
         organize: None,

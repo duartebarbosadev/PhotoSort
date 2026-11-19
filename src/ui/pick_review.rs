@@ -1,7 +1,7 @@
 use super::review_card::{Badge, CardEvent, CardPhoto, Fact, GridClick, ReviewCard};
 use super::*;
 use crate::core::pick_review::{Cluster, Reason, Review};
-use crate::core::text::TO_TRASH;
+use crate::core::text::{TO_TRASH, TRASH};
 
 /// Photos a card shows, best first; the panel beside the grid shows them all.
 const CARD_PHOTOS: usize = 3;
@@ -192,11 +192,11 @@ impl PhotoSortApp {
         if !self.pick_enabled() {
             return;
         }
-        let changed = self
+        let accepted = self
             .pick_review
             .accept_undecided(&mut self.decisions, &self.by_hand);
-        self.accepted_status(changed.len());
-        self.changed_items(changed);
+        self.accepted_status(accepted.suggestions);
+        self.changed_items(accepted.photos);
     }
     /// A click on the grid's empty space: no group is selected, and the
     /// panel beside the grid closes.
@@ -270,8 +270,11 @@ impl PhotoSortApp {
 /// The card's first decision. Its wording matches Accept all suggestions.
 pub(super) const ACCEPT: &str = "Accept suggestion";
 /// The line over the grid while nothing is marked: what to do.
-const HINT: &str =
-    "Nothing marked yet: accept a group's suggestion, or click a photo to mark it for Trash.";
+fn hint() -> String {
+    format!(
+        "Nothing marked yet: accept a group's suggestion, or click a photo to mark it for the {TRASH}."
+    )
+}
 
 impl PhotoSortApp {
     /// Pick Best's only view: a summary with Accept all suggestions, then
@@ -347,7 +350,7 @@ impl PhotoSortApp {
         }
         // Before anything is marked, the line says what to do instead.
         if trash == 0 && deck.elsewhere == 0 && !self.pick_review.clusters().is_empty() {
-            summary = HINT.to_owned();
+            summary = hint();
         }
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
@@ -846,7 +849,7 @@ mod tests {
         let shown = super::super::review_card::render_grid(&mut app);
         assert!(!shown.contains(&keep) && !shown.contains(&trash), "{shown}");
         assert!(
-            shown.contains(icon::STAR) && shown.contains(HINT),
+            shown.contains(icon::STAR) && shown.contains(&hint()),
             "{shown}"
         );
         assert_eq!(shown.matches(ACCEPT).count(), 2, "{shown}");
@@ -867,6 +870,14 @@ mod tests {
         assert!(!app.pick_undecided(1));
         app.accept_pick_defaults();
         assert_eq!(trashed(&app), vec![1]);
+        // Nobody's choice again, that group takes its suggestion: two photos
+        // marked, and the status counts the one suggestion, not the photos.
+        for id in [3, 4, 5] {
+            app.by_hand.remove(&MediaId(id));
+        }
+        app.accept_pick_defaults();
+        assert_eq!(trashed(&app), vec![1, 3, 5]);
+        assert_eq!(app.status, "Accepted 1 suggestion");
     }
 
     /// Photos already marked for Trash show last in their group, and stay
