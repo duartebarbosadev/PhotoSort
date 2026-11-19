@@ -313,7 +313,7 @@ impl PhotoSortApp {
                                 shapes.extend_from_slice(&aspects[..*shown]);
                             }
                         },
-                        |_, _| true,
+                        |app, i| app.pick_card_has_facts(i),
                         |app, i| Some(app.pick_card(i)),
                         current,
                     )
@@ -395,21 +395,6 @@ impl PhotoSortApp {
         });
         ui.add_space(S1);
         self.review_canvas(ui);
-    }
-
-    /// A group's heading: when it was taken, or its number.
-    fn pick_title(&self, group: usize) -> String {
-        let cluster = &self.pick_review.clusters()[group];
-        cluster
-            .ordered
-            .iter()
-            .filter_map(|id| self.metadata.get(id)?.captured_ms)
-            .min()
-            .and_then(crate::core::dates::clock)
-            .map_or_else(
-                || format!("Group {}", group + 1),
-                |time| time.format("%-d %b %Y, %H:%M").to_string(),
-            )
     }
 
     /// What the grid is drawn from, brought up to date: each card's photos'
@@ -497,109 +482,46 @@ impl PhotoSortApp {
         format!("{} {why}", super::delete_review::SUGGESTED)
     }
 
-    /// The facts that tell a group's photos apart, for the photos given:
-    /// only those that differ, the winner's value highlighted where it is
-    /// the best of the group.
+    /// What a card says under each of the photos given: only whose eyes
+    /// are closed, and that the winner's are open. Dates, sharpness, sizes
+    /// and the like are left out as clutter; the Suggested mark's tooltip
+    /// says why its photo won.
     fn pick_facts(&self, cluster: &Cluster, ids: &[MediaId]) -> Vec<Vec<Fact>> {
         let best = cluster.best();
-        let all = &cluster.ordered;
-        let analysis = |id: &MediaId| self.analysis.get(id);
-        let sharpness = |id: &MediaId| {
-            analysis(id)
-                .map(|a| a.quality_sharpness.unwrap_or(a.sharpness))
-                .filter(|v| v.is_finite())
-        };
-        let aesthetic = |id: &MediaId| analysis(id).and_then(|a| a.aesthetic).map(f64::from);
-        let faces = |id: &MediaId| analysis(id).and_then(|a| a.faces.as_ref()).map(|f| f.count);
-        let pixels = |id: &MediaId| {
-            self.metadata
-                .get(id)
-                .filter(|m| m.width > 0 && m.height > 0)
-                .map(|m| f64::from(m.width) * f64::from(m.height))
-        };
-        let bytes = |id: &MediaId| self.index.get(id).map(|i| self.media[*i].fingerprint.bytes);
-        // A numeric fact differs when its spread passes `margin`; the winner
-        // is highlighted when it holds the group's highest value.
-        let spread = |value: &dyn Fn(&MediaId) -> Option<f64>, margin: f64| {
-            let values: Vec<f64> = all.iter().filter_map(value).collect();
-            let (low, high) = values
-                .iter()
-                .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), v| {
-                    (l.min(*v), h.max(*v))
-                });
-            (values.len() >= 2 && high > low + margin.max(low.abs() * 0.05)).then_some(high)
-        };
-        let sharp_high = spread(&sharpness, 0.0);
-        let look_high = spread(&aesthetic, 0.02);
-        let pixel_high = spread(&pixels, 0.0);
-        let faces_differ = all.iter().map(faces).collect::<HashSet<_>>().len() > 1;
-        let bytes_differ = all.iter().map(bytes).collect::<HashSet<_>>().len() > 1;
-        let tops =
-            |value: Option<f64>, high: Option<f64>| value.zip(high).is_some_and(|(v, h)| v >= h);
         ids.iter()
             .map(|id| {
-                let winner = *id == best;
-                let mut facts = Vec::new();
-                if let Some(eyes) = cluster.eyes.get(id) {
+                let fact = cluster.eyes.get(id).and_then(|eyes| {
                     if eyes.closed > 0 {
-                        facts.push(Fact {
+                        Some(Fact {
                             text: match eyes.closed {
                                 1 => "Eyes closed".to_owned(),
                                 n => format!("{n} with eyes closed"),
                             },
                             better: false,
-                        });
-                    } else if eyes.open > 0 {
-                        facts.push(Fact {
-                            text: "Eyes open".to_owned(),
-                            better: winner,
-                        });
-                    }
-                }
-                if let Some(value) = sharpness(id).filter(|_| sharp_high.is_some()) {
-                    facts.push(Fact {
-                        text: if cluster.soft.contains(id) {
-                            format!("Soft {value:.0}")
-                        } else {
-                            format!("Sharpness {value:.0}")
-                        },
-                        better: winner && tops(Some(value), sharp_high),
-                    });
-                }
-                if let Some(value) = aesthetic(id).filter(|_| look_high.is_some()) {
-                    facts.push(Fact {
-                        text: format!("Aesthetic {:.0}", value * 100.0),
-                        better: winner && tops(Some(value), look_high),
-                    });
-                }
-                if let Some(n) = faces(id).filter(|_| faces_differ) {
-                    facts.push(Fact {
-                        text: count(n, "face", "faces"),
-                        better: false,
-                    });
-                }
-                if pixel_high.is_some()
-                    && let Some(m) = self.metadata.get(id).filter(|m| m.width > 0)
-                {
-                    let (w, h) = if (5..=8).contains(&m.orientation) {
-                        (m.height, m.width)
+                        })
                     } else {
-                        (m.width, m.height)
-                    };
-                    facts.push(Fact {
-                        text: format!("{w}×{h}"),
-                        better: winner && tops(pixels(id), pixel_high),
-                    });
-                }
-                if let Some(b) = bytes(id).filter(|_| bytes_differ) {
-                    facts.push(Fact {
-                        text: super::review_card::size_text(b),
-                        better: false,
-                    });
-                }
-                facts
+                        (eyes.open > 0).then(|| Fact {
+                            text: "Eyes open".to_owned(),
+                            better: *id == best,
+                        })
+                    }
+                });
+                fact.into_iter().collect()
             })
             .collect()
+    }
+
+    /// Whether a group's card has a line under its photos.
+    fn pick_card_has_facts(&self, group: usize) -> bool {
+        let cluster = &self.pick_review.clusters()[group];
+        let shown: Vec<MediaId> = self
+            .pick_order(cluster)
+            .into_iter()
+            .take(CARD_PHOTOS)
+            .collect();
+        self.pick_facts(cluster, &shown)
+            .iter()
+            .any(|facts| !facts.is_empty())
     }
 
     /// The card for one group: its best photos and their deciding facts,
@@ -680,7 +602,9 @@ impl PhotoSortApp {
             }
         );
         ReviewCard {
-            title: self.pick_title(group),
+            // No date over the photos: the card is its photos, and the
+            // header holds only Accept or Undo and how many more it has.
+            title: String::new(),
             state_text,
             photos,
             buttons: Vec::new(),
@@ -692,6 +616,7 @@ impl PhotoSortApp {
                 GroupLink::Accept => (ACCEPT.to_owned(), accept),
                 GroupLink::Undo => ("Undo".to_owned(), String::new()),
             }),
+            undo_icon: None,
             filled: undecided,
         }
     }
@@ -1005,15 +930,18 @@ mod tests {
     fn the_grid_shows_one_card_per_group_with_its_suggested_photo_and_no_confirm() {
         let mut app = app();
         let shown = super::super::review_card::render_grid(&mut app);
+        for text in [egui_phosphor::regular::STAR, "Accept all suggestions"] {
+            assert!(shown.contains(text), "{text} missing from:\n{shown}");
+        }
+        // No heading over a group: neither its date nor its number.
         for text in [
             "Group 1",
             "Group 2",
-            egui_phosphor::regular::STAR,
-            "Accept all suggestions",
+            "Confirm",
+            "Provisional",
+            "Keep all",
+            "Round",
         ] {
-            assert!(shown.contains(text), "{text} missing from:\n{shown}");
-        }
-        for text in ["Confirm", "Provisional", "Keep all", "Round"] {
             assert!(!shown.contains(text), "{text} in:\n{shown}");
         }
         assert!(
@@ -1035,7 +963,7 @@ mod tests {
     }
 
     #[test]
-    fn a_narrow_card_keeps_its_title_and_never_draws_the_count_over_it() {
+    fn a_card_has_no_title_and_never_draws_the_count_over_its_undo() {
         let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
         app.media = (1..=20).map(photo).collect();
         app.index = app
@@ -1055,8 +983,8 @@ mod tests {
         app.review = false;
         // Decided by hand, kept as it is: its count says how many it keeps.
         app.by_hand.insert(MediaId(20));
-        // The header as painted for photos of a shape: whether the title
-        // was cut, the count beside it, and whether the two overlap.
+        // The header as painted for photos of a shape: the count beside
+        // Undo, and whether the two overlap. No title over them.
         let mut header = |width: u32, height: u32| {
             for n in 1..=20 {
                 app.metadata.insert(
@@ -1096,29 +1024,29 @@ mod tests {
                 walk(&clipped.shape, &mut texts);
             }
             let span = |t: &egui::epaint::TextShape| (t.pos.x, t.pos.x + t.galley.size().x);
-            let title = texts
+            assert!(!texts.iter().any(|t| t.galley.text().contains("Group")));
+            let undo = texts
                 .iter()
-                .find(|t| t.galley.text() == "Group 1")
-                .expect("the card's title");
+                .find(|t| t.galley.text().ends_with("Undo"))
+                .expect("the card's Undo");
             let count = texts.iter().find(|t| t.galley.text().starts_with("+17"));
             (
-                title.galley.elided,
                 count.map(|t| t.galley.text().to_owned()),
-                count.is_some_and(|t| span(t).0 < span(title).1),
+                count.is_some_and(|t| span(t).1 > span(undo).0),
             )
         };
         // Wide photos: room for the whole count.
         assert_eq!(
             header(3000, 2000),
-            (false, Some("+17 more, 17 kept".to_owned()), false)
+            (Some("+17 more, 17 kept".to_owned()), false)
         );
-        // Narrower cards, down to the narrowest: the title stays whole and
-        // clear of the count, which is shortened where it must be.
+        // Narrower cards, down to the narrowest: the count stays clear of
+        // Undo, shortened where it must be.
         let mut counts = Vec::new();
         for width in [1600, 1400, 1000, 500] {
-            let (cut, count, over) = header(width, 2000);
-            assert!(!cut && !over, "{width}: {count:?}");
-            counts.push(count.expect("the count beside the title"));
+            let (count, over) = header(width, 2000);
+            assert!(!over, "{width}: {count:?}");
+            counts.push(count.expect("the count beside Undo"));
         }
         assert!(counts.iter().all(|c| c.starts_with("+17 more")));
         assert!(counts.iter().any(|c| c == "+17 more"), "{counts:?}");
@@ -1134,9 +1062,10 @@ mod tests {
             ratio,
         };
         let analysis = |score: f64, eyes: FaceEyes| crate::core::analysis::Analysis {
-            sharpness: 300.0,
-            quality_sharpness: Some(300.0),
-            aesthetic: Some(0.6),
+            // Sharpness and looks that differ: the card says neither.
+            sharpness: score * 5.0,
+            quality_sharpness: Some(score * 5.0),
+            aesthetic: Some(score as f32 / 100.0),
             faces: Some(FaceSummary {
                 count: 1,
                 eyes: vec![eyes],
@@ -1179,11 +1108,15 @@ mod tests {
             }
         );
         assert!(app.pick_keep_why(cluster).contains("closed for someone"));
+        assert_eq!((facts[0].len(), facts[1].len()), (1, 1));
         let shown = super::super::review_card::render_grid(&mut app);
         assert!(
             shown.contains("Eyes closed") && shown.contains("Eyes open"),
             "{shown}"
         );
+        for clutter in ["Sharpness", "Soft", "Aesthetic"] {
+            assert!(!shown.contains(clutter), "{clutter} in:\n{shown}");
+        }
     }
 
     #[test]

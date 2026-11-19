@@ -1303,6 +1303,7 @@ impl PhotoSortApp {
                 GroupLink::Accept => (super::pick_review::ACCEPT.to_owned(), accept),
                 GroupLink::Undo => ("Undo".to_owned(), String::new()),
             }),
+            undo_icon: None,
             filled: undecided,
         }
     }

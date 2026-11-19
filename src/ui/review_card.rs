@@ -59,6 +59,9 @@ pub(super) enum Badge {
     Trash(String),
     /// A quiet pill that marks a preview, such as a turn not taken yet.
     Note(String),
+    /// A turn staged for Review, by quarter turns clockwise: green, as
+    /// Keep is, since it is what Apply will do.
+    Turn(u8),
     /// No pill: the photo speaks for itself.
     None,
 }
@@ -107,6 +110,10 @@ pub(super) struct ReviewCard {
     /// A link in the header back to the suggestion: its label (such as
     /// "Undo") and tooltip, if any.
     pub undo: Option<(String, String)>,
+    /// The link's icon, when it is not the usual one: a check on a filled
+    /// link, the arrow back otherwise. Fix Rotation's Use suggestion leads
+    /// with the sparkle of its Suggested pill, so it never reads as Undo.
+    pub undo_icon: Option<&'static str>,
     /// The link is the card's first decision ("Accept suggestion" on a card
     /// nobody has decided yet): drawn as a filled button, not a quiet link.
     pub filled: bool,
@@ -668,6 +675,11 @@ impl PhotoSortApp {
 
         // Header: what the suggestion is, then its buttons as icons and the
         // link back to the suggestion, from the right.
+        let link_icon = card.undo_icon.unwrap_or(if card.filled {
+            egui_phosphor::regular::CHECK
+        } else {
+            egui_phosphor::regular::ARROW_U_UP_LEFT
+        });
         let inner = rect.shrink(PAD);
         let header = egui::Rect::from_min_size(inner.min, egui::vec2(inner.width(), HEADER));
         if layout.header {
@@ -718,7 +730,7 @@ impl PhotoSortApp {
                 // first decision (filled) comes before the state text, and
                 // says its first word ("Accept") before it is an icon alone.
                 let width = |label: &str| {
-                    undo_text(&painter, label, LinkStyle::Header, card.filled)
+                    undo_text(&painter, link_icon, label, LinkStyle::Header, card.filled)
                         .size()
                         .x
                         + 8.0
@@ -755,6 +767,7 @@ impl PhotoSortApp {
                     &painter,
                     Align2::RIGHT_CENTER,
                     egui::pos2(right, header.center().y),
+                    link_icon,
                     shown,
                     &hover,
                     style,
@@ -843,6 +856,7 @@ impl PhotoSortApp {
                         photo.name,
                         match &photo.badge {
                             Badge::Keep(text) | Badge::Trash(text) | Badge::Note(text) => text,
+                            Badge::Turn(turns) => turn_label(*turns),
                             Badge::None => "",
                         }
                     ),
@@ -973,6 +987,7 @@ impl PhotoSortApp {
                 &painter,
                 Align2::RIGHT_BOTTOM,
                 at,
+                link_icon,
                 label,
                 hover,
                 LinkStyle::OverPhoto,
@@ -1049,6 +1064,20 @@ impl PhotoSortApp {
                 slot,
                 RADIUS,
                 Stroke::new(TRASH_EDGE, RED.gamma_multiply(trash)),
+                egui::StrokeKind::Inside,
+            );
+        }
+        // A staged turn is edged in green, as Trash is in red: a page of
+        // cards shows at a glance which photos Apply will turn.
+        let turn = ui.ctx().animate_bool_responsive(
+            ui.id().with(("turn", id, photo.turns)),
+            matches!(photo.badge, Badge::Turn(_)),
+        );
+        if turn > 0.0 {
+            painter.rect_stroke(
+                slot,
+                RADIUS,
+                Stroke::new(2.0, GREEN.gamma_multiply(turn)),
                 egui::StrokeKind::Inside,
             );
         }
@@ -1143,20 +1172,14 @@ enum LinkStyle {
     OverPhoto,
 }
 
-/// A link's text: its icon and label, or the icon alone. A filled link
-/// (the card's first decision) leads with a check, the others with the
-/// arrow back to the suggestion.
+/// A link's text: its icon and label, or the icon alone.
 fn undo_text(
     painter: &egui::Painter,
+    icon: &str,
     label: &str,
     style: LinkStyle,
     filled: bool,
 ) -> Arc<egui::Galley> {
-    let icon = if filled {
-        egui_phosphor::regular::CHECK
-    } else {
-        egui_phosphor::regular::ARROW_U_UP_LEFT
-    };
     painter.layout_no_wrap(
         if style == LinkStyle::Arrow {
             icon.to_owned()
@@ -1177,12 +1200,13 @@ fn undo_link(
     painter: &egui::Painter,
     align: Align2,
     at: egui::Pos2,
+    icon: &str,
     label: &str,
     hover: &str,
     style: LinkStyle,
     filled: bool,
 ) -> (egui::Rect, bool) {
-    let text = undo_text(painter, label, style, filled);
+    let text = undo_text(painter, icon, label, style, filled);
     let over_photo = style == LinkStyle::OverPhoto;
     let (pad, size) = if over_photo || filled {
         (egui::vec2(8.0, 3.0), text.size() + egui::vec2(16.0, 6.0))
@@ -1229,21 +1253,16 @@ fn badge_pill(painter: &egui::Painter, slot: egui::Rect, badge: &Badge) -> egui:
     let (text, fill, ink) = match badge {
         Badge::Keep(text) => (format!("{}  {text}", icon::CHECK), GREEN, Color32::BLACK),
         Badge::Trash(text) => (format!("{}  {text}", icon::TRASH), RED, Color32::BLACK),
-        Badge::Note(text) => {
-            // Its icon alone when the photo is too narrow for its words.
-            let full = format!("{}  {text}", icon::SPARKLE);
-            let wide = painter
-                .layout_no_wrap(full.clone(), medium(11.0), INK)
-                .size()
-                .x
-                + 16.0;
-            let text = if wide <= slot.width() - 2.0 * (S1 + 2.0) {
-                full
-            } else {
-                icon::SPARKLE.to_owned()
-            };
-            (text, Color32::from_black_alpha(170), INK)
-        }
+        Badge::Note(text) => (
+            pill_text(painter, slot, icon::SPARKLE, text),
+            Color32::from_black_alpha(170),
+            INK,
+        ),
+        Badge::Turn(turns) => (
+            pill_text(painter, slot, turn_icon(*turns), turn_label(*turns)),
+            GREEN,
+            Color32::BLACK,
+        ),
         // Where the pill would be, so the Suggested mark beside it keeps
         // its place on a photo nobody has decided yet.
         Badge::None => {
@@ -1260,6 +1279,41 @@ fn badge_pill(painter: &egui::Painter, slot: egui::Rect, badge: &Badge) -> egui:
     painter.rect_filled(rect, R_CONTROL, fill);
     painter.galley(rect.min + egui::vec2(8.0, 3.0), galley, ink);
     rect
+}
+
+/// A pill's icon and words, or its icon alone when the photo is too narrow
+/// for its words.
+fn pill_text(painter: &egui::Painter, slot: egui::Rect, icon: &str, text: &str) -> String {
+    let full = format!("{icon}  {text}");
+    let wide = painter
+        .layout_no_wrap(full.clone(), medium(11.0), INK)
+        .size()
+        .x
+        + 16.0;
+    if wide <= slot.width() - 2.0 * (S1 + 2.0) {
+        full
+    } else {
+        icon.to_owned()
+    }
+}
+
+/// What a staged turn's pill says.
+pub(super) fn turn_label(turns: u8) -> &'static str {
+    match turns % 4 {
+        1 => "Will turn right",
+        2 => "Will turn 180°",
+        3 => "Will turn left",
+        _ => "",
+    }
+}
+
+/// The arrow a staged turn's pill leads with: the way it turns.
+fn turn_icon(turns: u8) -> &'static str {
+    if turns % 4 == 3 {
+        egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE
+    } else {
+        egui_phosphor::regular::ARROW_CLOCKWISE
+    }
 }
 
 /// A star beside the pill of the photo PhotoSort suggests keeping, or under
