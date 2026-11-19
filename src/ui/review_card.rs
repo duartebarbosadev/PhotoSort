@@ -125,6 +125,59 @@ pub(super) enum CardEvent {
     Undo,
 }
 
+/// The header action of an Easy Delete card or a Pick Best group, and of
+/// its panel's button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum GroupLink {
+    /// Nobody has decided it yet: take its suggestion.
+    Accept,
+    /// Back to where the step started it.
+    Undo,
+}
+
+impl GroupLink {
+    /// What a group offers. An undecided one offers Accept when it has a
+    /// suggestion to take. A decided one offers Undo: always, where the step
+    /// starts with nothing marked, so an accepted group can be taken back;
+    /// where suggestions apply on their own, once it differs from its
+    /// suggestion.
+    pub(super) fn of(
+        enabled: bool,
+        undecided: bool,
+        acceptable: bool,
+        auto: bool,
+        changed: bool,
+    ) -> Option<Self> {
+        if !enabled {
+            None
+        } else if undecided {
+            acceptable.then_some(Self::Accept)
+        } else {
+            (!auto || changed).then_some(Self::Undo)
+        }
+    }
+}
+
+impl PhotoSortApp {
+    /// After a group card's Accept, Undo or R, for its photos: Undo where
+    /// the step starts with nothing marked (`clear`) unmarks every one of
+    /// them, so its Accept shows again. Accept, and Undo where suggestions
+    /// apply on their own, have taken the suggestion already. Either way
+    /// none of them counts as chosen by hand.
+    pub(super) fn undo_group(&mut self, photos: Vec<MediaId>, clear: bool) {
+        if clear {
+            crate::core::model::update_trash(
+                &mut self.decisions,
+                photos.iter().map(|id| (*id, false)),
+            );
+        }
+        for id in &photos {
+            self.by_hand.remove(id);
+        }
+        self.changed_items(photos);
+    }
+}
+
 /// What a sectioned grid was asked to do this frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum GridClick {
