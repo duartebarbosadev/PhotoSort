@@ -29,9 +29,10 @@ pub(super) struct Deck {
     shapes: Vec<f32>,
     /// The decisions the turns were counted from.
     counted: Option<u64>,
-    /// Whether each photo has a turn staged: its card then shows it twice.
-    turned: Vec<bool>,
-    /// How many do.
+    /// Whether each photo's card shows it twice: as it is, and as a staged
+    /// turn or a suggestion not taken yet would leave it.
+    paired: Vec<bool>,
+    /// How many photos have a turn staged.
     turns: usize,
     /// A certain suggestion is not taken yet.
     left: bool,
@@ -344,13 +345,30 @@ impl PhotoSortApp {
         self.navigate_selection(1, false, false);
         self.rotation_panel = self.active.is_some();
     }
-    /// What the panel beside the grid shows: the photo as it is, and turned
-    /// when a turn is staged.
+    /// The second photo a card and the panel show: the staged turn, or,
+    /// while Use suggestion is the card's action, the suggestion as a
+    /// preview. A suggestion kept as it is shows the photo once.
+    pub(super) fn rotation_after(&self, id: MediaId) -> Option<(u8, bool)> {
+        let staged = turns(&self.decisions, id);
+        if staged != 0 {
+            return Some((staged, false));
+        }
+        if self.rotation_link(id) != Some(RotationLink::UseSuggestion) {
+            return None;
+        }
+        self.rotation_review
+            .suggestion(id)
+            .map(|s| s.turns % 4)
+            .filter(|t| *t != 0)
+            .map(|t| (t, true))
+    }
+    /// What the panel beside the grid shows: the photo as it is, and as
+    /// the staged turn or the suggestion would leave it.
     pub(super) fn rotation_canvas_ids(&self, id: MediaId) -> Vec<MediaId> {
-        if turns(&self.decisions, id) == 0 {
-            vec![id]
-        } else {
+        if self.rotation_after(id).is_some() {
             vec![id, id]
+        } else {
+            vec![id]
         }
     }
     /// Rotate and Undo in the floating bar under the panel's photos.
@@ -442,7 +460,7 @@ impl PhotoSortApp {
                             let deck = &app.grids.rotation;
                             if let Some(shape) = deck.shapes.get(i) {
                                 shapes.push(*shape);
-                                if deck.turned.get(i) == Some(&true) {
+                                if deck.paired.get(i) == Some(&true) {
                                     shapes.push(*shape);
                                 }
                             }
@@ -609,15 +627,23 @@ impl PhotoSortApp {
         }
         let decisions = self.decisions.revision();
         if deck.counted != Some(decisions) {
-            // From the staged turns, which are few, not from every photo.
-            deck.turned.clear();
-            deck.turned.resize(deck.shown.ids.len(), false);
+            // The suggestions come first and may show a preview, as their
+            // cards do; the staged turns, which are few, are counted from
+            // the decisions, not from every photo.
+            let suggested = deck.shown.sure + deck.shown.unsure;
+            deck.paired.clear();
+            deck.paired.extend(
+                deck.shown.ids[..suggested]
+                    .iter()
+                    .map(|id| self.rotation_after(*id).is_some()),
+            );
+            deck.paired.resize(deck.shown.ids.len(), false);
             deck.turns = 0;
             for (id, decision) in self.decisions.iter() {
                 if decision.turns % 4 != 0
                     && let Some(place) = deck.shown.places.get(id)
                 {
-                    deck.turned[*place] = true;
+                    deck.paired[*place] = true;
                     deck.turns += 1;
                 }
             }
@@ -655,7 +681,9 @@ impl PhotoSortApp {
     }
 
     /// The card for one photo: as it is now and, once a turn is staged, as
-    /// it will be. No labels: the photos say it. Rotate buttons and the one
+    /// it will be. A suggestion not taken yet shows as a preview under a
+    /// quiet Suggested pill, so the user sees it before Use suggestion.
+    /// No other labels: the photos say it. Rotate buttons and the one
     /// action that applies (Undo, Keep original or Use suggestion) sit in
     /// its header; how sure PhotoSort is lives in their tooltips.
     pub(super) fn rotation_card(&self, id: MediaId) -> ReviewCard {
@@ -693,7 +721,14 @@ impl PhotoSortApp {
             inset: None,
         };
         let mut photos = vec![photo(0, path.clone())];
-        if staged != 0 {
+        if let Some((preview, true)) = self.rotation_after(id) {
+            let mut after = photo(
+                preview,
+                format!("{path}\n{}", self.rotation_suggestion_text(id)),
+            );
+            after.badge = Badge::Note("Suggested".into());
+            photos.push(after);
+        } else if staged != 0 {
             // The suggestion only when the turn differs from it.
             let mut name = format!("{path}\nTurned {}", turn_text(staged));
             match self.rotation_review.suggestion(id) {
@@ -847,8 +882,27 @@ mod tests {
     fn with_the_setting_off_nothing_is_staged_until_a_suggestion_is_used() {
         let mut app = fixture(false);
         assert!(app.decisions.is_empty());
+        // Each card shows its suggestion before it is used: the photo as it
+        // is, then turned, under a Suggested pill.
+        let card = app.rotation_card(MediaId(1));
+        assert_eq!((card.photos[0].turns, card.photos[1].turns), (0, 1));
+        assert_eq!(card.photos[1].badge, Badge::Note("Suggested".into()));
+        assert!(card.photos[1].name.contains("90° right"));
+        let painted = super::super::review_card::render_grid(&mut app);
+        for text in ["Suggested", "0 photos turned", "Use suggestion"] {
+            assert!(painted.contains(text), "{text} missing from:\n{painted}");
+        }
         app.rotation_card_event(MediaId(1), CardEvent::Undo);
         assert_eq!(staged(&app, 1), 1);
+        // Used, the card shows the turn it will get, without the pill.
+        let card = app.rotation_card(MediaId(1));
+        assert_eq!(card.photos.len(), 2);
+        assert_eq!(
+            (card.photos[1].turns, &card.photos[1].badge),
+            (1, &Badge::None)
+        );
+        let painted = super::super::review_card::render_grid(&mut app);
+        assert!(painted.contains("1 photo turned"), "{painted}");
         assert_eq!(app.rotation_link(MediaId(1)), Some(RotationLink::Undo));
         app.rotation_card_event(MediaId(1), CardEvent::Undo);
         assert!(app.decisions.is_empty());
@@ -1063,12 +1117,15 @@ mod tests {
         app.rotation_card_event(MediaId(2), CardEvent::Open(0));
         assert!(app.rotation_panel && !app.review);
         assert_eq!(app.active, Some(MediaId(2)));
-        assert_eq!(app.rotation_canvas_ids(MediaId(2)), [MediaId(2)]);
-        app.rotation_card_event(MediaId(2), CardEvent::Undo);
+        // The panel shows the suggestion beside the photo before it is
+        // used, then the staged turn.
         assert_eq!(
             app.rotation_canvas_ids(MediaId(2)),
             [MediaId(2), MediaId(2)]
         );
+        assert_eq!(app.rotation_after(MediaId(2)), Some((2, true)));
+        app.rotation_card_event(MediaId(2), CardEvent::Undo);
+        assert_eq!(app.rotation_after(MediaId(2)), Some((2, false)));
         app.deselect_rotation_card();
         assert!(!app.rotation_panel && app.active.is_none());
     }

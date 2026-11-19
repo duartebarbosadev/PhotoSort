@@ -57,6 +57,8 @@ pub(super) struct Fact {
 pub(super) enum Badge {
     Keep(String),
     Trash(String),
+    /// A quiet pill that marks a preview, such as a turn not taken yet.
+    Note(String),
     /// No pill: the photo speaks for itself.
     None,
 }
@@ -840,7 +842,7 @@ impl PhotoSortApp {
                         side + 1,
                         photo.name,
                         match &photo.badge {
-                            Badge::Keep(text) | Badge::Trash(text) => text,
+                            Badge::Keep(text) | Badge::Trash(text) | Badge::Note(text) => text,
                             Badge::None => "",
                         }
                     ),
@@ -1227,6 +1229,21 @@ fn badge_pill(painter: &egui::Painter, slot: egui::Rect, badge: &Badge) -> egui:
     let (text, fill, ink) = match badge {
         Badge::Keep(text) => (format!("{}  {text}", icon::CHECK), GREEN, Color32::BLACK),
         Badge::Trash(text) => (format!("{}  {text}", icon::TRASH), RED, Color32::BLACK),
+        Badge::Note(text) => {
+            // Its icon alone when the photo is too narrow for its words.
+            let full = format!("{}  {text}", icon::SPARKLE);
+            let wide = painter
+                .layout_no_wrap(full.clone(), medium(11.0), INK)
+                .size()
+                .x
+                + 16.0;
+            let text = if wide <= slot.width() - 2.0 * (S1 + 2.0) {
+                full
+            } else {
+                icon::SPARKLE.to_owned()
+            };
+            (text, Color32::from_black_alpha(170), INK)
+        }
         // Where the pill would be, so the Suggested mark beside it keeps
         // its place on a photo nobody has decided yet.
         Badge::None => {

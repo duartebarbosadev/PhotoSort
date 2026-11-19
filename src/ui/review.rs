@@ -1119,6 +1119,9 @@ impl PhotoSortApp {
         let mut view = self.view_for(slot);
         let turns = if !corrected {
             0
+        } else if self.step == Step::Rotation {
+            // The staged turn, or the suggestion not taken yet.
+            self.rotation_after(id).map_or(0, |(turns, _)| turns)
         } else {
             self.preview_turns(id)
         };
