@@ -86,6 +86,18 @@ pub(super) enum RotationLink {
     /// Stages a suggestion that was not staged on its own.
     UseSuggestion,
 }
+impl RotationLink {
+    /// Its icon: only Undo has the arrow back. Use suggestion has the
+    /// sparkle of the Suggested pill it takes, Keep original a cross.
+    pub(super) fn icon(self) -> &'static str {
+        use egui_phosphor::regular as icon;
+        match self {
+            RotationLink::Undo => icon::ARROW_U_UP_LEFT,
+            RotationLink::KeepOriginal => icon::X,
+            RotationLink::UseSuggestion => icon::SPARKLE,
+        }
+    }
+}
 
 impl PhotoSortApp {
     /// Whether detection ran, even if every photo looked upright.
@@ -387,7 +399,7 @@ impl PhotoSortApp {
             }
             if let Some(link) = self.rotation_link(id) {
                 let (label, hover) = self.rotation_link_text(id, link);
-                let mut response = ui.button(label);
+                let mut response = ui.button(format!("{}  {label}", link.icon()));
                 if !hover.is_empty() {
                     response = response.on_hover_text(hover);
                 }
@@ -681,8 +693,9 @@ impl PhotoSortApp {
     }
 
     /// The card for one photo: as it is now and, once a turn is staged, as
-    /// it will be. A suggestion not taken yet shows as a preview under a
-    /// quiet Suggested pill, so the user sees it before Use suggestion.
+    /// it will be, edged in green under a green pill that says which way
+    /// Apply turns it. A suggestion not taken yet shows as a preview under
+    /// a quiet Suggested pill, so the user sees it before Use suggestion.
     /// No other labels: the photos say it. Rotate buttons and the one
     /// action that applies (Undo, Keep original or Use suggestion) sit in
     /// its header; how sure PhotoSort is lives in their tooltips.
@@ -743,7 +756,12 @@ impl PhotoSortApp {
                 }
                 None => {}
             }
-            photos.push(photo(staged, name));
+            let mut after = photo(staged, name);
+            // A photo marked for Trash keeps its red edge alone.
+            if !trash {
+                after.badge = Badge::Turn(staged);
+            }
+            photos.push(after);
         }
         ReviewCard {
             title: String::new(),
@@ -760,6 +778,7 @@ impl PhotoSortApp {
                 let (label, hover) = self.rotation_link_text(id, link);
                 (label.to_owned(), hover)
             }),
+            undo_icon: self.rotation_link(id).map(RotationLink::icon),
             filled: false,
         }
     }
@@ -889,20 +908,28 @@ mod tests {
         assert_eq!(card.photos[1].badge, Badge::Note("Suggested".into()));
         assert!(card.photos[1].name.contains("90° right"));
         let painted = super::super::review_card::render_grid(&mut app);
-        for text in ["Suggested", "0 photos turned", "Use suggestion"] {
+        // Use suggestion leads with the Suggested pill's sparkle, never
+        // Undo's arrow.
+        let use_it = format!("{}  Use suggestion", egui_phosphor::regular::SPARKLE);
+        for text in ["Suggested", "0 photos turned", &use_it] {
             assert!(painted.contains(text), "{text} missing from:\n{painted}");
         }
+        assert!(!painted.contains(egui_phosphor::regular::ARROW_U_UP_LEFT));
         app.rotation_card_event(MediaId(1), CardEvent::Undo);
         assert_eq!(staged(&app, 1), 1);
-        // Used, the card shows the turn it will get, without the pill.
+        // Used, the card shows the turn it will get under a green pill that
+        // says so, and Undo with its arrow.
         let card = app.rotation_card(MediaId(1));
         assert_eq!(card.photos.len(), 2);
         assert_eq!(
             (card.photos[1].turns, &card.photos[1].badge),
-            (1, &Badge::None)
+            (1, &Badge::Turn(1))
         );
         let painted = super::super::review_card::render_grid(&mut app);
-        assert!(painted.contains("1 photo turned"), "{painted}");
+        let undo = format!("{}  Undo", egui_phosphor::regular::ARROW_U_UP_LEFT);
+        for text in ["1 photo turned", &undo] {
+            assert!(painted.contains(text), "{text} missing from:\n{painted}");
+        }
         assert_eq!(app.rotation_link(MediaId(1)), Some(RotationLink::Undo));
         app.rotation_card_event(MediaId(1), CardEvent::Undo);
         assert!(app.decisions.is_empty());
@@ -976,6 +1003,11 @@ mod tests {
         );
         app.rotation_card_event(MediaId(3), CardEvent::Button(1));
         assert_eq!(staged(&app, 3), 1);
+        // Turned by hand, it is marked like a suggestion taken.
+        assert_eq!(
+            app.rotation_card(MediaId(3)).photos[1].badge,
+            Badge::Turn(1)
+        );
         app.rotation_queue_only = true;
         app.filter_dirty = true;
         app.refilter();
@@ -1040,7 +1072,11 @@ mod tests {
         let card = app.rotation_card(MediaId(1));
         assert_eq!(card.photos.len(), 2);
         assert_eq!((card.photos[0].turns, card.photos[1].turns), (0, 1));
-        assert!(card.photos.iter().all(|p| p.badge == Badge::None));
+        // The turn Apply will make is marked; the photo as it is is not.
+        assert_eq!(
+            (&card.photos[0].badge, &card.photos[1].badge),
+            (&Badge::None, &Badge::Turn(1))
+        );
         assert!(card.photos[1].name.contains("90% confident"));
         let painted = super::super::review_card::render_grid(&mut app);
         for gone in [
