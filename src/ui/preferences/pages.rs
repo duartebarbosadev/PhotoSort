@@ -58,6 +58,8 @@ impl Section {
                     || d.raw_look != s.raw_look
                     || d.reduce_motion != s.reduce_motion
                     || d.show_shortcuts != s.show_shortcuts
+                    || d.intro_shown != s.intro_shown
+                    || d.step_intros_shown != s.step_intros_shown
             }
             Section::Steps => {
                 d.hidden_steps != s.hidden_steps
@@ -973,6 +975,22 @@ fn appearance_page(ui: &mut egui::Ui, draft: &mut Preferences) {
         rows.row("Reduce motion", "", None, |ui| {
             switch(ui, &mut draft.reduce_motion, "Reduce motion")
         });
+        // The films that play once: seen ones are forgotten, so they play again.
+        let seen = draft.intro_shown || !draft.step_intros_shown.is_empty();
+        rows.row(
+            "Intro films",
+            "The tour plays again on the next launch, and each step's film the next time that step is shown.",
+            None,
+            |ui| {
+                if ui
+                    .add_enabled(seen, egui::Button::new("Show again"))
+                    .clicked()
+                {
+                    draft.intro_shown = false;
+                    draft.step_intros_shown.clear();
+                }
+            },
+        );
     });
 }
 

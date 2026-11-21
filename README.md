@@ -40,7 +40,7 @@ Lightroom and other editors see them.
 The steps sit along the bottom of the window. Use only the ones you need, in any order, and
 finish in **Review** to apply everything at once. PhotoSort remembers where you left off in
 each folder. **Menu → Watch the intro** shows a
-30-second tour.
+54-second tour, and each step plays a short film of its own the first time you open it.
 
 | Step | What it's for |
 | --- | --- |

@@ -16,6 +16,7 @@ impl PhotoSortApp {
     pub fn with_smoke_test(mut self, delay: Duration) -> Self {
         // Smoke runs must stay short and must not use up the first launch.
         self.intro = super::intro::Intro::Off;
+        self.step_intros = false;
         self.smoke_exit = Some(SmokeExit {
             delay,
             deadline: None,

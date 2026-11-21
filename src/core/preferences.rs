@@ -51,6 +51,11 @@ pub struct Preferences {
     pub photo_size: f32,
     /// The first-run intro has played. Menu → Watch the intro replays it.
     pub intro_shown: bool,
+    /// The steps whose own intro has played: each plays the first time its
+    /// step is opened with a folder in it. Menu replays the current step's.
+    pub step_intros_shown: HashSet<Step>,
+    /// The intros play without sound: the speaker button on the film.
+    pub intro_muted: bool,
     /// Prompts the user turned off: about memory and cache limits, and
     /// about RAW files they kept whose JPEG goes to the Trash.
     pub limit_prompts: LimitPrompts,
@@ -136,6 +141,8 @@ impl Default for Preferences {
             compact_strip: true,
             photo_size: PHOTO_SIZE,
             intro_shown: false,
+            step_intros_shown: HashSet::new(),
+            intro_muted: false,
             limit_prompts: Default::default(),
         }
     }

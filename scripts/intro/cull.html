@@ -1,0 +1,249 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PhotoSort: the Cull step</title>
+<!--
+  The film shown the first time Cull is opened, drawn like the intro film
+  (film.html) and with the same kit. It stays in Cull and is laid out as the
+  step is in the app, in its Review view: the bar with Search, the filters and
+  the view switch; one photo large; under it the bar with the arrows, Trash and
+  the stars; and along the bottom every photo in a strip.
+  The photos are stepped through; one is rated; one is marked for the Trash;
+  three are selected in the strip and compared side by side, and one of them is
+  marked; and Review lists the rating and what goes to the Trash without
+  applying them.
+  `draw(t)` paints the frame at `t` seconds and depends on nothing else, so
+  scripts/render_intro.py can step through it:
+      python3 scripts/render_intro.py --film cull
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; margin: auto; width: 100vw; height: 56.25vw;
+           max-height: 100vh; max-width: 177.78vh; }
+</style>
+<canvas id="film" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script>
+'use strict';
+// When things happen, in seconds. sound.py mirrors these.
+const AT = {
+  title: 1.3, one: 4.9, next: 8.0, next2: 8.9, rate: 10.4, star: 13.5, trash: 15.3, next3: 18.4, bin: 19.4,
+  compare: 21.2, sel: 24.3, sel2: 25.0, sel3: 25.7, choose: 27.0, bin2: 28.1, review: 29.9, tab: 33.5, end: 37.7,
+};
+const DURATION = AT.end + 1.2;
+const CARDS = [
+  [AT.title, 3.2, 'Cull', 'Rate your photos and decide what stays'],
+  [AT.one, 2.7, 'One photo at a time', 'Large, with every photo in the strip below'],
+  [AT.rate, 2.7, 'Rate with stars', 'Click a star, or press 1 to 5'],
+  [AT.trash, 2.7, 'Not a keeper?', 'Trash marks it, and nothing is deleted yet'],
+  [AT.compare, 2.7, 'Compare side by side', 'Select several in the strip to see them together'],
+  [AT.review, 2.8, 'Nothing changes yet', 'Review lists ratings and deletions before they are applied'],
+];
+
+// ---- the layout ------------------------------------------------------------------
+// The bar, the photo on show, the bar of its controls, and the strip.
+const BAR = 58, BIG_W = 453, BIG_Y = TOP + BAR + 214, PILL_Y = FOOT - 128, PILL_W = 690, THUMB_Y = FOOT - 56, TW = 92, STEP = 102;
+const ARROW = { x: CX - 276, y: PILL_Y }, BIN = { x: CX - 150, y: PILL_Y }, STAR_X = i => CX - 26 + 30 * i;
+const RATED = 2, STARS = 4, BINNED = 3, COMPARED = [6, 7, 8], CHOSEN = 1; // which photos, and which pane of the three
+
+// ---- the photos -------------------------------------------------------------------
+const SHOTS = [[0, 41], [1, 46], [2, 53], [0, 44, 3.2], [1, 48], [2, 50], [0, 57], [0, 57, 2.2, 0.06], [0, 57, 0, -0.05], [2, 61], [1, 63]]
+  .map(([pal, seed, soft = 0, sun = 0], k) => ({ pal, seed, soft, sun, k, file: `IMG_${4101 + k}.jpg`, x: CX + (k - 5) * STEP }));
+// Every photo is in the strip; the first four are also shown large one after
+// another, and three more side by side.
+const SINGLES = [0, 1, 2, 3], SINCE = [0.85, AT.next, AT.next2, AT.next3], UNTIL = [AT.next, AT.next2, AT.next3, AT.sel];
+const CAST = [
+  ...SHOTS.map(shot => ({ ...shot, role: 'thumb' })),
+  ...SINGLES.map((k, n) => ({ ...SHOTS[k], role: 'single', n })),
+  ...COMPARED.map((k, n) => ({ ...SHOTS[k], role: 'pane', n })),
+].map((photo, i) => ({ ...photo, home: farHome(i) }));
+const BACK = Array.from({ length: 6 }, (_, i) => ({ pal: i % 3, seed: 70 + i, home: farHome(18 + i) }));
+// How far a photo is marked for the Trash.
+const binnedAt = (k, t) => (k === BINNED ? eoc(seg(t, AT.bin + 0.08, AT.bin + 0.4)) : k === COMPARED[CHOSEN] ? eoc(seg(t, AT.bin2 + 0.08, AT.bin2 + 0.4)) : 0);
+// The photos compared: how far the second and the third have joined the first.
+const two = t => eio(seg(t, AT.sel2, AT.sel2 + 0.45)), three = t => eio(seg(t, AT.sel3, AT.sel3 + 0.45));
+const SEL = [AT.sel, AT.sel2, AT.sel3];
+const paneW = t => lerp(lerp(BIG_W, 420, two(t)), 364, three(t));
+const paneX = (n, t) => [lerp(lerp(CX, CX - 225, two(t)), CX - 384, three(t)), lerp(CX + 225, CX, three(t)), CX + 384][n];
+// Where a large photo is: singles come in from the right and leave to the left.
+function largeAt(P, t) {
+  if (P.role === 'pane') return { x: paneX(P.n, t), w: paneW(t), scale: eoc(seg(t, SEL[P.n], SEL[P.n] + 0.35)) };
+  const from = SINCE[P.n], into = eoc(seg(t, from, from + (P.n ? 0.3 : 0.5))), out = eic(seg(t, UNTIL[P.n], UNTIL[P.n] + 0.18));
+  return { x: CX + (P.n ? 90 * (1 - into) : 0) - 90 * out, w: BIG_W, scale: into * (1 - out) };
+}
+function poseAt(i, t) {
+  const P = CAST[i], dim = 0.42 * binnedAt(P.k, t);
+  const pose = P.role === 'thumb'
+    ? front(P.x, THUMB_Y, TW, { scale: eoc(seg(t, 0.95 + 0.03 * P.k, 1.4 + 0.03 * P.k)), dim })
+    : front(largeAt(P, t).x, BIG_Y, largeAt(P, t).w, { scale: largeAt(P, t).scale, dim, z: 1 });
+  // Review: every photo steps back.
+  return mix(pose, drift(P.home, i, t), eio(seg(t, AT.tab + 0.2 + 0.02 * i, AT.tab + 1.2 + 0.02 * i)));
+}
+// Which photo is on show alone, and whether several are compared.
+const currentAt = t => (t >= AT.sel ? COMPARED[t >= AT.choose ? CHOSEN : 0] : t >= AT.next3 ? 3 : t >= AT.next2 ? 2 : t >= AT.next ? 1 : 0);
+const starsAt = (k, t) => (k === RATED ? STARS * eoc(seg(t, AT.star, AT.star + 0.45)) : 0);
+
+// ---- what is drawn on the window, behind the photos ------------------------------
+const openAt = t => eoc(seg(t, 0.9, 1.5)) * (1 - eio(seg(t, AT.tab + 0.1, AT.tab + 0.6)));
+function under(t) {
+  const open = openAt(t);
+  if (open > 0.004) {
+    c.save(); c.globalAlpha *= open;
+    controls(t);
+    // Each large photo's place in the strip and its name, above it.
+    CAST.forEach(P => {
+      if (P.role === 'thumb') return;
+      const at = largeAt(P, t);
+      if (at.scale < 0.5) return;
+      c.save(); c.globalAlpha *= seg(at.scale, 0.5, 1);
+      font(15, 400, 0); text(`${P.k + 1} / ${P.file}`, at.x - at.w / 2 + 2, BIG_Y - at.w * 0.375 - 12, MUTED);
+      c.restore();
+    });
+    pill(t);
+    c.restore();
+  }
+  const files = [BINNED, COMPARED[CHOSEN]].map(k => [SHOTS[k].file, '', wire(0.6)]);
+  reviewList(t, AT.tab, AT.end, 'trash', 'Going to the Trash', 2, [...files, [`Rating ${SHOTS[RATED].file}`, `${STARS} stars`, ACCENT, 'star']]);
+}
+// The bar along the top: Search, what is shown, and how it is shown.
+function controls(t) {
+  c.fillStyle = wire(0.14); c.fillRect(WX, TOP + BAR - 2, WW, 2);
+  c.fillStyle = 'rgba(0,0,0,0.25)'; rr(WX + 20, TOP + 10, 170, 38, 10); c.fill();
+  symbol('search', WX + 42, TOP + 29, 0.8, wire(0.5)); font(18, 400, 0); text('Search', WX + 64, TOP + 35, wire(0.4));
+  let x = WX + 202;
+  font(17, 500, 0);
+  ['All photos', 'Filters & sort', 'Library navigator'].forEach((label, n) => {
+    const w = c.measureText(label).width + (n ? 28 : 54);
+    c.fillStyle = wire(0.07); rr(x, TOP + 10, w, 38, 10); c.fill();
+    text(label, x + 14, TOP + 35, wire(0.85));
+    if (!n) symbol('caret', x + w - 22, TOP + 29, 0.9, wire(0.7));
+    x += w + 10;
+  });
+  // The view switch, on Review, and Details.
+  let right = WX + WW - 20;
+  const details = c.measureText('Details').width + 28;
+  c.fillStyle = wire(0.07); rr(right - details, TOP + 10, details, 38, 10); c.fill(); text('Details', right - details + 14, TOP + 35, wire(0.85));
+  right -= details + 12;
+  const views = ['List', 'Icons', 'Grid', 'Review'], widths = views.map(view => c.measureText(view).width + 30), all = widths.reduce((a, b) => a + b, 0) + 8;
+  c.fillStyle = 'rgba(0,0,0,0.25)'; rr(right - all, TOP + 10, all, 38, 19); c.fill();
+  x = right - all + 4;
+  views.forEach((view, n) => {
+    if (n === 3) { c.fillStyle = wire(0.16); rr(x, TOP + 14, widths[n], 30, 15); c.fill(); }
+    text(view, x + widths[n] / 2, TOP + 35, n === 3 ? INK : wire(0.5), 'center');
+    x += widths[n];
+  });
+}
+// The bar under the photo: the arrows, Trash, the stars (or, while photos are
+// compared, "End comparison") and the zoom.
+function pill(t) {
+  const k = currentAt(t), marked = binnedAt(k, t), comparing = two(t);
+  c.fillStyle = PANEL; c.strokeStyle = LINE; c.lineWidth = 2; rr(CX - PILL_W / 2, PILL_Y - 24, PILL_W, 48, 24); c.fill(); c.stroke();
+  const pressed = Math.max(pressAt(t, AT.next), pressAt(t, AT.next2), pressAt(t, AT.next3));
+  glyph('left', ARROW.x - 40, PILL_Y, 1, wire(0.8));
+  c.fillStyle = wire(0.2 * pressed); c.beginPath(); c.arc(ARROW.x, PILL_Y, 18, 0, 7); c.fill();
+  glyph('right', ARROW.x, PILL_Y, 1, wire(0.8));
+  // Trash, or "Marked for Trash" once it is.
+  const press = Math.max(pressAt(t, AT.bin), pressAt(t, AT.bin2)), bw = 182;
+  c.fillStyle = marked > 0.02 ? `rgba(229,85,79,${0.9 * marked})` : wire(0.07 + 0.15 * press); rr(BIN.x - bw / 2, PILL_Y - 17, bw, 34, 10); c.fill();
+  font(16, 500, 0);
+  const label = marked > 0.5 ? 'Marked for Trash' : 'Trash', lw = c.measureText(label).width, ink = marked > 0.5 ? ON_ACCENT : wire(0.9);
+  glyph('trash', BIN.x - lw / 2 - 6, PILL_Y, 0.66, ink); text(label, BIN.x - lw / 2 + 12, PILL_Y + 6, ink);
+  // The stars of the photo on show.
+  c.save(); c.globalAlpha *= 1 - comparing;
+  for (let i = 0; i < 5; i++) {
+    const lit = clamp(starsAt(k, t) - i), pop = i === STARS - 1 ? 1 + 0.25 * pressAt(t, AT.star) : 1;
+    star(STAR_X(i), PILL_Y, 11 * pop, lit > 0.5 ? ACCENT : wire(0.28));
+  }
+  c.restore();
+  c.save(); c.globalAlpha *= comparing; text('End comparison', CX + 34, PILL_Y + 6, wire(0.9), 'center'); c.restore();
+  text('Fit', CX + 170, PILL_Y + 6, wire(0.75), 'center'); text('1:1', CX + 214, PILL_Y + 6, wire(0.75), 'center');
+  c.fillStyle = wire(0.12); rr(CX + 240, PILL_Y - 15, 58, 30, 9); c.fill(); text('Sync', CX + 269, PILL_Y + 6, wire(0.9), 'center');
+}
+
+// ---- what is drawn over the photos -----------------------------------------------
+function over(t) {
+  if (t >= AT.tab + 0.25) return;
+  const shown = eoc(seg(t, 1.3, 1.6)), current = currentAt(t);
+  CAST.forEach(P => {
+    const binned = binnedAt(P.k, t);
+    if (P.role === 'thumb') {
+      const h = TW * 0.75;
+      // The photo on show is outlined in the strip, and so are those compared with it.
+      const picked = t >= AT.sel ? COMPARED.indexOf(P.k) : -1, on = picked >= 0 && t >= SEL[picked];
+      if (P.k === current && shown > 0.01) { c.strokeStyle = ACCENT; c.lineWidth = 3 * shown; rr(P.x - TW / 2 - 4, THUMB_Y - h / 2 - 4, TW + 8, h + 8, 12); c.stroke(); }
+      else if (on) { c.strokeStyle = wire(0.6); c.lineWidth = 2.5; rr(P.x - TW / 2 - 4, THUMB_Y - h / 2 - 4, TW + 8, h + 8, 12); c.stroke(); }
+      if (binned > 0.01) { c.strokeStyle = RED; c.lineWidth = 3 * binned; rr(P.x - TW / 2, THUMB_Y - h / 2, TW, h, h * 0.11); c.stroke(); }
+      // Its rating, over its top edge.
+      const rated = eoc(seg(t, AT.star + 0.2, AT.star + 0.55));
+      if (P.k === RATED && rated > 0.01) {
+        c.save(); c.translate(P.x, THUMB_Y - h / 2 + 13); c.scale(rated, rated);
+        c.fillStyle = 'rgba(20,19,18,0.82)'; rr(-32, -10, 64, 20, 10); c.fill();
+        for (let i = 0; i < STARS; i++) star(-21 + 14 * i, 0, 6, ACCENT);
+        c.restore();
+      }
+      return;
+    }
+    const at = largeAt(P, t), h = at.w * 0.75;
+    if (at.scale < 0.9) return;
+    if (binned > 0.01) { c.strokeStyle = RED; c.lineWidth = 5 * binned; rr(at.x - at.w / 2, BIG_Y - h / 2, at.w, h, h * 0.11); c.stroke(); }
+    if (P.role !== 'pane') return;
+    // Compared photos have their own stars, and the one acted on is outlined.
+    const side = two(t);
+    if (side > 0.01) {
+      c.save(); c.globalAlpha *= side;
+      c.fillStyle = 'rgba(20,19,18,0.82)'; rr(at.x - at.w / 2 + 10, BIG_Y + h / 2 - 40, 124, 30, 9); c.fill();
+      for (let i = 0; i < 5; i++) star(at.x - at.w / 2 + 28 + 22 * i, BIG_Y + h / 2 - 25, 8, wire(0.35));
+      c.restore();
+      const active = P.n === CHOSEN ? eoc(seg(t, AT.choose, AT.choose + 0.3)) : P.n === 0 ? 1 - eoc(seg(t, AT.choose, AT.choose + 0.3)) : 0;
+      if (active > 0.01 && !(P.n === CHOSEN && binned > 0.5)) trace(at.x - at.w / 2 - 8, BIG_Y - h / 2 - 8, at.w + 16, h + 16, h * 0.11 + 6, 1, `rgba(232,135,58,${active * side})`, 3);
+    }
+  });
+}
+
+// ---- the pointer and the camera --------------------------------------------------
+const thumb = k => ({ x: SHOTS[k].x + 8, y: THUMB_Y + 12 });
+const STOPS = [
+  { t: 0.9, x: 1480, y: 870 },
+  { t: AT.next, x: ARROW.x + 4, y: ARROW.y + 4, click: true },
+  { t: AT.next2, x: ARROW.x + 4, y: ARROW.y + 4, click: true },
+  { t: AT.star, x: STAR_X(STARS - 1) + 3, y: PILL_Y + 5, click: true },
+  { t: AT.next3, x: ARROW.x + 4, y: ARROW.y + 4, click: true },
+  { t: AT.bin, x: BIN.x + 30, y: BIN.y + 8, click: true },
+  ...COMPARED.map((k, n) => ({ t: SEL[n], ...thumb(k), click: true })),
+  { t: AT.choose, x: CX + 30, y: BIG_Y + 50, click: true },
+  { t: AT.bin2, x: BIN.x + 30, y: BIN.y + 8, click: true },
+  { t: AT.tab, ...TAB(5), y: TAB(5).y + 4, click: true },
+  { t: AT.tab + 2.8, x: CX + 78, y: APPLY_Y + 18 },
+  { t: AT.end + 0.6, x: 1500, y: 900 },
+];
+const LEANS = [
+  { t: AT.next, until: AT.next2 + 0.5, x: CX - 100, y: PILL_Y - 110, amount: 0.5 },
+  { t: AT.star, until: AT.star + 1.0, x: CX + 20, y: PILL_Y - 70, amount: 1 },
+  { t: AT.bin, until: AT.bin + 1.0, x: CX - 90, y: PILL_Y - 90, amount: 0.9 },
+  { t: AT.sel, until: AT.sel3 + 0.5, x: SHOTS[7].x - 60, y: THUMB_Y - 150, amount: 0.6 },
+  { t: AT.bin2, until: AT.bin2 + 0.9, x: CX - 40, y: PILL_Y - 130, amount: 0.6 },
+  { t: AT.tab, ...TAB(5), amount: 1 },
+];
+
+function draw(real) {
+  const t = clamp(real, 0, DURATION);
+  compose(t, {
+    poses: [...BACK.map((tile, i) => ({ ...tile, ...drift(tile.home, 18 + i, t) })), ...CAST.map((tile, i) => ({ ...tile, ...poseAt(i, t) }))],
+    lean: leanOf(LEANS, t), rack: rackOf(CARDS, t),
+    frame: () => stepFrame(t, 4, AT.tab, AT.end), under, over,
+    top: () => { stepCards(CARDS, t); drawPointer(STOPS, t, eoc(seg(t, 0.9, 1.3)) * (1 - eic(seg(t, AT.end, AT.end + 0.4)))); },
+  });
+}
+
+window.DURATION = DURATION;
+window.draw = draw;
+window.ready = (async () => {
+  await loadKit();
+  draw(0);
+  if (!location.search.includes('render')) {
+    const start = performance.now();
+    const tick = now => { draw(((now - start) / 1000) % (DURATION + 1)); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  }
+  return true;
+})();
+</script>

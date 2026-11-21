@@ -1,0 +1,227 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PhotoSort: the Pick Best step</title>
+<!--
+  The film shown the first time Pick Best is opened, drawn like the intro film
+  (film.html) and with the same kit. It stays in Pick Best and is laid out as
+  the step is in the app: a line that says what to do, or how much is going to
+  the Trash, with "Accept all suggestions" beside it, and under it one card for
+  each group of similar shots, its best three photos side by side. Nothing is
+  marked at first: a star shows the photo PhotoSort would keep and each card
+  offers "Accept suggestion".
+  Two groups are looked at; in one a photo is marked for the Trash by hand; the
+  groups nobody touched are accepted at once; and Review lists what goes to the
+  Trash without applying it.
+  `draw(t)` paints the frame at `t` seconds and depends on nothing else, so
+  scripts/render_intro.py can step through it:
+      python3 scripts/render_intro.py --film pick-best
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; margin: auto; width: 100vw; height: 56.25vw;
+           max-height: 100vh; max-width: 177.78vh; }
+</style>
+<canvas id="film" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script>
+'use strict';
+// When things happen, in seconds. sound.py mirrors these.
+const AT = {
+  title: 1.3, similar: 4.9, tour: 8.0, tour2: 10.2, choose: 12.4, tour3: 15.5, pick: 16.6, accept: 18.6, press: 22.1,
+  review: 24.4, tab: 28.0, end: 32.2,
+};
+const DURATION = AT.end + 1.2;
+const CARDS = [
+  [AT.title, 3.2, 'Pick Best', 'Keep the best shot of each moment'],
+  [AT.similar, 2.7, 'Similar shots, side by side', 'A star marks the one PhotoSort would keep'],
+  [AT.choose, 2.7, 'Disagree? Click a photo', 'It is marked for the Trash and the others are kept'],
+  [AT.accept, 2.7, 'Accept the rest in one click', 'Groups you decided yourself are left alone'],
+  [AT.review, 2.8, 'Nothing is deleted yet', 'Review lists every photo before it goes to the Trash'],
+];
+
+// ---- the layout ------------------------------------------------------------------
+// A bar, a line that sums up, then the groups: two rows of cards.
+const BAR = 58, SUMMARY = 46, GRID_TOP = TOP + BAR + SUMMARY + 14, GRID_X = WX + 28, GRID_RIGHT = WX + WW - 28;
+const PW = 180, PH = PW * 0.75, PAD = 12, GAP = 10, HEAD = 34, CARD_H = HEAD + PH + 30, PITCH = CARD_H + 22, MB = 4.2;
+const ACCEPT = { x: GRID_RIGHT - 116, y: TOP + BAR + 24, w: 232 }; // "Accept all suggestions"
+
+// ---- the groups -------------------------------------------------------------------
+// Each group of similar shots: its row, how many more photos it has than the
+// card shows, and its photos. `best` is the one PhotoSort would keep. The last
+// group is decided by hand, against the suggestion.
+const GROUPS = [
+  { row: 0, more: 2, photos: [{ pal: 0, seed: 41, best: true }, { pal: 0, seed: 41, sun: -0.05, soft: 1.6 }, { pal: 0, seed: 41, sun: 0.06, soft: 2.4 }] },
+  { row: 0, more: 0, photos: [{ pal: 1, seed: 46, sun: 0.05, soft: 1.8 }, { pal: 1, seed: 46, best: true }, { pal: 1, seed: 46, sun: -0.06, soft: 2.6 }] },
+  { row: 1, more: 0, photos: [{ pal: 2, seed: 53, best: true }, { pal: 2, seed: 53, sun: 0.07, soft: 2 }, { pal: 2, seed: 53, sun: -0.04, soft: 1.5 }] },
+  { row: 1, more: 0, photos: [{ pal: 0, seed: 44, best: true }, { pal: 0, seed: 44, sun: 0.06, soft: 0.9 }] },
+];
+const HAND = 3, CLICKED = 0; // the group decided by hand, and the photo clicked in it
+// Every photo, with its group and where it sits; every group's box.
+const CAST = [];
+{
+  const x = [GRID_X, GRID_X];
+  let n = 3101;
+  GROUPS.forEach((group, g) => {
+    const count = group.photos.length;
+    group.box = { x: x[group.row], y: GRID_TOP + PITCH * group.row, w: count * PW + (count - 1) * GAP + 2 * PAD };
+    group.photos.forEach((photo, i) => {
+      // By hand, the clicked photo goes and the others stay; otherwise the best stays.
+      const trash = g === HAND ? i === CLICKED : !photo.best;
+      CAST.push({ ...photo, g, i, trash, file: `IMG_${n++}.jpg`, x: group.box.x + PAD + PW / 2 + i * (PW + GAP), y: group.box.y + HEAD + PH / 2, home: farHome(CAST.length) });
+    });
+    n += group.more;
+    x[group.row] += group.box.w + 16;
+  });
+}
+const BACK = Array.from({ length: 8 }, (_, i) => ({ pal: i % 3, seed: 70 + i, home: farHome(13 + i) }));
+// How far a group is decided: one by a click on a photo, the rest by Accept all.
+const decidedAt = (g, t) => (g === HAND ? eoc(seg(t, AT.pick + 0.08, AT.pick + 0.4)) : eoc(seg(t, AT.press + 0.15 + 0.1 * g, AT.press + 0.5 + 0.1 * g)));
+const trashAt = (k, t) => (CAST[k].trash ? decidedAt(CAST[k].g, t) : 0);
+function poseAt(k, t) {
+  const P = CAST[k];
+  const pose = front(P.x, P.y, PW, { scale: eoc(seg(t, 0.85 + 0.04 * k, 1.35 + 0.04 * k)), dim: 0.4 * trashAt(k, t) });
+  // Review: every photo steps back.
+  return mix(pose, drift(P.home, k, t), eio(seg(t, AT.tab + 0.2 + 0.02 * k, AT.tab + 1.2 + 0.02 * k)));
+}
+// How many photos are going to the Trash: the ones marked, and those of an
+// accepted group that its card does not show.
+const goingAt = t => CAST.filter((_, k) => trashAt(k, t) > 0.5).length + GROUPS.reduce((sum, group, g) => sum + (decidedAt(g, t) > 0.5 ? group.more : 0), 0);
+const TOTAL = CAST.filter(photo => photo.trash).length + GROUPS.reduce((sum, group) => sum + group.more, 0);
+
+// ---- what is drawn on the window, behind the photos ------------------------------
+const openAt = t => eoc(seg(t, 0.9, 1.5)) * (1 - eio(seg(t, AT.tab + 0.1, AT.tab + 0.6)));
+function under(t) {
+  const open = openAt(t);
+  if (open > 0.004) {
+    controls(t, open);
+    c.save(); c.globalAlpha *= 1 - eio(seg(t, AT.tab + 0.1, AT.tab + 0.5));
+    GROUPS.forEach((group, g) => {
+      const box = group.box, into = eoc(seg(t, 0.8 + 0.08 * g, 1.3 + 0.08 * g));
+      if (into <= 0.01) return;
+      c.save(); c.translate(box.x + box.w / 2, box.y + CARD_H / 2); c.scale(into, into); c.translate(-box.w / 2, -CARD_H / 2);
+      c.fillStyle = wire(0.05); c.strokeStyle = wire(0.13); c.lineWidth = 2; rr(0, 0, box.w, CARD_H, 14); c.fill(); c.stroke();
+      // The header: how many more photos the group has, and its own button:
+      // "Accept suggestion" while nobody has decided it, "Undo" once it is.
+      const decided = decidedAt(g, t);
+      if (group.more) { font(14, 400, 0); text(`+${group.more} more`, PAD + 2, 22, MUTED); }
+      if (decided < 0.99) {
+        font(14, 600, 0);
+        const w = c.measureText('Accept suggestion').width + 40, left = box.w - PAD + 2 - w;
+        c.save(); c.globalAlpha *= 1 - decided;
+        c.fillStyle = ACCENT; rr(left, 5, w, 25, 8); c.fill();
+        symbol('check', left + 15, 17.5, 0.62, ON_ACCENT); text('Accept suggestion', left + 27, 22.5, ON_ACCENT);
+        c.restore();
+      }
+      font(15, 500, 0); slideRight('Undo', box.w - PAD - 2, 23, 15, ACCENT, g === HAND ? seg(t, AT.pick + 0.2, AT.pick + 0.55) : seg(t, AT.press + 0.35 + 0.1 * g, AT.press + 0.7 + 0.1 * g));
+      // Each photo's name under it.
+      CAST.filter(photo => photo.g === g).forEach(photo => { font(14, 400, 0); text(photo.file, PAD + 2 + photo.i * (PW + GAP), HEAD + PH + 21, MUTED); });
+      c.restore();
+    });
+    c.restore();
+  }
+  const first = CAST.filter(photo => photo.trash);
+  reviewList(t, AT.tab, AT.end, 'trash', 'Going to the Trash', TOTAL, [[first[0].file, ''], [first[1].file, ''], [`and ${TOTAL - 2} more`, '']].map(([name, count]) => [name, count, wire(0.6)]));
+}
+// The bar along the top, and under it what to do or what is going to the Trash
+// so far, the photo size and the button that accepts every suggestion.
+function controls(t, open) {
+  c.save(); c.beginPath(); c.rect(WX, TOP, WW * open, BAR + SUMMARY); c.clip();
+  c.fillStyle = wire(0.14); c.fillRect(WX, TOP + BAR - 2, WW, 2);
+  // What is marked so far.
+  const going = goingAt(t), said = eio(seg(t, AT.pick + 0.15, AT.pick + 0.45));
+  font(17, 400, 0);
+  c.save(); c.globalAlpha *= 1 - said; text("Nothing marked yet: accept a group's suggestion, or click a photo to mark it for the Trash.", GRID_X, ACCEPT.y + 6, MUTED); c.restore();
+  c.save(); c.globalAlpha *= said; text(`${going} ${going === 1 ? 'photo' : 'photos'} in these groups going to the Trash · frees ${(going * MB).toFixed(1)} MB`, GRID_X, ACCEPT.y + 6, MUTED); c.restore();
+  const slider = ACCEPT.x - ACCEPT.w / 2 - 130;
+  c.fillStyle = wire(0.16); rr(slider, ACCEPT.y - 2, 104, 4, 2); c.fill();
+  c.fillStyle = wire(0.7); c.beginPath(); c.arc(slider + 46, ACCEPT.y, 7, 0, Math.PI * 2); c.fill();
+  const press = pressAt(t, AT.press), done = seg(t, AT.press + 0.3, AT.press + 0.6);
+  c.save(); c.translate(ACCEPT.x, ACCEPT.y); c.scale(1 - 0.06 * press, 1 - 0.06 * press);
+  c.fillStyle = press > 0.05 ? `rgba(232,135,58,${press})` : wire(0.1 - 0.06 * done); c.strokeStyle = wire(0.3 - 0.15 * done); c.lineWidth = 2;
+  rr(-ACCEPT.w / 2, -17, ACCEPT.w, 34, 10); c.fill(); c.stroke();
+  font(17, 500, 0); text('Accept all suggestions', 0, 6, press > 0.4 ? ON_ACCENT : wire(0.9 - 0.5 * done), 'center');
+  c.restore();
+  c.restore();
+}
+
+// ---- what is drawn over the photos -----------------------------------------------
+// A Keep or Trash pill at a photo's top-right corner. There is none until the
+// group is decided: it grows in (`on`) once Keep or Trash is the choice.
+function pill(x, y, trash, on) {
+  if (on <= 0.01) return;
+  const color = trash ? RED : GREEN, w = trash ? 84 : 78;
+  c.save(); c.translate(x - w / 2, y + 14); c.scale(on, on);
+  c.fillStyle = color; rr(-w / 2, -14, w, 28, 14); c.fill();
+  if (trash) glyph('trash', -w / 2 + 19, 0, 0.62, ON_ACCENT); else symbol('check', -w / 2 + 19, 0, 0.75, ON_ACCENT);
+  font(15, 600, 0); text(trash ? 'Trash' : 'Keep', -w / 2 + 32, 5.5, ON_ACCENT);
+  c.restore();
+}
+// The groups shown one at a time: from when to when, and which.
+const TOUR = [[AT.tour, AT.tour + 1.7, 0], [AT.tour2, AT.tour2 + 1.7, 1], [AT.tour3, AT.pick + 1.3, HAND]];
+function over(t) {
+  if (t < AT.tab + 0.25) {
+    CAST.forEach((P, k) => {
+      const going = trashAt(k, t), decided = decidedAt(P.g, t), grow = eoc(seg(t, 1.2 + 0.03 * k, 1.5 + 0.03 * k)), right = P.x + PW / 2 - 10, top = P.y - PH / 2 + 10;
+      // A photo going to the Trash is edged in red.
+      if (going > 0.01) { c.strokeStyle = RED; c.lineWidth = 4 * going; rr(P.x - PW / 2, P.y - PH / 2, PW, PH, PH * 0.11); c.stroke(); }
+      pill(right, top, P.trash, decided * (k === CAST.findIndex(photo => photo.g === HAND && photo.i === CLICKED) ? 1 - 0.14 * pressAt(t, AT.pick) : 1));
+      // PhotoSort's suggested keeper has a star: alone in the corner while
+      // nothing is marked, beside the pill after.
+      if (P.best && grow > 0.01) {
+        const aside = (P.trash ? 86 : 80) * decided;
+        c.fillStyle = 'rgba(27,26,25,0.75)'; c.beginPath(); c.arc(right - 14 - aside, top + 14, 14 * grow, 0, Math.PI * 2); c.fill();
+        star(right - 14 - aside, top + 14, 9 * grow, ACCENT);
+      }
+    });
+  }
+  TOUR.forEach(([from, to, g]) => {
+    const box = GROUPS[g].box;
+    trace(box.x - 7, box.y - 7, box.w + 14, CARD_H + 14, 19, eio(seg(t, from, from + 0.45)) * (1 - eio(seg(t, to, to + 0.4))), ACCENT, 3);
+  });
+}
+
+// ---- the pointer and the camera --------------------------------------------------
+const mid = g => ({ x: GROUPS[g].box.x + GROUPS[g].box.w / 2, y: GROUPS[g].box.y + CARD_H / 2 });
+const PICK = CAST.find(photo => photo.g === HAND && photo.i === CLICKED), PICK_AT = { x: PICK.x - 20, y: PICK.y + 22 };
+const STOPS = [
+  { t: 0.9, x: 1480, y: 870 },
+  ...TOUR.slice(0, 2).map(([at, , g]) => ({ t: at + 0.3, x: GROUPS[g].box.x + PAD + PW + 1, y: GROUPS[g].box.y + HEAD + PH + 14 })),
+  { t: AT.tour3 + 0.3, x: PICK_AT.x + 60, y: PICK_AT.y + 70 },
+  { t: AT.pick, ...PICK_AT, click: true },
+  { t: AT.pick + 1.3, x: PICK_AT.x + 50, y: PICK_AT.y + 90 },
+  { t: AT.press, x: ACCEPT.x + 40, y: ACCEPT.y + 6, click: true },
+  { t: AT.tab, ...TAB(5), y: TAB(5).y + 4, click: true },
+  { t: AT.tab + 2.8, x: CX + 78, y: APPLY_Y + 18 },
+  { t: AT.end + 0.6, x: 1500, y: 900 },
+];
+const LEANS = [
+  { t: AT.tour, until: AT.tour + 1.4, ...mid(0), amount: 1.1 },
+  { t: AT.tour2, until: AT.tour2 + 1.4, ...mid(1), amount: 1.1 },
+  { t: AT.tour3, until: AT.pick + 1.0, ...mid(HAND), amount: 1.3 },
+  { t: AT.press, x: ACCEPT.x - 200, y: ACCEPT.y + 120, amount: 0.5 },
+  { t: AT.tab, ...TAB(5), amount: 1 },
+];
+
+function draw(real) {
+  const t = clamp(real, 0, DURATION);
+  compose(t, {
+    poses: [...BACK.map((tile, i) => ({ ...tile, ...drift(tile.home, 13 + i, t) })), ...CAST.map((tile, k) => ({ ...tile, ...poseAt(k, t) }))],
+    lean: leanOf(LEANS, t), rack: rackOf(CARDS, t),
+    frame: () => stepFrame(t, 3, AT.tab, AT.end), under, over,
+    top: () => { stepCards(CARDS, t); drawPointer(STOPS, t, eoc(seg(t, 0.9, 1.3)) * (1 - eic(seg(t, AT.end, AT.end + 0.4)))); },
+  });
+}
+
+window.DURATION = DURATION;
+window.draw = draw;
+window.ready = (async () => {
+  await loadKit();
+  draw(0);
+  if (!location.search.includes('render')) {
+    const start = performance.now();
+    const tick = now => { draw(((now - start) / 1000) % (DURATION + 1)); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  }
+  return true;
+})();
+</script>
