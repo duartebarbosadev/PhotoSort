@@ -62,6 +62,21 @@ fn tile_height(photo: f32) -> f32 {
 }
 
 impl BoardRows {
+    /// Where the photo at `place` in `filtered` is laid out on the board.
+    fn tile_rect(&self, place: usize, sections: &[Section]) -> Option<egui::Rect> {
+        let row = self
+            .rows
+            .partition_point(|row| Self::start(row, sections) <= place)
+            .checked_sub(1)?;
+        let Row::Tiles(_, tiles) = &self.rows[row] else {
+            return None;
+        };
+        let &(left, width) = tiles.tiles.get(place.checked_sub(tiles.range.start)?)?;
+        Some(egui::Rect::from_min_size(
+            egui::pos2(left, self.tops[row]),
+            egui::vec2(width, self.heights[row]),
+        ))
+    }
     /// The first photo of a row, or of a header's folder.
     fn start(row: &Row, sections: &[Section]) -> usize {
         match row {
@@ -331,6 +346,43 @@ impl PhotoSortApp {
         });
         self.board.rows = Some(laid.clone());
         laid
+    }
+    /// Draws the photo at `position` in `filtered` on its way to `target`
+    /// (both in board coordinates), unless `viewport` is given and none of
+    /// it is in view.
+    fn board_tile(
+        &mut self,
+        ui: &mut egui::Ui,
+        origin: egui::Pos2,
+        viewport: Option<egui::Rect>,
+        position: usize,
+        target: egui::Rect,
+        dim: bool,
+    ) {
+        let Some(&media) = self.filtered.get(position) else {
+            return;
+        };
+        let rect = self
+            .board
+            .reflow
+            .place(Slot::Photo(self.media[media].id), target);
+        if viewport.is_some_and(|viewport| !rect.intersects(viewport)) {
+            return;
+        }
+        let rect = rect.translate(origin.to_vec2());
+        let settled = target.min + origin.to_vec2();
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .id_salt(("board", position))
+                .max_rect(rect),
+            |ui| {
+                // Photos wait, dimmed, for the grouping that will place them.
+                if dim {
+                    ui.multiply_opacity(0.45);
+                }
+                self.card_settling(ui, media, rect.width(), rect.height(), true, Some(settled))
+            },
+        );
     }
     /// A board just opened draws nothing for a moment while the shapes of
     /// the `screen` photos at its top are read, so they appear in shape
@@ -891,46 +943,19 @@ impl PhotoSortApp {
                     }
                     Row::Tiles(_, tiles) => {
                         for (position, &(left, w)) in tiles.range.clone().zip(&tiles.tiles) {
-                            let Some(&media) = self.filtered.get(position) else {
-                                continue;
-                            };
                             let target = egui::Rect::from_min_size(
                                 egui::pos2(left, *top),
                                 egui::vec2(w, *height),
                             );
-                            let rect = self
-                                .board
-                                .reflow
-                                .place(Slot::Photo(self.media[media].id), target)
-                                .translate(origin.to_vec2());
-                            let settled = target.min + origin.to_vec2();
-                            ui.scope_builder(
-                                egui::UiBuilder::new()
-                                    .id_salt(("board", position))
-                                    .max_rect(rect),
-                                |ui| {
-                                    // Photos wait, dimmed, for the grouping
-                                    // that will place them.
-                                    if dim {
-                                        ui.multiply_opacity(0.45);
-                                    }
-                                    self.card_settling(
-                                        ui,
-                                        media,
-                                        rect.width(),
-                                        rect.height(),
-                                        true,
-                                        Some(settled),
-                                    )
-                                },
-                            );
+                            self.board_tile(ui, origin, None, position, target, dim);
                         }
                     }
                 }
             }
-            // The rows just above and below the view are placed too, not
-            // drawn: a tile leaving or entering the view on its way keeps
-            // gliding rather than vanishing or appearing at its new place.
+            // A tile leaving the view on its way keeps gliding, drawn while
+            // any of it is still in view, rather than vanishing: the rows
+            // just outside the view are placed, and so is every tile drawn
+            // in the last frame that has not been yet, wherever it is going.
             let last = tops.partition_point(|top| *top <= viewport.max.y);
             for margin in [first.checked_sub(1), Some(last)].into_iter().flatten() {
                 match rows.get(margin) {
@@ -945,18 +970,30 @@ impl PhotoSortApp {
                     }
                     Some(Row::Tiles(_, tiles)) => {
                         for (position, &(left, w)) in tiles.range.clone().zip(&tiles.tiles) {
-                            if let Some(&media) = self.filtered.get(position) {
-                                self.board.reflow.place(
-                                    Slot::Photo(self.media[media].id),
-                                    egui::Rect::from_min_size(
-                                        egui::pos2(left, tops[margin]),
-                                        egui::vec2(w, heights[margin]),
-                                    ),
-                                );
-                            }
+                            let target = egui::Rect::from_min_size(
+                                egui::pos2(left, tops[margin]),
+                                egui::vec2(w, heights[margin]),
+                            );
+                            self.board_tile(ui, origin, Some(viewport), position, target, dim);
                         }
                     }
                     None => {}
+                }
+            }
+            for slot in self.board.reflow.unplaced() {
+                let Slot::Photo(id) = slot else {
+                    continue;
+                };
+                let Some(position) = self
+                    .index
+                    .get(&id)
+                    .and_then(|index| laid.places.get(*index))
+                    .map(|place| *place as usize)
+                else {
+                    continue;
+                };
+                if let Some(target) = laid.tile_rect(position, &self.board.sections) {
+                    self.board_tile(ui, origin, Some(viewport), position, target, dim);
                 }
             }
             if self.board.reflow.end() {

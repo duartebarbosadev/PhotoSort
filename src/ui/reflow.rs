@@ -88,6 +88,15 @@ impl<T: Copy + Eq + Hash, K: PartialEq + Clone> Reflow<T, K> {
         rect
     }
 
+    /// The tiles drawn in the last frame not placed yet in this one.
+    pub(super) fn unplaced(&self) -> Vec<T> {
+        self.was
+            .keys()
+            .filter(|tile| !self.now.contains_key(*tile))
+            .copied()
+            .collect()
+    }
+
     /// Ends the frame: `true` while a tile is still on its way, so the next
     /// frame should come soon.
     pub(super) fn end(&mut self) -> bool {

@@ -7,7 +7,7 @@
 //! it reads is cached on disk, so the thumbnail's own read finds it there.
 use super::{Event, Publisher};
 use crate::core::{
-    cache::Writes,
+    cache::Control,
     model::{Media, MediaId, MediaKind},
     pipeline::Pipeline,
 };
@@ -48,13 +48,13 @@ pub struct Shapes {
 }
 
 impl Shapes {
-    pub(super) fn new(publisher: Publisher, cache: PathBuf, writes: Arc<Writes>) -> Self {
+    pub(super) fn new(publisher: Publisher, cache: PathBuf, control: Control) -> Self {
         let shared = Arc::new(Shared::default());
         let thread = {
             let shared = shared.clone();
             thread::Builder::new()
                 .name("photosort-shapes".into())
-                .spawn(move || run(&shared, &publisher, cache, writes))
+                .spawn(move || run(&shared, &publisher, cache, &control))
                 .expect("shape thread starts")
         };
         Self {
@@ -93,9 +93,9 @@ impl Shapes {
     }
 }
 
-fn run(shared: &Shared, publisher: &Publisher, cache: PathBuf, writes: Arc<Writes>) {
+fn run(shared: &Shared, publisher: &Publisher, cache: PathBuf, control: &Control) {
     let mut pipeline = Pipeline::new(0, cache);
-    pipeline.share_writes(writes);
+    pipeline.share_writes(control.writes());
     pipeline.limit_threads(1);
     // Only the shape is wanted; the image worker names places.
     pipeline.skip_places();
@@ -128,6 +128,9 @@ fn run(shared: &Shared, publisher: &Publisher, cache: PathBuf, writes: Arc<Write
         if cancelled() {
             continue;
         }
+        // The disk cache limits as they are now: off writes nothing, and a
+        // trim keeps to the size the user chose.
+        pipeline.configure_cache(control.limits());
         let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             pipeline.metadata_cancellable(&media, &cancelled)
         }));

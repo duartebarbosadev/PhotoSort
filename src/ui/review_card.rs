@@ -271,6 +271,15 @@ struct CardInputs {
     titled: bool,
 }
 
+/// Something in a card grid that eases to a new place: a section's header,
+/// or a card by its first photo, so a card never glides from the place of
+/// another that a new list put there.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum CardSlot {
+    Header(usize),
+    Card(MediaId),
+}
+
 /// What a card grid's rows were laid out from, but for its cards' shapes:
 /// the grid, its sections, headers, width, photo size, captions and gap.
 type GridKey = (&'static str, Vec<usize>, bool, (f32, f32, bool, f32));
@@ -292,9 +301,9 @@ pub(super) struct CardRows {
     spans: Vec<(f32, f32)>,
     /// The height of the content.
     height: f32,
-    /// Cards and headers easing to new places (`true` for a header) when
-    /// photos' shapes change the rows, by what the rows were laid out from.
-    reflow: super::reflow::Reflow<(bool, usize), GridKey>,
+    /// Cards and headers easing to new places when photos' shapes change
+    /// the rows, by what the rows were laid out from.
+    reflow: super::reflow::Reflow<CardSlot, GridKey>,
     /// How many times the rows were laid out.
     #[cfg(test)]
     layouts: usize,
@@ -598,7 +607,7 @@ impl PhotoSortApp {
                         let rect = grid
                             .reflow
                             .place(
-                                (true, *section),
+                                CardSlot::Header(*section),
                                 egui::Rect::from_min_size(
                                     egui::pos2(0.0, *row_top),
                                     egui::vec2(width, SECTION),
@@ -618,16 +627,15 @@ impl PhotoSortApp {
                             let Some(spec) = card(self, index) else {
                                 continue;
                             };
-                            let rect = grid
-                                .reflow
-                                .place(
-                                    (false, index),
-                                    egui::Rect::from_min_size(
-                                        egui::pos2(left, *row_top),
-                                        egui::vec2(card_width, *height),
-                                    ),
-                                )
-                                .translate(origin.to_vec2());
+                            let target = egui::Rect::from_min_size(
+                                egui::pos2(left, *row_top),
+                                egui::vec2(card_width, *height),
+                            );
+                            let rect = match spec.photos.first() {
+                                Some(photo) => grid.reflow.place(CardSlot::Card(photo.id), target),
+                                None => target,
+                            }
+                            .translate(origin.to_vec2());
                             // On its way to a new place the card's photos
                             // take the height it has so far.
                             let layout = CardLayout {

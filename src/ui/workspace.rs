@@ -911,6 +911,10 @@ impl PhotoSortApp {
         self.review_tidy = false;
         self.metadata.clear();
         self.shapes.clear();
+        // Laid out from shapes no longer known: the board opens afresh, and
+        // waits for the first screenful's shapes as on a first open.
+        self.board.rows = None;
+        self.board.shapes_wait = None;
         self.browse = Default::default();
         self.browse_groups.clear();
         self.navigator = Default::default();

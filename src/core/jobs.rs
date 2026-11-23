@@ -550,7 +550,7 @@ impl Runtime {
             previews::thread_count(),
             cache_control.writes(),
         );
-        let shapes = shapes::Shapes::new(publisher.clone(), cache.clone(), cache_control.writes());
+        let shapes = shapes::Shapes::new(publisher.clone(), cache.clone(), cache_control.clone());
         let image_thread = images::spawn(images::Wiring {
             publisher,
             previews: previews.throttle(),
