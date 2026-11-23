@@ -3202,3 +3202,28 @@ fn show_original_waits_for_a_plan_that_differs_from_disk() {
     assert!(app.organize_planned() && hold(&mut app));
     app.runtime.shutdown();
 }
+
+#[test]
+fn a_window_with_no_room_keeps_the_board_rows_as_they_are() {
+    let (_temp, mut app) = organize();
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    let board = |app: &mut PhotoSortApp, size: egui::Vec2| {
+        let _ = ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ui| app.organize_board(ui),
+        );
+        app.board.rows.clone().map(|rows| Arc::as_ptr(&rows))
+    };
+    let full = egui::vec2(1400.0, 900.0);
+    let laid = board(&mut app, full);
+    assert!(laid.is_some());
+    // Minimized, and back: the rows laid out before are the ones drawn.
+    for size in [egui::Vec2::ZERO, egui::vec2(1.0, 1.0), full] {
+        assert_eq!(board(&mut app, size), laid, "{size:?}");
+    }
+    app.runtime.shutdown();
+}

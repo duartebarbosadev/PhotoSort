@@ -24,6 +24,8 @@ mod diagnostics;
 mod files;
 mod images;
 pub mod previews;
+pub use shapes::Shape;
+mod shapes;
 mod similarity;
 mod subjects;
 
@@ -63,6 +65,8 @@ pub enum Event {
         metadata: Metadata,
         stats: Stats,
     },
+    /// Photos' shapes, read ahead of their thumbnails; see `shapes`.
+    Shapes(Vec<(MediaId, shapes::Shape)>),
     MetadataBatch {
         run: u64,
         items: Vec<(MediaId, Result<Metadata, String>)>,
@@ -477,6 +481,8 @@ pub struct Runtime {
     pub browsing: super::browsing::Worker,
     /// Builds the open folder's previews on disk in the background.
     pub previews: previews::Builder,
+    /// Reads photos' shapes ahead of their thumbnails.
+    shapes: shapes::Shapes,
     pub events: Receiver<Envelope>,
     io: SyncSender<Message<IoWork>>,
     images: SyncSender<Message<ImageWork>>,
@@ -544,6 +550,7 @@ impl Runtime {
             previews::thread_count(),
             cache_control.writes(),
         );
+        let shapes = shapes::Shapes::new(publisher.clone(), cache.clone(), cache_control.writes());
         let image_thread = images::spawn(images::Wiring {
             publisher,
             previews: previews.throttle(),
@@ -571,6 +578,7 @@ impl Runtime {
             raw_look,
             browsing,
             previews,
+            shapes,
             events,
             io,
             images,
@@ -598,12 +606,18 @@ impl Runtime {
         self.previews.clear();
         self.playback.select(None);
         self.browsing.reset(None);
+        self.shapes.clear();
         self.cancel_analysis();
         self.cancel_metadata();
         let epoch = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         tracing::debug!(epoch, "folder generation changed");
         self.inspection.lock().unwrap().update(epoch, Vec::new());
         epoch
+    }
+    /// Reads these photos' shapes ahead of their thumbnails, in this
+    /// order, instead of any still waiting; see `shapes`.
+    pub fn read_shapes(&self, media: Vec<Media>) {
+        self.shapes.read(self.epoch(), media);
     }
     pub fn index_metadata(&self, media: Arc<Vec<Media>>) -> Result<u64, String> {
         self.metadata_generation
@@ -637,6 +651,8 @@ impl Runtime {
         self.browsing.shutdown();
         self.previews.shutdown();
         self.stop.store(true, Ordering::Release);
+        // After `stop`: a batch waiting for room in the event queue gives up.
+        self.shapes.shutdown();
         self.cancel_analysis();
         for thread in self.threads.drain(..) {
             let _ = thread.join();

@@ -387,6 +387,42 @@ impl PhotoSortApp {
         {
             self.board.folder_anchor = None;
         }
+        self.read_board_shapes();
+    }
+    /// Reads the shapes of the photos the board does not know the shape of
+    /// yet, ahead of their thumbnails and in board order, the folders shown
+    /// first. The metadata groupings read every photo's metadata anyway.
+    fn read_board_shapes(&mut self) {
+        if self.metadata_organize_mode() {
+            return;
+        }
+        let focus = &self.board.focus;
+        let (shown, hidden): (Vec<&Section>, Vec<&Section>) = self
+            .board
+            .sections
+            .iter()
+            .partition(|section| shows(focus, section.path.as_deref()));
+        let unknown: Vec<Media> = shown
+            .into_iter()
+            .chain(hidden)
+            .flat_map(|section| section.range.clone())
+            .filter_map(|position| self.media.get(*self.filtered.get(position)?))
+            .filter(|m| {
+                m.kind != MediaKind::Video
+                    && !self.metadata.contains_key(&m.id)
+                    && !self.shapes.contains_key(&m.id)
+            })
+            .cloned()
+            .collect();
+        if unknown.is_empty() {
+            return;
+        }
+        // Opened just now: the board waits a moment for the first
+        // screenful's shapes rather than lay them out as 4:3.
+        if self.board.rows.is_none() && self.board.shapes_wait.is_none() {
+            self.board.shapes_wait = Some(std::time::Instant::now());
+        }
+        self.runtime.read_shapes(unknown);
     }
     /// The board section holding the active photo.
     pub(super) fn active_section(&self) -> Option<&Section> {

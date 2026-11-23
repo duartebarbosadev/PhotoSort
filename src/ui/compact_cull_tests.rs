@@ -480,10 +480,25 @@ fn navigator_opens_beside_review_and_follows_between_views_at_both_sizes() {
 
 #[test]
 fn loading_grid_animates_then_comes_to_rest() {
+    // Cull's grid, then Organize's board with no photo's metadata known:
+    // shapes read ahead and thumbnails arriving must come to rest too.
+    for organize in [false, true] {
+        loading_grid_comes_to_rest(organize);
+    }
+}
+
+fn loading_grid_comes_to_rest(organize: bool) {
     const IDLE: Duration = Duration::from_millis(900);
     let (_temp, mut app) = fixture();
     app.navigator.enabled = false;
     app.active = Some(app.media[0].id);
+    if organize {
+        app.step = Step::Organize;
+        app.output = app.root.as_ref().unwrap().display().to_string();
+        app.metadata.clear();
+        app.filter_dirty = true;
+        app.refilter();
+    }
     let ctx = egui::Context::default();
     theme_install(&ctx);
     // Real motion: shimmer, fade-in, hover and ring must all come to rest.
