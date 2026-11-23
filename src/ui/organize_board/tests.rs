@@ -3265,8 +3265,16 @@ fn a_reshaped_photo_glides_its_row_into_place_and_no_tile_vanishes() {
         }
         tiles
     };
-    for _ in 0..3 {
+    // Every thumbnail and the large preview in first: each brings the
+    // photo's real (square) size, which would turn the photo back mid-glide.
+    let deadline = std::time::Instant::now() + crate::test_support::worker_patience();
+    for frame in 0.. {
         tiles(&mut app);
+        if frame >= 3 && app.requested.is_empty() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "{:?}", app.requested);
+        std::thread::sleep(std::time::Duration::from_millis(2));
     }
     let before = tiles(&mut app);
     // The first photo turns out three times as wide as it is tall: its row
