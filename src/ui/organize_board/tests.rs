@@ -3202,3 +3202,124 @@ fn show_original_waits_for_a_plan_that_differs_from_disk() {
     assert!(app.organize_planned() && hold(&mut app));
     app.runtime.shutdown();
 }
+
+#[test]
+fn a_window_with_no_room_keeps_the_board_rows_as_they_are() {
+    let (_temp, mut app) = organize();
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    let board = |app: &mut PhotoSortApp, size: egui::Vec2| {
+        let _ = ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ui| app.organize_board(ui),
+        );
+        app.board.rows.clone().map(|rows| Arc::as_ptr(&rows))
+    };
+    let full = egui::vec2(1400.0, 900.0);
+    let laid = board(&mut app, full);
+    assert!(laid.is_some());
+    // Minimized, and back: the rows laid out before are the ones drawn.
+    for size in [egui::Vec2::ZERO, egui::vec2(1.0, 1.0), full] {
+        assert_eq!(board(&mut app, size), laid, "{size:?}");
+    }
+    app.runtime.shutdown();
+}
+
+#[test]
+fn a_reshaped_photo_glides_its_row_into_place_and_no_tile_vanishes() {
+    let (_temp, mut app) = organize();
+    let ctx = egui::Context::default();
+    theme_install(&ctx);
+    set_reduce_motion(&ctx, false);
+    ctx.enable_accesskit();
+    let mut time = 0.0;
+    // Each photo tile on the board, by name, as drawn this frame.
+    let mut tiles = |app: &mut PhotoSortApp| {
+        time += 1.0 / 60.0;
+        let out = ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 520.0),
+                )),
+                time: Some(time),
+                ..Default::default()
+            },
+            |ui| app.update_workspace(ui, false),
+        );
+        let mut tiles: HashMap<String, egui::Rect> = HashMap::new();
+        for (_, node) in out.platform_output.accesskit_update.unwrap().nodes {
+            if let (Some(name), Some(bounds)) = (node.label(), node.bounds())
+                && name.starts_with("photo-")
+                && bounds.y1 - bounds.y0 > 40.0
+            {
+                let rect = egui::Rect::from_min_max(
+                    egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
+                    egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
+                );
+                tiles.insert(name.to_owned(), rect);
+            }
+        }
+        tiles
+    };
+    // Every thumbnail and the large preview in first: each brings the
+    // photo's real (square) size, which would turn the photo back mid-glide.
+    let deadline = std::time::Instant::now() + crate::test_support::worker_patience();
+    for frame in 0.. {
+        tiles(&mut app);
+        if frame >= 3 && app.requested.is_empty() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "{:?}", app.requested);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let before = tiles(&mut app);
+    // The first photo turns out three times as wide as it is tall: its row
+    // breaks and pushes the rows under it down, some out of view.
+    let id = app
+        .media
+        .iter()
+        .find(|m| m.name() == "photo-0.png")
+        .unwrap()
+        .id;
+    let metadata = Metadata {
+        width: 3000,
+        height: 1000,
+        ..app.metadata[&id].clone()
+    };
+    let _ = app.handle_event(
+        &ctx,
+        Event::Asset {
+            id,
+            preview: false,
+            pixels: Arc::new(egui::ColorImage::filled([3, 1], Color32::BLACK)),
+            decoder_warning: None,
+            metadata,
+            stats: Default::default(),
+        },
+    );
+    let first = tiles(&mut app);
+    for name in before.keys() {
+        assert!(first.contains_key(name), "{name} vanished: {first:?}");
+    }
+    // It starts on its way from where it was, then comes to rest.
+    let start = first["photo-0.png"];
+    assert!(start.width() > before["photo-0.png"].width() + 1.0);
+    let mut last = start;
+    for frame in 0.. {
+        assert!(frame < 120, "never came to rest");
+        let now = tiles(&mut app)["photo-0.png"];
+        if now == last {
+            break;
+        }
+        last = now;
+    }
+    assert!(last.width() > start.width() + 1.0, "{start:?} to {last:?}");
+    // At rest where the layout puts it: reduced motion draws every tile there.
+    set_reduce_motion(&ctx, true);
+    assert_eq!(tiles(&mut app)["photo-0.png"], last);
+    app.runtime.shutdown();
+}

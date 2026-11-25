@@ -10,7 +10,7 @@ use std::ops::Range;
 
 /// The widest and the narrowest a tile's photo gets, over its height.
 /// Beyond them, a panorama or a very tall crop is fitted inside its slot.
-const ASPECTS: std::ops::RangeInclusive<f32> = 0.5..=2.5;
+pub(super) const ASPECTS: std::ops::RangeInclusive<f32> = 0.5..=2.5;
 /// The most a full row stretches its photos past the target height to fill
 /// the width.
 const STRETCH: f32 = 1.35;
@@ -61,7 +61,31 @@ pub(super) fn aspect(width: u32, height: u32, orientation: u8, turns: u8) -> f32
     } else {
         (width, height)
     };
-    (w as f32 / h as f32).clamp(*ASPECTS.start(), *ASPECTS.end())
+    common((w as f32 / h as f32).clamp(*ASPECTS.start(), *ASPECTS.end()))
+}
+
+/// The shapes cameras shoot in, landscape and portrait.
+const COMMON: [f32; 9] = [
+    1.0,
+    5.0 / 4.0,
+    4.0 / 5.0,
+    4.0 / 3.0,
+    3.0 / 4.0,
+    3.0 / 2.0,
+    2.0 / 3.0,
+    16.0 / 9.0,
+    9.0 / 16.0,
+];
+
+/// `aspect` as the common shape it is within a hundredth of. A RAW's header
+/// gives the size it is shot at and its decode a few pixels more (6000 by
+/// 4000, then 6024 by 4024): both are 3:2, so a tile laid out from the
+/// header keeps its place when the thumbnail comes.
+fn common(aspect: f32) -> f32 {
+    COMMON
+        .into_iter()
+        .find(|shape| (aspect - shape).abs() <= shape * 0.01)
+        .unwrap_or(aspect)
 }
 
 /// The photo height at which `tiles` side by side, `gap` apart, fill
@@ -258,6 +282,8 @@ mod tests {
         assert_eq!(aspect(6000, 4000, 6, 3), 1.5);
         assert_eq!(aspect(6000, 4000, 1, 2), 1.5);
         assert_eq!(aspect(0, 4000, 1, 0), 4.0 / 3.0);
+        // A RAW's header and its decode a few pixels larger agree.
+        assert_eq!(aspect(6024, 4024, 8, 0), aspect(6000, 4000, 8, 0));
         // A panorama and a sliver are fitted inside a bounded slot.
         assert_eq!(aspect(12000, 2000, 1, 0), 2.5);
         assert_eq!(aspect(500, 4000, 1, 0), 0.5);

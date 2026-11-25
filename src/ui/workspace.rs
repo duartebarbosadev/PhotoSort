@@ -44,6 +44,8 @@ mod pick_review;
 mod plan_review;
 #[path = "pointer.rs"]
 mod pointer;
+#[path = "reflow.rs"]
+mod reflow;
 #[path = "review.rs"]
 mod review;
 #[path = "review_card.rs"]
@@ -230,6 +232,9 @@ pub struct PhotoSortApp {
     /// guided grids laid out from the old shape lay out again; a new photo
     /// already changes the map's size.
     metadata_shapes: u64,
+    /// Photos' sizes and orientations read ahead of their thumbnails, for
+    /// photos whose metadata is not known yet: grids lay them out in shape.
+    shapes: HashMap<MediaId, crate::core::jobs::Shape>,
     /// The folder Cull's navigator highlights and scrolls the photos to.
     spy: navigator::Spy,
     /// Swipe compare, while it is open.
@@ -610,6 +615,7 @@ impl PhotoSortApp {
             group_best_stale: HashSet::new(),
             metadata_revision: 0,
             metadata_shapes: 0,
+            shapes: HashMap::new(),
             spy: Default::default(),
             swipe: None,
             automatic_groups: Arc::default(),
@@ -904,6 +910,11 @@ impl PhotoSortApp {
         self.review_targets = false;
         self.review_tidy = false;
         self.metadata.clear();
+        self.shapes.clear();
+        // Laid out from shapes no longer known: the board opens afresh, and
+        // waits for the first screenful's shapes as on a first open.
+        self.board.rows = None;
+        self.board.shapes_wait = None;
         self.browse = Default::default();
         self.browse_groups.clear();
         self.navigator = Default::default();

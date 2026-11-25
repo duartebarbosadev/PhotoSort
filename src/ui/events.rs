@@ -52,6 +52,7 @@ impl PhotoSortApp {
                 stats,
             } => self.on_metadata_batch(run, items, done, total, stats),
             Event::Batch(batch) => self.on_batch(batch),
+            Event::Shapes(shapes) => self.on_shapes(shapes),
             Event::Opened(catalog, session, views) => self.on_opened(catalog, session, views),
             Event::FolderUnavailable { folder, problem } => {
                 self.on_folder_unavailable(&folder, problem)
@@ -604,8 +605,25 @@ impl PhotoSortApp {
     /// place differs advances `metadata_revision`, so folders named from
     /// the old ones are named again; a new photo already changes the
     /// map's size.
+    /// Shapes read ahead of thumbnails: the grids lay those photos out
+    /// again in them. A photo whose metadata came first keeps that.
+    fn on_shapes(&mut self, shapes: Vec<(MediaId, crate::core::jobs::Shape)>) {
+        let mut any = false;
+        for (id, shape) in shapes {
+            if self.metadata.contains_key(&id) || !self.index.contains_key(&id) {
+                continue;
+            }
+            if self.shapes.insert(id, shape) != Some(shape) {
+                self.board.reshaped.note(id);
+                any = true;
+            }
+        }
+        // The guided grids key their cached rows on this.
+        self.metadata_shapes += u64::from(any);
+    }
     fn replace_metadata(&mut self, id: MediaId, metadata: Metadata) {
         let known = self.metadata.insert(id, metadata);
+        self.shapes.remove(&id);
         let now = &self.metadata[&id];
         if known
             .as_ref()

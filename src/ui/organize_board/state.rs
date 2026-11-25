@@ -1,6 +1,6 @@
 //! The board's state and the small vocabulary every part of it shares:
 //! sections, folder rows, the folder actions and the path helpers.
-use super::grid::BoardRows;
+use super::grid::{BoardRows, BoardRowsKey};
 use super::*;
 
 /// What the board was arranged from; a change rearranges it.
@@ -140,7 +140,28 @@ pub(in crate::ui::workspace) struct Reshaped {
     pub(super) all: bool,
 }
 
+/// Something on the board that eases to a new place.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(in crate::ui::workspace) enum Slot {
+    Photo(MediaId),
+    Header(usize),
+}
+
 impl Reshaped {
+    /// Nothing is waiting.
+    pub(super) fn is_empty(&self) -> bool {
+        !self.all && self.ids.is_empty()
+    }
+    /// Adds what `other` noted.
+    pub(super) fn merge(&mut self, other: Self) {
+        if other.all {
+            self.everything();
+        } else {
+            for id in other.ids {
+                self.note(id);
+            }
+        }
+    }
     pub(in crate::ui::workspace) fn note(&mut self, id: MediaId) {
         if self.all {
             return;
@@ -295,6 +316,17 @@ pub(in crate::ui::workspace) struct Board {
     pub(in crate::ui::workspace) rows: Option<Arc<BoardRows>>,
     /// Photos whose rows may need laying out again.
     pub(in crate::ui::workspace) reshaped: Reshaped,
+    /// When photos' new shapes last moved the rows (egui time): more
+    /// arriving soon after wait a moment, so the board settles in a few
+    /// moves instead of one per photo.
+    pub(in crate::ui::workspace) reshaped_at: Option<f64>,
+    /// A photo's shape changed the rows: set when they are laid out again.
+    pub(in crate::ui::workspace) reflowed: bool,
+    /// When the board, opened before any of its photos' shapes were known,
+    /// started waiting for the first screenful of them; see `SHAPES_WAIT`.
+    pub(in crate::ui::workspace) shapes_wait: Option<std::time::Instant>,
+    /// The tiles and headers easing to their new places.
+    pub(in crate::ui::workspace) reflow: reflow::Reflow<Slot, BoardRowsKey>,
     /// Background work the board has yet to catch up with.
     pub(in crate::ui::workspace) refresh: Refresh,
     /// The folders the grouping proposes, while no folder is edited by hand.

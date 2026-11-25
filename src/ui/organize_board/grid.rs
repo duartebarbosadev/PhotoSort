@@ -36,6 +36,16 @@ pub(in crate::ui::workspace) struct BoardRows {
     places: Vec<u32>,
 }
 
+/// How long a board just opened waits for its first screenful's shapes
+/// before it lays them out as 4:3 and lets them glide when they come.
+const SHAPES_WAIT: std::time::Duration = std::time::Duration::from_millis(600);
+/// The most photos at the top of a board just opened whose shapes it waits
+/// for: a screen of small tiles.
+const SHAPES_FIRST: usize = 64;
+
+/// How long after the rows last moved new shapes wait to move them again.
+const RESHAPE_EVERY: f64 = 0.15;
+
 /// A photo's tile: its photo at the row's height and the inset around it.
 fn tile(aspect: f32) -> photo_rows::Tile {
     photo_rows::Tile {
@@ -52,6 +62,21 @@ fn tile_height(photo: f32) -> f32 {
 }
 
 impl BoardRows {
+    /// Where the photo at `place` in `filtered` is laid out on the board.
+    fn tile_rect(&self, place: usize, sections: &[Section]) -> Option<egui::Rect> {
+        let row = self
+            .rows
+            .partition_point(|row| Self::start(row, sections) <= place)
+            .checked_sub(1)?;
+        let Row::Tiles(_, tiles) = &self.rows[row] else {
+            return None;
+        };
+        let &(left, width) = tiles.tiles.get(place.checked_sub(tiles.range.start)?)?;
+        Some(egui::Rect::from_min_size(
+            egui::pos2(left, self.tops[row]),
+            egui::vec2(width, self.heights[row]),
+        ))
+    }
     /// The first photo of a row, or of a header's folder.
     fn start(row: &Row, sections: &[Section]) -> usize {
         match row {
@@ -266,6 +291,10 @@ impl PhotoSortApp {
                 return self.board.rows.clone().expect("rows were just checked");
             }
         }
+        // Laid out again in full with nothing else changed: a photo's
+        // shape did (every photo turned at once, or one too many to patch).
+        self.board.reflowed |= self.board.rows.as_ref().is_some_and(|rows| rows.key == key)
+            && !self.board.reshaped.is_empty();
         self.board.reshaped.clear();
         let mut rows = Vec::new();
         let mut tops = Vec::new();
@@ -318,6 +347,80 @@ impl PhotoSortApp {
         self.board.rows = Some(laid.clone());
         laid
     }
+    /// Draws the photo at `position` in `filtered` on its way to `target`
+    /// (both in board coordinates), unless `viewport` is given and none of
+    /// it is in view.
+    fn board_tile(
+        &mut self,
+        ui: &mut egui::Ui,
+        origin: egui::Pos2,
+        viewport: Option<egui::Rect>,
+        position: usize,
+        target: egui::Rect,
+        dim: bool,
+    ) {
+        let Some(&media) = self.filtered.get(position) else {
+            return;
+        };
+        let rect = self
+            .board
+            .reflow
+            .place(Slot::Photo(self.media[media].id), target);
+        if viewport.is_some_and(|viewport| !rect.intersects(viewport)) {
+            return;
+        }
+        let rect = rect.translate(origin.to_vec2());
+        let settled = target.min + origin.to_vec2();
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .id_salt(("board", position))
+                .max_rect(rect),
+            |ui| {
+                // Photos wait, dimmed, for the grouping that will place them.
+                if dim {
+                    ui.multiply_opacity(0.45);
+                }
+                self.card_settling(ui, media, rect.width(), rect.height(), true, Some(settled))
+            },
+        );
+    }
+    /// A board just opened draws nothing for a moment while the shapes of
+    /// the `screen` photos at its top are read, so they appear in shape
+    /// instead of as 4:3 tiles that reshape at once. Reading them takes a
+    /// few milliseconds each; a slow disk gives up after `SHAPES_WAIT`.
+    /// Their thumbnails are asked for meanwhile, so the wait costs them
+    /// nothing; one that comes first brings its shape too.
+    fn board_waits_for_shapes(&mut self, screen: usize) -> bool {
+        let Some(since) = self.board.shapes_wait else {
+            return false;
+        };
+        let focus = &self.board.focus;
+        let unknown: Vec<MediaId> = self
+            .board
+            .sections
+            .iter()
+            .filter(|section| shows(focus, section.path.as_deref()))
+            .flat_map(|section| section.range.clone())
+            .filter_map(|position| self.media.get(*self.filtered.get(position)?))
+            .filter(|m| m.kind != MediaKind::Video)
+            .take(screen)
+            .map(|m| m.id)
+            .filter(|id| {
+                !self.metadata.contains_key(id)
+                    && !self.shapes.contains_key(id)
+                    && !self.textures.contains_key(&(*id, false))
+            })
+            .collect();
+        let waiting = since.elapsed() < SHAPES_WAIT && !unknown.is_empty();
+        if waiting {
+            for id in unknown {
+                self.texture(id, false);
+            }
+        } else {
+            self.board.shapes_wait = None;
+        }
+        waiting
+    }
     /// Checks the photos noted as possibly reshaped against the shapes the
     /// rows were laid out with, and lays out again the rows around those
     /// that differ. Most do not: a thumbnail usually brings the size the
@@ -342,6 +445,7 @@ impl PhotoSortApp {
         if changed.is_empty() {
             return true;
         }
+        self.board.reflowed = true;
         changed.sort_by_key(|(place, _)| *place);
         changed.dedup_by_key(|(place, _)| *place);
         // Shared only while a frame draws from them; then lay out in full.
@@ -434,8 +538,37 @@ impl PhotoSortApp {
             ui.add_space(S2);
         }
         self.board_summary(ui);
+        // A minimized or collapsed window has no room for a tile: the rows
+        // stay as they are for when it comes back, rather than be laid out
+        // one photo per row and then again.
+        if ui.available_width() < MIN_TILE || ui.available_height() <= 0.0 {
+            return;
+        }
+        // As many photos as the view can show: rows of the narrowest tiles.
+        let screen = {
+            let size = self.photo_size();
+            let gap = ui.spacing().item_spacing.x;
+            let narrowest = (size * photo_rows::ASPECTS.start() + 2.0 * TILE_INSET).max(MIN_TILE);
+            let across = ((ui.available_width() + gap) / (narrowest + gap)).floor();
+            let down = (ui.available_height() / tile_height(size)).floor() + 1.0;
+            ((across.max(1.0) * down) as usize).min(SHAPES_FIRST)
+        };
+        if self.board_waits_for_shapes(screen) {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(16));
+            return;
+        }
         let width = ui.available_width();
         let spacing = ui.spacing().item_spacing.y;
+        // Shapes that arrive soon after the rows last moved wait a moment
+        // and move them together, so a loading board settles in a few
+        // smooth moves rather than one per thumbnail.
+        let now = ui.input(|i| i.time);
+        let wait = self
+            .board
+            .reshaped_at
+            .map_or(0.0, |at| RESHAPE_EVERY - (now - at));
+        let held = (wait > 0.0).then(|| std::mem::take(&mut self.board.reshaped));
         let laid = self.board_rows(BoardRowsKey {
             arranged: self.board.arranged,
             focus: self.board.focus.clone(),
@@ -444,6 +577,14 @@ impl PhotoSortApp {
             gap: ui.spacing().item_spacing.x,
             spacing,
         });
+        if let Some(held) = held.filter(|held| !held.is_empty()) {
+            self.board.reshaped.merge(held);
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(wait));
+        }
+        if std::mem::take(&mut self.board.reflowed) {
+            self.board.reshaped_at = Some(now);
+        }
         let focus = &laid.key.focus;
         let (rows, tops, heights, bottoms) = (&laid.rows, &laid.tops, &laid.heights, &laid.bottoms);
         let total = laid.total;
@@ -533,6 +674,8 @@ impl PhotoSortApp {
             Some(tops[row].min(end))
         });
         let mut glide = None;
+        // The view scrolls to hold the photo at its top still.
+        let mut holding = false;
         if let Some(target) = glide_to {
             self.library_reveal = false;
             self.board.to_top = false;
@@ -570,10 +713,16 @@ impl PhotoSortApp {
                     scroll.vertical_scroll_offset((top + height - ui.available_height()).max(0.0));
             } else if let Some(offset) = anchor {
                 scroll = scroll.vertical_scroll_offset(offset);
+                holding = true;
             }
         } else if let Some(offset) = anchor {
             scroll = scroll.vertical_scroll_offset(offset);
+            holding = true;
         }
+        let was_offset = saved_offset().unwrap_or(0.0);
+        let still = ui.style().animation_time == 0.0;
+        let dt = ui.input(|i| i.stable_dt);
+        let frame = ui.ctx().cumulative_frame_nr();
         let faces_mode = self.board.people.signature.is_some();
         let editable = self.board_editable();
         let root = self.board_root_name();
@@ -590,6 +739,13 @@ impl PhotoSortApp {
         let output = scroll.show_viewport(ui, |ui, viewport| {
             let origin = ui.max_rect().min;
             ui.set_min_size(egui::vec2(width, total));
+            // Tiles ease to the places a photo's new shape gave them.
+            let held = if holding {
+                viewport.min.y - was_offset
+            } else {
+                0.0
+            };
+            self.board.reflow.begin(&laid.key, frame, held, dt, still);
             // Registered before the tiles, so a press on a tile still picks
             // or drags that photo; only empty space starts a rectangle.
             let background = ui.interact(
@@ -683,11 +839,15 @@ impl PhotoSortApp {
                                 .map(|path| self.folder_faces(&path, ui.ctx().pixels_per_point()))
                                 .unwrap_or_default()
                         });
-                        let section = &self.board.sections[*index];
-                        let rect = egui::Rect::from_min_size(
-                            origin + egui::vec2(0.0, *top),
-                            egui::vec2(width, HEADER),
+                        let rect = self.board.reflow.place(
+                            Slot::Header(*index),
+                            egui::Rect::from_min_size(
+                                egui::pos2(0.0, *top),
+                                egui::vec2(width, HEADER),
+                            ),
                         );
+                        let rect = rect.translate(origin.to_vec2());
+                        let section = &self.board.sections[*index];
                         let response = ui.interact(
                             rect,
                             egui::Id::new(("organize-section", &section.path)),
@@ -783,29 +943,61 @@ impl PhotoSortApp {
                     }
                     Row::Tiles(_, tiles) => {
                         for (position, &(left, w)) in tiles.range.clone().zip(&tiles.tiles) {
-                            let rect = egui::Rect::from_min_size(
-                                origin + egui::vec2(left, *top),
+                            let target = egui::Rect::from_min_size(
+                                egui::pos2(left, *top),
                                 egui::vec2(w, *height),
                             );
-                            let Some(&media) = self.filtered.get(position) else {
-                                continue;
-                            };
-                            ui.scope_builder(
-                                egui::UiBuilder::new()
-                                    .id_salt(("board", position))
-                                    .max_rect(rect),
-                                |ui| {
-                                    // Photos wait, dimmed, for the grouping
-                                    // that will place them.
-                                    if dim {
-                                        ui.multiply_opacity(0.45);
-                                    }
-                                    self.card(ui, media, w, *height, true)
-                                },
-                            );
+                            self.board_tile(ui, origin, None, position, target, dim);
                         }
                     }
                 }
+            }
+            // A tile leaving the view on its way keeps gliding, drawn while
+            // any of it is still in view, rather than vanishing: the rows
+            // just outside the view are placed, and so is every tile drawn
+            // in the last frame that has not been yet, wherever it is going.
+            let last = tops.partition_point(|top| *top <= viewport.max.y);
+            for margin in [first.checked_sub(1), Some(last)].into_iter().flatten() {
+                match rows.get(margin) {
+                    Some(Row::Header(index)) => {
+                        self.board.reflow.place(
+                            Slot::Header(*index),
+                            egui::Rect::from_min_size(
+                                egui::pos2(0.0, tops[margin]),
+                                egui::vec2(width, HEADER),
+                            ),
+                        );
+                    }
+                    Some(Row::Tiles(_, tiles)) => {
+                        for (position, &(left, w)) in tiles.range.clone().zip(&tiles.tiles) {
+                            let target = egui::Rect::from_min_size(
+                                egui::pos2(left, tops[margin]),
+                                egui::vec2(w, heights[margin]),
+                            );
+                            self.board_tile(ui, origin, Some(viewport), position, target, dim);
+                        }
+                    }
+                    None => {}
+                }
+            }
+            for slot in self.board.reflow.unplaced() {
+                let Slot::Photo(id) = slot else {
+                    continue;
+                };
+                let Some(position) = self
+                    .index
+                    .get(&id)
+                    .and_then(|index| laid.places.get(*index))
+                    .map(|place| *place as usize)
+                else {
+                    continue;
+                };
+                if let Some(target) = laid.tile_rect(position, &self.board.sections) {
+                    self.board_tile(ui, origin, Some(viewport), position, target, dim);
+                }
+            }
+            if self.board.reflow.end() {
+                ui.ctx().request_repaint();
             }
             if let Some((area, _)) = &marquee {
                 let painter = ui.painter();
@@ -950,12 +1142,19 @@ mod tests {
         };
         let first = app.board_rows(key(&app));
         let before = laid(&first);
-        // The same shape again keeps the rows; so does a size that arrives
-        // as the 4:3 the rows assumed, and a Trash mark.
+        // The same shape again keeps the rows; so does a shape read ahead
+        // as the 4:3 the rows assumed, its decode a few pixels larger (as a
+        // RAW's is), and a Trash mark.
         let id = app.media[0].id;
         let (width, height) = (app.metadata[&id].width, app.metadata[&id].height);
         decoded(&mut app, id, width, height);
-        decoded(&mut app, unread, 4000, 3000);
+        let _ = app.handle_event(
+            &egui::Context::default(),
+            Event::Shapes(vec![(unread, (4000, 3000, 1))]),
+        );
+        assert!(app.board.reshaped.ids.contains(&unread));
+        decoded(&mut app, unread, 4016, 3016);
+        assert!(app.shapes.is_empty());
         app.reject(id);
         assert!(!app.filter_dirty && !app.board.reshaped.ids.is_empty());
         let same = app.board_rows(key(&app));

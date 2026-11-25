@@ -335,6 +335,20 @@ impl PhotoSortApp {
         height: f32,
         captioned: bool,
     ) {
+        self.card_settling(ui, index, width, height, captioned, None);
+    }
+    /// [`Self::card`] for a tile on its way to a new place, which it
+    /// reaches at `settled`: its loading shimmer keeps the pace of the
+    /// wave there rather than racing or stalling as the tile moves.
+    pub(super) fn card_settling(
+        &mut self,
+        ui: &mut egui::Ui,
+        index: usize,
+        width: f32,
+        height: f32,
+        captioned: bool,
+        settled: Option<egui::Pos2>,
+    ) {
         use egui_phosphor::regular as icon;
         let media = self.media[index].clone();
         let id = media.id;
@@ -388,7 +402,8 @@ impl PhotoSortApp {
             );
             round_corners(&painter, drawn, image_radius, fill);
         } else if self.requested.contains(&(id, false)) {
-            shimmer(ui, image_rect);
+            let settled = settled.unwrap_or(rect.min);
+            shimmer_from(ui, image_rect, settled + (image_rect.min - rect.min));
         } else {
             painter.text(
                 image_rect.center(),
@@ -801,6 +816,12 @@ pub(super) fn reveal(ui: &egui::Ui, id: MediaId, loaded: bool) -> f32 {
 /// so a loading grid reads as one wave rather than many blinking cells.
 /// Reduce motion keeps the well and drops the sweep.
 pub(super) fn shimmer(ui: &egui::Ui, rect: egui::Rect) {
+    shimmer_from(ui, rect, rect.min);
+}
+
+/// [`shimmer`] in phase with the wave at `wave`: where the placeholder
+/// will rest when it is easing to a new place.
+fn shimmer_from(ui: &egui::Ui, rect: egui::Rect, wave: egui::Pos2) {
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     painter.rect_filled(rect, 6.0, WELL);
     if ui.ctx().global_style().animation_time == 0.0 {
@@ -810,7 +831,7 @@ pub(super) fn shimmer(ui: &egui::Ui, rect: egui::Rect) {
     let band = rect.width().max(rect.height()) * 0.7;
     let skew = rect.height() * 0.35;
     // Offset by position so the wave travels diagonally across the grid.
-    let phase = (ui.input(|i| i.time) / PERIOD - f64::from(rect.left() + rect.top() * 0.6) / 1800.0)
+    let phase = (ui.input(|i| i.time) / PERIOD - f64::from(wave.x + wave.y * 0.6) / 1800.0)
         .rem_euclid(1.0) as f32;
     let x = rect.left() - band - skew + phase * (rect.width() + band + skew);
     let mut mesh = egui::Mesh::default();

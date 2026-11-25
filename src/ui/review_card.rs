@@ -271,6 +271,19 @@ struct CardInputs {
     titled: bool,
 }
 
+/// Something in a card grid that eases to a new place: a section's header,
+/// or a card by its first photo, so a card never glides from the place of
+/// another that a new list put there.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum CardSlot {
+    Header(usize),
+    Card(MediaId),
+}
+
+/// What a card grid's rows were laid out from, but for its cards' shapes:
+/// the grid, its sections, headers, width, photo size, captions and gap.
+type GridKey = (&'static str, Vec<usize>, bool, (f32, f32, bool, f32));
+
 /// A card grid's rows, kept between frames: what each card asks of its row,
 /// and the rows laid out from that for one width and photo size.
 #[derive(Default)]
@@ -288,6 +301,9 @@ pub(super) struct CardRows {
     spans: Vec<(f32, f32)>,
     /// The height of the content.
     height: f32,
+    /// Cards and headers easing to new places when photos' shapes change
+    /// the rows, by what the rows were laid out from.
+    reflow: super::reflow::Reflow<CardSlot, GridKey>,
     /// How many times the rows were laid out.
     #[cfg(test)]
     layouts: usize,
@@ -553,9 +569,19 @@ impl PhotoSortApp {
             grid.spans.get(position).copied().unwrap_or((0.0, 0.0))
         });
         let mut clicked = None;
+        let reflow_key: GridKey = (
+            salt,
+            sections.to_vec(),
+            headers,
+            (width, target, captions, gap),
+        );
+        let still = ui.style().animation_time == 0.0;
+        let dt = ui.input(|i| i.stable_dt);
+        let frame = ui.ctx().cumulative_frame_nr();
         let output = scroll.show_viewport(ui, |ui, viewport| {
             ui.set_min_height(grid.height);
             let origin = ui.max_rect().min;
+            grid.reflow.begin(&reflow_key, frame, 0.0, dt, still);
             // Under every card and header, which take their own clicks.
             let background = egui::Rect::from_min_max(
                 origin + viewport.min.to_vec2(),
@@ -576,13 +602,18 @@ impl PhotoSortApp {
                 if *row_top > viewport.max.y {
                     break;
                 }
-                let y = origin.y + row_top;
                 match row {
                     Row::Header(section) => {
-                        let rect = egui::Rect::from_min_size(
-                            egui::pos2(origin.x, y),
-                            egui::vec2(width, SECTION),
-                        );
+                        let rect = grid
+                            .reflow
+                            .place(
+                                CardSlot::Header(*section),
+                                egui::Rect::from_min_size(
+                                    egui::pos2(0.0, *row_top),
+                                    egui::vec2(width, SECTION),
+                                ),
+                            )
+                            .translate(origin.to_vec2());
                         ui.scope_builder(
                             egui::UiBuilder::new()
                                 .id_salt((salt, "section", *section))
@@ -596,16 +627,28 @@ impl PhotoSortApp {
                             let Some(spec) = card(self, index) else {
                                 continue;
                             };
-                            let rect = egui::Rect::from_min_size(
-                                egui::pos2(origin.x + left, y),
+                            let target = egui::Rect::from_min_size(
+                                egui::pos2(left, *row_top),
                                 egui::vec2(card_width, *height),
                             );
+                            let rect = match spec.photos.first() {
+                                Some(photo) => grid.reflow.place(CardSlot::Card(photo.id), target),
+                                None => target,
+                            }
+                            .translate(origin.to_vec2());
+                            // On its way to a new place the card's photos
+                            // take the height it has so far.
+                            let layout = CardLayout {
+                                photo_height: (layout.photo_height + rect.height() - height)
+                                    .max(1.0),
+                                ..*layout
+                            };
                             shapes.clear();
                             aspects(self, index, &mut shapes);
                             let event = ui
                                 .scope_builder(
                                     egui::UiBuilder::new().id_salt((salt, index)).max_rect(rect),
-                                    |ui| self.review_card(ui, rect, &spec, *layout, &shapes),
+                                    |ui| self.review_card(ui, rect, &spec, layout, &shapes),
                                 )
                                 .inner;
                             if let Some(event) = event {
@@ -614,6 +657,9 @@ impl PhotoSortApp {
                         }
                     }
                 }
+            }
+            if grid.reflow.end() {
+                ui.ctx().request_repaint();
             }
         });
         self.library_offset = output.state.offset.y;
@@ -1369,11 +1415,17 @@ pub(super) fn size_text(bytes: u64) -> String {
 impl PhotoSortApp {
     /// A photo's width over its height as a grid shows it, from its
     /// metadata, with `turns` more quarter turns. Never from its texture,
-    /// so rows do not move as thumbnails arrive.
+    /// so rows do not move as thumbnails arrive. Before its metadata, from
+    /// the shape read ahead of its thumbnail; 4:3 until then.
     pub(super) fn photo_aspect(&self, id: MediaId, turns: u8) -> f32 {
-        self.metadata.get(&id).map_or(4.0 / 3.0, |m| {
-            super::photo_rows::aspect(m.width, m.height, m.orientation, turns)
-        })
+        let (width, height, orientation) = match self.metadata.get(&id) {
+            Some(m) => (m.width, m.height, m.orientation),
+            None => match self.shapes.get(&id) {
+                Some(&shape) => shape,
+                None => return 4.0 / 3.0,
+            },
+        };
+        super::photo_rows::aspect(width, height, orientation, turns)
     }
 
     /// Changes when a photo's metadata arrives or its size or orientation

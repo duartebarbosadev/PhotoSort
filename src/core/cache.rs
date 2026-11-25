@@ -163,6 +163,10 @@ impl Control {
     pub fn status(&self) -> Status {
         self.state.lock().unwrap().status.clone()
     }
+    /// The limits as last configured, for pipelines that read them per photo.
+    pub(crate) fn limits(&self) -> Limits {
+        self.state.lock().unwrap().limits
+    }
     pub fn configure(&self, mut limits: Limits) {
         limits.normalize();
         let mut state = self.state.lock().unwrap();
