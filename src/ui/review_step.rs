@@ -663,6 +663,7 @@ impl PhotoSortApp {
         if let Some(action) = self.review_action.take() {
             match action {
                 ReviewAction::Undo(list, item) => self.undo_review_item(list, item),
+                ReviewAction::UndoAll(section) => self.undo_review_section(section),
                 ReviewAction::Open(step) => self.switch_step(step),
             }
         }

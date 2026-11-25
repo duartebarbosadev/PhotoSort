@@ -109,7 +109,7 @@ impl Folder {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Section {
+pub(super) enum Section {
     Moving,
     Folders,
     Trash,
@@ -130,6 +130,8 @@ pub(super) enum List {
 pub(super) enum ReviewAction {
     /// Take back the change of one photo in one section.
     Undo(List, Item),
+    /// Take back every change a section lists that Undo can take back.
+    UndoAll(Section),
     /// Go back to a step to change things there.
     Open(Step),
 }
@@ -717,6 +719,40 @@ impl Rows {
         let start = group.checked_sub(1).map_or(0, |i| self.ends[i]);
         (group, row - start)
     }
+    /// The photos of `section` that their own Undo takes back: moves and
+    /// renames, and the Trash marks, turns and ratings staged by hand.
+    pub(super) fn undoable(&self, section: Section) -> Vec<(List, Item)> {
+        let staged = |list: List| {
+            self.items(list)
+                .iter()
+                .filter(|item| matches!(item, Item::Staged { .. }))
+                .map(move |item| (list, *item))
+                .collect()
+        };
+        match section {
+            Section::Moving => self
+                .folders
+                .iter()
+                .enumerate()
+                .flat_map(|(i, folder)| {
+                    folder
+                        .groups
+                        .iter()
+                        .enumerate()
+                        .flat_map(move |(g, (_, items))| {
+                            items
+                                .iter()
+                                .filter(|item| matches!(item, Item::Group(_)))
+                                .map(move |item| (List::Folder(i, g), *item))
+                        })
+                })
+                .collect(),
+            Section::Folders => Vec::new(),
+            Section::Trash => staged(List::Trash),
+            Section::Rotate => staged(List::Rotate),
+            Section::Rate => staged(List::Rate),
+        }
+    }
     fn items(&self, list: List) -> &[Item] {
         match list {
             List::Trash => &self.trash,
@@ -943,6 +979,16 @@ fn undo_text(list: List, file: &str) -> String {
         List::Rotate => format!("Don't rotate {file}"),
         List::Rate => format!("Don't change the rating of {file}"),
         List::Folder(..) => format!("Leave {file} where it is"),
+    }
+}
+
+/// What a section's Undo all says, for `n` photos.
+fn undo_all_text(section: Section, n: usize) -> String {
+    match section {
+        Section::Trash => format!("Keep all {n}"),
+        Section::Rotate => format!("Don't rotate any of these {n}"),
+        Section::Rate => format!("Don't change the rating of any of these {n}"),
+        Section::Moving | Section::Folders => format!("Leave all {n} where they are"),
     }
 }
 
@@ -1379,6 +1425,12 @@ impl PhotoSortApp {
                 // On the Review step, folder changes are edited in Organize.
                 let organize =
                     rows.editable && matches!(section, Section::Moving | Section::Folders);
+                // One Undo for the whole section, once there is more than one.
+                let undoable = if rows.editable {
+                    rows.undoable(section).len()
+                } else {
+                    0
+                };
                 let row = egui::Rect::from_min_size(
                     inner.min + egui::vec2(-S3, S3),
                     egui::vec2(inner.width() + S3, SECTION_HEIGHT - S3),
@@ -1390,13 +1442,29 @@ impl PhotoSortApp {
                     |ui| {
                         ui.label(RichText::new(glyph).size(16.0).color(color));
                         ui.label(RichText::new(title).font(semibold(15.0)).color(color));
-                        if organize {
+                        if organize || undoable > 1 {
                             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                                if ui
-                                    .link(format!("{}  Edit in Organize", icon::FOLDERS))
-                                    .clicked()
+                                if organize
+                                    && ui
+                                        .link(format!("{}  Edit in Organize", icon::FOLDERS))
+                                        .clicked()
                                 {
                                     self.review_action = Some(ReviewAction::Open(Step::Organize));
+                                }
+                                if undoable > 1 {
+                                    if organize {
+                                        ui.add_space(S3);
+                                    }
+                                    if ui
+                                        .link(format!(
+                                            "{}  Undo all",
+                                            icon::ARROW_COUNTER_CLOCKWISE
+                                        ))
+                                        .on_hover_text(undo_all_text(section, undoable))
+                                        .clicked()
+                                    {
+                                        self.review_action = Some(ReviewAction::UndoAll(section));
+                                    }
                                 }
                             });
                         }
@@ -2079,53 +2147,76 @@ impl PhotoSortApp {
 
     /// Takes back the change of one photo listed on the Review step.
     pub(super) fn undo_review_item(&mut self, list: List, item: Item) {
+        self.undo_review_items(&[(list, item)]);
+    }
+
+    /// Takes back every photo `section` lists that its own Undo would:
+    /// the section's Undo all, as if each were taken back by hand.
+    pub(super) fn undo_review_section(&mut self, section: Section) {
+        let undo = self.plan_rows.undoable(section);
+        self.undo_review_items(&undo);
+    }
+
+    /// Takes back the changes of photos listed on the Review step, all at
+    /// once: the list is made again a single time, however many there are.
+    fn undo_review_items(&mut self, undo: &[(List, Item)]) {
         if self.busy || self.scanning {
             return;
         }
         // Already out of date: it is listed again from scratch anyway.
         let stale = self.review_stale;
-        // The list is made again without this photo, where it was scrolled to.
-        if matches!(
-            (list, item),
-            (List::Trash | List::Rotate | List::Rate, Item::Staged { .. })
-                | (List::Folder(..), Item::Group(_))
-        ) {
-            self.plan_rows.hold_scroll();
-        }
-        match (list, item) {
-            (List::Trash, Item::Staged { id, .. }) => {
-                // With its RAW, JPEG and XMP companions, as it was marked.
-                self.stage_manual([id], crate::core::decisions::Change::Trash(false));
-            }
-            (List::Rotate, Item::Staged { id, .. }) => {
-                crate::core::rotation::set_turns(&mut self.decisions, id, 0);
-                self.changed_item(id);
-            }
-            (List::Rate, Item::Staged { id, .. }) => {
-                if let Some(decision) = self.decisions.get_mut(&id) {
-                    decision.rating = None;
-                    if decision.is_empty() {
-                        self.decisions.remove(&id);
+        let mut trash = Vec::new();
+        let mut rotate = Vec::new();
+        let mut rate = Vec::new();
+        let mut moves = HashSet::new();
+        for &(list, item) in undo {
+            match (list, item) {
+                (List::Trash, Item::Staged { id, .. }) => trash.push(id),
+                (List::Rotate, Item::Staged { id, .. }) => rotate.push(id),
+                (List::Rate, Item::Staged { id, .. }) => rate.push(id),
+                (List::Folder(..), Item::Group(group)) => {
+                    match self.plan.as_ref().and_then(|plan| plan.actions.get(group)) {
+                        Some(Action::Move { files } | Action::FinishMove { files }) => moves
+                            .extend(
+                                files
+                                    .iter()
+                                    .map(|(source, _)| MediaId::for_path(&source.path)),
+                            ),
+                        Some(Action::RenameFile { source, .. }) => {
+                            moves.insert(MediaId::for_path(&source.path));
+                        }
+                        _ => {}
                     }
                 }
-                self.changed_item(id);
+                _ => {}
             }
-            (List::Folder(..), Item::Group(group)) => {
-                let ids: HashSet<MediaId> =
-                    match self.plan.as_ref().and_then(|plan| plan.actions.get(group)) {
-                        Some(Action::Move { files } | Action::FinishMove { files }) => files
-                            .iter()
-                            .map(|(source, _)| MediaId::for_path(&source.path))
-                            .collect(),
-                        Some(Action::RenameFile { source, .. }) => {
-                            [MediaId::for_path(&source.path)].into_iter().collect()
-                        }
-                        _ => HashSet::new(),
-                    };
-                self.keep_organize_items_in_place(&ids);
-                return;
+        }
+        if trash.is_empty() && rotate.is_empty() && rate.is_empty() && moves.is_empty() {
+            return;
+        }
+        // The list is made again without these photos, where it was scrolled to.
+        self.plan_rows.hold_scroll();
+        if !trash.is_empty() {
+            // With their RAW, JPEG and XMP companions, as they were marked.
+            self.stage_manual(trash, crate::core::decisions::Change::Trash(false));
+        }
+        for &id in &rotate {
+            crate::core::rotation::set_turns(&mut self.decisions, id, 0);
+        }
+        for &id in &rate {
+            if let Some(decision) = self.decisions.get_mut(&id) {
+                decision.rating = None;
+                if decision.is_empty() {
+                    self.decisions.remove(&id);
+                }
             }
-            _ => return,
+        }
+        if !rotate.is_empty() || !rate.is_empty() {
+            self.changed_items(rotate.into_iter().chain(rate));
+        }
+        if !moves.is_empty() {
+            self.keep_organize_items_in_place(&moves);
+            return;
         }
         // The planned moves stay as they are: a Trash mark, rating or turn
         // never changes them. Only the staged choices are listed again, with

@@ -865,24 +865,29 @@ fn card_sentences_name_one_source_or_count_several() {
 }
 
 /// The Review step lists the changes made in several steps by what happens
-/// to the photos, and each photo's Undo takes back its change alone.
+/// to the photos, and each photo's Undo takes back its change alone. A
+/// section with more than one photo also has an Undo all, for that section
+/// only.
 #[test]
-fn the_review_step_lists_changes_from_every_step_and_undoes_one_at_a_time() {
+fn the_review_step_lists_changes_from_every_step_and_undoes_one_or_a_whole_section() {
     use super::super::compact_cull_tests::{click_label, fixture, frame, rendered};
     let (_temp, mut app) = fixture();
     app.output = app.root.as_ref().unwrap().display().to_string();
     let ids: Vec<MediaId> = app.media.iter().map(|m| m.id).collect();
     let name = |i: usize| app.media[i].name();
     let names: Vec<String> = (1..5).map(name).collect();
-    // Cull: a Trash mark and a rating.
+    // Cull: a Trash mark and two ratings.
     app.stage_manual([ids[1]], crate::core::decisions::Change::Trash(true));
     app.rating(ids[2], 4);
-    // Organize: a new name. Fix Rotation: a turn.
+    app.rating(ids[4], 2);
+    // Organize: a new name. Fix Rotation: two turns, one on a rated photo.
     app.switch_step(Step::Organize);
     app.file_names.insert(ids[3], "Keeper".into());
     app.switch_step(Step::Rotation);
-    crate::core::rotation::set_turns(&mut app.decisions, ids[4], 1);
-    app.changed_item(ids[4]);
+    for id in [ids[4], ids[6]] {
+        crate::core::rotation::set_turns(&mut app.decisions, id, 1);
+        app.changed_item(id);
+    }
     let ctx = egui::Context::default();
     theme_install(&ctx);
     ctx.enable_accesskit();
@@ -904,7 +909,7 @@ fn the_review_step_lists_changes_from_every_step_and_undoes_one_at_a_time() {
     let has = |nodes: &[(String, egui::Rect)], label: &str| nodes.iter().any(|(l, _)| l == label);
     for label in [
         &format!(
-            "You're about to rename 1 photo, change the rating or rotation of 2 photos and send 1 photo to the {TRASH}."
+            "You're about to rename 1 photo, change the rating or rotation of 3 photos and send 1 photo to the {TRASH}."
         ),
         "Apply all changes",
         &format!("Keep {}", names[0]),
@@ -919,6 +924,18 @@ fn the_review_step_lists_changes_from_every_step_and_undoes_one_at_a_time() {
         );
     }
     assert!(!app.plan_open);
+    // Rotating and Rating each list two photos; the one Trash mark and the
+    // one rename have their own Undo only. A link and its text are both
+    // named: one per row.
+    let undo_all = |nodes: &[(String, egui::Rect)]| {
+        nodes
+            .iter()
+            .filter(|(label, _)| label.ends_with("Undo all"))
+            .map(|(_, rect)| rect.center().y.round() as i32)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+    };
+    assert_eq!(undo_all(&nodes), 2);
     // Undo on one photo: only its Trash mark goes.
     click_label(&mut app, &ctx, size, &format!("Keep {}", names[0]));
     assert!(!app.decision(ids[1]).rejected);
@@ -947,7 +964,48 @@ fn the_review_step_lists_changes_from_every_step_and_undoes_one_at_a_time() {
     assert!(app.file_names.is_empty());
     assert!(!has(&nodes, &format!("Leave {} where it is", names[2])));
     assert!(has(&nodes, &format!("Don't rotate {}", names[3])));
-    assert_eq!(app.staged_change_count(), 2);
+    assert_eq!(app.staged_change_count(), 3);
+    assert_eq!(undo_all(&nodes), 2);
+    // Undo all on Rotating takes back both turns at once, like each photo's
+    // Undo: the rating on the turned photo and the Rating section stay.
+    let scrolled = app.plan_rows.generation;
+    app.review_action = Some(ReviewAction::UndoAll(Section::Rotate));
+    let nodes = list(&mut app);
+    assert!(app.plan_rows.rotations.is_empty());
+    assert!(
+        [ids[4], ids[6]]
+            .iter()
+            .all(|id| app.decision(*id).turns % 4 == 0)
+    );
+    assert_eq!(app.decision(ids[4]).rating, Some(2));
+    assert_eq!(app.decision(ids[2]).rating, Some(4));
+    assert_eq!(app.plan_rows.ratings.len(), 2);
+    assert!(!has(&nodes, &format!("Don't rotate {}", names[3])));
+    assert_eq!(undo_all(&nodes), 1);
+    assert_eq!(app.plan_rows.generation, scrolled);
+    assert!(!app.review_stale && app.plan.is_some());
+    // Two Trash marks, as a suggestion accepted elsewhere sets them: not by
+    // hand yet. The Trash header gets its Undo all too.
+    let marks = [ids[5], ids[7]];
+    for id in marks {
+        app.decisions.entry(id).or_default().rejected = true;
+        app.changed_item(id);
+    }
+    let nodes = list(&mut app);
+    assert_eq!(app.plan_rows.undoable(Section::Trash).len(), 2);
+    assert_eq!(undo_all(&nodes), 2);
+    // Undo all on Trash keeps both, as each photo's Keep would: both count
+    // as decided by hand, and the ratings stay listed.
+    app.review_action = Some(ReviewAction::UndoAll(Section::Trash));
+    let nodes = list(&mut app);
+    assert!(marks.iter().all(|id| !app.decision(*id).rejected));
+    assert!(marks.iter().all(|id| app.by_hand.contains(id)));
+    assert!(app.plan_rows.trash.is_empty() && app.plan_rows.rotations.is_empty());
+    assert_eq!(app.plan_rows.ratings.len(), 2);
+    assert_eq!(app.decision(ids[4]).rating, Some(2));
+    assert_eq!(app.decision(ids[2]).rating, Some(4));
+    assert_eq!(undo_all(&nodes), 1);
+    assert!(!app.review_stale && app.plan.is_some());
     // Nothing changed on disk.
     assert!(app.media.iter().all(|m| m.path.is_file()));
     app.runtime.shutdown();
