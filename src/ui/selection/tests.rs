@@ -651,7 +651,7 @@ fn digits_pick_within_the_active_photos_group_in_single_view() {
 }
 
 #[test]
-fn d_marks_every_selected_photo_in_organize_and_cull_and_a_mixed_selection_never_flips() {
+fn keys_act_on_every_selected_photo_in_organize_and_cull_and_d_never_flips_a_mixed_selection() {
     for step in [Step::Organize, Step::Cull] {
         let (_dir, mut app) = fixture();
         settle(&mut app);
@@ -680,6 +680,23 @@ fn d_marks_every_selected_photo_in_organize_and_cull_and_a_mixed_selection_never
             (1..=4).all(|i| !marked(&app, i)),
             "{step:?}: D again unmarks them all"
         );
+        // R and a rating reach every selected photo too, not only the one
+        // clicked last.
+        assert!(app.cull_selection_key(egui::Key::R, egui::Modifiers::NONE));
+        assert!(app.cull_selection_key(egui::Key::Num3, egui::Modifiers::COMMAND));
+        settle(&mut app);
+        let staged = |app: &PhotoSortApp, i| {
+            app.decisions
+                .get(&MediaId(i))
+                .map(|d| (d.turns, d.rating))
+                .unwrap_or_default()
+        };
+        assert!(
+            (1..=4).all(|i| staged(&app, i) == (1, Some(3))),
+            "{step:?}: every selected photo is turned and rated"
+        );
+        assert_eq!(staged(&app, 0), (0, None), "{step:?}");
+        assert_eq!(staged(&app, 5), (0, None), "{step:?}");
         assert!(app.plan.is_none(), "staging must not start file operations");
     }
 }
@@ -718,6 +735,18 @@ fn d_marks_only_the_compared_photo_picked_and_every_one_otherwise() {
             marked(&app, 3) && !marked(&app, 1) && !marked(&app, 5),
             "{step:?}"
         );
+        // R and a rating reach it alone too.
+        assert!(app.cull_selection_key(egui::Key::R, egui::Modifiers::NONE));
+        assert!(app.cull_selection_key(egui::Key::Num4, egui::Modifiers::COMMAND));
+        settle(&mut app);
+        assert_eq!(app.decisions[&MediaId(3)].turns, 1, "{step:?}");
+        assert_eq!(app.decisions[&MediaId(3)].rating, Some(4), "{step:?}");
+        assert!(
+            [1, 5]
+                .iter()
+                .all(|i| app.decisions.get(&MediaId(*i)).is_none()),
+            "{step:?}"
+        );
         // The Trash button acts on the same photo D does.
         assert_eq!(app.trash_button_state(MediaId(3)), (false, true));
         app.trash_button_clicked(MediaId(3));
@@ -732,6 +761,14 @@ fn d_marks_only_the_compared_photo_picked_and_every_one_otherwise() {
         settle(&mut app);
         assert!([1, 3, 5].iter().all(|i| marked(&app, *i)), "{step:?}");
         assert!(!marked(&app, 2), "{step:?}");
+        assert!(app.cull_selection_key(egui::Key::R, egui::Modifiers::SHIFT));
+        settle(&mut app);
+        let turns = [1, 3, 5].map(|i| app.decisions[&MediaId(i)].turns);
+        assert_eq!(
+            turns,
+            [3, 0, 3],
+            "{step:?}: Shift+R turns every compared photo"
+        );
         // A new selection lets go of a picked photo too.
         app.numeric_key(egui::Key::Num1, egui::Modifiers::NONE);
         assert_eq!(app.focused_comparison_photo(), Some(MediaId(1)));
@@ -860,6 +897,24 @@ fn clicking_a_compared_photo_picks_it_for_d_and_empty_space_lets_go() {
         press_d(&mut app);
         assert!(app.decision(ids[2]).rejected, "{step:?}");
         assert!(!app.decision(ids[0]).rejected, "{step:?}");
+        // Organize's selection keys never wait on a query, so R goes through
+        // a real frame there: the picked photo alone turns.
+        let press_r = |app: &mut PhotoSortApp| {
+            let key = egui::Event::Key {
+                key: egui::Key::R,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            };
+            frame(app, &ctx, size, vec![key]);
+            settle(app);
+        };
+        if step == Step::Organize {
+            press_r(&mut app);
+            assert_eq!(app.decision(ids[2]).turns, 1);
+            assert_eq!(app.decision(ids[0]).turns, 0);
+        }
         // Click between the photos: D marks both. The photos are read again
         // from a settled frame.
         settle(&mut app);
@@ -883,6 +938,12 @@ fn clicking_a_compared_photo_picks_it_for_d_and_empty_space_lets_go() {
         press_d(&mut app);
         assert!(app.decision(ids[0]).rejected, "{step:?}");
         assert!(app.decision(ids[2]).rejected, "{step:?}");
+        // Let go of the picked photo: R turns both.
+        if step == Step::Organize {
+            press_r(&mut app);
+            assert_eq!(app.decision(ids[2]).turns, 2);
+            assert_eq!(app.decision(ids[0]).turns, 1);
+        }
         app.runtime.shutdown();
     }
 }

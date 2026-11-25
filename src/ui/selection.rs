@@ -201,9 +201,9 @@ impl PhotoSortApp {
         self.active = None;
     }
     fn stage_selection(&mut self, change: Change) {
-        // Batch ratings and marks belong to Cull; Organize's board selects
-        // photos to move them.
-        if self.step != Step::Cull || !self.selection_ready() {
+        // Cull's browser and Organize's board stage batch ratings, turns and
+        // marks; the guided steps have no selection of their own.
+        if !matches!(self.step, Step::Cull | Step::Organize) || !self.selection_ready() {
             return;
         }
         let ids = self.selection.ordered(&self.media, &self.filtered);
@@ -239,6 +239,29 @@ impl PhotoSortApp {
                         .all(|id| self.selection.contains(*id))
             }
             _ => false,
+        }
+    }
+    /// What R, D, Delete and a Ctrl/Cmd+digit rating act on. Selecting
+    /// several photos aims them at all of them; clicking one among them
+    /// afterwards (or picking it with its digit) aims them at that photo
+    /// alone, until Escape or a click on empty space lets go of it.
+    pub(super) fn key_target(&self) -> KeyTarget {
+        if let Some(id) = self.focused_comparison_photo() {
+            return KeyTarget::Picked(id);
+        }
+        let together = match self.step {
+            // Cull's browser always acts on its selection, even one photo.
+            Step::Cull if !self.review => !self.selection.is_empty(),
+            // Organize's preview and Cull's comparison: one selected photo
+            // stays with the canvas, as does a comparison that is not the
+            // selection (a similarity group).
+            Step::Cull | Step::Organize => self.selection_compared(),
+            _ => false,
+        };
+        if together {
+            KeyTarget::Selection
+        } else {
+            KeyTarget::Canvas
         }
     }
     /// The photo clicked among compared selected photos, while it is shown.
@@ -437,23 +460,12 @@ impl PhotoSortApp {
         key: egui::Key,
         modifiers: egui::Modifiers,
     ) -> bool {
-        // Organize's folder board selects photos to move or compare them.
-        if self.step == Step::Organize && !self.review {
-            match key {
-                egui::Key::A if modifiers.command || modifiers.ctrl => {
+        let command = modifiers.command || modifiers.ctrl;
+        match self.step {
+            // Organize's folder board selects photos to move or compare them.
+            Step::Organize if !self.review => match key {
+                egui::Key::A if command => {
                     self.select_all_visible();
-                    return true;
-                }
-                // Several selected photos are marked together, or only the
-                // one clicked in the preview; one photo keeps the
-                // single-photo D handled by the canvas.
-                egui::Key::D
-                    if !modifiers.alt
-                        && !modifiers.command
-                        && !modifiers.ctrl
-                        && self.selection.len() > 1 =>
-                {
-                    self.trash_compared();
                     return true;
                 }
                 egui::Key::Escape => {
@@ -471,15 +483,9 @@ impl PhotoSortApp {
                     }
                     return true;
                 }
-                _ => return false,
-            }
-        }
-        if self.step != Step::Cull {
-            return false;
-        }
-        let command = modifiers.command || modifiers.ctrl;
-        if !self.review {
-            match key {
+                _ => {}
+            },
+            Step::Cull if !self.review => match key {
                 egui::Key::A if command => {
                     self.select_all_visible();
                     return true;
@@ -488,58 +494,70 @@ impl PhotoSortApp {
                     self.clear_library_selection();
                     return true;
                 }
-                egui::Key::D if !modifiers.alt => {
-                    self.toggle_selection_trash();
-                    return true;
-                }
-                egui::Key::R => {
-                    self.stage_selection(Change::Rotate(if modifiers.alt {
-                        2
-                    } else if modifiers.shift {
-                        3
-                    } else {
-                        1
-                    }));
-                    return true;
-                }
-                egui::Key::Delete | egui::Key::Backspace => {
-                    if self.selection_ready() && !self.selection.is_empty() {
-                        self.stage_selection(Change::Trash(true));
-                    }
-                    return true;
-                }
                 _ => {}
-            }
-        } else if self.selection_compared() && !modifiers.alt && !command {
-            // A comparison of selected photos marks them together, or only
-            // the one clicked; Escape lets go of that photo first.
-            match key {
-                egui::Key::D => {
-                    self.trash_compared();
-                    return true;
-                }
-                egui::Key::Escape if self.focused_comparison_photo().is_some() => {
+            },
+            // A comparison of selected photos lets go of the one clicked
+            // first, so the keys below reach them all again.
+            Step::Cull => {
+                if key == egui::Key::Escape
+                    && !modifiers.alt
+                    && !command
+                    && self.focused_comparison_photo().is_some()
+                {
                     self.comparison_focus = None;
                     return true;
                 }
-                _ => {}
             }
+            _ => return false,
         }
-        // In Review, Ctrl/Cmd and a digit rate every selected photo only
-        // while they are the photos shown, as D marks them; otherwise they
-        // rate the photo shown (`numeric_key`), not selected ones off screen.
-        let together = !self.review
-            || (self.selection_compared() && self.focused_comparison_photo().is_none());
-        if command
-            && together
-            && !self.selection.is_empty()
-            && let Some(n) = super::shortcuts::digit(key).filter(|n| *n <= 5)
-        {
-            self.stage_selection(Change::Rating(n as u8));
-            return true;
-        }
-        false
+        self.selection_action_key(key, modifiers)
     }
+    /// R, D, Delete and a Ctrl/Cmd+digit rating on the photos
+    /// [`Self::key_target`] names; the canvas's photo is left to
+    /// `photo_key` and `numeric_key`.
+    fn selection_action_key(&mut self, key: egui::Key, modifiers: egui::Modifiers) -> bool {
+        let command = modifiers.command || modifiers.ctrl;
+        let change = match key {
+            // D marks them all, or unmarks them all when every one is marked.
+            egui::Key::D if !modifiers.alt && !command => None,
+            egui::Key::R if !command => Some(Change::Rotate(if modifiers.alt {
+                2
+            } else if modifiers.shift {
+                3
+            } else {
+                1
+            })),
+            egui::Key::Delete | egui::Key::Backspace if !modifiers.alt && !command => {
+                Some(Change::Trash(true))
+            }
+            _ if command && !modifiers.alt => {
+                match super::shortcuts::digit(key).filter(|n| *n <= 5) {
+                    Some(n) => Some(Change::Rating(n as u8)),
+                    None => return false,
+                }
+            }
+            _ => return false,
+        };
+        match (self.key_target(), change) {
+            (KeyTarget::Canvas, _) => return false,
+            (KeyTarget::Picked(id), Some(change)) => self.stage_manual([id], change),
+            (KeyTarget::Picked(id), None) => self.reject(id),
+            (KeyTarget::Selection, Some(change)) => self.stage_selection(change),
+            (KeyTarget::Selection, None) => self.toggle_selection_trash(),
+        }
+        true
+    }
+}
+
+/// See [`PhotoSortApp::key_target`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum KeyTarget {
+    /// The one photo on the canvas, as when nothing is selected.
+    Canvas,
+    /// The photo clicked among compared selected photos.
+    Picked(MediaId),
+    /// Every selected photo.
+    Selection,
 }
 
 #[cfg(test)]
