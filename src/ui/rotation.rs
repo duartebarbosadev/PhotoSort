@@ -112,7 +112,7 @@ impl PhotoSortApp {
             self.filter_dirty = true;
         }
     }
-    fn rotation_enabled(&self) -> bool {
+    pub(super) fn rotation_enabled(&self) -> bool {
         !self.busy && self.rotation_run.is_none()
     }
     /// With the setting on, certain suggestions are the default decisions:
@@ -964,6 +964,16 @@ mod tests {
         app.accept_rotation_suggestions();
         assert_eq!((staged(&app, 1), staged(&app, 2)), (0, 0));
         assert!(app.status.starts_with("No suggestion left to accept"));
+        // Undo all takes back the turn Accept all gave, even after a Trash
+        // mark made by hand since, which stays.
+        let mut app = fixture(false);
+        app.accept_rotation_suggestions();
+        assert_eq!(staged(&app, 1), 1);
+        app.rotation_card_event(MediaId(1), CardEvent::Select(0));
+        key(&mut app, egui::Key::D, egui::Modifiers::NONE);
+        key(&mut app, egui::Key::U, egui::Modifiers::SHIFT);
+        assert_eq!(staged(&app, 1), 0, "{}", app.status);
+        assert!(app.decision(MediaId(1)).rejected, "the Trash mark went");
     }
 
     #[test]
@@ -1214,6 +1224,10 @@ mod tests {
         assert_eq!(staged(&app, 1), 2, "Shift+U undid a turn made by hand");
         key(&mut app, egui::Key::D, none);
         assert!(app.decision(MediaId(1)).rejected, "D marks it for Trash");
+        // R turns the selected photo with the panel hidden too, as D does.
+        key(&mut app, egui::Key::Escape, none);
+        key(&mut app, egui::Key::R, none);
+        assert_eq!(staged(&app, 1), 3, "R needs the panel");
         app.deselect_rotation_card();
         assert!(!app.rotation_panel && app.active.is_none());
     }

@@ -241,7 +241,7 @@ impl PhotoSortApp {
             [id] if toggle || !self.decision(*id).rejected => self.reject(*id),
             [_] => {}
             _ => self.set_status(
-                "This card has several photos: click one, or press its number, to mark it for Trash"
+                "This card has several photos: click one to mark it for Trash, or open the card and press its number"
                     .into(),
             ),
         }
@@ -290,6 +290,7 @@ impl PhotoSortApp {
             }
             egui::Key::ArrowLeft | egui::Key::ArrowUp => self.navigate_pick(-1),
             egui::Key::ArrowRight | egui::Key::ArrowDown => self.navigate_pick(1),
+            egui::Key::U if modifiers.shift && repeat => {}
             egui::Key::U if modifiers.shift => self.undo_all_cards(),
             egui::Key::U => self.undo_card(),
             egui::Key::D if repeat => {}
@@ -320,6 +321,7 @@ impl PhotoSortApp {
                     self.toggle_delete_candidate(photo - 1);
                 }
             }
+            egui::Key::U if modifiers.shift && repeat => {}
             egui::Key::U if modifiers.shift => self.undo_all_cards(),
             egui::Key::U => self.undo_card(),
             egui::Key::D if repeat => {}
@@ -343,17 +345,19 @@ impl PhotoSortApp {
         modifiers: egui::Modifiers,
         repeat: bool,
     ) -> bool {
-        // Keys that turn a photo act on the one shown beside the grid. R and
-        // Shift+R turn it right and left as in Cull; Q and E still do too.
+        // Keys that turn a photo act on the selected one, outlined in the
+        // grid with the panel hidden too, as A, U and D do. R and Shift+R
+        // turn it right and left as in Cull; Q and E still do too.
         let shown = self.rotation_panel;
         match pressed {
-            egui::Key::Q | egui::Key::E | egui::Key::R if shown => {
+            egui::Key::Q | egui::Key::E | egui::Key::R if self.active.is_some() => {
                 let left = pressed == egui::Key::Q || pressed == egui::Key::R && modifiers.shift;
                 if let Some(id) = self.active {
                     self.rotate_card(id, if left { 3 } else { 1 });
                 }
             }
             egui::Key::Q | egui::Key::E | egui::Key::R => {}
+            egui::Key::U if modifiers.shift && repeat => {}
             egui::Key::U if modifiers.shift => self.undo_all_cards(),
             egui::Key::U => self.undo_card(),
             egui::Key::D if repeat => {}

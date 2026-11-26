@@ -212,6 +212,15 @@ impl PhotoSortApp {
             None => Category::ALL.into_iter().collect(),
         };
         self.filter_dirty = true;
+        // A card the new tab hides is let go of, so no key acts on a card
+        // that is not shown.
+        if self.delete_current.is_some_and(|id| {
+            self.delete_review
+                .entry(id)
+                .is_some_and(|e| !self.delete_categories.contains(&e.category))
+        }) {
+            self.deselect_delete_card();
+        }
     }
     pub(super) fn delete_review_ids(&self) -> Vec<MediaId> {
         self.filtered.iter().map(|i| self.media[*i].id).collect()
@@ -231,7 +240,7 @@ impl PhotoSortApp {
             _ => entry.reason.clone(),
         }
     }
-    fn delete_enabled(&self) -> bool {
+    pub(super) fn delete_enabled(&self) -> bool {
         !self.busy && self.delete_run.is_none()
     }
     /// Switches one photo of the current card between Keep and Trash.
@@ -261,20 +270,18 @@ impl PhotoSortApp {
         if !self.delete_enabled() {
             return;
         }
-        let before = self.accept_marks(&self.delete_candidates(ids));
         let accepted = self.delete_review.accept_sparing(
             ids,
             &self.pick_review,
             &mut self.decisions,
             &self.by_hand,
         );
-        self.note_accepted(Step::EasyDelete, before);
         self.accepted_status(accepted.suggestions);
         self.changed_items(accepted.photos);
     }
     /// The photos of the cards of `ids`, each once: an Eyes closed card's
     /// better shot can be on another card too.
-    fn delete_candidates(&self, ids: &[MediaId]) -> Vec<MediaId> {
+    pub(super) fn delete_candidates(&self, ids: &[MediaId]) -> Vec<MediaId> {
         let mut seen = HashSet::new();
         ids.iter()
             .filter_map(|id| self.delete_review.entry(*id))
@@ -319,8 +326,12 @@ impl PhotoSortApp {
     }
     /// Every card shown back to its suggestion.
     pub(super) fn accept_delete_defaults(&mut self) {
+        // Only the summary's Accept all is noted for its Undo all: a
+        // group's own Accept all is not what that button would take back.
         let ids = self.delete_review_ids();
+        let before = self.accept_marks(&self.delete_candidates(&ids));
         self.accept_delete_suggestions(&ids);
+        self.note_accepted(Step::EasyDelete, before);
     }
     /// A click on the grid's empty space: no card is selected, and the
     /// panel beside the grid closes. An arrow key, Enter or a click selects
@@ -2488,6 +2499,28 @@ mod tests {
         );
         let shown = super::super::review_card::render_grid(&mut app);
         assert!(shown.contains("Accept all suggestions"), "{shown}");
+        // Undo all waits while busy, as its button does.
+        key(&mut app, egui::Key::A, egui::Modifiers::SHIFT);
+        app.busy = true;
+        key(&mut app, egui::Key::U, egui::Modifiers::SHIFT);
+        app.busy = false;
+        assert!(trashed(&app, 1), "Shift+U undid while busy");
+        // A tab that hides the selected card lets go of it, and Undo all
+        // reaches only the cards the tab shows.
+        app.set_delete_tab(Some(Category::Dark));
+        app.refilter();
+        assert_eq!(app.delete_current, None, "a hidden card stayed selected");
+        key(&mut app, egui::Key::U, egui::Modifiers::SHIFT);
+        assert!(trashed(&app, 1), "Undo all reached another tab");
+        app.set_delete_tab(None);
+        app.refilter();
+        // A photo switched by hand and back is the user's: Undo all leaves it.
+        app.delete_card_event(MediaId(1), CardEvent::Select(0));
+        hold(&mut app, egui::Key::Num1, none, 0);
+        hold(&mut app, egui::Key::Num1, none, 0);
+        assert!(trashed(&app, 1));
+        key(&mut app, egui::Key::U, egui::Modifiers::SHIFT);
+        assert!(trashed(&app, 1), "Undo all took back a choice made by hand");
     }
     #[test]
     fn cancelled_duplicate_pass_preserves_review_and_rejects_late_pairs() {

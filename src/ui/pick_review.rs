@@ -118,7 +118,7 @@ impl PhotoSortApp {
             self.changed_items(marked);
         }
     }
-    fn pick_enabled(&self) -> bool {
+    pub(super) fn pick_enabled(&self) -> bool {
         !self.busy && self.pick_run.is_none()
     }
     /// The selected group.
