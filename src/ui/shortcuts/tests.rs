@@ -859,12 +859,19 @@ fn guided_keys_match_their_cards_and_trash_keys_only_mark_where_marks_show() {
     }]);
     assert_eq!(rate(&mut app), (true, Some(3)));
     app.runtime.shutdown();
-    // Fix Rotation shows no Trash marks, so D and Delete stage none.
+    // In Fix Rotation the trash keys act on the selected photo as in Cull:
+    // Delete marks it and waits while busy, D marks it or takes it back.
     let mut app = super::tests::app(Step::Rotation);
-    for key in [egui::Key::D, egui::Key::Delete, egui::Key::Backspace] {
+    app.busy = true;
+    press(&mut app, egui::Key::Delete);
+    assert!(app.decisions.is_empty());
+    app.busy = false;
+    for key in [egui::Key::Delete, egui::Key::Backspace] {
         press(&mut app, key);
+        assert!(app.decision(MediaId(7)).rejected, "{key:?}");
     }
-    assert!(app.decisions.is_empty() && !app.plan_open);
+    press(&mut app, egui::Key::D);
+    assert!(!app.decision(MediaId(7)).rejected && !app.plan_open);
     app.runtime.shutdown();
     // Reviewing in Cull, Delete marks the photo as D does, and waits while busy.
     let mut app = super::tests::app(Step::Cull);

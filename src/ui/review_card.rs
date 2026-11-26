@@ -167,6 +167,109 @@ impl GroupLink {
     }
 }
 
+/// A photo Accept all suggestions changed: its Trash mark and quarter turns
+/// before, and as Accept all left them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct AcceptedPhoto {
+    id: MediaId,
+    before: (bool, u8),
+    after: (bool, u8),
+}
+
+impl PhotoSortApp {
+    /// A photo's Trash mark and quarter turns, what Accept all changes.
+    fn accept_mark(&self, id: MediaId) -> (bool, u8) {
+        let decision = self.decision(id);
+        (decision.rejected, decision.turns % 4)
+    }
+    /// Before an Accept all: the marks of the photos it may change.
+    pub(super) fn accept_marks(&self, ids: &[MediaId]) -> Vec<(MediaId, (bool, u8))> {
+        ids.iter().map(|id| (*id, self.accept_mark(*id))).collect()
+    }
+    /// After an Accept all: notes each photo it changed, for Undo all. A
+    /// second Accept all adds to the first, so Undo all takes back both.
+    pub(super) fn note_accepted(&mut self, step: Step, before: Vec<(MediaId, (bool, u8))>) {
+        let changed: Vec<AcceptedPhoto> = before
+            .into_iter()
+            .map(|(id, before)| AcceptedPhoto {
+                id,
+                before,
+                after: self.accept_mark(id),
+            })
+            .filter(|photo| photo.before != photo.after)
+            .collect();
+        let noted = self.accepted.entry(step).or_default();
+        for photo in changed {
+            match noted.iter_mut().find(|p| p.id == photo.id) {
+                Some(earlier) => earlier.after = photo.after,
+                None => noted.push(photo),
+            }
+        }
+        noted.retain(|p| p.before != p.after);
+    }
+    /// The photos of this step's Accept all still as it left them: what
+    /// Undo all would take back. A photo changed since, by hand or by its
+    /// card's Undo, is the user's and stays out.
+    fn accepted_left(&self, step: Step) -> Vec<AcceptedPhoto> {
+        self.accepted
+            .get(&step)
+            .into_iter()
+            .flatten()
+            .filter(|p| self.accept_mark(p.id) == p.after)
+            .copied()
+            .collect()
+    }
+    /// Whether the step's summary offers Undo all in place of Accept all:
+    /// Accept all has nothing left to do, and what it did is still there.
+    pub(super) fn offers_undo_all(&self, step: Step, acceptable: bool) -> bool {
+        !acceptable && !self.accepted_left(step).is_empty()
+    }
+    /// Undo all, Shift+U: what this step's Accept all suggestions changed
+    /// goes back as it was, and only that.
+    pub(super) fn undo_accepted(&mut self, step: Step) {
+        let photos = self.accepted_left(step);
+        self.accepted.remove(&step);
+        for photo in &photos {
+            crate::core::model::update_trash(&mut self.decisions, [(photo.id, photo.before.0)]);
+            crate::core::rotation::set_turns(&mut self.decisions, photo.id, photo.before.1);
+        }
+        self.set_status(match photos.len() {
+            0 => "Nothing to undo".into(),
+            1 => "Accept all undone · 1 photo back as it was".into(),
+            n => format!("Accept all undone · {n} photos back as they were"),
+        });
+        if !photos.is_empty() {
+            self.pending_bookmark = None;
+            self.changed_items(photos.iter().map(|p| p.id));
+        }
+    }
+    /// The summary's Accept all suggestions, or, once it has nothing left
+    /// to do and what it did is still there, Undo all in its place.
+    pub(super) fn accept_or_undo_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        acceptable: bool,
+        enabled: bool,
+    ) -> Option<bool> {
+        let undo = self.offers_undo_all(self.step, acceptable);
+        let (button, key) = if undo {
+            (
+                egui::Button::new(format!(
+                    "{}  Undo all",
+                    egui_phosphor::regular::ARROW_U_UP_LEFT
+                )),
+                "Undo what Accept all suggestions changed · Shift+U",
+            )
+        } else {
+            (egui::Button::new("Accept all suggestions"), "Shift+A")
+        };
+        ui.add_enabled(enabled && (undo || acceptable), button)
+            .on_hover_text(key)
+            .clicked()
+            .then_some(undo)
+    }
+}
+
 impl PhotoSortApp {
     /// After a group card's Accept, Undo or R, for its photos: Undo where
     /// the step starts with nothing marked (`clear`) unmarks every one of

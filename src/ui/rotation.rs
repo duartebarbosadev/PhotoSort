@@ -267,7 +267,7 @@ impl PhotoSortApp {
     }
     fn rotation_link_text(&self, id: MediaId, link: RotationLink) -> (&'static str, String) {
         match link {
-            RotationLink::Undo => ("Undo", "R".to_owned()),
+            RotationLink::Undo => ("Undo", "U".to_owned()),
             RotationLink::KeepOriginal => ("Keep original", String::new()),
             RotationLink::UseSuggestion => ("Use suggestion", self.rotation_suggestion_text(id)),
         }
@@ -327,18 +327,29 @@ impl PhotoSortApp {
             return;
         }
         let ids = self.rotation_suggestions_left();
+        let before = self.accept_marks(&ids);
         for id in &ids {
             if let Some(suggestion) = self.rotation_review.suggestion(*id) {
                 set_turns(&mut self.decisions, *id, suggestion.turns);
             }
         }
+        self.note_accepted(Step::Rotation, before);
         self.accepted_status(ids.len());
         if !ids.is_empty() {
             self.pending_bookmark = None;
             self.changed_items(ids);
         }
     }
-    /// R: the photo shown beside the grid goes back to where it started.
+    /// A: the selected photo takes its suggestion, as its Use suggestion
+    /// button does. A photo turned already stays as it is.
+    pub(super) fn accept_rotation_card(&mut self) {
+        if let Some(id) = self.active
+            && self.rotation_link(id) == Some(RotationLink::UseSuggestion)
+        {
+            self.follow_rotation_link(id, RotationLink::UseSuggestion);
+        }
+    }
+    /// U: the selected photo goes back to where it started.
     pub(super) fn undo_rotation(&mut self) {
         if let Some(id) = self.active
             && self.rotation_review.changed(id, &self.decisions)
@@ -352,7 +363,7 @@ impl PhotoSortApp {
         self.rotation_panel = false;
         self.active = None;
     }
-    /// Enter: the choice is already staged, so move on.
+    /// Enter: the next photo, shown beside the grid. It accepts nothing: A does.
     pub(super) fn next_rotation_card(&mut self) {
         self.navigate_selection(1, false, false);
         self.rotation_panel = self.active.is_some();
@@ -391,10 +402,10 @@ impl PhotoSortApp {
         };
         let enabled = self.rotation_enabled();
         ui.add_enabled_ui(enabled, |ui| {
-            if icon_button(ui, icon::ARROW_COUNTER_CLOCKWISE, "Rotate left · Q").clicked() {
+            if icon_button(ui, icon::ARROW_COUNTER_CLOCKWISE, "Rotate left · Shift+R").clicked() {
                 self.rotate_card(id, 3);
             }
-            if icon_button(ui, icon::ARROW_CLOCKWISE, "Rotate right · E").clicked() {
+            if icon_button(ui, icon::ARROW_CLOCKWISE, "Rotate right · R").clicked() {
                 self.rotate_card(id, 1);
             }
             if let Some(link) = self.rotation_link(id) {
@@ -512,18 +523,14 @@ impl PhotoSortApp {
     /// One line over the grid: what is staged, the photo size, and Accept
     /// all suggestions.
     fn rotation_summary(&mut self, ui: &mut egui::Ui) {
-        let (turned, left) = (self.grids.rotation.turns, self.grids.rotation.left);
+        let deck = &self.grids.rotation;
+        let (turned, left) = (deck.turns, deck.left);
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add_enabled(
-                        left && self.rotation_enabled(),
-                        egui::Button::new("Accept all suggestions"),
-                    )
-                    .on_hover_text("A")
-                    .clicked()
-                {
-                    self.accept_rotation_suggestions();
+                match self.accept_or_undo_button(ui, left, self.rotation_enabled()) {
+                    Some(true) => self.undo_accepted(Step::Rotation),
+                    Some(false) => self.accept_rotation_suggestions(),
+                    None => {}
                 }
                 ui.add_space(S3);
                 self.size_slider(ui);
@@ -708,7 +715,8 @@ impl PhotoSortApp {
             .unwrap_or_default();
         let staged = turns(&self.decisions, id);
         let enabled = self.rotation_enabled();
-        // Marked for Trash in another step: dimmed, its pill takes it back.
+        // Marked for Trash, here with D or in another step: dimmed, its pill
+        // takes it back.
         let trash = self.decision(id).rejected;
         // One photo twice: its name once, under the first.
         let photo = |turns: u8, name: String| CardPhoto {
@@ -771,8 +779,9 @@ impl PhotoSortApp {
                 CardButton::new(icon::ARROW_COUNTER_CLOCKWISE, "Rotate left").enabled(enabled),
                 CardButton::new(icon::ARROW_CLOCKWISE, "Rotate right").enabled(enabled),
             ],
-            // The selected card shows in the panel beside the grid.
-            shown: self.rotation_panel && self.active == Some(id),
+            // The selected card, outlined while the panel is hidden too: the
+            // keys still act on it.
+            shown: self.active == Some(id),
             title_hover: None,
             undo: self.rotation_link(id).filter(|_| enabled).map(|link| {
                 let (label, hover) = self.rotation_link_text(id, link);
@@ -803,7 +812,7 @@ impl PhotoSortApp {
                     self.follow_rotation_link(id, link);
                 }
             }
-            // Only a photo marked for Trash elsewhere has a pill: Keep.
+            // Only a photo marked for Trash has a pill: Keep.
             CardEvent::Toggle(_) => {
                 self.stage_manual([id], crate::core::decisions::Change::Trash(false));
             }
@@ -855,6 +864,23 @@ mod tests {
     }
     fn staged(app: &PhotoSortApp, n: u64) -> u8 {
         turns(&app.decisions, MediaId(n))
+    }
+    fn key(app: &mut PhotoSortApp, key: egui::Key, modifiers: egui::Modifiers) {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }],
+            ..Default::default()
+        };
+        let _ = ctx.run_test(input, |ui| {
+            let ctx = &ui.ctx().clone();
+            app.keyboard(ctx)
+        });
     }
 
     #[test]
@@ -1146,7 +1172,7 @@ mod tests {
         assert_eq!(draw(&mut app, 320.0).0, fourth);
     }
     #[test]
-    fn a_click_opens_the_card_in_the_panel_and_keys_act_only_on_it() {
+    fn a_click_opens_the_card_in_the_panel_and_keys_turn_accept_and_undo_it() {
         let mut app = fixture(true);
         assert!(!app.rotation_panel);
         assert_eq!(app.active, None);
@@ -1162,6 +1188,32 @@ mod tests {
         assert_eq!(app.rotation_after(MediaId(2)), Some((2, true)));
         app.rotation_card_event(MediaId(2), CardEvent::Undo);
         assert_eq!(app.rotation_after(MediaId(2)), Some((2, false)));
+        // R and Shift+R turn it right and left, U takes it back, A uses the
+        // suggestion, and Enter only moves on.
+        let none = egui::Modifiers::NONE;
+        key(&mut app, egui::Key::R, none);
+        assert_eq!(staged(&app, 2), 3);
+        key(&mut app, egui::Key::R, egui::Modifiers::SHIFT);
+        assert_eq!(staged(&app, 2), 2);
+        key(&mut app, egui::Key::U, none);
+        assert_eq!(staged(&app, 2), 0, "U undoes it");
+        key(&mut app, egui::Key::A, none);
+        assert_eq!((staged(&app, 2), app.active), (2, Some(MediaId(2))));
+        key(&mut app, egui::Key::Z, egui::Modifiers::COMMAND);
+        assert_eq!(staged(&app, 2), 0, "Ctrl/Cmd+Z undoes it too");
+        key(&mut app, egui::Key::ArrowLeft, none);
+        key(&mut app, egui::Key::Enter, none);
+        assert_eq!(app.active, Some(MediaId(2)), "Enter moves on");
+        assert_eq!(staged(&app, 2), 0, "Enter used the suggestion");
+        key(&mut app, egui::Key::ArrowLeft, none);
+        assert_eq!(app.active, Some(MediaId(1)));
+        key(&mut app, egui::Key::R, none);
+        assert_eq!(staged(&app, 1), 2);
+        // Shift+U takes back only what Accept all did: none of this.
+        key(&mut app, egui::Key::U, egui::Modifiers::SHIFT);
+        assert_eq!(staged(&app, 1), 2, "Shift+U undid a turn made by hand");
+        key(&mut app, egui::Key::D, none);
+        assert!(app.decision(MediaId(1)).rejected, "D marks it for Trash");
         app.deselect_rotation_card();
         assert!(!app.rotation_panel && app.active.is_none());
     }

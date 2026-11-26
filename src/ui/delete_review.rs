@@ -253,24 +253,6 @@ impl PhotoSortApp {
             self.changed_items([candidate]);
         }
     }
-    /// Left and Right decide the whole card shown beside the grid. Keep
-    /// keeps every photo on it; Trash sends all but its keeper to Trash, so
-    /// neither can leave a pair with both photos marked.
-    pub(super) fn decide_delete_card(&mut self, trash: bool) {
-        if !self.delete_enabled() {
-            return;
-        }
-        if let Some(id) = self.delete_current {
-            if trash {
-                self.delete_review.trash(id, &mut self.decisions);
-            } else {
-                self.delete_review.keep(id, &mut self.decisions);
-            }
-            let decided = self.delete_candidates(&[id]);
-            self.by_hand.extend(decided.iter().copied());
-            self.changed_items(decided);
-        }
-    }
     /// Accept all suggestions, for these cards: every photo not decided by
     /// hand takes its suggestion, and a choice made by hand stays as it is.
     /// A photo that would be the last one kept of its card or of its Pick
@@ -279,12 +261,14 @@ impl PhotoSortApp {
         if !self.delete_enabled() {
             return;
         }
+        let before = self.accept_marks(&self.delete_candidates(ids));
         let accepted = self.delete_review.accept_sparing(
             ids,
             &self.pick_review,
             &mut self.decisions,
             &self.by_hand,
         );
+        self.note_accepted(Step::EasyDelete, before);
         self.accepted_status(accepted.suggestions);
         self.changed_items(accepted.photos);
     }
@@ -302,14 +286,35 @@ impl PhotoSortApp {
     /// Accept takes its suggestion in full, and Undo takes it back to where
     /// the step started it. Its photos count as undecided again.
     pub(super) fn undo_delete(&mut self) {
+        if let Some(id) = self.delete_current {
+            self.undo_delete_of(id);
+        }
+    }
+    fn undo_delete_of(&mut self, id: MediaId) {
+        if !self.delete_enabled() {
+            return;
+        }
+        let clear = !self.delete_undecided(id) && !self.preferences.easy_delete_auto;
+        if !clear {
+            self.delete_review.accept(&[id], &mut self.decisions);
+        }
+        self.undo_group(self.delete_candidates(&[id]), clear);
+    }
+    /// A: the selected card takes its suggestion, as its Accept suggestion
+    /// button does. A card decided already stays as it is.
+    pub(super) fn accept_delete_card(&mut self) {
         if let Some(id) = self.delete_current
-            && self.delete_enabled()
+            && self.delete_link(id) == Some(GroupLink::Accept)
         {
-            let clear = !self.delete_undecided(id) && !self.preferences.easy_delete_auto;
-            if !clear {
-                self.delete_review.accept(&[id], &mut self.decisions);
-            }
-            self.undo_group(self.delete_candidates(&[id]), clear);
+            self.undo_delete();
+        }
+    }
+    /// U: the selected card's Undo, as its button.
+    pub(super) fn undo_delete_card(&mut self) {
+        if let Some(id) = self.delete_current
+            && self.delete_link(id) == Some(GroupLink::Undo)
+        {
+            self.undo_delete();
         }
     }
     /// Every card shown back to its suggestion.
@@ -325,7 +330,7 @@ impl PhotoSortApp {
         self.delete_current = None;
         self.active = None;
     }
-    /// Enter: the suggestion is already the decision, so move on.
+    /// Enter: the next card, shown beside the grid. It accepts nothing: A does.
     pub(super) fn next_delete_card(&mut self) {
         self.navigate_selection(1, false, false);
         self.delete_panel = self.delete_current.is_some();
@@ -468,14 +473,14 @@ impl PhotoSortApp {
     /// suggestion while the card is undecided, as on the card.
     pub(super) fn delete_undo_button(&mut self, ui: &mut egui::Ui) {
         if let Some(id) = self.delete_current {
-            let button = if self.delete_undecided(id) {
-                primary(super::pick_review::ACCEPT)
+            let (button, key) = if self.delete_undecided(id) {
+                (primary(super::pick_review::ACCEPT), "A")
             } else {
-                egui::Button::new("Undo")
+                (egui::Button::new("Undo"), "U")
             };
             if ui
                 .add_enabled(self.delete_link(id).is_some(), button)
-                .on_hover_text("R")
+                .on_hover_text(key)
                 .clicked()
             {
                 self.undo_delete();
@@ -821,15 +826,10 @@ impl PhotoSortApp {
             // Accept all and the size slider are placed first, from the
             // right; the summary then gets only the room left and truncates.
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add_enabled(
-                        changed > 0 && self.delete_enabled(),
-                        egui::Button::new("Accept all suggestions"),
-                    )
-                    .on_hover_text("A")
-                    .clicked()
-                {
-                    self.accept_delete_defaults();
+                match self.accept_or_undo_button(ui, changed > 0, self.delete_enabled()) {
+                    Some(true) => self.undo_accepted(Step::EasyDelete),
+                    Some(false) => self.accept_delete_defaults(),
+                    None => {}
                 }
                 ui.add_space(S3);
                 self.size_slider(ui);
@@ -1287,17 +1287,19 @@ impl PhotoSortApp {
         // What accepting the suggestion does, said on its button.
         let marked = entry.suggestion().iter().filter(|keep| !**keep).count();
         let accept = match (entry.companion.is_some(), marked) {
-            (true, 1) => "Keep the starred photo and mark the other one for Trash · R".to_owned(),
-            (true, n) => format!("Keep the starred photo and mark the other {n} for Trash · R"),
-            (false, 1) => "Mark this photo for Trash · R".to_owned(),
-            (false, n) => format!("Mark these {n} photos for Trash · R"),
+            (true, 1) => "Keep the starred photo and mark the other one for Trash · A".to_owned(),
+            (true, n) => format!("Keep the starred photo and mark the other {n} for Trash · A"),
+            (false, 1) => "Mark this photo for Trash · A".to_owned(),
+            (false, n) => format!("Mark these {n} photos for Trash · A"),
         };
         ReviewCard {
             title: card_title(entry),
             state_text: None,
             photos,
             buttons: Vec::new(),
-            shown: self.delete_panel && self.delete_current == Some(subject),
+            // The selected card, outlined while the panel is hidden too: the
+            // keys still act on it.
+            shown: self.delete_current == Some(subject),
             title_hover: Some(self.delete_reason(entry)),
             undo: self.delete_link(subject).map(|link| match link {
                 GroupLink::Accept => (super::pick_review::ACCEPT.to_owned(), accept),
@@ -2296,7 +2298,7 @@ mod tests {
         assert_eq!((app.delete_current, app.delete_panel), (None, false));
         // The keys that change a card wait until one is shown.
         let staged = app.decisions.clone();
-        for k in [egui::Key::Num1, egui::Key::ArrowLeft, egui::Key::R] {
+        for k in [egui::Key::Num1, egui::Key::R] {
             key(&mut app, k, egui::Modifiers::NONE);
         }
         assert_eq!(app.decisions, staged);
@@ -2306,10 +2308,11 @@ mod tests {
         assert_eq!(app.delete_current, Some(MediaId(1)));
         assert!(app.delete_panel);
         let entry = app.delete_review.entry(MediaId(1)).unwrap().clone();
-        // Only a soft highlight marks the card shown in the panel.
+        // Only a soft highlight marks the selected card, and it stays while
+        // the panel is hidden: the keys still act on that card.
         assert!(app.delete_card(&entry).shown);
         app.delete_panel = false;
-        assert!(!app.delete_card(&entry).shown);
+        assert!(app.delete_card(&entry).shown);
     }
     #[test]
     fn a_click_on_the_grid_background_deselects_and_closes_the_panel() {
@@ -2415,51 +2418,76 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_decides_cards_switches_photos_moves_on_with_enter_and_undoes_with_r() {
+    fn keyboard_accepts_undoes_and_moves_on_while_arrows_only_move() {
         let mut app = app();
         app.delete_card_event(MediaId(1), CardEvent::Select(0));
         app.review = false;
         let none = egui::Modifiers::NONE;
-        // Left keeps the pair and Right sends only its copy to Trash,
-        // however often either is pressed.
-        for _ in 0..2 {
-            key(&mut app, egui::Key::ArrowLeft, none);
-            assert!(!trashed(&app, 1) && !trashed(&app, 2), "Left keeps both");
-        }
-        for _ in 0..2 {
-            key(&mut app, egui::Key::ArrowRight, none);
-            assert!(
-                trashed(&app, 1) && !trashed(&app, 2),
-                "Right spares the keeper"
-            );
-        }
+        let undo = egui::Modifiers::COMMAND;
+        let staged = app.decisions.clone();
+        // Left and Right walk the cards like Up and Down, and never change a
+        // photo: the digits do that.
+        key(&mut app, egui::Key::ArrowRight, none);
+        assert_eq!(app.delete_current, Some(MediaId(4)), "Right moves on");
+        key(&mut app, egui::Key::ArrowLeft, none);
+        assert_eq!(app.delete_current, Some(MediaId(1)), "Left moves back");
+        assert_eq!(app.decisions, staged, "an arrow changed a photo");
+        // D on a card of two picks neither photo for the user.
+        key(&mut app, egui::Key::D, none);
+        assert_eq!(app.decisions, staged, "D guessed a photo");
+        assert!(app.status.contains("several photos"), "{}", app.status);
         // A held key decides once: its repeats never switch the photo back.
         hold(&mut app, egui::Key::Num2, none, 3);
         assert!(trashed(&app, 2), "2 switches the second photo once");
-        key(&mut app, egui::Key::ArrowRight, none);
+        key(&mut app, egui::Key::Z, undo);
         assert!(
             trashed(&app, 1) && !trashed(&app, 2),
-            "Right keeps the keeper"
+            "Ctrl/Cmd+Z restores it"
         );
-        key(&mut app, egui::Key::ArrowLeft, none);
-        key(&mut app, egui::Key::R, none);
-        assert!(trashed(&app, 1) && !trashed(&app, 2), "R undoes the card");
+        // With suggestions off, U undoes by clearing the card and A accepts
+        // it in place. Enter only moves on, with the panel hidden too.
+        app.preferences.easy_delete_auto = false;
+        key(&mut app, egui::Key::U, none);
+        assert!(!trashed(&app, 1) && !trashed(&app, 2), "Undo clears it");
+        key(&mut app, egui::Key::A, none);
+        assert!(trashed(&app, 1) && !trashed(&app, 2), "A accepts it");
+        assert_eq!(app.delete_current, Some(MediaId(1)), "A stays");
+        key(&mut app, egui::Key::U, none);
+        key(&mut app, egui::Key::Escape, none);
+        assert!(!app.delete_panel);
         key(&mut app, egui::Key::Enter, none);
+        assert!(!trashed(&app, 1), "Enter accepted the card");
         assert_eq!(app.delete_current, Some(MediaId(4)), "Enter moves on");
-        // Two formats of one shot: Right keeps the HEIC.
-        key(&mut app, egui::Key::ArrowRight, none);
+        assert!(app.delete_panel);
+        key(&mut app, egui::Key::Num1, none);
         assert!(trashed(&app, 4) && !trashed(&app, 5));
-        // A photo alone on its card: Left keeps it and Right marks it.
         key(&mut app, egui::Key::ArrowDown, none);
         assert_eq!(app.delete_current, Some(MediaId(3)));
-        key(&mut app, egui::Key::ArrowLeft, none);
-        assert!(!trashed(&app, 3));
-        key(&mut app, egui::Key::ArrowRight, none);
-        assert!(trashed(&app, 3));
+        // D switches a card's only photo, once however long it is held.
+        hold(&mut app, egui::Key::D, none, 2);
+        assert!(!trashed(&app, 3), "D takes the marked photo back");
+        // Delete only marks: pressed twice, the photo stays marked.
+        for _ in 0..2 {
+            key(&mut app, egui::Key::Delete, none);
+            assert!(trashed(&app, 3), "Delete marks it");
+        }
         key(&mut app, egui::Key::ArrowUp, none);
-        assert_eq!(app.delete_current, Some(MediaId(4)));
-        key(&mut app, egui::Key::A, none);
-        assert!(trashed(&app, 4), "A leaves a choice made by hand");
+        key(&mut app, egui::Key::A, egui::Modifiers::SHIFT);
+        assert!(trashed(&app, 1), "Shift+A accepts the undecided card");
+        assert!(trashed(&app, 4), "Shift+A leaves a choice made by hand");
+        // Undo all then takes Accept all's place, and Shift+U takes back
+        // what Accept all did and nothing else: the choices made by hand stay.
+        let shown = super::super::review_card::render_grid(&mut app);
+        assert!(shown.contains("Undo all"), "{shown}");
+        assert!(!shown.contains("Accept all suggestions"), "{shown}");
+        key(&mut app, egui::Key::U, egui::Modifiers::SHIFT);
+        assert!(!trashed(&app, 1), "{}", app.status);
+        assert!(
+            trashed(&app, 3) && trashed(&app, 4),
+            "a choice made by hand went"
+        );
+        let shown = super::super::review_card::render_grid(&mut app);
+        assert!(shown.contains("Accept all suggestions"), "{shown}");
     }
     #[test]
     fn cancelled_duplicate_pass_preserves_review_and_rejects_late_pairs() {

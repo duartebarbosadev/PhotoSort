@@ -247,6 +247,7 @@ impl PhotoSortApp {
         self.decisions = session.decisions.into();
         self.trash_steps = session.trash_steps;
         self.by_hand = session.by_hand;
+        self.accepted.clear();
         self.trash_steps
             .retain(|id, _| self.decisions.get(id).is_some_and(|d| d.rejected));
         self.delete_review.restore_suggested(session.suggested);
@@ -996,6 +997,7 @@ impl PhotoSortApp {
         self.decisions = session.decisions.clone().into();
         self.trash_steps = session.trash_steps.clone();
         self.by_hand = session.by_hand.clone();
+        self.accepted.clear();
         self.delete_review
             .restore_suggested(session.suggested.clone());
         self.pick_review

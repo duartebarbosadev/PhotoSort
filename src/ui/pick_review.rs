@@ -192,9 +192,17 @@ impl PhotoSortApp {
         if !self.pick_enabled() {
             return;
         }
+        let photos: Vec<MediaId> = self
+            .pick_review
+            .clusters()
+            .iter()
+            .flat_map(|c| c.ordered.iter().copied())
+            .collect();
+        let before = self.accept_marks(&photos);
         let accepted = self
             .pick_review
             .accept_undecided(&mut self.decisions, &self.by_hand);
+        self.note_accepted(Step::PickBest, before);
         self.accepted_status(accepted.suggestions);
         self.changed_items(accepted.photos);
     }
@@ -221,27 +229,35 @@ impl PhotoSortApp {
         self.set_active(best);
         self.pick_panel = true;
     }
-    /// Enter: the suggestion is already the decision, so show the selected
-    /// group, or move on to the next one.
-    pub(super) fn next_pick_group(&mut self) {
-        if self.pick_current.is_some() && !self.pick_panel {
-            self.pick_panel = true;
-        } else {
-            self.navigate_pick(1);
+    /// A: the selected group takes its suggestion, as its Accept suggestion
+    /// button does. A group decided already stays as it is.
+    pub(super) fn accept_pick_card(&mut self) {
+        if let Some(group) = self.pick_group()
+            && self.pick_link(group) == Some(GroupLink::Accept)
+        {
+            self.undo_pick_group(group);
+        }
+    }
+    /// U: the selected group's Undo, as its button.
+    pub(super) fn undo_pick_card(&mut self) {
+        if let Some(group) = self.pick_group()
+            && self.pick_link(group) == Some(GroupLink::Undo)
+        {
+            self.undo_pick_group(group);
         }
     }
     /// The panel's Undo, beside its Keep/Trash switches: Accept suggestion
     /// while the group is undecided, as on its card.
     pub(super) fn pick_undo_button(&mut self, ui: &mut egui::Ui) {
         if let Some(group) = self.pick_group() {
-            let button = if self.pick_undecided(group) {
-                primary(ACCEPT)
+            let (button, key) = if self.pick_undecided(group) {
+                (primary(ACCEPT), "A")
             } else {
-                egui::Button::new("Undo")
+                (egui::Button::new("Undo"), "U")
             };
             if ui
                 .add_enabled(self.pick_link(group).is_some(), button)
-                .on_hover_text("R")
+                .on_hover_text(key)
                 .clicked()
             {
                 self.undo_pick();
@@ -357,15 +373,10 @@ impl PhotoSortApp {
         }
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add_enabled(
-                        changed > 0 && self.pick_enabled(),
-                        egui::Button::new("Accept all suggestions"),
-                    )
-                    .on_hover_text("A")
-                    .clicked()
-                {
-                    self.accept_pick_defaults();
+                match self.accept_or_undo_button(ui, changed > 0, self.pick_enabled()) {
+                    Some(true) => self.undo_accepted(Step::PickBest),
+                    Some(false) => self.accept_pick_defaults(),
+                    None => {}
                 }
                 ui.add_space(S3);
                 self.size_slider(ui);
@@ -594,7 +605,7 @@ impl PhotoSortApp {
         });
         let others = cluster.ordered.len() - 1;
         let accept = format!(
-            "Keep the starred photo and mark the {} for Trash · R",
+            "Keep the starred photo and mark the {} for Trash · A",
             if others == 1 {
                 "other one".to_owned()
             } else {
@@ -608,9 +619,9 @@ impl PhotoSortApp {
             state_text,
             photos,
             buttons: Vec::new(),
-            // The selected group shows in the panel beside the grid, which
-            // is enough: no outline that could be read as Keep or Trash.
-            shown: self.pick_panel && self.pick_group() == Some(group),
+            // The selected group, outlined while the panel is hidden too:
+            // the keys still act on it.
+            shown: self.pick_group() == Some(group),
             title_hover: None,
             undo: self.pick_link(group).map(|link| match link {
                 GroupLink::Accept => (ACCEPT.to_owned(), accept),
@@ -704,22 +715,29 @@ mod tests {
         ids
     }
     fn key(app: &mut PhotoSortApp, key: egui::Key, modifiers: egui::Modifiers) {
+        hold(app, key, modifiers, 0);
+    }
+    /// A key press, then `repeats` more of it with no release between, as
+    /// a held key sends them: egui marks those as repeats itself.
+    fn hold(app: &mut PhotoSortApp, key: egui::Key, modifiers: egui::Modifiers, repeats: usize) {
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        let input = egui::RawInput {
-            events: vec![egui::Event::Key {
-                key,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers,
-            }],
-            ..Default::default()
-        };
-        let _ = ctx.run_test(input, |ui| {
-            let ctx = &ui.ctx().clone();
-            app.keyboard(ctx)
-        });
+        for _ in 0..=repeats {
+            let input = egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                ..Default::default()
+            };
+            let _ = ctx.run_test(input, |ui| {
+                let ctx = &ui.ctx().clone();
+                app.keyboard(ctx)
+            });
+        }
     }
 
     #[test]
@@ -908,11 +926,17 @@ mod tests {
         key(&mut app, egui::Key::Enter, egui::Modifiers::NONE);
         assert_eq!(app.pick_group(), Some(0));
         assert!(app.pick_panel);
-        // Number keys toggle the nth photo of the group shown, best first.
-        key(&mut app, egui::Key::Num2, egui::Modifiers::NONE);
+        // D never guesses which photo of the group the user means.
+        key(&mut app, egui::Key::D, egui::Modifiers::NONE);
+        assert_eq!(trashed(&app), vec![1, 2, 4], "D changed the group");
+        // Number keys toggle the nth photo of the group shown, best first,
+        // once however long the key is held.
+        hold(&mut app, egui::Key::Num2, egui::Modifiers::NONE, 3);
         assert_eq!(trashed(&app), vec![1, 4], "Photo 2 is the second best");
         key(&mut app, egui::Key::R, egui::Modifiers::NONE);
-        assert_eq!(trashed(&app), vec![1, 2, 4], "R undoes the group");
+        assert_eq!(trashed(&app), vec![1, 4], "R does nothing here");
+        key(&mut app, egui::Key::U, egui::Modifiers::NONE);
+        assert_eq!(trashed(&app), vec![1, 2, 4], "U undoes the group");
         // Arrows move to the next group; Esc closes the panel.
         key(&mut app, egui::Key::ArrowDown, egui::Modifiers::NONE);
         assert_eq!(app.pick_group(), Some(1));

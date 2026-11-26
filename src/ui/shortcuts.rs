@@ -166,6 +166,10 @@ impl PhotoSortApp {
                 continue;
             }
             let command = modifiers.command || modifiers.ctrl;
+            if command && !modifiers.alt && !modifiers.shift && pressed == egui::Key::Z {
+                self.undo_card();
+                continue;
+            }
             if command && (modifiers.alt || !command_chord_allowed(pressed))
                 || modifiers.alt && pressed != egui::Key::R
             {
@@ -194,15 +198,73 @@ impl PhotoSortApp {
         repeat: bool,
     ) -> bool {
         match self.step {
-            Step::PickBest => self.pick_key(pressed, modifiers),
+            Step::PickBest => self.pick_key(pressed, modifiers, repeat),
             Step::EasyDelete => self.delete_key(pressed, modifiers, repeat),
-            Step::Rotation => self.rotation_key(pressed, modifiers),
+            Step::Rotation => self.rotation_key(pressed, modifiers, repeat),
             _ => false,
         }
     }
 
-    fn pick_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
-        // Keys that change a group act on the one shown beside the grid.
+    /// U, and for now Ctrl/Cmd+Z: the selected card's Undo, in the steps
+    /// that show cards. Help names U alone, so Ctrl/Cmd+Z stays free for a
+    /// fuller undo later.
+    fn undo_card(&mut self) {
+        match self.step {
+            Step::EasyDelete => self.undo_delete_card(),
+            Step::PickBest => self.undo_pick_card(),
+            Step::Rotation => self.undo_rotation(),
+            _ => {}
+        }
+    }
+
+    /// D in the steps that show cards: the selected card's photo goes to
+    /// Trash, or back, as D does in Cull; Delete and Backspace (`toggle`
+    /// false) only mark it, and wait while busy, as in Cull. A card of
+    /// several photos has no one photo selected (a click on one switches
+    /// it), so these keys there say how to choose one instead of guessing.
+    fn trash_card_photo(&mut self, toggle: bool) {
+        if !toggle && self.busy {
+            return;
+        }
+        let photos: Vec<MediaId> = match self.step {
+            Step::EasyDelete => self
+                .delete_current
+                .and_then(|id| self.delete_review.entry(id))
+                .map(|entry| entry.candidates())
+                .unwrap_or_default(),
+            Step::PickBest => self.pick_panel_ids(),
+            Step::Rotation => self.active.into_iter().collect(),
+            _ => return,
+        };
+        match photos.as_slice() {
+            [] => {}
+            [id] if toggle || !self.decision(*id).rejected => self.reject(*id),
+            [_] => {}
+            _ => self.set_status(
+                "This card has several photos: click one, or press its number, to mark it for Trash"
+                    .into(),
+            ),
+        }
+    }
+
+    /// Shift+U: Undo all, in the steps that show cards: what the step's
+    /// Accept all suggestions changed goes back, and only that.
+    fn undo_all_cards(&mut self) {
+        if matches!(
+            self.step,
+            Step::EasyDelete | Step::PickBest | Step::Rotation
+        ) {
+            self.undo_accepted(self.step);
+        }
+    }
+
+    // In the three steps that show cards, D marks the selected card's photo,
+    // A accepts its suggestion, Shift+A accepts them all, U (and Ctrl/Cmd+Z,
+    // in `keyboard`) undoes the card, Shift+U undoes what Accept all did, and Enter only moves on, as the arrows
+    // do: accepting is always a key of its own.
+    fn pick_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers, repeat: bool) -> bool {
+        // Keys that change a photo act on the group shown beside the grid,
+        // once per press: a held key's repeats would switch it back and forth.
         let shown = self.pick_panel && self.pick_current.is_some();
         let digit = [
             egui::Key::Num1,
@@ -219,18 +281,26 @@ impl PhotoSortApp {
         .position(|k| *k == pressed);
         match pressed {
             _ if digit.is_some() => {
-                if shown && let Some(slot) = digit {
+                if shown
+                    && !repeat
+                    && let Some(slot) = digit
+                {
                     self.toggle_pick_slot(slot);
                 }
             }
             egui::Key::ArrowLeft | egui::Key::ArrowUp => self.navigate_pick(-1),
             egui::Key::ArrowRight | egui::Key::ArrowDown => self.navigate_pick(1),
-            egui::Key::R if modifiers.shift => self.accept_pick_defaults(),
-            egui::Key::R if shown => self.undo_pick(),
+            egui::Key::U if modifiers.shift => self.undo_all_cards(),
+            egui::Key::U => self.undo_card(),
+            egui::Key::D if repeat => {}
+            egui::Key::D => self.trash_card_photo(true),
+            egui::Key::Delete | egui::Key::Backspace => self.trash_card_photo(false),
+            egui::Key::A if modifiers.shift => self.accept_pick_defaults(),
+            egui::Key::A => self.accept_pick_card(),
+            // Nothing turns here: a group shows several photos, none chosen.
             egui::Key::R => {}
             egui::Key::Enter if modifiers.shift => self.review_changes(),
-            egui::Key::Enter => self.next_pick_group(),
-            egui::Key::A => self.accept_pick_defaults(),
+            egui::Key::Enter => self.navigate_pick(1),
             egui::Key::Escape if self.pick_panel => self.pick_panel = false,
             _ => return false,
         }
@@ -245,45 +315,54 @@ impl PhotoSortApp {
         // says: an Eyes closed card can show more than two.
         let photo = digit(pressed).filter(|d| *d > 0);
         match pressed {
-            // Left keeps the card's photos, Right sends all but its keeper
-            // to Trash, as Help says.
-            egui::Key::ArrowLeft | egui::Key::ArrowRight => {
-                if decides {
-                    self.decide_delete_card(pressed == egui::Key::ArrowRight);
-                }
-            }
             _ if photo.is_some() => {
                 if decides && let Some(photo) = photo {
                     self.toggle_delete_candidate(photo - 1);
                 }
             }
-            egui::Key::R if modifiers.shift => self.accept_delete_defaults(),
-            egui::Key::R if self.delete_panel => self.undo_delete(),
+            egui::Key::U if modifiers.shift => self.undo_all_cards(),
+            egui::Key::U => self.undo_card(),
+            egui::Key::D if repeat => {}
+            egui::Key::D => self.trash_card_photo(true),
+            egui::Key::Delete | egui::Key::Backspace => self.trash_card_photo(false),
+            egui::Key::A if modifiers.shift => self.accept_delete_defaults(),
+            egui::Key::A => self.accept_delete_card(),
+            // Nothing turns here: a card shows its photos, none chosen.
             egui::Key::R => {}
             egui::Key::Enter if modifiers.shift => self.review_changes(),
             egui::Key::Enter => self.next_delete_card(),
-            egui::Key::A => self.accept_delete_defaults(),
             egui::Key::Escape if self.delete_panel => self.delete_panel = false,
             _ => return false,
         }
         true
     }
 
-    fn rotation_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) -> bool {
-        // Keys that change a photo act on the one shown beside the grid.
+    fn rotation_key(
+        &mut self,
+        pressed: egui::Key,
+        modifiers: egui::Modifiers,
+        repeat: bool,
+    ) -> bool {
+        // Keys that turn a photo act on the one shown beside the grid. R and
+        // Shift+R turn it right and left as in Cull; Q and E still do too.
         let shown = self.rotation_panel;
         match pressed {
-            egui::Key::Q | egui::Key::E if shown => {
+            egui::Key::Q | egui::Key::E | egui::Key::R if shown => {
+                let left = pressed == egui::Key::Q || pressed == egui::Key::R && modifiers.shift;
                 if let Some(id) = self.active {
-                    self.rotate_card(id, if pressed == egui::Key::Q { 3 } else { 1 });
+                    self.rotate_card(id, if left { 3 } else { 1 });
                 }
             }
-            egui::Key::Q | egui::Key::E => {}
-            egui::Key::R if shown && !modifiers.shift => self.undo_rotation(),
-            egui::Key::R => {}
+            egui::Key::Q | egui::Key::E | egui::Key::R => {}
+            egui::Key::U if modifiers.shift => self.undo_all_cards(),
+            egui::Key::U => self.undo_card(),
+            egui::Key::D if repeat => {}
+            egui::Key::D => self.trash_card_photo(true),
+            egui::Key::Delete | egui::Key::Backspace => self.trash_card_photo(false),
+            egui::Key::A if modifiers.shift => self.accept_rotation_suggestions(),
+            egui::Key::A => self.accept_rotation_card(),
             egui::Key::Enter if modifiers.shift => self.review_changes(),
             egui::Key::Enter => self.next_rotation_card(),
-            egui::Key::A => self.accept_rotation_suggestions(),
             egui::Key::Escape if shown => self.rotation_panel = false,
             _ => return false,
         }
@@ -319,8 +398,7 @@ impl PhotoSortApp {
 
     /// Single-photo actions shared by every workflow that shows a canvas.
     fn photo_key(&mut self, pressed: egui::Key, modifiers: egui::Modifiers) {
-        // Easy Delete and Pick Best choose with their own keys, and Fix
-        // Rotation shows no Trash marks to stage.
+        // Easy Delete, Pick Best and Fix Rotation mark with their own keys.
         let marks = !matches!(
             self.step,
             Step::EasyDelete | Step::PickBest | Step::Rotation

@@ -274,27 +274,6 @@ impl Review {
             update_trash(decisions, [(candidate, kept(decisions, candidate))]);
         }
     }
-    /// Keeps every photo of a card.
-    pub fn keep(&self, id: MediaId, decisions: &mut HashMap<MediaId, Decision>) {
-        if let Some(entry) = self.entry(id) {
-            update_trash(
-                decisions,
-                entry.candidates().into_iter().map(|c| (c, false)),
-            );
-        }
-    }
-    /// Sends a card's photos to Trash, all but its keeper, which stays even
-    /// where the suggestion keeps both (two formats of one shot): a card of
-    /// several photos never loses them all. A photo alone on its card goes.
-    pub fn trash(&self, id: MediaId, decisions: &mut HashMap<MediaId, Decision>) {
-        if let Some(entry) = self.entry(id) {
-            let marks = entry
-                .candidates()
-                .into_iter()
-                .map(|c| (c, c == entry.subject || entry.extra.contains(&c)));
-            update_trash(decisions, marks);
-        }
-    }
     /// Puts each card back to its suggestion.
     pub fn accept(&self, ids: &[MediaId], decisions: &mut HashMap<MediaId, Decision>) {
         update_trash(decisions, self.suggested_marks(ids));

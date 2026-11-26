@@ -91,6 +91,7 @@ use eframe::egui::{
 };
 #[path = "transitions.rs"]
 mod transitions;
+use review_card::AcceptedPhoto;
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -399,6 +400,9 @@ pub struct PhotoSortApp {
     /// Photos whose Keep or Trash was chosen by hand, in any step: Accept
     /// all suggestions leaves them as they are. Saved with the session.
     by_hand: HashSet<MediaId>,
+    /// What each step's Accept all suggestions changed, so its Undo all
+    /// takes back that and nothing else. Not saved with the session.
+    accepted: HashMap<Step, Vec<AcceptedPhoto>>,
     /// The photos Fix Rotation, Easy Delete and Pick Best show last: those
     /// already marked for Trash when the step's list was built or entered.
     /// `None` until the next list is built, so a photo never jumps away the
@@ -726,6 +730,7 @@ impl PhotoSortApp {
             catalog_identities: Default::default(),
             trash_steps: HashMap::new(),
             by_hand: HashSet::new(),
+            accepted: HashMap::new(),
             trash_last: None,
             grids: Default::default(),
             file_names: HashMap::new(),
@@ -905,6 +910,7 @@ impl PhotoSortApp {
         self.decisions.clear();
         self.trash_steps.clear();
         self.by_hand.clear();
+        self.accepted.clear();
         self.trash_last = None;
         self.review_blocked = None;
         self.review_targets = false;
@@ -2943,6 +2949,9 @@ fn pressed_keys(ctx: &egui::Context, rotation: bool) -> Vec<(egui::Key, egui::Mo
                         | egui::Key::Num8
                         | egui::Key::Num9
                 ) || (*key == egui::Key::Enter && (modifiers.shift || rotation))
+                    // A card's Undo in the guided steps.
+                    || (*key == egui::Key::U && rotation)
+                    || (*key == egui::Key::Z && (modifiers.command || modifiers.ctrl) && rotation)
                     // Organize's New folder; a plain N stays with egui.
                     || (*key == egui::Key::N
                         && (modifiers.command || modifiers.ctrl)
