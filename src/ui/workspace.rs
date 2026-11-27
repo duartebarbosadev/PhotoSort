@@ -291,6 +291,9 @@ pub struct PhotoSortApp {
     comparison: Vec<MediaId>,
     /// The comparison set aside by F1, restored by pressing F1 again.
     single_view_stash: Vec<MediaId>,
+    /// Easy Delete and Pick Best's panel shows one photo of the card at a
+    /// time, the arrows flipping between them (F).
+    panel_focus: bool,
     textures: HashMap<(MediaId, bool), Texture>,
     requested: HashSet<(MediaId, bool)>,
     failures: HashMap<MediaId, String>,
@@ -542,6 +545,7 @@ impl PhotoSortApp {
         app.runtime.cache.configure(app.preferences.cache);
         app.runtime.processing.configure(app.preferences.processing);
         app.runtime.raw_look.set(app.preferences.raw_look);
+        app.runtime.raw_look.set_detail(app.preferences.raw_detail);
         set_reduce_motion(&cc.egui_ctx, app.preferences.reduce_motion);
         app.runtime.cache.request(false);
         if let Some(folder) = folder {
@@ -666,6 +670,7 @@ impl PhotoSortApp {
             selection: Default::default(),
             comparison: Vec::new(),
             single_view_stash: Vec::new(),
+            panel_focus: false,
             textures: HashMap::new(),
             requested: HashSet::new(),
             failures: HashMap::new(),
@@ -1210,12 +1215,14 @@ impl PhotoSortApp {
             self.pick_current = Some(id);
             self.active = Some(id);
             self.focused_slot = slot as u64;
-            // Another group starts at fit, like a new photo.
+            // Another group starts at fit, like a new photo, and waits a
+            // moment before loading original detail. Within the group (a
+            // photo switched between Keep and Trash) the detail shown stays.
             if group != self.pick_review.group_of(id) {
                 self.inspection_view = InspectionView::default();
                 self.independent_views.clear();
+                self.view_started = Instant::now();
             }
-            self.view_started = Instant::now();
             return;
         }
         if self.step == Step::EasyDelete && self.delete_review.entry(id).is_some() {

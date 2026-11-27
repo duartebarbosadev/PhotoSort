@@ -34,8 +34,9 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
         "Easy Delete",
         &[
             ("Left / Right", "Previous / next"),
-            ("1–9", "Switch that photo"),
-            ("D / Delete", "Mark a one-photo card for Trash"),
+            ("1–9", "Keep it, trash the rest"),
+            ("F", "Focus one, arrows flip"),
+            ("D / Delete", "Trash a lone or focused photo"),
             ("A", "Accept suggestion"),
             ("Enter", "Next"),
             ("U", "Undo"),
@@ -60,7 +61,9 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
         "Pick Best",
         &[
             ("Left / Right", "Previous / next"),
-            ("1–9", "Keep or trash"),
+            ("1–9", "Keep it, trash the rest"),
+            ("F", "Focus one, arrows flip"),
+            ("D / Delete", "Trash the focused photo"),
             ("A", "Accept suggestion"),
             ("Enter", "Next"),
             ("U", "Undo"),

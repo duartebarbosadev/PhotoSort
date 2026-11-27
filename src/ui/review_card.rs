@@ -167,6 +167,25 @@ impl GroupLink {
     }
 }
 
+/// What a click on a card's photo, or its number, does: on a card nobody
+/// has started, keep it and send the others to Trash; once started, switch
+/// it between Keep and Trash. U starts the card over.
+pub(super) fn keep_text(started: bool, keep: bool, side: usize) -> String {
+    let what = if !started {
+        "Keep this one, the others to Trash"
+    } else if keep {
+        "Move to Trash"
+    } else {
+        "Keep this one too"
+    };
+    // Only the first nine photos have a number key.
+    if side < 9 {
+        format!("{what} · {}", side + 1)
+    } else {
+        what.to_owned()
+    }
+}
+
 /// A photo Accept all suggestions changed: its Trash mark and quarter turns
 /// before and as Accept all left them, and whether each had been chosen by
 /// hand before it.
@@ -183,6 +202,16 @@ pub(super) struct AcceptedPhoto {
 type Restore = (MediaId, Option<bool>, Option<u8>);
 
 impl PhotoSortApp {
+    /// Whether a card is under way: any of its photos chosen by hand, or
+    /// marked for Trash, by its Accept, Accept all or a suggestion applied
+    /// on its own. Its photos' numbers then switch only their own photo;
+    /// only an untouched card keeps one and sends the rest to Trash. Its
+    /// Undo (U) starts it over.
+    pub(super) fn card_started(&self, photos: &[MediaId]) -> bool {
+        photos
+            .iter()
+            .any(|id| self.by_hand.contains(id) || self.decision(*id).rejected)
+    }
     /// A photo's Trash mark and quarter turns, what Accept all changes.
     fn accept_mark(&self, id: MediaId) -> (bool, u8) {
         let decision = self.decision(id);
@@ -303,7 +332,7 @@ impl PhotoSortApp {
         }
     }
     /// The summary's Accept all suggestions, or, once it has nothing left
-    /// to do and what it did is still there, Undo all in its place.
+    /// to do and what it did is still there, Undo Accept all in its place.
     pub(super) fn accept_or_undo_button(
         &mut self,
         ui: &mut egui::Ui,
@@ -314,10 +343,10 @@ impl PhotoSortApp {
         let (button, key) = if undo {
             (
                 egui::Button::new(format!(
-                    "{}  Undo all",
+                    "{}  Undo Accept all",
                     egui_phosphor::regular::ARROW_U_UP_LEFT
                 )),
-                "Undo what Accept all suggestions changed · Shift+U",
+                "Puts back what Accept all changed; your own choices stay · Shift+U",
             )
         } else {
             (egui::Button::new("Accept all suggestions"), "Shift+A")

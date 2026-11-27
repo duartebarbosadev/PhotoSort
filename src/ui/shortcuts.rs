@@ -226,6 +226,18 @@ impl PhotoSortApp {
         if !toggle && self.busy {
             return;
         }
+        // In focus they act on the photo shown, alone.
+        if self.focus_active() {
+            if let Some(id) = self
+                .comparison_ids()
+                .get(self.focused_slot as usize)
+                .copied()
+                && (toggle || !self.decision(id).rejected)
+            {
+                self.reject(id);
+            }
+            return;
+        }
         let photos: Vec<MediaId> = match self.step {
             Step::EasyDelete => self
                 .delete_current
@@ -241,7 +253,7 @@ impl PhotoSortApp {
             [id] if toggle || !self.decision(*id).rejected => self.reject(*id),
             [_] => {}
             _ => self.set_status(
-                "This card has several photos: click one to mark it for Trash, or open the card and press its number"
+                "This card has several photos: click the one to keep, or open the card, press F, then D to send the one shown to Trash"
                     .into(),
             ),
         }
@@ -285,11 +297,19 @@ impl PhotoSortApp {
                     && !repeat
                     && let Some(slot) = digit
                 {
-                    self.toggle_pick_slot(slot);
+                    self.keep_pick_slot(slot);
                 }
+            }
+            // In focus the arrows flip between the group's photos.
+            egui::Key::ArrowLeft | egui::Key::ArrowUp if self.focus_active() => self.flip_focus(-1),
+            egui::Key::ArrowRight | egui::Key::ArrowDown if self.focus_active() => {
+                self.flip_focus(1)
             }
             egui::Key::ArrowLeft | egui::Key::ArrowUp => self.navigate_pick(-1),
             egui::Key::ArrowRight | egui::Key::ArrowDown => self.navigate_pick(1),
+            egui::Key::F if repeat => {}
+            egui::Key::F => self.toggle_panel_focus(),
+            egui::Key::Escape if self.focus_active() => self.panel_focus = false,
             egui::Key::U if modifiers.shift && repeat => {}
             egui::Key::U if modifiers.shift => self.undo_all_cards(),
             egui::Key::U => self.undo_card(),
@@ -318,7 +338,7 @@ impl PhotoSortApp {
         match pressed {
             _ if photo.is_some() => {
                 if decides && let Some(photo) = photo {
-                    self.toggle_delete_candidate(photo - 1);
+                    self.keep_delete_candidate(photo - 1);
                 }
             }
             egui::Key::U if modifiers.shift && repeat => {}
@@ -333,6 +353,15 @@ impl PhotoSortApp {
             egui::Key::R => {}
             egui::Key::Enter if modifiers.shift => self.review_changes(),
             egui::Key::Enter => self.next_delete_card(),
+            // In focus the arrows flip between the card's photos; otherwise
+            // they move between cards (`arrow_key`).
+            egui::Key::ArrowLeft | egui::Key::ArrowUp if self.focus_active() => self.flip_focus(-1),
+            egui::Key::ArrowRight | egui::Key::ArrowDown if self.focus_active() => {
+                self.flip_focus(1)
+            }
+            egui::Key::F if repeat => {}
+            egui::Key::F => self.toggle_panel_focus(),
+            egui::Key::Escape if self.focus_active() => self.panel_focus = false,
             egui::Key::Escape if self.delete_panel => self.delete_panel = false,
             _ => return false,
         }

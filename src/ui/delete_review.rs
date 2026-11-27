@@ -10,7 +10,9 @@ use crate::core::text::{TO_TRASH, TRASH};
 pub(super) const SUGGESTED: &str = "Suggested by PhotoSort.";
 /// The line over the grid while nothing is marked: what to do.
 fn hint() -> String {
-    format!("Nothing marked yet: accept a suggestion, or click a photo to mark it for the {TRASH}.")
+    format!(
+        "Nothing marked yet: accept a suggestion, or click the photo to keep and the others go to the {TRASH}."
+    )
 }
 
 /// On a photo PhotoSort suggests moving to Trash and left unmarked: every
@@ -243,7 +245,48 @@ impl PhotoSortApp {
     pub(super) fn delete_enabled(&self) -> bool {
         !self.busy && self.delete_run.is_none()
     }
-    /// Switches one photo of the current card between Keep and Trash.
+    /// A photo's number, or a click on it: on a card nobody has started by
+    /// hand, that photo is kept and the others go to Trash; once the card is
+    /// started, it switches that photo between Keep and Trash. U starts over.
+    pub(super) fn keep_delete_candidate(&mut self, side: usize) {
+        if !self.delete_enabled() {
+            return;
+        }
+        let Some(candidates) = self
+            .delete_current
+            .and_then(|id| self.delete_review.entry(id))
+            .map(Entry::candidates)
+        else {
+            return;
+        };
+        let Some(&chosen) = candidates.get(side) else {
+            return;
+        };
+        // In focus a number or click only shows that photo; D marks it.
+        if self.focus_active() {
+            self.active = Some(chosen);
+            self.focused_slot = side as u64;
+            return;
+        }
+        // A photo alone on its card has no others to send to Trash: its
+        // number or a click switches it, as on a card under way.
+        if self.card_started(&candidates) || candidates.len() == 1 {
+            let kept = !self.decision(chosen).rejected;
+            crate::core::model::update_trash(&mut self.decisions, [(chosen, kept)]);
+            self.by_hand.insert(chosen);
+        } else {
+            crate::core::model::update_trash(
+                &mut self.decisions,
+                candidates.iter().map(|c| (*c, *c != chosen)),
+            );
+            self.by_hand.extend(candidates.iter().copied());
+        }
+        self.active = Some(chosen);
+        self.focused_slot = side as u64;
+        self.changed_items(candidates);
+    }
+    /// Switches one photo of the current card between Keep and Trash, as D
+    /// does on a card of one photo.
     pub(super) fn toggle_delete_candidate(&mut self, side: usize) {
         if !self.delete_enabled() {
             return;
@@ -514,6 +557,11 @@ impl PhotoSortApp {
     /// opens its photos large in a panel beside the grid. The keyboard acts
     /// on the current card in both.
     pub(super) fn delete_grid(&mut self, ui: &mut egui::Ui) {
+        // Focus belongs to the panel: closed any way (X, Esc, a click on the
+        // grid's background), it ends.
+        if !(self.delete_panel && self.delete_current.is_some()) {
+            self.panel_focus = false;
+        }
         let shown = self.delete_deck();
         self.delete_summary(ui);
         ui.add_space(S2);
@@ -1231,6 +1279,8 @@ impl PhotoSortApp {
         // Nobody has decided it yet: no Keep or Trash, only the suggestion.
         let undecided = self.delete_undecided(subject);
         let leaders = entry.candidates();
+        // A photo alone on its card switches from the first click.
+        let started = self.card_started(&leaders) || leaders.len() == 1;
         let mut facts = self.delete_facts(entry, &leaders);
         // A suggestion held back says why, first, where it is not cut off.
         for held in self
@@ -1261,10 +1311,12 @@ impl PhotoSortApp {
                 CardPhoto {
                     id: *id,
                     turns: self.preview_turns(*id),
-                    badge: if undecided {
+                    // Only Trash is marked: the photos left unmarked are the
+                    // ones kept.
+                    badge: if undecided || keep {
                         Badge::None
                     } else {
-                        Badge::keep(keep)
+                        Badge::keep(false)
                     },
                     // This card's own reason: its keeper may keep others too.
                     suggested: keeps_for(entry, *id),
@@ -1278,19 +1330,7 @@ impl PhotoSortApp {
                     facts,
                     trash: !keep,
                     dimmed: self.trashed_elsewhere(*id),
-                    toggle: enabled.then(|| {
-                        format!(
-                            "{} · {}",
-                            if undecided {
-                                "Mark for Trash"
-                            } else if keep {
-                                "Move to Trash instead"
-                            } else {
-                                "Keep instead"
-                            },
-                            side + 1
-                        )
-                    }),
+                    toggle: enabled.then(|| super::review_card::keep_text(started, keep, side)),
                     inset: insets[side].take(),
                 }
             })
@@ -1351,6 +1391,11 @@ impl PhotoSortApp {
     /// current suggestion so the keyboard follows the mouse.
     pub(super) fn delete_card_event(&mut self, subject: MediaId, event: CardEvent) {
         self.pending_bookmark = None;
+        // A click on another card leaves focus: the panel shows that card
+        // whole.
+        if self.delete_current != Some(subject) {
+            self.panel_focus = false;
+        }
         if self.delete_current != Some(subject) && self.delete_review.entry(subject).is_some() {
             self.set_active(subject);
         }
@@ -1370,7 +1415,7 @@ impl PhotoSortApp {
                 // A click shows the card's photos large beside the grid.
                 self.delete_panel = true;
             }
-            CardEvent::Toggle(side) => self.toggle_delete_candidate(side),
+            CardEvent::Toggle(side) => self.keep_delete_candidate(side),
             CardEvent::Undo => self.undo_delete(),
             CardEvent::Button(_) => {}
         }
@@ -2094,9 +2139,9 @@ mod tests {
         app.delete_card_event(MediaId(3), CardEvent::Toggle(0));
         assert_eq!(app.delete_current, Some(MediaId(3)));
         assert!(!trashed(&app, 3));
-        // The HEIC of the pair goes to Trash from its own pill.
+        // A click on the pair's HEIC keeps it and sends the JPEG to Trash.
         app.delete_card_event(MediaId(4), CardEvent::Toggle(1));
-        assert!(trashed(&app, 5) && !trashed(&app, 4));
+        assert!(trashed(&app, 4) && !trashed(&app, 5));
         app.delete_card_event(MediaId(3), CardEvent::Undo);
         assert!(trashed(&app, 3));
         // Pills act on their card without opening the panel.
@@ -2447,9 +2492,13 @@ mod tests {
         key(&mut app, egui::Key::D, none);
         assert_eq!(app.decisions, staged, "D guessed a photo");
         assert!(app.status.contains("several photos"), "{}", app.status);
-        // A held key decides once: its repeats never switch the photo back.
-        hold(&mut app, egui::Key::Num2, none, 3);
-        assert!(trashed(&app, 2), "2 switches the second photo once");
+        // Its suggestion is applied: a number switches only its photo, once
+        // however long the key is held. 1 brings the copy back from Trash.
+        hold(&mut app, egui::Key::Num1, none, 3);
+        assert!(
+            !trashed(&app, 1) && !trashed(&app, 2),
+            "1 switches the first alone"
+        );
         key(&mut app, egui::Key::Z, undo);
         assert!(
             trashed(&app, 1) && !trashed(&app, 2),
@@ -2471,7 +2520,7 @@ mod tests {
         assert_eq!(app.delete_current, Some(MediaId(4)), "Enter moves on");
         assert!(app.delete_panel);
         key(&mut app, egui::Key::Num1, none);
-        assert!(trashed(&app, 4) && !trashed(&app, 5));
+        assert!(!trashed(&app, 4) && trashed(&app, 5));
         key(&mut app, egui::Key::ArrowDown, none);
         assert_eq!(app.delete_current, Some(MediaId(3)));
         // D switches a card's only photo, once however long it is held.
@@ -2482,19 +2531,25 @@ mod tests {
             key(&mut app, egui::Key::Delete, none);
             assert!(trashed(&app, 3), "Delete marks it");
         }
+        // Untouched again (U, suggestions off), its 1 marks it at once: a
+        // photo alone has no others to send to Trash instead.
+        key(&mut app, egui::Key::U, none);
+        assert!(!trashed(&app, 3));
+        key(&mut app, egui::Key::Num1, none);
+        assert!(trashed(&app, 3), "1 left a lone photo kept");
         key(&mut app, egui::Key::ArrowUp, none);
         key(&mut app, egui::Key::A, egui::Modifiers::SHIFT);
         assert!(trashed(&app, 1), "Shift+A accepts the undecided card");
-        assert!(trashed(&app, 4), "Shift+A leaves a choice made by hand");
-        // Undo all then takes Accept all's place, and Shift+U takes back
+        assert!(trashed(&app, 5), "Shift+A leaves a choice made by hand");
+        // Undo Accept all then takes its place, and Shift+U takes back
         // what Accept all did and nothing else: the choices made by hand stay.
         let shown = super::super::review_card::render_grid(&mut app);
-        assert!(shown.contains("Undo all"), "{shown}");
+        assert!(shown.contains("Undo Accept all"), "{shown}");
         assert!(!shown.contains("Accept all suggestions"), "{shown}");
         key(&mut app, egui::Key::U, egui::Modifiers::SHIFT);
         assert!(!trashed(&app, 1), "{}", app.status);
         assert!(
-            trashed(&app, 3) && trashed(&app, 4),
+            trashed(&app, 3) && trashed(&app, 5),
             "a choice made by hand went"
         );
         let shown = super::super::review_card::render_grid(&mut app);
@@ -2514,13 +2569,20 @@ mod tests {
         assert!(trashed(&app, 1), "Undo all reached another tab");
         app.set_delete_tab(None);
         app.refilter();
-        // A photo switched by hand and back is the user's: Undo all leaves it.
+        // After Accept all a number switches only its own photo: 1 comes
+        // back from Trash and 2 stays kept. That choice is the user's, so
+        // Undo all leaves it.
         app.delete_card_event(MediaId(1), CardEvent::Select(0));
-        hold(&mut app, egui::Key::Num1, none, 0);
-        hold(&mut app, egui::Key::Num1, none, 0);
-        assert!(trashed(&app, 1));
+        key(&mut app, egui::Key::Num1, none);
+        assert!(
+            !trashed(&app, 1) && !trashed(&app, 2),
+            "a number moved another"
+        );
         key(&mut app, egui::Key::U, egui::Modifiers::SHIFT);
-        assert!(trashed(&app, 1), "Undo all took back a choice made by hand");
+        assert!(
+            !trashed(&app, 1),
+            "Undo all took back a choice made by hand"
+        );
     }
     #[test]
     fn cancelled_duplicate_pass_preserves_review_and_rejects_late_pairs() {

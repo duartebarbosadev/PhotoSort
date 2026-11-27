@@ -345,6 +345,7 @@ impl ImageWorker {
             let publisher = self.publisher.clone();
             // A Settings change applies to the next preview or detail request.
             self.pipeline.set_raw_look(self.raw_look.get());
+            self.pipeline.set_raw_detail(self.raw_look.detail());
             self.pipeline.apply_pressure(memory::Pressure::current());
             let ok = publisher.guard(super::Worker::Images, || {
                 self.pace();

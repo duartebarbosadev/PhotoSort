@@ -1102,8 +1102,13 @@ fn guided_comparisons_never_show_the_previous_photo_under_the_new_ones_pill() {
                 _ => false,
             })
         };
+        // Only Trash is marked in Easy Delete and Pick Best: the photo shown
+        // is marked so its pill appears.
+        if step != Step::Rotation {
+            app.decisions.entry(MediaId(0)).or_default().rejected = true;
+        }
         let loaded = draw(&mut app);
-        // With its pixels, a guided candidate carries its Keep/Trash pill.
+        // With its pixels, a guided candidate carries its Trash pill.
         assert_eq!(shows_pill(&loaded), step != Step::Rotation, "{step:?}");
         app.set_active(MediaId(1));
         let output = draw(&mut app);
@@ -1424,4 +1429,25 @@ fn every_photo_of_a_large_pick_best_group_asks_for_detail_focused_first() {
     let mut loading: Vec<u64> = app.detail_waiting.keys().copied().collect();
     loading.sort();
     assert_eq!(loading, [0, 1, 2, 3, 4, 5, 6, 7, 10]);
+}
+
+#[test]
+fn two_landscape_photos_go_side_by_side_unless_stacking_shows_them_larger() {
+    // A wide panel: stacked looked as large on paper, but each slot's label
+    // strip and margins leave the photos about 5% smaller than side by side.
+    let landscape = 2.0 / 3.0;
+    assert_eq!(two_photo_columns(1430.0, 965.0, 8.0, landscape), 2);
+    // Portraits sit side by side there, and a tall, narrow panel still
+    // stacks landscapes.
+    assert_eq!(two_photo_columns(1430.0, 965.0, 8.0, 1.5), 2);
+    assert_eq!(two_photo_columns(600.0, 1200.0, 8.0, landscape), 1);
+}
+
+#[test]
+fn a_sideways_swipe_scrolls_a_row_and_only_a_mostly_vertical_one_zooms() {
+    // A trackpad swipe along the row is never level; it still is not a zoom.
+    assert!(sideways(egui::vec2(40.0, 15.0)));
+    assert!(sideways(egui::vec2(-30.0, -50.0)));
+    assert!(!sideways(egui::vec2(10.0, 40.0)));
+    assert!(!sideways(egui::vec2(0.0, 5.0)));
 }

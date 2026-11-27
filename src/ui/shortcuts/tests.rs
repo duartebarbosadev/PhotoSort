@@ -787,7 +787,7 @@ fn guided_keys_match_their_cards_and_trash_keys_only_mark_where_marks_show() {
             app.keyboard(&ui.ctx().clone())
         });
     };
-    // An Eyes closed card of four photos: 3 and 4 switch the third and
+    // An Eyes closed card of four photos: 3 and 4 reach the third and
     // fourth, as their tooltips say.
     let mut app = app(Step::EasyDelete);
     app.media = (1..=4)
@@ -817,11 +817,17 @@ fn guided_keys_match_their_cards_and_trash_keys_only_mark_where_marks_show() {
     }]);
     app.delete_current = Some(MediaId(1));
     app.delete_panel = true;
-    for (key, photo) in [(egui::Key::Num3, MediaId(3)), (egui::Key::Num4, MediaId(4))] {
-        let before = app.decision(photo).rejected;
-        press(&mut app, key);
-        assert_ne!(app.decision(photo).rejected, before, "{key:?}");
-    }
+    // 3 keeps the third and sends the others to Trash; then 4 brings the
+    // fourth back.
+    let marked = |app: &PhotoSortApp| {
+        (1..=4)
+            .map(|n| app.decision(MediaId(n)).rejected)
+            .collect::<Vec<_>>()
+    };
+    press(&mut app, egui::Key::Num3);
+    assert_eq!(marked(&app), [true, true, false, true]);
+    press(&mut app, egui::Key::Num4);
+    assert_eq!(marked(&app), [true, true, false, false]);
     // The card shows none of its photos as the active one, so it has no
     // toolbar stars, and the rating and rotation keys change no photo.
     let rate = |app: &mut PhotoSortApp| {

@@ -212,6 +212,7 @@ impl PhotoSortApp {
     }
     pub(super) fn set_step(&mut self, step: Step) {
         self.browse_filters_open = false;
+        self.panel_focus = false;
         if self.step != step {
             self.organize_preview_requested = false;
             if step == Step::Review {
