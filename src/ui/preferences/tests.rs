@@ -433,6 +433,19 @@ fn settings_preserve_live_history_and_render_compactly_without_image_or_analysis
         .filter(|s| s.pending(&draft, &app.preferences))
         .collect();
     assert_eq!(pending, [Section::Performance]);
+    // So is "Show again" for the intro films: saved, none counts as seen.
+    app.preferences.intro_shown = true;
+    app.preferences.step_intros_shown.insert(Step::Cull);
+    let mut draft = app.preferences.clone();
+    draft.intro_shown = false;
+    draft.step_intros_shown.clear();
+    let pending: Vec<_> = Section::ALL
+        .into_iter()
+        .filter(|s| s.pending(&draft, &app.preferences))
+        .collect();
+    assert_eq!(pending, [Section::Appearance]);
+    app.save_settings(draft);
+    assert!(!app.preferences.intro_shown && app.preferences.step_intros_shown.is_empty());
 }
 #[test]
 fn recent_folders_are_checked_in_the_background_and_missing_ones_leave_the_list() {

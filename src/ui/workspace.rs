@@ -164,6 +164,8 @@ pub struct PhotoSortApp {
     crash_notice_shown: bool,
     /// The first-run intro, due at startup or replayed from Menu.
     intro: intro::Intro,
+    /// A step opened for the first time plays its own intro.
+    step_intros: bool,
     preferences_path: Option<PathBuf>,
     /// The preferences file exists but could not be read; defaults stand in.
     preferences_unreadable: bool,
@@ -573,6 +575,7 @@ impl PhotoSortApp {
             crash_notice: None,
             crash_notice_shown: false,
             intro: intro::Intro::Off,
+            step_intros: intro::AUTOPLAY,
             preferences_path: None,
             preferences_unreadable: false,
             preferences_draft: None,

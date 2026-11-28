@@ -1,0 +1,359 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PhotoSort: the Organize step</title>
+<!--
+  The film shown the first time Organize is opened, drawn like the intro film
+  (film.html) and with the same kit. It stays in Organize and is laid out as the
+  step is in the app: the "Group by" menu and where the folders go along the
+  top, the folders down the left, the photos under their folder in the middle
+  and the chosen photo large on the right.
+  An import is grouped by capture date, then by location; two photos are dragged
+  where they belong; a folder is renamed; a photo shows the files that travel
+  with it; and Review lists the moves without applying them.
+  `draw(t)` paints the frame at `t` seconds and depends on nothing else, so
+  scripts/render_intro.py can step through it:
+      python3 scripts/render_intro.py --film organize
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; margin: auto; width: 100vw; height: 56.25vw;
+           max-height: 100vh; max-width: 177.78vh; }
+</style>
+<canvas id="film" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script>
+'use strict';
+// When things happen, in seconds. sound.py mirrors these.
+const AT = {
+  title: 1.3, group: 4.9, menu: 8.0, date: 8.9, menu2: 11.6, place: 12.5, noGps: 14.3, hand: 15.9, drag: 18.9, drop: 20.0, drag2: 20.8, drop2: 21.9,
+  rename: 22.9, pairs: 25.9, fan: 28.5, review: 32.7, tab: 36.1, end: 40.3,
+};
+const DURATION = AT.end + 1.2;
+// What is said, over the middle of the window, before each thing is shown:
+// when, for how long, and the two lines.
+const CARDS = [
+  [AT.title, 3.2, 'Organize', 'Sort a messy import into folders'],
+  [AT.group, 2.7, 'Choose how to group', 'By date, location, camera, faces or similarity'],
+  [AT.hand, 2.7, 'Adjust anything by hand', 'Drag photos between folders and rename folders in place'],
+  [AT.pairs, 2.6, 'Pairs stay together', 'A RAW, its JPEG and its edits move as one'],
+  [AT.review, 2.8, 'Nothing moves yet', 'Review lists every change before you apply it'],
+];
+
+// ---- the layout ------------------------------------------------------------------
+// A bar of controls, then three panes: the folders, the board, the preview.
+const BAR = 58, PANES = TOP + BAR, LIST_W = 230, BOARD_X = WX + LIST_W, PREVIEW_X = 1230, PREVIEW_CX = (PREVIEW_X + WX + WW) / 2;
+const HX = BOARD_X + 31, STAGE_X = (BOARD_X + PREVIEW_X) / 2, STAGE_Y = 400; // a row's left edge; where a photo is held up to be looked at
+const ROW = r => PANES + 8 + 138 * r; // the top of a folder's row on the board: its name, then its photos
+const COL = j => HX + 56 + 124 * j;
+const slot = (r, j) => front(COL(j), ROW(r) + 80, 112);
+const SIDE = i => PANES + 92 + 46 * i; // the middle of a row in the folder list
+// The "Group by" menu: what it offers (as the app names them) and where it opens.
+const MODES = ['Current folders', 'Capture date', 'Camera', 'Location', 'Visual similarity', 'Faces', 'Date + similarity'];
+const COMBO = { x: WX + 118, w: 196 }, MENU = { x: WX + 118, y: TOP + 54, w: 230, row: 36 };
+const MENU_ROW = i => MENU.y + 26 + MENU.row * i;
+const ROOT = 'Import'; // the folder that was opened
+
+// ---- the photos ------------------------------------------------------------------
+// Fourteen: four from each of three places, taken over four days, and two with
+// no place recorded that plainly belong with the others.
+const DATES = ['2026-10-18', '2026-10-19', '2026-10-21', '2026-10-24'], PLACES = ['Porto', 'Azores', 'Gerês', 'No GPS'], NEW_NAME = 'Hiking trip';
+const CAST = [
+  { place: 0, date: 0, pal: 0, seed: 41 }, { place: 0, date: 0, pal: 0, seed: 43 }, { place: 0, date: 1, pal: 0, seed: 44 }, { place: 0, date: 2, pal: 0, seed: 47 },
+  { place: 1, date: 0, pal: 1, seed: 45 }, { place: 1, date: 1, pal: 1, seed: 46 }, { place: 1, date: 1, pal: 1, seed: 48 }, { place: 1, date: 2, pal: 1, seed: 49 },
+  { place: 2, date: 1, pal: 2, seed: 51 }, { place: 2, date: 2, pal: 2, seed: 50 }, { place: 2, date: 2, pal: 2, seed: 53 }, { place: 2, date: 3, pal: 2, seed: 54 },
+  { place: 3, date: 0, pal: 0, seed: 56 }, { place: 3, date: 3, pal: 2, seed: 57 },
+];
+const fileName = k => `IMG_${String(37 + k).padStart(4, '0')}.JPG`;
+// The two dragged out of "No GPS": which photo, when, and into which row.
+const DRAGS = [{ k: 12, from: AT.drag, to: AT.drop, row: 0 }, { k: 13, from: AT.drag2, to: AT.drop2, row: 2 }];
+const PAIR = 5; // the photo that shows its RAW and its edits
+// Which photo is chosen, and so shown in the preview, from when.
+const CHOSEN = [[1.5, 3], [AT.drag, 12], [AT.drag2, 13], [AT.fan, PAIR]];
+const MESSY = [8, 3, 11, 0, 6, 13, 2, 9, 5, 12, 1, 7, 10, 4];
+const seats = { date: [0, 0, 0, 0], place: [0, 0, 0, 0] };
+CAST.forEach((T, k) => {
+  const rnd = rng(200 + k), cell = MESSY.indexOf(k), row = Math.floor(cell / 5), col = cell % 5;
+  T.messy = { x: COL(2) + (col - (row === 2 ? 1.5 : 2)) * 126 + (rnd() - 0.5) * 18, y: ROW(0) + 88 + 126 * row + (rnd() - 0.5) * 18, rot: (rnd() - 0.5) * 0.2 };
+  T.wave = 0.05 * (col + row);
+  T.dateOrder = T.date * 4 + seats.date[T.date]; T.byDate = slot(T.date, seats.date[T.date]++);
+  T.placeOrder = T.place * 4 + seats.place[T.place]; T.byPlace = slot(T.place, seats.place[T.place]++);
+  T.home = farHome(k);
+});
+// Seven more that only ever drift behind.
+const BACK = Array.from({ length: 7 }, (_, i) => ({ pal: i % 3, seed: 70 + i, home: farHome(14 + i) }));
+
+const lifted = t => eio(seg(t, AT.fan, AT.fan + 0.7)) * (1 - eio(seg(t, AT.fan + 3.0, AT.fan + 3.7)));
+const fanned = t => eio(seg(t, AT.fan + 0.55, AT.fan + 1.15)) * (1 - eio(seg(t, AT.fan + 2.4, AT.fan + 2.95)));
+function poseAt(k, t) {
+  const T = CAST[k];
+  let pose = front(T.messy.x, T.messy.y, 114, { rot: T.messy.rot, scale: eoc(seg(t, 0.8 + T.wave, 1.3 + T.wave)) });
+  // Each grouping lifts the photo out of its place and sets it down in the next.
+  [[AT.date, T.byDate, T.dateOrder], [AT.place, T.byPlace, T.placeOrder]].forEach(([at, to, order]) => {
+    const p = eio(seg(t, at + 0.15 + 0.05 * order, at + 0.85 + 0.05 * order)), lift = Math.sin(Math.PI * p);
+    pose = mix(pose, to, p); pose.w *= 1 + 0.1 * lift; pose.z = 20 * lift;
+  });
+  // The two without a place follow the pointer into the folders they belong in.
+  const drag = DRAGS.find(d => d.k === k);
+  if (drag) {
+    const held = seg(t, drag.from, drag.from + 0.15) * (1 - seg(t, drag.to, drag.to + 0.2));
+    pose = mix(pose, slot(drag.row, 4), eio(seg(t, drag.from + 0.12, drag.to - 0.03)));
+    pose.w *= 1 + 0.12 * held; pose.z = held > 0 ? 30 : 0;
+  }
+  // One is held up to show the files that travel with it; the rest dim.
+  const up = lifted(t);
+  if (k === PAIR) { pose = mix(pose, front(STAGE_X, STAGE_Y, 270), up); pose.z = up > 0 ? 40 : 0; } else pose.dim = 0.6 * up;
+  // Review: every photo steps back.
+  return mix(pose, drift(T.home, k, t), eio(seg(t, AT.tab + 0.2 + 0.02 * k, AT.tab + 1.2 + 0.02 * k)));
+}
+// The RAW and the edits of the photo held up: behind it, then fanned out either side.
+function companions(t) {
+  if (lifted(t) <= 0.004) return [];
+  const main = poseAt(PAIR, t), fan = fanned(t);
+  return [[-1, CAST[PAIR]], [1, { paint: sidecar }]].map(([side, what]) => ({ ...what, ...main, x: main.x + side * 215 * fan, y: main.y + 10 * fan, rot: side * 0.07 * fan, z: 39 }));
+}
+// A file of edits: a card of sliders, the size of a photo.
+function sidecar(o) {
+  const { x, y, w, rot = 0, scale = 1, alpha = 1 } = o, h = w * 0.75;
+  if (scale <= 0.004) return;
+  c.save(); c.translate(x, y); c.rotate(rot); c.scale(scale, scale); c.globalAlpha *= alpha;
+  c.save(); c.shadowColor = 'rgba(0,0,0,0.5)'; c.shadowBlur = h * 0.3; c.shadowOffsetY = h * 0.09;
+  c.fillStyle = CARD; rr(-w / 2, -h / 2, w, h, h * 0.11); c.fill(); c.restore();
+  c.strokeStyle = LINE; c.lineWidth = 2; rr(-w / 2, -h / 2, w, h, h * 0.11); c.stroke();
+  [-0.1, 0.16, -0.2].forEach((knob, i) => {
+    const ly = (i - 1) * h * 0.24;
+    c.strokeStyle = wire(0.22); c.lineWidth = 5; c.lineCap = 'round'; c.beginPath(); c.moveTo(-w * 0.3, ly); c.lineTo(w * 0.3, ly); c.stroke();
+    c.strokeStyle = ACCENT; c.beginPath(); c.moveTo(-w * 0.3, ly); c.lineTo(w * knob, ly); c.stroke();
+    c.fillStyle = INK; c.beginPath(); c.arc(w * knob, ly, 10, 0, 7); c.fill();
+  });
+  c.restore();
+}
+
+// ---- the folders: what the board is grouped into, and from when -----------------
+const folderOf = (k, t) => { const drag = DRAGS.find(d => d.k === k); return drag && t >= drag.to ? drag.row : CAST[k].place; };
+// The folder being renamed: selected, then typed over.
+function renamed(t) {
+  const s = t - AT.rename;
+  return s < 0.6 ? PLACES[2] : NEW_NAME.slice(0, Math.max(1, Math.ceil(seg(s, 0.6, 1.7) * NEW_NAME.length)));
+}
+const GROUPINGS = [
+  { from: 0.9, rows: 1, name: () => ROOT, count: () => CAST.length, color: () => null },
+  { from: AT.date, rows: 4, name: r => DATES[r], color: () => null,
+    count: (r, t) => CAST.filter(T => T.date === r && t > AT.date + 0.8 + 0.05 * T.dateOrder).length },
+  { from: AT.place, rows: 4, name: (r, t) => (r === 2 ? renamed(t) : PLACES[r]), color: r => (r < 3 ? PALS[r].sky[1] : null),
+    count: (r, t) => CAST.filter((T, k) => folderOf(k, t) === r && t > AT.place + 0.8 + 0.05 * T.placeOrder).length,
+    // "No GPS" goes once it is empty; a folder's count lights as a photo lands in it.
+    gone: (r, t) => (r === 3 ? seg(t, AT.drop2 + 0.3, AT.drop2 + 0.6) : 0),
+    lit: (r, t) => DRAGS.some(d => d.row === r && t >= d.to && t < d.to + 1) },
+];
+// Calls `item` for every folder on show: which grouping it is of, its row, name,
+// count and colour, and how far it has come in and gone out.
+function folders(t, item) {
+  GROUPINGS.forEach((g, n) => {
+    const next = GROUPINGS[n + 1];
+    for (let r = 0; r < g.rows; r++) {
+      const enter = seg(t, g.from + 0.1 * r, g.from + 0.45 + 0.1 * r), leave = Math.max(next ? seg(t, next.from, next.from + 0.3) : 0, g.gone ? g.gone(r, t) : 0);
+      if (enter > 0 && leave < 1) item(n, r, g.name(r, t), g.count(r, t), g.color(r), enter, leave, !!g.lit && g.lit(r, t));
+    }
+  });
+}
+// Where the chosen photo is going, as the preview says it.
+function destination(k, t) {
+  if (t < AT.date + 0.5) return ROOT;
+  if (t < AT.place + 0.5) return `${ROOT}  →  ${DATES[CAST[k].date]}`;
+  const r = folderOf(k, t);
+  return `${ROOT}  →  ${r === 2 ? renamed(t) : PLACES[r]}`;
+}
+
+// How far the bar and the three panes are open: in as the window is drawn, out for Review.
+const openAt = t => eoc(seg(t, 0.9, 1.5)) * (1 - eio(seg(t, AT.tab + 0.1, AT.tab + 0.6)));
+const modeAt = t => (t < AT.date ? 0 : t < AT.place ? 1 : 3);
+
+// ---- what is drawn on the window, behind the photos ------------------------------
+function under(t) {
+  const open = openAt(t), away = seg(t, AT.tab + 0.1, AT.tab + 0.4);
+  if (open > 0.004) {
+    controls(t, open);
+    folderList(t, open);
+    preview(t, open);
+  }
+  // Each folder's name above its row of photos: where it is and how much it holds.
+  folders(t, (n, r, name, count, color, enter, leave) => {
+    const out = Math.max(leave, away), g = eoc(enter) * (1 - out), y = ROW(r) + 22;
+    if (g > 0.01) glyph('folder', HX + 10, y - 8, 0.95 * g, color || wire(0.6));
+    font(21, 600, -0.2); slideLeft(name, HX + 34, y, 21, INK, enter, out);
+    let x = HX + 34 + c.measureText(name).width + 14;
+    font(15, 400, 0);
+    if (n > 0) { slideLeft(`in ${ROOT}`, x, y - 1, 15, FAINT, enter, out); x += c.measureText(`in ${ROOT}`).width + 12; }
+    slideLeft(`${count} ${count === 1 ? 'photo' : 'photos'}`, x, y - 1, 15, MUTED, enter, out);
+  });
+  // The folder a carried photo is over lights up.
+  DRAGS.forEach(d => {
+    const on = seg(t, d.to - 0.5, d.to - 0.3) * (1 - seg(t, d.to, d.to + 0.25));
+    if (on > 0.004) { c.strokeStyle = `rgba(232,135,58,${on})`; c.lineWidth = 2.5; rr(HX - 10, ROW(d.row) - 2, 628, 34, 9); c.stroke(); }
+  });
+  reviewList(t, AT.tab, AT.end, 'folder', 'Moving', CAST.length, [[PLACES[0], 5], [PLACES[1], 4], [NEW_NAME, 5]].map(([name, count], i) => [name, count, PALS[i].sky[1]]));
+}
+// The bar along the top: how the photos are grouped, where the folders go, and search.
+function controls(t, open) {
+  c.save(); c.beginPath(); c.rect(WX, TOP, WW * open, BAR); c.clip();
+  c.fillStyle = wire(0.14); c.fillRect(WX, TOP + BAR - 2, WW, 2);
+  font(20, 500, 0); text('Group by', WX + 26, TOP + 36, wire(0.55));
+  const lit = Math.max(pressAt(t, AT.menu), pressAt(t, AT.menu2));
+  c.fillStyle = wire(0.07 + 0.08 * lit); c.strokeStyle = wire(0.26); c.lineWidth = 2; rr(COMBO.x, TOP + 10, COMBO.w, 38, 10); c.fill(); c.stroke();
+  font(19, 500, 0);
+  [[0.9, 0], [AT.date, 1], [AT.place, 3]].forEach(([from, mode], n, all) => {
+    const next = all[n + 1];
+    slideLeft(MODES[mode], COMBO.x + 16, TOP + 36, 19, INK, seg(t, from, from + 0.35), next ? seg(t, next[0], next[0] + 0.3) : 0);
+  });
+  symbol('caret', COMBO.x + COMBO.w - 20, TOP + 30, 1, wire(0.7));
+  const chip = COMBO.x + COMBO.w + 14;
+  c.fillStyle = wire(0.07); rr(chip, TOP + 10, 304, 38, 10); c.fill(); c.stroke();
+  glyph('folder', chip + 24, TOP + 29, 0.8, wire(0.7)); font(19, 500, 0); text('Organize into this folder', chip + 44, TOP + 36, wire(0.85));
+  symbol('caret', chip + 282, TOP + 30, 0.9, wire(0.6));
+  const search = WX + WW - 236;
+  c.fillStyle = 'rgba(0,0,0,0.25)'; rr(search, TOP + 10, 216, 38, 10); c.fill();
+  symbol('search', search + 22, TOP + 29, 0.8, wire(0.5)); font(19, 400, 0); text('Search', search + 44, TOP + 36, wire(0.4));
+  c.restore();
+}
+// The folders down the left: the folder that was opened, and under it the ones proposed.
+function folderList(t, open) {
+  c.save(); c.beginPath(); c.rect(WX, PANES, LIST_W, (FOOT - PANES) * open); c.clip();
+  c.fillStyle = wire(0.14); c.fillRect(BOARD_X - 2, PANES, 2, FOOT - PANES);
+  font(15, 600, 1.4); text('FOLDERS', WX + 24, PANES + 42, wire(0.45));
+  glyph('folder', WX + LIST_W - 34, PANES + 37, 0.8, wire(0.5)); symbol('plus', WX + LIST_W - 22, PANES + 30, 0.55, wire(0.7));
+  c.fillStyle = wire(0.08); rr(WX + 12, SIDE(0) - 21, LIST_W - 26, 42, 10); c.fill();
+  symbol('drive', WX + 36, SIDE(0), 0.85, ACCENT);
+  font(19, 500, -0.2); slideLeft(ROOT, WX + 58, SIDE(0) + 6, 19, INK, seg(t, 0.9, 1.3));
+  font(17, 500, 0); slideRight(String(CAST.length), WX + LIST_W - 24, SIDE(0) + 6, 17, wire(0.5), seg(t, 0.9, 1.3));
+  // The one being renamed has a text field round its name, the old name selected.
+  const s = t - AT.rename, field = eio(seg(s, 0.2, 0.45)) * (1 - eio(seg(s, 2.1, 2.4))), y3 = SIDE(3);
+  font(19, 500, -0.2);
+  const nameW = c.measureText(renamed(t)).width;
+  if (field > 0.004) {
+    c.fillStyle = `rgba(27,26,25,${field})`; rr(WX + 64, y3 - 18, 116, 36, 8); c.fill();
+    trace(WX + 64, y3 - 18, 116, 36, 8, field, ACCENT, 2.5);
+    const picked = eoc(seg(s, 0.3, 0.45));
+    if (s < 0.6 && picked > 0) { c.fillStyle = 'rgba(232,135,58,0.4)'; rr(WX + 69, y3 - 13, (nameW + 6) * picked, 26, 5); c.fill(); }
+    if (s >= 0.6 && s < 2.1 && Math.sin(t * 9) > -0.3) { c.fillStyle = ACCENT; c.fillRect(WX + 74 + nameW, y3 - 12, 2.5, 24); }
+  }
+  folders(t, (n, r, name, count, color, enter, leave, lit) => {
+    if (n === 0) return; // the opened folder is the row above
+    const y = SIDE(r + 1), g = eoc(enter) * (1 - leave);
+    if (g > 0.01) glyph('folder', WX + 52, y, 0.8 * g, color || wire(0.6));
+    font(19, 500, -0.2); slideLeft(name, WX + 72, y + 6, 19, INK, enter, leave);
+    font(17, 500, 0); slideRight(String(count), WX + LIST_W - 24, y + 6, 17, lit ? ACCENT : wire(0.5), enter, leave);
+  });
+  c.restore();
+}
+// The chosen photo, large on the right, with its name and where it is going.
+function preview(t, open) {
+  const right = WX + WW;
+  c.save(); c.beginPath(); c.rect(right - (right - PREVIEW_X) * open, PANES, right - PREVIEW_X, FOOT - PANES); c.clip();
+  c.fillStyle = wire(0.14); c.fillRect(PREVIEW_X, PANES, 2, FOOT - PANES);
+  CHOSEN.forEach(([at, k], n) => {
+    const next = CHOSEN[n + 1], enter = seg(t, at, at + 0.45), leave = next ? seg(t, next[0], next[0] + 0.45) : 0;
+    if (enter <= 0 || leave >= 1) return;
+    font(19, 600, -0.2); slideLeft(fileName(k), PREVIEW_X + 24, PANES + 44, 19, INK, enter, leave);
+    if (enter >= 1 && leave <= 0) {
+      glyph('folder', PREVIEW_X + 33, PANES + 68, 0.62, wire(0.5)); font(15, 400, 0); text(destination(k, t), PREVIEW_X + 48, PANES + 73, MUTED);
+    }
+    // One photo slides out as the next slides in.
+    c.save(); c.beginPath(); c.rect(PREVIEW_X + 2, PANES + 96, right - PREVIEW_X - 2, 262); c.clip();
+    photo({ ...CAST[k], x: PREVIEW_CX, y: PANES + 228 + 270 * (1 - eio(enter)) - 270 * eio(leave), w: 312 });
+    c.restore();
+  });
+  // Under it: step through the photos, mark for the Trash, rate.
+  c.save(); c.translate(PREVIEW_CX, PANES + 402);
+  c.fillStyle = '#1B1A19'; c.strokeStyle = wire(0.24); c.lineWidth = 2; rr(-150, -25, 300, 50, 25); c.fill(); c.stroke();
+  glyph('left', -124, 0, 1, wire(0.5)); glyph('right', -100, 0, 1, wire(0.5));
+  glyph('trash', -62, 0, 0.8, wire(0.7)); font(17, 500, 0); text('Trash', -46, 6, wire(0.7));
+  for (let i = 0; i < 5; i++) star(30 + 25 * i, 0, 9, wire(0.22));
+  c.restore();
+  c.restore();
+}
+// ---- what is drawn over the photos -----------------------------------------------
+const FILES = ['IMG_0042.ARW', 'IMG_0042.JPG', 'IMG_0042.xmp'];
+function over(t) {
+  // The chosen photo is outlined on the board.
+  CHOSEN.forEach(([at, k], n) => {
+    const next = CHOSEN[n + 1], on = seg(t, at, at + 0.2) * (1 - (next ? seg(t, next[0], next[0] + 0.2) : 0)), pose = poseAt(k, t);
+    if (on * pose.focus > 0.01) onPhoto(pose, (w, h) => { c.strokeStyle = ACCENT; c.lineWidth = 3.5 * on * pose.focus; rr(-w / 2 - 3, -h / 2 - 3, w + 6, h + 6, h * 0.11 + 3); c.stroke(); });
+  });
+  // "No GPS" is pointed out as the photos without a place settle into it.
+  trace(HX - 14, ROW(3) - 6, COL(1) + 56 - HX + 28, 138, 14, eio(seg(t, AT.noGps, AT.noGps + 0.5)) * (1 - eio(seg(t, AT.noGps + 0.95, AT.noGps + 1.4))), ACCENT, 3);
+  // The name of each file of the photo held up.
+  const fan = fanned(t);
+  if (fan > 0.004) {
+    font(20, 600, 0);
+    FILES.forEach((name, i) => {
+      const w = c.measureText(name).width + 32;
+      chip(name, STAGE_X + (i - 1) * 215 * fan + w / 2, STAGE_Y + 152, MUTED, eoc(seg(t, AT.fan + 0.9 + 0.1 * i, AT.fan + 1.25 + 0.1 * i)) * (1 - eic(seg(t, AT.fan + 2.2, AT.fan + 2.5))), true);
+    });
+  }
+  groupMenu(t);
+}
+// The "Group by" menu, open between a press on it and a choice from it.
+function groupMenu(t) {
+  [[AT.menu, AT.date, 1], [AT.menu2, AT.place, 3]].forEach(([opens, picks, choice]) => {
+    const open = eoc(seg(t, opens + 0.05, opens + 0.3)) * (1 - eic(seg(t, picks + 0.15, picks + 0.35)));
+    if (open <= 0.004) return;
+    const h = MODES.length * MENU.row + 16, was = choice === 1 ? 0 : 1;
+    c.save(); c.beginPath(); c.rect(MENU.x - 30, MENU.y - 4, MENU.w + 60, (h + 40) * open); c.clip();
+    c.save(); c.shadowColor = 'rgba(0,0,0,0.55)'; c.shadowBlur = 30; c.shadowOffsetY = 10;
+    c.fillStyle = '#232221'; rr(MENU.x, MENU.y, MENU.w, h, 12); c.fill(); c.restore();
+    c.strokeStyle = wire(0.2); c.lineWidth = 2; rr(MENU.x, MENU.y, MENU.w, h, 12); c.stroke();
+    MODES.forEach((mode, i) => {
+      const y = MENU_ROW(i), hover = i === choice ? seg(t, picks - 0.35, picks - 0.1) : 0, press = i === choice ? pressAt(t, picks) : 0;
+      if (hover > 0) { c.fillStyle = press > 0.05 ? `rgba(232,135,58,${0.25 + 0.6 * press})` : wire(0.1 * hover); rr(MENU.x + 6, y - 16, MENU.w - 12, 32, 8); c.fill(); }
+      font(19, 500, 0); text(mode, MENU.x + 20, y + 7, i === was ? ACCENT : wire(0.88));
+      if (i === was) symbol('check', MENU.x + MENU.w - 24, y, 0.9, ACCENT);
+    });
+    c.restore();
+  });
+}
+// ---- the pointer and the camera --------------------------------------------------
+const grab = (pose, more) => ({ x: pose.x + 12, y: pose.y + 18, ...more });
+const COMBO_AT = { x: COMBO.x + 120, y: TOP + 34 }, RENAME_AT = { x: WX + 160, y: SIDE(3) + 12 };
+const STOPS = [
+  { t: 0.9, x: 1480, y: 870 },
+  { t: AT.menu, ...COMBO_AT, click: true },
+  { t: AT.date, x: MENU.x + 120, y: MENU_ROW(1) + 8, click: true },
+  { t: AT.menu2, ...COMBO_AT, click: true },
+  { t: AT.place, x: MENU.x + 120, y: MENU_ROW(3) + 8, click: true },
+  ...DRAGS.flatMap(d => [grab(CAST[d.k].byPlace, { t: d.from, click: true, hold: true }), grab(slot(d.row, 4), { t: d.to, travel: 9 })]),
+  // A double-click on the folder's name.
+  { t: AT.rename, ...RENAME_AT, click: true }, { t: AT.rename + 0.2, ...RENAME_AT, click: true },
+  { t: AT.rename + 3.2, x: 1180, y: 690 },
+  { t: AT.tab, ...TAB(5), y: TAB(5).y + 4, click: true },
+  { t: AT.tab + 2.8, x: CX + 78, y: APPLY_Y + 18 },
+  { t: AT.end + 0.6, x: 1500, y: 900 },
+];
+// The pushes in on what is being pressed: from when to when, where, and how far.
+const LEANS = [
+  { t: AT.menu, until: AT.date, x: MENU.x + 60, y: MENU_ROW(1), amount: 0.9 }, { t: AT.menu2, until: AT.place, x: MENU.x + 60, y: MENU_ROW(1), amount: 0.9 },
+  { t: AT.rename, until: AT.rename + 2.0, x: WX + 130, y: SIDE(3), amount: 1.0 },
+  { t: AT.tab, ...TAB(5), amount: 1 },
+];
+function draw(real) {
+  const t = clamp(real, 0, DURATION);
+  compose(t, {
+    poses: [...BACK.map((tile, i) => ({ ...tile, ...drift(tile.home, 14 + i, t) })), ...CAST.map((tile, k) => ({ ...tile, ...poseAt(k, t) })), ...companions(t)],
+    lean: leanOf(LEANS, t), rack: rackOf(CARDS, t),
+    frame: () => stepFrame(t, 0, AT.tab, AT.end), under, over,
+    top: () => { stepCards(CARDS, t); drawPointer(STOPS, t, eoc(seg(t, 0.9, 1.3)) * (1 - eic(seg(t, AT.end, AT.end + 0.4)))); },
+  });
+}
+
+window.DURATION = DURATION;
+window.draw = draw;
+window.ready = (async () => {
+  await loadKit();
+  draw(0);
+  if (!location.search.includes('render')) {
+    const start = performance.now();
+    const tick = now => { draw(((now - start) / 1000) % (DURATION + 1)); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  }
+  return true;
+})();
+</script>

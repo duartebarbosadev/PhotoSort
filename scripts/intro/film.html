@@ -1,0 +1,465 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PhotoSort intro film</title>
+<!--
+  The first-run intro film, drawn frame by frame on a canvas.
+  A line drawing of the PhotoSort window sits in the middle of the frame, and
+  twelve photos play every part: each step pulls the ones it needs into the
+  window, laid out as that step is in the app, and lets the rest drift, out of
+  focus, behind.
+  `draw(t)` paints the frame at `t` seconds and depends on nothing else, so
+  scripts/render_intro.py can step through it and encode resources/intro/intro.mp4.
+  Opened in a browser (from a local web server at the repository root) it
+  simply plays in a loop.
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; margin: auto; width: 100vw; height: 56.25vw;
+           max-height: 100vh; max-width: 177.78vh; }
+</style>
+<canvas id="film" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script>
+'use strict';
+// The film is written in "script" seconds and played back slower: the opening
+// at OPEN_PACE, each step's name card at CARD_PACE, the rest of the step at PACE
+// and the ending at full speed. Every time below is in script seconds.
+// A step begins with its tab being pressed; its name is then shown over the
+// window while the photos rearrange behind it (the MORPH span), and it plays.
+const OPEN = 2.6, LENGTHS = [4.2, 6.8, 5.6, 4.2, 6.6, 4.2], MORPH = [0.25, 1.35];
+const CARD_END = 1.9, OPEN_PACE = 1.15, CARD_PACE = 1.6, PACE = 1.5;
+// Opening, six steps, ending: when each begins.
+const STARTS = [0, OPEN];
+LENGTHS.forEach(length => STARTS.push(STARTS[STARTS.length - 1] + length));
+const OUTRO = STARTS[7], END = OUTRO + 2.5;
+// Stretches of script time and how slowly each plays.
+const SPANS = [[0, OPEN, OPEN_PACE], ...LENGTHS.flatMap((length, i) => [[STARTS[i + 1], STARTS[i + 1] + CARD_END, CARD_PACE], [STARTS[i + 1] + CARD_END, STARTS[i + 2], PACE]]), [OUTRO, END, 1]];
+const DURATION = SPANS.reduce((sum, [from, to, pace]) => sum + (to - from) * pace, 0);
+// The script time showing `real` seconds into the film.
+function scriptTime(real) {
+  for (const [from, to, pace] of SPANS) {
+    if (real <= (to - from) * pace) return from + real / pace;
+    real -= (to - from) * pace;
+  }
+  return END;
+}
+// The two photos side by side that Easy Delete, Fix Rotation and Pick Best share.
+const LEFT_X = 650, RIGHT_X = 1270, PANE_Y = 361;
+
+// What each step's name card says under its name.
+const STEPS = [
+  ['Organize', 'Sort a messy import into folders'],
+  ['Easy Delete', 'Clear out duplicates and blurry shots'],
+  ['Fix Rotation', 'Straighten sideways and upside-down photos'],
+  ['Pick Best', 'Keep the best shot from each burst'],
+  ['Cull', 'Rate, compare and decide what stays'],
+  ['Review', 'See every change, then apply them all at once'],
+];
+const FOLDERS = ['Porto', 'Azores', 'Gerês'];
+
+// ---- the twelve photos ----------------------------------------------------
+// Two identical sunsets (a duplicate), a soft sea beside its sharp twin (a
+// blurry shot) and two forests taken a moment apart (a burst).
+const CAST = [
+  { pal: 0, seed: 41 }, { pal: 0, seed: 41 }, { pal: 0, seed: 43 }, { pal: 0, seed: 44 },
+  { pal: 1, seed: 45 }, { pal: 1, seed: 46, soft: 7 }, { pal: 1, seed: 46 }, { pal: 1, seed: 48 },
+  { pal: 2, seed: 51 }, { pal: 2, seed: 50, sun: -0.05, soft: 2.5 }, { pal: 2, seed: 50, sun: 0.04 }, { pal: 2, seed: 53 },
+];
+const HOME = [7, 2, 10, 5, 0, 8, 3, 11, 6, 1, 9, 4];
+const MESSY = [6, 1, 9, 3, 10, 4, 0, 8, 5, 11, 2, 7];
+const COL = j => 1085 + (j - 1.5) * 215;
+CAST.forEach((tile, k) => {
+  const rnd = rng(100 + k);
+  const b = lerp(-3.55, 0.4, HOME.indexOf(k) / 11), reach = HOME.indexOf(k) % 2 ? 1.12 : 0.94, cell = MESSY.indexOf(k);
+  tile.home = { x: CX + Math.cos(b) * 860 * reach, y: 520 + Math.sin(b) * 470 * reach, w: 280 + rnd() * 120, rot: (rnd() - 0.5) * 0.5 };
+  tile.messy = { x: COL(cell % 4) + (rnd() - 0.5) * 28, y: 276 + 174 * Math.floor(cell / 4) + (rnd() - 0.5) * 28, rot: (rnd() - 0.5) * 0.24 };
+  tile.sorted = { x: COL(k % 4), y: 288 + 174 * tile.pal };
+  tile.order = tile.pal * 4 + k % 4;
+});
+
+// Where a photo rests when no step is using it: far behind, drifting.
+const behind = (k, t) => drift(CAST[k].home, k, t);
+const GONE = { gone: true };
+
+// What each part of the film asks of photo `k`, `s` seconds in. A part keeps
+// answering after it ends, so the next one can take over from wherever it was.
+// The moments something is clicked are mirrored in sound.py.
+const COPY = 1, ORIGINAL = 0, BLURRY = 5, SHARP = 6, SIDEWAYS = 2, SECOND = 9, BEST = 10, RATED = 3, CULLED = 7;
+// The three sea photos compared side by side in Cull, left to right.
+const SIDE = [4, CULLED, SHARP];
+const CLICK = { place: 2.0, easy: 3.1, easy2: 5.6, turn: 4.4, best: 3.05, star: 2.0, open: 2.6, add: 3.3, add2: 3.9, pick: 4.8, trash: 5.5, apply: 2.55 };
+const SORT_AT = CLICK.place + 0.15, CHECK = [2.0, 2.95], TURN = [3.1, 4.0];
+const STRIP = [3, 4, 7, 6, 8, 10, 11, 0, 2], THUMB = j => ({ x: CX + (j - 4) * 124, y: 648, w: 110 });
+const deleted = (k, part) => (part >= 3 && (k === COPY || k === BLURRY)) || (part >= 5 && k === SECOND) || (part >= 6 && k === CULLED);
+const LEFT = CAST.map((_, k) => k).filter(k => !deleted(k, 7));
+const PARTS = [
+  // Opening: the unsorted photos appear in the window as it is drawn.
+  (k, s) => {
+    const T = CAST[k], cell = MESSY.indexOf(k), wave = 0.05 * (cell % 4 + Math.floor(cell / 4));
+    return front(T.messy.x, T.messy.y, 160, { rot: T.messy.rot, scale: eoc(seg(s, 1.75 + wave, 2.25 + wave)) });
+  },
+  // Organize: a messy grid sorts itself into one row per folder.
+  (k, s) => {
+    const T = CAST[k], p = eio(seg(s, SORT_AT + 0.07 * T.order, SORT_AT + 0.7 + 0.07 * T.order)), lift = Math.sin(Math.PI * p);
+    return front(lerp(T.messy.x, T.sorted.x, p), lerp(T.messy.y, T.sorted.y, p), 160 * (1 + 0.1 * lift), { rot: T.messy.rot * (1 - p), z: 20 * lift });
+  },
+  // Easy Delete: a copy beside its original, then a blurry shot beside a sharp
+  // one; the copy and the blurry shot go.
+  (k, s, t) => {
+    const pane = x => front(x, PANE_Y - 14, 400), away = (at, marked) => {
+      const d = eic(seg(s, at + 0.15, at + 0.75));
+      return { ...pane(LEFT_X), y: PANE_Y - 14 + 60 * d, scale: 1 - d, rot: -0.2 * d, dim: 0.3 * seg(s, marked, marked + 0.3), z: 1 };
+    };
+    if (k === COPY) return away(CLICK.easy, 2.4);
+    if (k === ORIGINAL) return mix(pane(RIGHT_X), behind(k, t), eio(seg(s, 3.5, 4.2)));
+    if (k === BLURRY) return mix(behind(k, t), away(CLICK.easy2, 4.9), eio(seg(s, 3.7, 4.5)));
+    if (k === SHARP) return mix(behind(k, t), pane(RIGHT_X), eio(seg(s, 3.8, 4.6)));
+    return null;
+  },
+  // Fix Rotation: the photo is checked, found sideways, and its correction is
+  // laid beside where it was.
+  (k, s) => {
+    if (k !== SIDEWAYS) return null;
+    const p = eio(seg(s, TURN[0], TURN[1]));
+    return front(lerp(LEFT_X, RIGHT_X, p), PANE_Y - 14 - 30 * Math.sin(Math.PI * p), lerp(360, 400, p), { rot: Math.PI / 2 * (1 - p), z: 2 });
+  },
+  // Pick Best: two of a burst; the better one stays.
+  (k, s) => {
+    const win = eio(seg(s, CLICK.best + 0.1, CLICK.best + 0.8));
+    if (k === BEST) return front(lerp(RIGHT_X, CX, win), lerp(PANE_Y - 16, CY - 26, win), lerp(400, 520, win), { z: 2 });
+    if (k !== SECOND) return null;
+    return front(LEFT_X - 60 * win, PANE_Y - 16, 400, { scale: 1 - eic(win), dim: 0.45 * seg(s, 2.7, 2.95) });
+  },
+  // Cull: the strip of photos; one is rated, then three are chosen and laid side
+  // by side, and the one in the middle goes to the Trash.
+  (k, s) => {
+    const j = STRIP.indexOf(k);
+    if (j < 0) return null;
+    const T = THUMB(j), thumb = front(T.x, T.y, T.w), n = SIDE.indexOf(k);
+    if (k === RATED) return mix(front(CX, 306, 400, { z: 3 }), thumb, eio(seg(s, CLICK.open, CLICK.open + 0.55)));
+    if (n < 0) return thumb;
+    // The row makes room as each photo joins, and closes up once one is gone.
+    const two = eio(seg(s, CLICK.add + 0.05, CLICK.add + 0.6)), three = eio(seg(s, CLICK.add2 + 0.05, CLICK.add2 + 0.6)) * (1 - eio(seg(s, CLICK.trash + 0.45, CLICK.trash + 1.0)));
+    const x = [CX - 215 * two - 155 * three, CX + 215 * (1 - three), CX + 215 + 155 * three][n], at = [CLICK.open, CLICK.add, CLICK.add2][n];
+    const d = k === CULLED ? eic(seg(s, CLICK.trash + 0.25, CLICK.trash + 0.8)) : 0;
+    const up = front(x, 306 + 60 * d, lerp(400, 350, three), { z: 3, scale: 1 - d, rot: -0.2 * d, dim: k === CULLED ? 0.35 * seg(s, CLICK.trash, CLICK.trash + 0.3) : 0 });
+    return mix(thumb, up, eio(seg(s, at + 0.05, at + 0.6)));
+  },
+  // Review: every photo rests while the list is read.
+  () => null,
+  // Ending: what is left, in a tidy row.
+  k => front(CX + (LEFT.indexOf(k) - (LEFT.length - 1) / 2) * 146, 724, 124),
+];
+function poseAt(k, t) {
+  const n = STARTS.findLastIndex(start => t >= start), s = t - STARTS[n];
+  const ask = (part, at) => {
+    const pose = deleted(k, part) ? GONE : PARTS[part](k, at, t);
+    return !pose ? behind(k, t) : pose.gone ? { ...behind(k, t), scale: 0 } : pose;
+  };
+  const now = ask(n, s);
+  return n > 0 && s < MORPH[1] ? mix(ask(n - 1, t - STARTS[n - 1]), now, eio(seg(s, MORPH[0], MORPH[1]))) : now;
+}
+
+// ---- type ---------------------------------------------------------------------
+// A step's name and what it does, over the middle of the window, before it plays.
+function card(i, s) {
+  const leave = seg(s, 1.45, 1.8);
+  font(88, 600, -3);
+  slideWords(STEPS[i][0], CX, CY + 4, 88, INK, k => seg(s, 0.4 + 0.1 * k, 0.85 + 0.1 * k), leave);
+  font(31, 400, -0.1);
+  slideWords(STEPS[i][1], CX, CY + 62, 31, MUTED, k => seg(s, 0.62 + 0.05 * k, 1.05 + 0.05 * k), leave);
+}
+// How far the window's contents have slipped out of focus behind that card.
+const rackAt = s => eoc(seg(s, 0.1, 0.5)) * (1 - eio(seg(s, 1.45, 1.95)));
+
+// ---- the window -------------------------------------------------------------
+function appWindow(t) {
+  const e = t - OUTRO, drawn = eio(seg(t, 1.15, 2.1)) * (1 - eio(seg(e, 0.05, 0.9))), fit = eoc(seg(t, 1.7, 2.3)) * (1 - eic(seg(e, 0, 0.45)));
+  if (drawn <= 0.004) return;
+  const n = clamp(STARTS.findLastIndex(start => t >= start) - 1, 0, 5), s = t - STARTS[n + 1], on = t >= OPEN;
+  const pos = n === 0 ? 0 : n - 1 + eio(seg(s, 0, 0.35)), press = on ? Math.sin(Math.PI * seg(s, 0, 0.5)) : 0;
+  // Each tab's name rises into the bar, one after another.
+  appFrame(drawn, fit, on ? pos : null, press, k => 1 - eoc(seg(t, 1.85 + 0.07 * k, 2.3 + 0.07 * k)) + eic(seg(e, 0.04 * k, 0.4 + 0.04 * k)));
+  if (t >= 2.05 && e < 0) wordmark(1, 1, 1);
+}
+
+// ---- the pointer ---------------------------------------------------------------
+// Where it goes and what it presses; it sets off before each stop to arrive on time.
+const STOPS = [{ t: OPEN - 0.75, x: 1480, y: 870 }];
+[[], [[CLICK.place, WX + 289, TOP + 29]], [[CLICK.easy, CX, FOOT - 74], [CLICK.easy2, CX, FOOT - 74]], [[CLICK.turn, CX, FOOT - 74]], [[CLICK.best, CX, FOOT - 74]],
+  [[CLICK.star, CX + 116, 520], [CLICK.open, THUMB(1).x, 648], [CLICK.add, THUMB(2).x, 648], [CLICK.add2, THUMB(3).x, 648], [CLICK.pick, CX, 300], [CLICK.trash, CX - 130, 520]], [[CLICK.apply, CX, TOP + 150 + 104 * 3 + 16]]].forEach((clicks, part) => {
+  if (part === 0) return;
+  STOPS.push({ t: STARTS[part], ...TAB(part - 1), y: TAB(part - 1).y + 4, click: true });
+  clicks.forEach(([at, x, y]) => STOPS.push({ t: STARTS[part] + at, x, y: y + 4, click: true }));
+});
+STOPS.push({ t: OUTRO + 0.7, x: 1500, y: 900 });
+const pointer = t => drawPointer(STOPS, t, eoc(seg(t, OPEN - 0.75, OPEN - 0.4)) * (1 - eic(seg(t, OUTRO + 0.25, OUTRO + 0.7))));
+// The push in on a step's tab as it is pressed: how far, and on which tab.
+function tabZoom(t) {
+  let best = { amount: 0, ...TAB(0) };
+  for (let part = 1; part <= 6; part++) {
+    const s = t - STARTS[part], amount = eio(seg(s, -0.45, 0)) * (1 - eio(seg(s, 0.3, 0.85)));
+    if (amount > best.amount) best = { amount, ...TAB(part - 1) };
+  }
+  return best;
+}
+
+// ---- what each part draws besides the photos ---------------------------------
+// `s` runs past the part's end, so each piece can also leave. `under` pieces sit
+// behind the photos in focus.
+const under = [], over = [];
+let partLength = 0; // of the part whose pieces are being drawn
+const leaving = (s, from = 0, len = 0.4) => eic(seg(s, partLength + from, partLength + from + len));
+// The two panes and the Confirm bar: in for Easy Delete, out once Pick Best is settled.
+function compare(t) {
+  const into = t - STARTS[2], out = eio(seg(t - STARTS[4], CLICK.best + 0.1, CLICK.best + 0.7));
+  const drawn = eio(seg(into, 1.3, 1.95)) * (1 - out);
+  [WX + 20, CX + 10].forEach((x, n) => trace(x, TOP + 16, 600, 470, 16, drawn, n === 0 && t < STARTS[4] + 2.6 ? ACCENT : wire(0.22), 2.5));
+  const g = eoc(seg(into, 1.5, 1.95)) * (1 - eic(out));
+  if (g <= 0.004) return;
+  const hit = Math.max(pressAt(t - STARTS[2], CLICK.easy), pressAt(t - STARTS[2], CLICK.easy2), pressAt(t - STARTS[3], CLICK.turn), pressAt(t - STARTS[4], CLICK.best));
+  c.save(); c.translate(CX, FOOT - 74); c.scale(g, g);
+  c.fillStyle = '#1B1A19'; c.strokeStyle = wire(0.24); c.lineWidth = 2; rr(-170, -29, 340, 58, 29); c.fill(); c.stroke();
+  glyph('left', -132, 0, 1.1, wire(0.5)); glyph('right', -100, 0, 1.1, wire(0.5));
+  for (let i = 0; i < 3; i++) star(98 + 26 * i, 0, 8, wire(0.28));
+  c.scale(1 - 0.1 * hit, 1 - 0.1 * hit);
+  c.fillStyle = ACCENT; rr(-64, -20, 128, 40, 20); c.fill();
+  font(19, 600, 0); text('Confirm', 0, 7, ON_ACCENT, 'center');
+  c.restore();
+}
+
+over[0] = s => {
+  if (s < 2.05) wordmark(eio(seg(s, 1.3, 2.05)), eoc(seg(s, 0.1, 0.7)), seg(s, 0.3, 0.9));
+};
+const GROUPS = [['Date', 84], ['Place', 90], ['Camera', 108], ['People', 100]];
+under[1] = s => {
+  const open = eoc(seg(s, 1.4, 1.9)) * (1 - leaving(s, 0, 0.45)), chosen = eoc(seg(s, CLICK.place, CLICK.place + 0.25));
+  if (open > 0.004) {
+    // "Group by" and its choices along the top, the folder list down the left.
+    c.save(); c.beginPath(); c.rect(WX, TOP, WW * open, 58); c.clip();
+    c.fillStyle = wire(0.14); c.fillRect(WX, TOP + 56, WW, 2);
+    font(20, 500, 0); text('Group by', WX + 26, TOP + 36, wire(0.55));
+    let x = WX + 150;
+    GROUPS.forEach(([label, w]) => {
+      const on = label === 'Place' ? chosen : 0;
+      c.strokeStyle = wire(0.26); c.lineWidth = 2; rr(x, TOP + 10, w, 38, 19); c.stroke();
+      if (on > 0) { c.save(); c.translate(x + w / 2, TOP + 29); c.scale(on * (1 - 0.08 * pressAt(s, CLICK.place)), on); c.fillStyle = ACCENT; rr(-w / 2, -19, w, 38, 19); c.fill(); c.restore(); }
+      font(19, 500, 0); text(label, x + w / 2, TOP + 36, on > 0.5 ? ON_ACCENT : wire(0.8), 'center');
+      x += w + 10;
+    });
+    c.restore();
+    c.save(); c.beginPath(); c.rect(WX, TOP + 58, 252, (FOOT - TOP - 58) * open); c.clip();
+    c.fillStyle = wire(0.14); c.fillRect(WX + 250, TOP + 58, 2, FOOT - TOP);
+    font(17, 600, 1.6); text('FOLDERS', WX + 26, TOP + 100, wire(0.45));
+    FOLDERS.forEach((name, f) => {
+      const y = TOP + 150 + 58 * f, n = CAST.filter(tile => tile.pal === f && s > SORT_AT + 0.65 + 0.07 * tile.order).length;
+      const g = eoc(seg(s, SORT_AT + 0.1 * f, SORT_AT + 0.4 + 0.1 * f));
+      if (n === 4) { c.fillStyle = wire(0.07); rr(WX + 14, y - 24, 224, 48, 12); c.fill(); }
+      c.fillStyle = PALS[f].sky[1]; c.beginPath(); c.arc(WX + 36, y, 7 * g, 0, 7); c.fill();
+      font(23, 500, -0.2); c.save(); c.translate(WX + 56 + c.measureText(name).width / 2, 0); slideWords(name, 0, y + 8, 23, INK, () => seg(s, SORT_AT + 0.1 * f, SORT_AT + 0.5 + 0.1 * f)); c.restore();
+      if (g > 0.5) { font(22, 500, 0); text(String(n), WX + 220, y + 8, n === 4 ? ACCENT : wire(0.45), 'right'); }
+    });
+    c.restore();
+  }
+  // Each folder's name rises above its row as the row fills.
+  FOLDERS.forEach((name, f) => {
+    const y = 288 + 174 * f - 74, into = SORT_AT + 0.4 + 0.28 * f;
+    font(21, 500, -0.2);
+    c.save(); c.translate(COL(0) - 80 + c.measureText(name).width / 2 + 34, 0);
+    slideWords(name, 0, y, 21, INK, () => seg(s, into, into + 0.45), leaving(s, 0, 0.3));
+    c.restore();
+    glyph('folder', COL(0) - 68, y - 8, 0.8 * eoc(seg(s, into, into + 0.4)) * (1 - leaving(s, 0, 0.3)), PALS[f].sky[1]);
+  });
+};
+under[3] = s => {
+  // Where the correction will sit, and where the original was.
+  const hold = eoc(seg(s, 1.6, 1.95)) * (1 - leaving(s, 0, 0.3));
+  c.setLineDash([10, 10]);
+  if (hold > 0.004) { c.strokeStyle = wire(0.3 * hold * (1 - seg(s, TURN[1] - 0.3, TURN[1]))); c.lineWidth = 2; rr(RIGHT_X - 200, PANE_Y - 164, 400, 300, 33); c.stroke(); }
+  const was = seg(s, TURN[0] + 0.2, TURN[0] + 0.6) * (1 - leaving(s, 0, 0.3));
+  if (was > 0.004) { c.strokeStyle = wire(0.3 * was); c.lineWidth = 2; rr(LEFT_X - 135, PANE_Y - 194, 270, 360, 30); c.stroke(); }
+  c.setLineDash([]);
+};
+over[2] = s => {
+  // For each pair: how the two compare, why the left one goes, what the right one is.
+  [[1.9, '=', 'Exact duplicate', 'Original', CLICK.easy], [4.4, '≈', 'Blurry', 'Sharper shot', CLICK.easy2]].forEach(([at, sign, why, other, click]) => {
+    const gone = seg(s, click + 0.1, click + 0.45), mark = eoc(seg(s, at, at + 0.3)) * (1 - eic(gone));
+    if (mark > 0.004) {
+      c.save(); c.translate(CX, PANE_Y - 14); c.scale(mark, mark);
+      c.fillStyle = '#1B1A19'; c.strokeStyle = wire(0.6); c.lineWidth = 2.5; c.beginPath(); c.arc(0, 0, 28, 0, 7); c.fill(); c.stroke();
+      font(32, 500, 0); text(sign, 0, 11, INK, 'center'); c.restore();
+    }
+    font(29, 600, -0.2);
+    slideWords(why, LEFT_X, PANE_Y + 196, 29, '#F0837D', k => seg(s, at + 0.1 + 0.08 * k, at + 0.55 + 0.08 * k), gone);
+    font(29, 500, -0.2);
+    slideWords(other, RIGHT_X, PANE_Y + 196, 29, MUTED, k => seg(s, at + 0.25 + 0.08 * k, at + 0.7 + 0.08 * k), seg(s, click + 0.45, click + 0.8));
+    chip('Trash', WX + 20 + 600 - 18, TOP + 50, RED, eoc(seg(s, at + 0.5, at + 0.8)) * (1 - eic(gone)));
+    chip('Keep', CX + 10 + 600 - 18, TOP + 50, GREEN, eoc(seg(s, at + 0.6, at + 0.9)) * (1 - eic(seg(s, click + 0.45, click + 0.75))));
+  });
+};
+over[3] = (s, t) => {
+  const pose = poseAt(SIDEWAYS, t), y = PANE_Y - 14;
+  // Checking: a line sweeps down and back up the photo inside corner marks.
+  const on = seg(s, CHECK[0] - 0.1, CHECK[0] + 0.05) * (1 - seg(s, CHECK[1] - 0.05, CHECK[1] + 0.1));
+  if (on > 0.004) {
+    const at = y - 172 * Math.cos(2 * Math.PI * seg(s, CHECK[0], CHECK[1])), reach = 144 + 12 * on;
+    c.strokeStyle = ACCENT; c.lineWidth = 3 * on; c.lineCap = 'round';
+    [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([sx, sy]) => {
+      const px = LEFT_X + sx * reach, py = y + sy * (reach + 24);
+      c.beginPath(); c.moveTo(px - sx * 24, py); c.lineTo(px, py); c.lineTo(px, py - sy * 24); c.stroke();
+    });
+    const band = c.createLinearGradient(0, at - 46, 0, at + 46);
+    band.addColorStop(0, 'rgba(232,135,58,0)'); band.addColorStop(0.5, `rgba(232,135,58,${0.26 * on})`); band.addColorStop(1, 'rgba(232,135,58,0)');
+    c.fillStyle = band; c.fillRect(LEFT_X - 135, at - 46, 270, 92);
+    c.fillStyle = ACCENT; rr(LEFT_X - 142, at - 1.5, 284, 3, 1.5); c.fill();
+  }
+  // What it is doing, what it found, and what it suggests.
+  const end = leaving(s, 0, 0.3);
+  font(29, 500, -0.2);
+  slideWords('Checking rotation', LEFT_X, PANE_Y + 196, 29, MUTED, k => seg(s, CHECK[0] - 0.05 + 0.08 * k, CHECK[0] + 0.4 + 0.08 * k), seg(s, CHECK[1] - 0.1, CHECK[1] + 0.2));
+  font(29, 600, -0.2);
+  slideWords('Sideways', LEFT_X, PANE_Y + 196, 29, '#F0837D', () => seg(s, CHECK[1] + 0.15, CHECK[1] + 0.6), end);
+  slideWords('Suggested fix', RIGHT_X, PANE_Y + 196, 29, ACCENT, k => seg(s, TURN[1] - 0.25 + 0.08 * k, TURN[1] + 0.2 + 0.08 * k), end);
+  badge(pose.x + pose.w / 2 - 26, pose.y + pose.w * 0.375 - 26, 28, GREEN, 'check', eoc(seg(s, CLICK.turn + 0.1, CLICK.turn + 0.45)) * pose.focus);
+  const spin = eoc(seg(s, CHECK[1] + 0.05, CHECK[1] + 0.3)) * (1 - eic(seg(s, TURN[1], TURN[1] + 0.25)));
+  if (spin > 0.004) {
+    c.save(); c.translate(CX, y); c.scale(spin, spin); c.rotate(-Math.PI * 2 * eio(seg(s, TURN[0], TURN[1])));
+    c.fillStyle = '#1B1A19'; c.strokeStyle = ACCENT; c.lineWidth = 2.5; c.beginPath(); c.arc(0, 0, 28, 0, 7); c.fill(); c.stroke();
+    glyph('rotate', 0, 0, 1.3, ACCENT); c.restore();
+  }
+};
+over[4] = (s, t) => {
+  const win = seg(s, CLICK.best + 0.1, CLICK.best + 0.5), fold = 1 - eic(win), count = eoc(seg(s, 1.85, 2.6));
+  [[LEFT_X, 6.1], [RIGHT_X, 8.4]].forEach(([x, score], n) => {
+    const w = 300 * eoc(seg(s, 1.55 + 0.1 * n, 1.9 + 0.1 * n)) * fold;
+    if (w < 2) return;
+    const best = n === 1 && count > 0.97;
+    c.save(); c.beginPath(); c.rect(x - 215, PANE_Y + 150, 430, 60); c.clip();
+    font(34, 600, -0.5); text((score * count).toFixed(1), x - 200, PANE_Y + 191 + 60 * (1 - fold), best ? ACCENT : INK);
+    c.restore();
+    c.fillStyle = wire(0.12); rr(x - 110, PANE_Y + 175, w, 10, 5); c.fill();
+    c.fillStyle = best ? ACCENT : MUTED; rr(x - 110, PANE_Y + 175, Math.max(10, w * score / 10 * count), 10, 5); c.fill();
+  });
+  chip('Trash', WX + 20 + 600 - 18, TOP + 50, RED, eoc(seg(s, 2.7, 2.95)) * fold);
+  chip('Keep', CX + 10 + 600 - 18, TOP + 50, GREEN, eoc(seg(s, 2.75, 3.0)) * fold);
+  chip('★ Suggested', CX + 10 + 600 - 110, TOP + 50, ACCENT, eoc(seg(s, 2.6, 2.85)) * fold, true);
+  const pose = poseAt(BEST, t), stay = pose.focus * (1 - leaving(s, 0.2, 0.4)), edge = 5 * eoc(seg(s, 2.6, 2.85)) * stay;
+  if (edge > 0.2) onPhoto(pose, (w, h) => { c.strokeStyle = ACCENT; c.lineWidth = edge; rr(-w / 2, -h / 2, w, h, h * 0.11); c.stroke(); });
+  badge(pose.x + pose.w / 2 - 10, pose.y - pose.w * 0.375 + 10, 36 * pose.w / 520, ACCENT, 'star', eoc(seg(s, CLICK.best + 0.7, CLICK.best + 1.0)) * stay);
+};
+under[5] = s => {
+  // The strip keeps a thumbnail of every photo that is open above it.
+  const gone = eic(seg(s, CLICK.trash + 0.25, CLICK.trash + 0.8));
+  [[RATED, s < CLICK.open + 0.55 ? 1 : 0], ...SIDE.map(k => [k, k === CULLED ? 1 - gone : 1])].forEach(([k, there]) => {
+    const T = THUMB(STRIP.indexOf(k)), g = eoc(seg(s, 1.25, 1.8)) * there * (1 - leaving(s, 0, 0.3));
+    photo({ ...CAST[k], x: T.x, y: T.y, w: T.w, scale: g, dim: k === CULLED ? 0.5 * seg(s, CLICK.trash, CLICK.trash + 0.3) : 0 });
+  });
+  // Trash and five stars under the photo.
+  const g = eoc(seg(s, 1.5, 1.95)) * (1 - leaving(s, 0, 0.4));
+  if (g <= 0.004) return;
+  const hit = pressAt(s, CLICK.trash), cleared = eic(seg(s, CLICK.open, CLICK.open + 0.3));
+  c.save(); c.translate(CX, 516); c.scale(g, g);
+  c.fillStyle = '#1B1A19'; c.strokeStyle = wire(0.24); c.lineWidth = 2; rr(-210, -31, 420, 62, 31); c.fill(); c.stroke();
+  c.fillStyle = `rgba(229,85,79,${hit})`; rr(-196, -21, 132, 42, 21); c.fill();
+  glyph('trash', -170, 0, 0.95, hit > 0.4 ? ON_ACCENT : wire(0.75)); font(20, 500, 0); text('Trash', -150, 7, hit > 0.4 ? ON_ACCENT : wire(0.75));
+  for (let i = 0; i < 5; i++) {
+    const on = i < 4 ? eoc(seg(s, CLICK.star + 0.06 * (3 - i), CLICK.star + 0.06 * (3 - i) + 0.25)) * (1 - cleared) : 0;
+    star(-16 + 44 * i, 0, 15, wire(0.2));
+    if (on > 0) star(-16 + 44 * i, 0, 15 * on, ACCENT);
+  }
+  c.restore();
+};
+over[5] = (s, t) => {
+  const end = leaving(s, 0, 0.3), gone = eic(seg(s, CLICK.trash + 0.25, CLICK.trash + 0.8));
+  // Which photos of the strip are open: the first, then the three chosen after it.
+  const g = eoc(seg(s, 1.6, 1.95)) * (1 - end), at = THUMB(eio(seg(s, CLICK.open, CLICK.open + 0.4)));
+  trace(at.x - 61, at.y - 47, 122, 94, 14, g, ACCENT, 3);
+  [CLICK.add, CLICK.add2].forEach((click, i) => {
+    const T = THUMB(i + 2);
+    trace(T.x - 61, T.y - 47, 122, 94, 14, eio(seg(s, click, click + 0.35)) * (1 - end) * (i === 0 ? 1 - gone : 1), ACCENT, 3);
+  });
+  // The stars the first photo was given stay under its thumbnail.
+  const rated = THUMB(0);
+  for (let i = 0; i < 4; i++) { const on = eoc(seg(s, CLICK.open + 0.5 + 0.05 * i, CLICK.open + 0.75 + 0.05 * i)) * (1 - end); if (on > 0) star(rated.x - 24 + 16 * i, rated.y + 62, 7 * on, ACCENT); }
+  // One of the three is picked out, then marked for the Trash.
+  const pose = poseAt(CULLED, t), x = eoc(seg(s, CLICK.trash, CLICK.trash + 0.3)) * pose.focus, picked = eoc(seg(s, CLICK.pick, CLICK.pick + 0.25)) * (1 - x);
+  if (picked > 0.004) onPhoto(pose, (w, h) => { c.strokeStyle = ACCENT; c.lineWidth = 5 * picked; rr(-w / 2, -h / 2, w, h, h * 0.11); c.stroke(); });
+  if (x > 0.004) onPhoto(pose, (w, h) => { c.strokeStyle = RED; c.lineWidth = 7 * x; rr(-w / 2, -h / 2, w, h, h * 0.11); c.stroke(); badge(0, 0, w * 0.12, RED, 'cross', x); });
+};
+const ROWS = [['folder', 'Move into folders', 12], ['rotate', 'Rotate upright', 1], ['trash', 'Move to the Trash', 4]];
+under[6] = s => {
+  const x = CX - 360, w = 720;
+  ROWS.forEach(([kind, label, count], k) => {
+    const y = TOP + 150 + 104 * k, into = eoc(seg(s, 1.6 + 0.12 * k, 2.1 + 0.12 * k)), out = leaving(s, 0.05 * k, 0.4);
+    const run = eio(seg(s, CLICK.apply + 0.15 + 0.2 * k, CLICK.apply + 0.55 + 0.2 * k)), done = eoc(seg(s, CLICK.apply + 0.5 + 0.2 * k, CLICK.apply + 0.8 + 0.2 * k));
+    if (into <= 0.004 || out >= 1) return;
+    // Each row rises into its own slot and later sinks out of it.
+    c.save(); c.beginPath(); c.rect(x - 30, y - 56, w + 60, 112); c.clip(); c.translate(0, 118 * (1 - into) + 118 * out);
+    c.fillStyle = PANEL; c.strokeStyle = LINE; c.lineWidth = 2; rr(x, y - 44, w, 88, 22); c.fill(); c.stroke();
+    if (run > 0) { c.save(); rr(x, y - 44, w, 88, 22); c.clip(); c.fillStyle = 'rgba(93,190,126,0.14)'; c.fillRect(x, y - 44, w * run, 88); c.restore(); }
+    c.fillStyle = CARD; c.beginPath(); c.arc(x + 54, y, 27, 0, 7); c.fill();
+    glyph(kind, x + 54, y, 1.3, INK);
+    font(30, 500, -0.3); text(label, x + 102, y + 10, INK);
+    font(30, 600, 0); text(String(Math.round(count * eoc(seg(s, 1.8 + 0.1 * k, 2.4 + 0.1 * k)))), x + w - 90, y + 10, INK, 'right');
+    c.strokeStyle = FAINT; c.lineWidth = 2.5; c.beginPath(); c.arc(x + w - 48, y, 15, 0, 7); c.stroke();
+    badge(x + w - 48, y, 17, GREEN, 'check', done);
+    c.restore();
+  });
+  const g = eoc(seg(s, 1.85, 2.25)) * (1 - leaving(s, 0, 0.4)), press = pressAt(s, CLICK.apply), fin = seg(s, CLICK.apply + 1.05, CLICK.apply + 1.3);
+  if (g <= 0.004) return;
+  c.save(); c.translate(CX, TOP + 150 + 104 * 3 + 16); c.scale(g * (1 - 0.07 * press), g * (1 - 0.07 * press));
+  c.shadowColor = `rgba(232,135,58,${0.35 * (1 - fin)})`; c.shadowBlur = 40;
+  c.fillStyle = fin > 0.5 ? GREEN : ACCENT; rr(-120, -38, 240, 76, 38); c.fill(); c.shadowColor = 'transparent';
+  font(30, 600, -0.2);
+  slideWords(fin > 0.5 ? 'Applied' : 'Apply', 0, 10.5, 30, ON_ACCENT, () => (fin > 0.5 ? seg(fin, 0.5, 1) : 1), fin > 0.5 ? 0 : seg(fin, 0, 0.5));
+  c.restore();
+};
+over[7] = s => {
+  wordmark(1 - eio(seg(s, 0.1, 0.9)), 1, 1, 318);
+};
+
+function draw(real) {
+  const t = scriptTime(clamp(real, 0, DURATION));
+  c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = 1; c.filter = 'none';
+  backdrop(t);
+  const n = STARTS.findLastIndex(start => t >= start), s = t - STARTS[n], step = n >= 1 && n <= 6;
+  const rack = step ? rackAt(s) : 0;
+  const poses = CAST.map((tile, k) => ({ ...tile, ...poseAt(k, t) })).sort((a, b) => a.focus - b.focus || a.z - b.z);
+  const view = viewAt(t, tabZoom(t));
+  const pieces = list => [n - 1, n].forEach(part => { if (list[part]) { partLength = STARTS[part + 1] - STARTS[part]; list[part](t - STARTS[part], t); } });
+  // A photo coming forward is behind the window and, more and more, in front of
+  // it too, so it never pops across the window's edge.
+  poses.filter(p => p.focus < CROSSED).forEach(p => view.photo(p));
+  vignette();
+  c.save(); view.window();
+  appWindow(t);
+  // While a step's name is up, what is in the window steps back behind it.
+  c.globalAlpha = 1 - 0.8 * rack;
+  compare(t); pieces(under);
+  c.globalAlpha = 1;
+  c.restore();
+  poses.filter(p => p.focus > RESTING).forEach(p => view.photo(p, { rack, alpha: eio(seg(p.focus, RESTING, CROSSED)) }));
+  c.save(); view.window();
+  c.globalAlpha = 1 - 0.8 * rack;
+  pieces(over);
+  c.globalAlpha = 1;
+  if (step) card(n - 1, s);
+  pointer(t);
+  c.restore();
+  c.globalAlpha = 1;
+  c.drawImage(noise, 0, 0);
+}
+
+window.DURATION = DURATION;
+window.draw = draw;
+window.ready = (async () => {
+  await loadKit();
+  draw(0);
+  if (!location.search.includes('render')) {
+    const start = performance.now();
+    const tick = now => { draw(((now - start) / 1000) % (DURATION + 1)); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  }
+  return true;
+})();
+</script>

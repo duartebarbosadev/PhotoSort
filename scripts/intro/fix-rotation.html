@@ -1,0 +1,253 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PhotoSort: the Fix Rotation step</title>
+<!--
+  The film shown the first time Fix Rotation is opened, drawn like the intro film
+  (film.html) and with the same kit. It stays in Fix Rotation and is laid out as
+  the step is in the app: the "Suggestions only" switch, how many photos are
+  turned with "Accept all suggestions" beside it, and under them a card for each
+  photo: as it is and, next to it, as it would be, under a Suggested pill until
+  the turn is taken and a green "Will turn" pill after.
+  One suggestion is used; the rest PhotoSort is sure of are accepted at once;
+  one it is not sure of is turned by hand; and Review lists the turns without
+  applying them.
+  `draw(t)` paints the frame at `t` seconds and depends on nothing else, so
+  scripts/render_intro.py can step through it:
+      python3 scripts/render_intro.py --film fix-rotation
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; margin: auto; width: 100vw; height: 56.25vw;
+           max-height: 100vh; max-width: 177.78vh; }
+</style>
+<canvas id="film" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script>
+'use strict';
+// When things happen, in seconds. sound.py mirrors these.
+const AT = {
+  title: 1.3, shown: 4.9, tour: 8.0, use: 10.2, accept: 12.4, press: 15.9, unsure: 18.0, tour2: 21.1, turn: 22.9,
+  review: 25.2, tab: 28.8, end: 33.0,
+};
+const DURATION = AT.end + 1.2;
+const CARDS = [
+  [AT.title, 3.2, 'Fix Rotation', 'Straighten photos that came out sideways'],
+  [AT.shown, 2.7, 'Before and after', 'Each photo sits next to the way it would look turned'],
+  [AT.accept, 2.7, 'Accept in one click', 'Every turn PhotoSort is sure of, all at once'],
+  [AT.unsure, 2.7, 'Not sure? You decide', 'Those wait for you, and any photo can be turned by hand'],
+  [AT.review, 2.8, 'Nothing is turned yet', 'Review lists every turn before it is applied'],
+];
+
+// ---- the layout ------------------------------------------------------------------
+// A bar with the switch, a line that sums up, then the photos: two sections of cards.
+const BAR = 58, SUMMARY = 46, GRID_TOP = TOP + BAR + SUMMARY + 8, GRID_X = WX + 28, GRID_RIGHT = WX + WW - 28;
+const PH = 138, PAD = 12, GAP = 10, HEAD = 34, CARD_H = HEAD + PH + 28, SECTION_HEAD = 36, NOTE = 22, PITCH = 248;
+const ACCEPT = { x: GRID_RIGHT - 116, y: TOP + BAR + 24, w: 232 }; // "Accept all suggestions"
+const QUARTER = Math.PI / 2;
+// A photo lying on its side is shown as it is stored: tall and narrow.
+const sideways = rot => Math.abs(Math.sin(rot)) > 0.7;
+const slotW = rot => (sideways(rot) ? PH * 0.75 : PH / 0.75);
+
+// ---- the photos -------------------------------------------------------------------
+// Each card: the photo's name, how it lies now (`rot`), the quarter turns
+// clockwise PhotoSort suggests, and the turns that end up staged. The last
+// section is the suggestions PhotoSort is not sure of.
+const SECTIONS = [
+  { name: 'Sideways or upside down', cards: [
+    { file: 'IMG_2041.jpg', pal: 0, seed: 41, rot: -QUARTER, suggests: 1, staged: 1 },
+    { file: 'IMG_2058.jpg', pal: 1, seed: 46, rot: QUARTER, suggests: 3, staged: 3 },
+    { file: 'IMG_2063.jpg', pal: 2, seed: 53, rot: Math.PI, suggests: 2, staged: 2 }] },
+  { name: 'Not sure - check these', note: 'Not turned unless you choose. Accept all leaves them as they are.', cards: [
+    { file: 'IMG_2077.jpg', pal: 2, seed: 50, rot: -QUARTER, suggests: 3, staged: 1 },
+    { file: 'IMG_2090.jpg', pal: 0, seed: 44, rot: Math.PI, suggests: 2, staged: 0 }] },
+];
+const sectionY = s => GRID_TOP + PITCH * s;
+const cardTop = s => sectionY(s) + SECTION_HEAD + (SECTIONS[s].note ? NOTE : 0);
+// Every card with where it sits, and every photo: the card's photo as it is,
+// then as it would be.
+const BOXES = [], CAST = [];
+SECTIONS.forEach((section, s) => {
+  let x = GRID_X;
+  section.cards.forEach(card => {
+    // The turned photo is upright in every card here, so its slot is wide.
+    const before = slotW(card.rot), after = PH / 0.75, box = { ...card, s, x, y: cardTop(s), w: before + after + GAP + 2 * PAD, n: BOXES.length };
+    box.beforeX = x + PAD + before / 2; box.afterX = x + PAD + before + GAP + after / 2; box.photoY = box.y + HEAD + PH / 2;
+    BOXES.push(box);
+    CAST.push({ pal: card.pal, seed: card.seed, box, after: false, home: farHome(CAST.length) });
+    CAST.push({ pal: card.pal, seed: card.seed, box, after: true, home: farHome(CAST.length) });
+    x += box.w + 16;
+  });
+});
+const BACK = Array.from({ length: 8 }, (_, i) => ({ pal: i % 3, seed: 70 + i, home: farHome(12 + i) }));
+const [A, B, C, D] = BOXES;
+// How far a card's turn is staged: the first by its own "Use suggestion", the
+// rest that PhotoSort is sure of by "Accept all", the unsure one by hand.
+function stagedAt(box, t) {
+  if (box === A) return eoc(seg(t, AT.use + 0.08, AT.use + 0.4));
+  if (box === D) return eio(seg(t, AT.turn + 0.05, AT.turn + 0.6));
+  if (box.s === 0) return eoc(seg(t, AT.press + 0.15 + 0.12 * box.n, AT.press + 0.5 + 0.12 * box.n));
+  return 0;
+}
+// How the turned photo lies: as suggested until a different turn is staged.
+const afterRot = (box, t) => lerp(box.rot + box.suggests * QUARTER - (box.suggests > 2 ? 4 * QUARTER : 0), box.rot + box.staged * QUARTER, box.staged === box.suggests ? 1 : stagedAt(box, t));
+function poseAt(k, t) {
+  const P = CAST[k], box = P.box, rot = P.after ? afterRot(box, t) : box.rot;
+  const pose = front(P.after ? box.afterX : box.beforeX, box.photoY, P.after || !sideways(box.rot) ? PH / 0.75 : PH, { rot, scale: eoc(seg(t, 0.85 + 0.04 * k, 1.35 + 0.04 * k)) });
+  // Review: every photo steps back.
+  return mix(pose, drift(P.home, k, t), eio(seg(t, AT.tab + 0.2 + 0.02 * k, AT.tab + 1.2 + 0.02 * k)));
+}
+
+// ---- icons ------------------------------------------------------------------------
+function turnIcon(x, y, s, color, clockwise) {
+  c.save(); c.translate(x, y); c.scale(clockwise ? -1 : 1, 1); glyph('rotate', 0, 0, s, color); c.restore();
+}
+function sparkle(x, y, r, color) {
+  c.fillStyle = color; c.beginPath();
+  for (let i = 0; i < 8; i++) { const a = -QUARTER + i * Math.PI / 4, q = i % 2 ? r * 0.3 : r; c.lineTo(x + Math.cos(a) * q, y + Math.sin(a) * q); }
+  c.closePath(); c.fill();
+}
+
+// ---- what is drawn on the window, behind the photos ------------------------------
+const openAt = t => eoc(seg(t, 0.9, 1.5)) * (1 - eio(seg(t, AT.tab + 0.1, AT.tab + 0.6)));
+function under(t) {
+  const open = openAt(t);
+  if (open > 0.004) {
+    controls(t, open);
+    c.save(); c.globalAlpha *= 1 - eio(seg(t, AT.tab + 0.1, AT.tab + 0.5));
+    SECTIONS.forEach((section, s) => {
+      const y = sectionY(s), enter = seg(t, 0.9 + 0.12 * s, 1.35 + 0.12 * s);
+      font(21, 600, -0.2); slideLeft(section.name, GRID_X, y + 26, 21, INK, enter);
+      if (section.note) { font(15, 400, 0); slideLeft(section.note, GRID_X, y + 50, 15, MUTED, enter); }
+    });
+    BOXES.forEach(box => {
+      const into = eoc(seg(t, 0.8 + 0.1 * box.s + 0.06 * box.n, 1.3 + 0.1 * box.s + 0.06 * box.n));
+      if (into <= 0.01) return;
+      c.save(); c.translate(box.x + box.w / 2, box.y + CARD_H / 2); c.scale(into, into); c.translate(-box.w / 2, -CARD_H / 2);
+      c.fillStyle = wire(0.05); c.strokeStyle = wire(0.13); c.lineWidth = 2; rr(0, 0, box.w, CARD_H, 14); c.fill(); c.stroke();
+      // The header: rotate left, rotate right, and the one action that applies.
+      [false, true].forEach((clockwise, i) => {
+        const press = box === D && clockwise ? pressAt(t, AT.turn) : 0;
+        c.fillStyle = wire(0.08 + 0.2 * press); rr(PAD + 30 * i, 5, 26, 24, 7); c.fill();
+        turnIcon(PAD + 13 + 30 * i, 17, 0.62, wire(0.85), clockwise);
+      });
+      const staged = stagedAt(box, t);
+      font(14, 600, 0);
+      const label = 'Use suggestion', right = box.w - PAD - 2, w = c.measureText(label).width;
+      c.save(); c.globalAlpha *= 1 - staged; sparkle(right - w - 12, 16.5, 7, ACCENT); text(label, right - w, 21.5, ACCENT); c.restore();
+      font(14, 600, 0); slideRight('Undo', right, 21.5, 14, ACCENT, staged);
+      // Its name, once, under the photo as it is.
+      font(14, 400, 0); text(box.file, PAD + 2, HEAD + PH + 20, MUTED);
+      c.restore();
+    });
+    c.restore();
+  }
+  reviewList(t, AT.tab, AT.end, 'rotate', 'Rotating', 4, [['Rotate right', 2], ['Rotate left', 1], ['Turn 180°', 1]].map(([name, count]) => [name, count, wire(0.6)]));
+}
+// The bar along the top with its switch, and under it how many photos are
+// turned so far, the photo size and the button that accepts every suggestion.
+function controls(t, open) {
+  c.save(); c.beginPath(); c.rect(WX, TOP, WW * open, BAR + SUMMARY); c.clip();
+  c.fillStyle = wire(0.14); c.fillRect(WX, TOP + BAR - 2, WW, 2);
+  // "Suggestions only", switched on.
+  c.fillStyle = ACCENT; rr(WX + 26, TOP + 18, 40, 22, 11); c.fill();
+  c.fillStyle = ON_ACCENT; c.beginPath(); c.arc(WX + 55, TOP + 29, 8, 0, 7); c.fill();
+  font(18, 500, 0); text('Suggestions only', WX + 78, TOP + 35, INK);
+  const search = WX + WW - 236;
+  c.fillStyle = 'rgba(0,0,0,0.25)'; rr(search, TOP + 10, 216, 38, 10); c.fill();
+  symbol('search', search + 22, TOP + 29, 0.8, wire(0.5)); font(19, 400, 0); text('Search', search + 44, TOP + 36, wire(0.4));
+  // What is turned so far.
+  const turned = BOXES.filter(box => stagedAt(box, t) > 0.5).length;
+  font(17, 400, 0); text(`${turned} ${turned === 1 ? 'photo' : 'photos'} turned`, GRID_X, ACCEPT.y + 6, MUTED);
+  const slider = ACCEPT.x - ACCEPT.w / 2 - 130;
+  c.fillStyle = wire(0.16); rr(slider, ACCEPT.y - 2, 104, 4, 2); c.fill();
+  c.fillStyle = wire(0.7); c.beginPath(); c.arc(slider + 46, ACCEPT.y, 7, 0, Math.PI * 2); c.fill();
+  const press = pressAt(t, AT.press), done = seg(t, AT.press + 0.3, AT.press + 0.6);
+  c.save(); c.translate(ACCEPT.x, ACCEPT.y); c.scale(1 - 0.06 * press, 1 - 0.06 * press);
+  c.fillStyle = press > 0.05 ? `rgba(232,135,58,${press})` : wire(0.1 - 0.06 * done); c.strokeStyle = wire(0.3 - 0.15 * done); c.lineWidth = 2;
+  rr(-ACCEPT.w / 2, -17, ACCEPT.w, 34, 10); c.fill(); c.stroke();
+  font(17, 500, 0); text('Accept all suggestions', 0, 6, press > 0.4 ? ON_ACCENT : wire(0.9 - 0.5 * done), 'center');
+  c.restore();
+  c.restore();
+}
+
+// ---- what is drawn over the photos -----------------------------------------------
+const TURNS = ['', 'Will turn right', 'Will turn 180°', 'Will turn left'];
+// A pill at the turned photo's top-right corner: a quiet "Suggested" until the
+// turn is staged (`on`), then a green one that says which way Apply turns it.
+function pills(box, x, y, on, grow) {
+  font(13, 600, 0);
+  const quiet = c.measureText('Suggested').width + 34, label = TURNS[box.staged || box.suggests], loud = c.measureText(label).width + 36;
+  if (grow * (1 - on) > 0.01) {
+    c.save(); c.translate(x - quiet / 2, y + 12); c.scale(grow * (1 - on), grow * (1 - on));
+    c.fillStyle = 'rgba(20,19,18,0.78)'; rr(-quiet / 2, -12, quiet, 24, 12); c.fill();
+    sparkle(-quiet / 2 + 15, 0, 6.5, INK); text('Suggested', -quiet / 2 + 25, 4.5, INK);
+    c.restore();
+  }
+  if (grow * on > 0.01) {
+    c.save(); c.translate(x - loud / 2, y + 12); c.scale(grow * on, grow * on);
+    c.fillStyle = GREEN; rr(-loud / 2, -12, loud, 24, 12); c.fill();
+    turnIcon(-loud / 2 + 16, 0, 0.55, ON_ACCENT, box.staged !== 3); text(label, -loud / 2 + 27, 4.5, ON_ACCENT);
+    c.restore();
+  }
+}
+// The cards that are leaned in on and outlined: from when to when, and which.
+const TOUR = [[AT.tour, AT.use + 1.4, A], [AT.tour2, AT.turn + 1.4, D]];
+function over(t) {
+  if (t < AT.tab + 0.25) {
+    BOXES.forEach(box => {
+      const grow = eoc(seg(t, 1.25 + 0.04 * box.n, 1.55 + 0.04 * box.n)), staged = stagedAt(box, t), w = PH / 0.75;
+      // A staged turn is edged in green.
+      if (staged > 0.01) { c.strokeStyle = GREEN; c.lineWidth = 3.5 * staged; rr(box.afterX - w / 2, box.photoY - PH / 2, w, PH, PH * 0.11); c.stroke(); }
+      pills(box, box.afterX + w / 2 - 8, box.photoY - PH / 2 + 8, staged, grow);
+    });
+  }
+  TOUR.forEach(([from, to, box]) => {
+    trace(box.x - 7, box.y - 7, box.w + 14, CARD_H + 14, 19, eio(seg(t, from, from + 0.45)) * (1 - eio(seg(t, to, to + 0.4))), ACCENT, 3);
+  });
+}
+
+// ---- the pointer and the camera --------------------------------------------------
+const USE_AT = { x: A.x + A.w - PAD - 44, y: A.y + 23 }, TURN_AT = { x: D.x + PAD + 45, y: D.y + 22 };
+const STOPS = [
+  { t: 0.9, x: 1480, y: 870 },
+  { t: AT.tour + 0.3, x: A.x + A.w - 70, y: A.y + CARD_H - 22 },
+  { t: AT.use, ...USE_AT, click: true },
+  { t: AT.use + 1.3, x: A.x + A.w + 30, y: A.y + CARD_H + 20 },
+  { t: AT.press, x: ACCEPT.x + 40, y: ACCEPT.y + 6, click: true },
+  { t: AT.tour2 + 0.3, x: D.x + D.w + 34, y: D.y + CARD_H - 30 },
+  { t: AT.turn, ...TURN_AT, click: true },
+  { t: AT.turn + 1.3, x: D.x + D.w + 34, y: D.y + CARD_H - 20 },
+  { t: AT.tab, ...TAB(5), y: TAB(5).y + 4, click: true },
+  { t: AT.tab + 2.8, x: CX + 78, y: APPLY_Y + 18 },
+  { t: AT.end + 0.6, x: 1500, y: 900 },
+];
+const LEANS = [
+  { t: AT.tour, until: AT.use + 1.1, x: A.x + A.w / 2 + 40, y: A.y + CARD_H / 2, amount: 1.4 },
+  { t: AT.press, x: ACCEPT.x - 200, y: ACCEPT.y + 120, amount: 0.5 },
+  { t: AT.tour2, until: AT.turn + 1.1, x: D.x + D.w / 2 + 60, y: D.y + CARD_H / 2 - 20, amount: 1.3 },
+  { t: AT.tab, ...TAB(5), amount: 1 },
+];
+
+function draw(real) {
+  const t = clamp(real, 0, DURATION);
+  compose(t, {
+    poses: [...BACK.map((tile, i) => ({ ...tile, ...drift(tile.home, 12 + i, t) })), ...CAST.map((tile, k) => ({ ...tile, ...poseAt(k, t) }))],
+    lean: leanOf(LEANS, t), rack: rackOf(CARDS, t),
+    frame: () => stepFrame(t, 2, AT.tab, AT.end), under, over,
+    top: () => { stepCards(CARDS, t); drawPointer(STOPS, t, eoc(seg(t, 0.9, 1.3)) * (1 - eic(seg(t, AT.end, AT.end + 0.4)))); },
+  });
+}
+
+window.DURATION = DURATION;
+window.draw = draw;
+window.ready = (async () => {
+  await loadKit();
+  draw(0);
+  if (!location.search.includes('render')) {
+    const start = performance.now();
+    const tick = now => { draw(((now - start) / 1000) % (DURATION + 1)); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  }
+  return true;
+})();
+</script>

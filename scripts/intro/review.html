@@ -1,0 +1,223 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PhotoSort: the Review step</title>
+<!--
+  The film shown the first time Review is opened, drawn like the intro film
+  (film.html) and with the same kit. It stays in Review and is laid out as the
+  step is in the app: its name with the Apply button beside it, a sentence that
+  says what is about to happen, and under them every change in sections:
+  Moving, Going to the Trash, Rotating and Rating.
+  The list is looked through; one photo is taken off it, so it stays as it is;
+  then Apply is pressed, the changes are made and the step says so.
+  `draw(t)` paints the frame at `t` seconds and depends on nothing else, so
+  scripts/render_intro.py can step through it:
+      python3 scripts/render_intro.py --film review
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; margin: auto; width: 100vw; height: 56.25vw;
+           max-height: 100vh; max-width: 177.78vh; }
+</style>
+<canvas id="film" width="1920" height="1080"></canvas>
+<script src="kit.js"></script>
+<script>
+'use strict';
+// When things happen, in seconds. sound.py mirrors these.
+const AT = {
+  title: 1.3, list: 4.9, tour: 8.0, scroll: 10.0, tour2: 10.9, mind: 12.8, hover: 15.9, remove: 16.9, apply: 18.9, press: 22.4,
+  done: 24.0, end: 28.0,
+};
+const DURATION = AT.end + 1.2;
+const CARDS = [
+  [AT.title, 3.2, 'Review', 'See every change before it happens'],
+  [AT.list, 2.7, 'Everything in one list', 'Moves, the Trash, rotations and ratings from every step'],
+  [AT.mind, 2.7, 'Changed your mind?', 'Take a photo off the list and it stays as it is'],
+  [AT.apply, 2.7, 'One button applies it all', 'Nothing touches your files until you press it'],
+];
+
+// ---- the layout ------------------------------------------------------------------
+// The step's name and Apply, the sentence, a line, then the list, which scrolls.
+const GRID_X = WX + 28, GRID_RIGHT = WX + WW - 28, LIST_TOP = TOP + 112, TW = 120, TH = TW * 0.75, PITCH = 166, SCROLL = 160;
+const APPLY = { x: GRID_RIGHT - 104, y: TOP + 36, w: 208 }; // "Apply all changes"
+const QUARTER = Math.PI / 2;
+const scrollAt = t => SCROLL * eio(seg(t, AT.scroll, AT.scroll + 0.9));
+const sectionY = (s, t) => LIST_TOP + PITCH * s - scrollAt(t);
+
+// ---- the changes ------------------------------------------------------------------
+// Each section: its icon and colour, what it is called, and its photos with
+// what is said under each. A rotation is two photos: as it is, then as it will be.
+const SECTIONS = [
+  { kind: 'folder', color: ACCENT, name: 'Moving', photos: [[0, 41, 'to Porto'], [0, 44, 'to Porto'], [0, 57, 'to Porto'], [1, 46, 'to Azores'], [1, 48, 'to Azores']] },
+  { kind: 'trash', color: RED, name: 'Going to the Trash', photos: [[2, 50, 'IMG_3102.jpg'], [1, 63, 'IMG_4104.jpg'], [0, 59, 'IMG_4108.jpg']] },
+  { kind: 'rotate', color: INK, name: 'Rotating', photos: [[2, 53, 'Rotate right', -QUARTER], [1, 65, 'Rotate left', QUARTER]] },
+  { kind: 'star', color: INK, name: 'Rating', photos: [[2, 61, 4], [0, 67, 5]] },
+];
+const REMOVED = 1; // the photo of the Trash section that is taken off the list
+const gone = t => eio(seg(t, AT.remove + 0.05, AT.remove + 0.85));
+// Its place in the list empties at once, and then the photos after it close up.
+const left = t => eio(seg(t, AT.remove + 0.03, AT.remove + 0.25)), closed = t => eio(seg(t, AT.remove + 0.3, AT.remove + 0.8));
+const CAST = [];
+SECTIONS.forEach((section, s) => {
+  section.photos.forEach(([pal, seed, note, rot], i) => {
+    const pair = rot !== undefined, x = GRID_X + (pair ? i * 260 : TW / 2 + i * (TW + 14));
+    const add = more => CAST.push({ pal, seed, s, i, note, home: farHome(CAST.length), ...more });
+    if (pair) { add({ x: x + TH * 0.375, w: TH, rot }); add({ x: x + TH * 0.75 + 44 + TW / 2, w: TW, rot: 0, after: true }); } else add({ x, w: TW, rot: 0 });
+  });
+});
+const BACK = Array.from({ length: 8 }, (_, i) => ({ pal: i % 3, seed: 80 + i, home: farHome(14 + i) }));
+// Where a photo is across its row: those after the one taken off close up.
+const photoX = (P, t) => P.x - (P.s === 1 && P.i > REMOVED ? (TW + 14) * closed(t) : 0);
+const photoY = (P, t) => sectionY(P.s, t) + 36 + TH / 2;
+function poseAt(k, t) {
+  const P = CAST[k], taken = P.s === 1 && P.i === REMOVED ? gone(t) : 0;
+  const pose = front(photoX(P, t), photoY(P, t), P.w, { rot: P.rot, scale: eoc(seg(t, 0.85 + 0.04 * k, 1.35 + 0.04 * k)) });
+  // Applied: every photo steps back; the one taken off the list already has.
+  return mix(pose, drift(P.home, k, t), Math.max(eio(seg(t, AT.press + 0.2 + 0.02 * k, AT.press + 1.2 + 0.02 * k)), taken));
+}
+const listClip = t => [WX, LIST_TOP - 6, WW, FOOT - LIST_TOP + 6];
+
+// ---- what is drawn on the window, behind the photos ------------------------------
+const many = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+function under(t) {
+  const open = eoc(seg(t, 0.9, 1.5)) * (1 - eio(seg(t, AT.press + 0.1, AT.press + 0.5)));
+  if (open > 0.004) {
+    const trashed = gone(t) > 0.5 ? 2 : 3;
+    c.save(); c.beginPath(); c.rect(WX, TOP, WW * eoc(seg(t, 0.9, 1.5)), FOOT - TOP); c.clip(); c.globalAlpha *= open;
+    // The step's name, the button that applies everything, and what it will do.
+    font(28, 600, -0.4); text('Review', GRID_X, TOP + 46, INK);
+    const press = pressAt(t, AT.press);
+    c.save(); c.translate(APPLY.x, APPLY.y); c.scale(1 - 0.06 * press, 1 - 0.06 * press);
+    c.shadowColor = `rgba(232,135,58,${0.25 + 0.15 * Math.sin(t * 3)})`; c.shadowBlur = 24;
+    c.fillStyle = ACCENT; rr(-APPLY.w / 2, -20, APPLY.w, 40, 11); c.fill(); c.shadowColor = 'transparent';
+    font(18, 600, 0); text('Apply all changes', 0, 6.5, ON_ACCENT, 'center');
+    c.restore();
+    font(17, 500, 0); text(`You're about to move 5 photos into 2 folders, send ${many(trashed, 'photo')} to the Trash, rotate 2 photos and rate 2 photos.`, GRID_X, TOP + 86, INK);
+    c.fillStyle = wire(0.14); c.fillRect(GRID_X, TOP + 104, GRID_RIGHT - GRID_X, 2);
+    // The list: each section's icon, name and count, and a line under each photo.
+    c.beginPath(); c.rect(...listClip(t)); c.clip();
+    SECTIONS.forEach((section, s) => {
+      const y = sectionY(s, t), enter = seg(t, 0.9 + 0.1 * s, 1.35 + 0.1 * s), g = eoc(enter);
+      if (g > 0.01 && section.kind === 'star') star(GRID_X + 11, y + 15, 10 * g, section.color);
+      else if (g > 0.01) glyph(section.kind, GRID_X + 11, y + 16, 0.85 * g, section.color);
+      font(19, 600, -0.2); slideLeft(section.name, GRID_X + 32, y + 23, 19, INK, enter);
+      const nameW = c.measureText(section.name).width, count = s === 1 ? trashed : section.photos.length;
+      font(15, 400, 0); slideLeft(many(count, 'photo'), GRID_X + 46 + nameW, y + 22, 15, MUTED, enter);
+    });
+    CAST.forEach((P, k) => {
+      const shown = eoc(seg(t, 1.2 + 0.03 * k, 1.5 + 0.03 * k)) * (P.s === 1 && P.i === REMOVED ? 1 - left(t) : 1), x = photoX(P, t), y = photoY(P, t);
+      if (shown <= 0.01) return;
+      c.save(); c.globalAlpha *= shown;
+      if (P.s === 2 && !P.after) {
+        // Before → after.
+        const ax = P.x + TH * 0.375 + 12;
+        c.strokeStyle = wire(0.6); c.lineWidth = 2; c.lineCap = 'round'; c.beginPath(); c.moveTo(ax, y); c.lineTo(ax + 20, y); c.moveTo(ax + 14, y - 6); c.lineTo(ax + 20, y); c.lineTo(ax + 14, y + 6); c.stroke();
+        font(14, 400, 0); text(P.note, P.x - TH * 0.375 + 2, y + TH / 2 + 20, MUTED);
+      } else if (P.s === 3) {
+        for (let i = 0; i < 5; i++) star(x - TW / 2 + 10 + 17 * i, y + TH / 2 + 15, 7, i < P.note ? ACCENT : wire(0.2));
+      } else if (P.s < 2) {
+        font(14, 400, 0); text(P.note, x - TW / 2 + 2, y + TH / 2 + 20, MUTED);
+      }
+      c.restore();
+    });
+    c.restore();
+  }
+  outcome(t);
+}
+// After Apply: the changes being made, then what was done.
+function outcome(t) {
+  const out = eic(seg(t, AT.end, AT.end + 0.4)), working = eoc(seg(t, AT.press + 0.45, AT.press + 0.75)) * (1 - eio(seg(t, AT.done - 0.3, AT.done)));
+  if (working > 0.01) {
+    c.save(); c.globalAlpha *= working;
+    font(26, 600, -0.2); text('Applying your changes', CX, CY - 8, INK, 'center');
+    c.fillStyle = wire(0.14); rr(CX - 180, CY + 22, 360, 6, 3); c.fill();
+    c.fillStyle = ACCENT; rr(CX - 180, CY + 22, 360 * seg(t, AT.press + 0.5, AT.done - 0.25), 6, 3); c.fill();
+    c.restore();
+  }
+  const done = eoc(seg(t, AT.done, AT.done + 0.4)) * (1 - out);
+  if (done <= 0.01) return;
+  // A green check, drawn on, over what was done.
+  c.save(); c.translate(CX, CY - 92); c.scale(done, done);
+  c.strokeStyle = GREEN; c.lineWidth = 4; c.beginPath(); c.arc(0, 0, 36, 0, 7); c.stroke();
+  const drawn = eoc(seg(t, AT.done + 0.2, AT.done + 0.6));
+  c.lineCap = 'round'; c.lineJoin = 'round'; c.lineWidth = 5; c.setLineDash([60 * drawn, 60]); c.beginPath(); c.moveTo(-16, 1); c.lineTo(-5, 12); c.lineTo(17, -11); c.stroke(); c.setLineDash([]);
+  c.restore();
+  font(32, 600, -0.4); slideWords('All changes applied', CX, CY - 12, 32, INK, k => seg(t, AT.done + 0.15 + 0.08 * k, AT.done + 0.55 + 0.08 * k), out);
+  font(19, 400, 0); slideWords('Moved 5 photos, rotated 2 photos, rated 2 photos and sent 2 photos to the Trash.', CX, CY + 28, 19, MUTED, k => seg(t, AT.done + 0.35 + 0.03 * k, AT.done + 0.75 + 0.03 * k), out);
+  const button = eoc(seg(t, AT.done + 0.8, AT.done + 1.15)) * (1 - out);
+  if (button > 0.01) {
+    c.save(); c.translate(CX, CY + 92); c.scale(button, button);
+    c.fillStyle = ACCENT; rr(-84, -21, 168, 42, 12); c.fill();
+    font(18, 600, 0); text('Back to Cull', 0, 6.5, ON_ACCENT, 'center');
+    c.restore();
+  }
+}
+
+// ---- what is drawn over the photos -----------------------------------------------
+const TAKEN = CAST.find(P => P.s === 1 && P.i === REMOVED);
+const CROSS_AT = { x: TAKEN.x + TW / 2 - 15, y: LIST_TOP + PITCH - SCROLL + 36 + 15 };
+function over(t) {
+  if (t >= AT.press + 0.25) return;
+  c.save(); c.beginPath(); c.rect(...listClip(t)); c.clip();
+  CAST.forEach(P => {
+    if (P.s !== 1) return;
+    const taken = P.i === REMOVED ? left(t) : 0, x = photoX(P, t), y = photoY(P, t), shown = eoc(seg(t, 1.3, 1.6)) * (1 - taken);
+    // A photo going to the Trash is edged in red.
+    if (shown > 0.01) { c.strokeStyle = RED; c.lineWidth = 3 * shown; rr(x - TW / 2, y - TH / 2, TW, TH, TH * 0.11); c.stroke(); }
+  });
+  // Under the pointer, a photo offers to be taken off the list.
+  const offer = eoc(seg(t, AT.hover - 0.1, AT.hover + 0.2)) * (1 - left(t));
+  if (offer > 0.01) {
+    c.save(); c.translate(CROSS_AT.x, CROSS_AT.y); c.scale(offer * (1 - 0.15 * pressAt(t, AT.remove)), offer * (1 - 0.15 * pressAt(t, AT.remove)));
+    c.fillStyle = 'rgba(20,19,18,0.85)'; c.beginPath(); c.arc(0, 0, 12, 0, 7); c.fill();
+    cross(0, 0, 13, INK, 0.16);
+    c.restore();
+    font(14, 500, 0);
+    const tip = 'Keep IMG_4104.jpg', w = c.measureText(tip).width + 20, g = eoc(seg(t, AT.hover + 0.25, AT.hover + 0.5)) * (1 - seg(t, AT.remove, AT.remove + 0.15));
+    if (g > 0.01) { c.save(); c.globalAlpha *= g; c.fillStyle = CARD; c.strokeStyle = LINE; c.lineWidth = 1.5; rr(CROSS_AT.x + 20, CROSS_AT.y - 40, w, 28, 8); c.fill(); c.stroke(); text(tip, CROSS_AT.x + 30, CROSS_AT.y - 21, INK); c.restore(); }
+  }
+  c.restore();
+}
+
+// ---- the pointer and the camera --------------------------------------------------
+const STOPS = [
+  { t: 0.9, x: 1480, y: 870 },
+  { t: AT.tour + 0.3, x: GRID_X + 5 * (TW + 14) + 20, y: LIST_TOP + 36 + TH + 10 },
+  { t: AT.tour2 + 0.3, x: GRID_X + 560, y: LIST_TOP + 2 * PITCH - SCROLL + 36 + TH },
+  { t: AT.hover, x: TAKEN.x + 6, y: CROSS_AT.y + 40 },
+  { t: AT.remove, x: CROSS_AT.x + 2, y: CROSS_AT.y + 3, click: true, travel: 0.45 },
+  { t: AT.remove + 1.2, x: CROSS_AT.x + 120, y: CROSS_AT.y + 130 },
+  { t: AT.press, x: APPLY.x + 30, y: APPLY.y + 8, click: true },
+  { t: AT.done + 1.6, x: CX + 150, y: CY + 150 },
+  { t: AT.end + 0.6, x: 1500, y: 900 },
+];
+const LEANS = [
+  { t: AT.tour, until: AT.tour + 1.3, x: GRID_X + 340, y: LIST_TOP + 90, amount: 0.9 },
+  { t: AT.tour2, until: AT.tour2 + 1.3, x: GRID_X + 300, y: LIST_TOP + 2 * PITCH - SCROLL + 150, amount: 0.9 },
+  { t: AT.hover, until: AT.remove + 1.0, x: TAKEN.x + 40, y: CROSS_AT.y + 40, amount: 1.3 },
+  { t: AT.press, x: APPLY.x - 160, y: APPLY.y + 100, amount: 0.6 },
+];
+
+function draw(real) {
+  const t = clamp(real, 0, DURATION);
+  compose(t, {
+    poses: [...BACK.map((tile, i) => ({ ...tile, ...drift(tile.home, 14 + i, t) })), ...CAST.map((tile, k) => ({ ...tile, ...poseAt(k, t) }))],
+    lean: leanOf(LEANS, t), rack: rackOf(CARDS, t),
+    frame: () => stepFrame(t, 5, 1e6, AT.end), under, over,
+    top: () => { stepCards(CARDS, t); drawPointer(STOPS, t, eoc(seg(t, 0.9, 1.3)) * (1 - eic(seg(t, AT.end, AT.end + 0.4)))); },
+    clip: t < AT.press + 0.2 ? listClip(t) : null,
+  });
+}
+
+window.DURATION = DURATION;
+window.draw = draw;
+window.ready = (async () => {
+  await loadKit();
+  draw(0);
+  if (!location.search.includes('render')) {
+    const start = performance.now();
+    const tick = now => { draw(((now - start) / 1000) % (DURATION + 1)); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  }
+  return true;
+})();
+</script>

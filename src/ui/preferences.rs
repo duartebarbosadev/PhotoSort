@@ -19,7 +19,7 @@ fn keep_live(next: &mut Preferences, live: &Preferences) {
     next.recent_folders = live.recent_folders.clone();
     next.updates.last_attempt = live.updates.last_attempt;
     next.updates.repository = live.updates.repository.clone();
-    next.intro_shown = live.intro_shown;
+    next.intro_muted = live.intro_muted;
     next.photo_size = live.photo_size;
 }
 
@@ -314,6 +314,13 @@ impl PhotoSortApp {
                 }
                 if ui.button("Watch the intro").clicked() {
                     self.watch_intro();
+                    ui.close();
+                }
+                if ui
+                    .button(format!("Watch the {} intro", self.step.title()))
+                    .clicked()
+                {
+                    self.watch_step_intro();
                     ui.close();
                 }
                 if ui.button("About PhotoSort").clicked() {

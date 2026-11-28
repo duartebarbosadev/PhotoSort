@@ -1,5 +1,8 @@
-//! The first-run intro: a half-minute film of the workflow, played once over
-//! the window on first launch and again from Menu → Watch the intro.
+//! The intros: a 54-second film of the workflow, played once over the window
+//! on first launch, and a shorter film for each step, played the first time
+//! that step is opened with a folder in it. Menu plays either again. The
+//! film has a player's controls along its bottom edge: play and pause, a
+//! bar to move through it, and its sound.
 use super::*;
 use crate::core::{playback, preferences::Preferences};
 
@@ -14,18 +17,48 @@ const FADE: f64 = 0.32;
 const FIRST_FRAME_WAIT: f64 = 0.5;
 /// The film's shape until its first frame arrives.
 const ASPECT: f32 = 16.0 / 9.0;
-/// Keys that skip the intro, as in the Python app.
-const SKIP_KEYS: [egui::Key; 3] = [egui::Key::Escape, egui::Key::Space, egui::Key::Enter];
+/// Keys that close the intro. Space pauses it, as in any player.
+const SKIP_KEYS: [egui::Key; 2] = [egui::Key::Escape, egui::Key::Enter];
+/// Seconds the arrow keys move through the film.
+const STEP_SECONDS: f64 = 5.0;
+/// How loud the film plays with its sound on: the player's own level.
+const VOLUME: f32 = 0.5;
+/// How far from the film's end the bar can be dragged, in seconds: the end
+/// itself closes the film, which a drag must not do by accident.
+const END_MARGIN: f64 = 0.4;
+/// The height of the shade the controls sit on, over the film's bottom edge.
+const SHADE: f32 = 96.0;
 
+/// Which film: the tour of the whole workflow, or one step's own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Clip {
+    Tour,
+    Step(Step),
+}
+impl Clip {
+    /// The film's file under the resources' `intro` folder.
+    fn file(self) -> &'static str {
+        match self {
+            Self::Tour => "intro.mp4",
+            Self::Step(Step::Organize) => "organize.mp4",
+            Self::Step(Step::EasyDelete) => "easy-delete.mp4",
+            Self::Step(Step::Rotation) => "fix-rotation.mp4",
+            Self::Step(Step::PickBest) => "pick-best.mp4",
+            Self::Step(Step::Cull) => "cull.mp4",
+            Self::Step(Step::Review) => "review.mp4",
+        }
+    }
+}
 pub(super) enum Intro {
     Off,
     /// Plays at the next frame with no other dialog open.
-    Due(PathBuf),
+    Due(Clip, PathBuf),
     Playing(Box<Film>),
 }
 /// The intro's own player: the review player follows the focused library
 /// video and would stop the film on its next frame.
 pub(super) struct Film {
+    pub(super) clip: Clip,
     player: playback::Player,
     /// Context time when the film was opened, and when its card appeared.
     opened: f64,
@@ -38,7 +71,7 @@ impl Intro {
         if !autoplay || preferences.intro_shown {
             return Self::Off;
         }
-        film_path().map_or(Self::Off, Self::Due)
+        film_path(Clip::Tour).map_or(Self::Off, |path| Self::Due(Clip::Tour, path))
     }
     pub(super) fn playing(&self) -> bool {
         matches!(self, Self::Playing(_))
@@ -50,11 +83,11 @@ impl Film {
         self.texture.is_some()
     }
 }
-/// The bundled film: in the app bundle's resources, or the checkout's.
-fn film_path() -> Option<PathBuf> {
+/// A bundled film: in the app bundle's resources, or the checkout's.
+fn film_path(clip: Clip) -> Option<PathBuf> {
     crate::core::models::resource_roots()
         .into_iter()
-        .map(|root| root.join("intro/intro.mp4"))
+        .map(|root| root.join("intro").join(clip.file()))
         .find(|path| path.is_file())
 }
 /// Card opacity `elapsed` seconds after it appeared: an ease-out fade, or
@@ -76,6 +109,161 @@ fn card_size(window: Vec2, aspect: f32) -> Vec2 {
         .min(room.y * aspect);
     egui::vec2(width, width / aspect)
 }
+/// Seconds as a clock: "0:07", "1:12".
+fn clock(seconds: f64) -> String {
+    let seconds = seconds.max(0.0) as u64;
+    format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+/// A round button of the controls, drawn as its icon alone.
+fn control(
+    ui: &egui::Ui,
+    id: egui::Id,
+    center: egui::Pos2,
+    icon: &str,
+    name: &str,
+    key: &str,
+) -> bool {
+    let rect = egui::Rect::from_center_size(center, Vec2::splat(32.0));
+    let response = named(
+        ui.interact(rect, id, Sense::click()),
+        egui::WidgetType::Button,
+        name,
+    );
+    if response.hovered() {
+        ui.painter()
+            .circle_filled(center, 16.0, Color32::from_white_alpha(34));
+    }
+    ui.painter().text(
+        center,
+        egui::Align2::CENTER_CENTER,
+        icon,
+        medium(18.0),
+        Color32::WHITE,
+    );
+    response.on_hover_text(format!("{name} · {key}")).clicked()
+}
+/// The controls along the film's bottom edge, on a shade that fades up into
+/// the picture: play or pause, where the film is, a bar to move through it,
+/// and the sound. Returns the sound wanted when its button is pressed.
+fn controls(
+    ui: &egui::Ui,
+    card: egui::Rect,
+    player: &playback::Player,
+    state: &playback::Snapshot,
+    muted: bool,
+) -> Option<bool> {
+    use egui_phosphor::regular as icon;
+    let painter = ui.painter();
+    let radius = f32::from(RADIUS);
+    let (clear, dark) = (Color32::TRANSPARENT, Color32::from_black_alpha(200));
+    // The shade ends above the card's round corners; a strip with the same
+    // corners finishes it.
+    let shade = egui::Rect::from_min_max(
+        egui::pos2(card.left(), card.bottom() - SHADE),
+        egui::pos2(card.right(), card.bottom() - radius),
+    );
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(shade.left_top(), clear);
+    mesh.colored_vertex(shade.right_top(), clear);
+    mesh.colored_vertex(shade.left_bottom(), dark);
+    mesh.colored_vertex(shade.right_bottom(), dark);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 2, 3);
+    painter.add(egui::Shape::mesh(mesh));
+    painter.rect_filled(
+        egui::Rect::from_min_max(shade.left_bottom(), card.right_bottom()),
+        egui::CornerRadius {
+            nw: 0,
+            ne: 0,
+            sw: RADIUS,
+            se: RADIUS,
+        },
+        dark,
+    );
+    let id = egui::Id::new("intro-controls");
+    let y = card.bottom() - 28.0;
+    let (left, right) = (card.left() + 22.0, card.right() - 22.0);
+    let (glyph, name) = if state.play_requested {
+        (icon::PAUSE, "Pause")
+    } else {
+        (icon::PLAY, "Play")
+    };
+    if control(
+        ui,
+        id.with("play"),
+        egui::pos2(left + 12.0, y),
+        glyph,
+        name,
+        "Space",
+    ) {
+        player.toggle();
+    }
+    // Where the film is, and how long it runs.
+    let at = state.seek_target.unwrap_or(state.position);
+    let time = painter.text(
+        egui::pos2(left + 40.0, y),
+        egui::Align2::LEFT_CENTER,
+        format!("{} / {}", clock(at), clock(state.duration)),
+        medium(12.0),
+        Color32::from_white_alpha(220),
+    );
+    let (glyph, name) = if muted {
+        (icon::SPEAKER_X, "Unmute")
+    } else {
+        (icon::SPEAKER_HIGH, "Mute")
+    };
+    let sound = control(
+        ui,
+        id.with("sound"),
+        egui::pos2(right - 12.0, y),
+        glyph,
+        name,
+        "M",
+    )
+    .then_some(muted);
+    // The bar: a click or a drag anywhere on it moves the film there.
+    let track = egui::Rect::from_min_max(
+        egui::pos2(time.right().max(left + 112.0) + 16.0, y - 2.0),
+        egui::pos2(right - 44.0, y + 2.0),
+    );
+    if track.width() > 24.0 {
+        let response = named(
+            ui.interact(
+                track.expand2(egui::vec2(6.0, 12.0)),
+                id.with("seek"),
+                Sense::click_and_drag(),
+            ),
+            egui::WidgetType::Slider,
+            "Position",
+        );
+        let length = state.duration.max(0.001);
+        if state.ready
+            && (response.is_pointer_button_down_on() || response.clicked())
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            let wanted =
+                f64::from(((pointer.x - track.left()) / track.width()).clamp(0.0, 1.0)) * length;
+            let wanted = wanted.min((length - END_MARGIN).max(0.0));
+            if (wanted - at).abs() > 0.05 {
+                player.seek(wanted);
+            }
+        }
+        let held = response.hovered() || response.is_pointer_button_down_on();
+        let played = track.left() + track.width() * (at / length).clamp(0.0, 1.0) as f32;
+        painter.rect_filled(track, 2.0, Color32::from_white_alpha(56));
+        painter.rect_filled(
+            egui::Rect::from_min_max(track.min, egui::pos2(played, track.bottom())),
+            2.0,
+            ACCENT,
+        );
+        painter.circle_filled(
+            egui::pos2(played, y),
+            if held { 7.0 } else { 5.0 },
+            Color32::WHITE,
+        );
+    }
+    sound
+}
 fn player(ctx: &egui::Context) -> playback::Player {
     // Unit tests script playback; a real decoder makes them timing-dependent.
     #[cfg(test)]
@@ -93,33 +281,88 @@ fn player(ctx: &egui::Context) -> playback::Player {
 impl PhotoSortApp {
     /// Menu → Watch the intro.
     pub(super) fn watch_intro(&mut self) {
-        match film_path() {
-            Some(path) => self.intro = Intro::Due(path),
+        self.watch(Clip::Tour);
+    }
+    /// Menu → Watch the intro of the step on screen.
+    pub(super) fn watch_step_intro(&mut self) {
+        self.watch(Clip::Step(self.step));
+    }
+    fn watch(&mut self, clip: Clip) {
+        match film_path(clip) {
+            Some(path) => self.intro = Intro::Due(clip, path),
             None => self.set_status("The intro film is missing from this installation".into()),
         }
     }
-    /// Skip keys, taken before any other keyboard handling can see them.
-    pub(super) fn intro_keys(&mut self, ctx: &egui::Context) {
-        if self.intro.playing()
-            && ctx.input_mut(|input| {
-                // Consume every skip key, so none reaches the window once it closes.
-                SKIP_KEYS
-                    .into_iter()
-                    .filter(|key| input.consume_key(egui::Modifiers::NONE, *key))
-                    .count()
-                    > 0
-            })
-        {
-            tracing::debug!("intro skipped");
-            self.intro = Intro::Off;
+    /// The step on screen is due its own film the first time it is opened
+    /// with a folder in it. Without a folder there is nothing to explain yet.
+    fn step_intro_due(&mut self) {
+        let step = self.step;
+        match &self.intro {
+            // The step was left before its film could start.
+            Intro::Due(Clip::Step(due), _) if *due != step => self.intro = Intro::Off,
+            Intro::Off
+                if self.step_intros
+                    && self.root.is_some()
+                    && !self.preferences_unreadable
+                    && !self.preferences.step_intros_shown.contains(&step) =>
+            {
+                match film_path(Clip::Step(step)) {
+                    Some(path) => self.intro = Intro::Due(Clip::Step(step), path),
+                    // Nothing to play: not looked for again on every frame.
+                    None => {
+                        self.preferences.step_intros_shown.insert(step);
+                    }
+                }
+            }
+            _ => {}
         }
     }
-    fn start_intro(&mut self, ctx: &egui::Context, path: PathBuf) {
+    /// The film's keys, taken before any other keyboard handling can see
+    /// them: Esc or Enter closes it, Space pauses, the arrows move through
+    /// it and M turns its sound off and on.
+    pub(super) fn intro_keys(&mut self, ctx: &egui::Context) {
+        let Intro::Playing(film) = &self.intro else {
+            return;
+        };
+        let pressed = |key| ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key));
+        // Consume every skip key, so none reaches the window once it closes.
+        if SKIP_KEYS.into_iter().filter(|key| pressed(*key)).count() > 0 {
+            tracing::debug!("intro skipped");
+            self.intro = Intro::Off;
+            return;
+        }
+        if pressed(egui::Key::Space) {
+            film.player.toggle();
+        }
+        if pressed(egui::Key::ArrowLeft) {
+            film.player.seek_relative(-STEP_SECONDS);
+        }
+        if pressed(egui::Key::ArrowRight) {
+            film.player.seek_relative(STEP_SECONDS);
+        }
+        if pressed(egui::Key::M) {
+            self.set_intro_sound(self.preferences.intro_muted);
+        }
+    }
+    /// Turns the films' sound on or off, for this film and the next ones.
+    fn set_intro_sound(&mut self, on: bool) {
+        if let Intro::Playing(film) = &self.intro {
+            film.player.volume(if on { VOLUME } else { 0.0 });
+        }
+        if self.preferences.intro_muted == on {
+            self.preferences.intro_muted = !on;
+            self.save_preferences();
+        }
+    }
+    fn start_intro(&mut self, ctx: &egui::Context, clip: Clip, path: PathBuf) {
         self.intro = Intro::Off;
-        if !self.preferences.intro_shown {
-            // Remembered as it opens: quitting part-way through, or a film
-            // that cannot play, must not bring it back on every launch.
-            self.preferences.intro_shown = true;
+        // Remembered as it opens: quitting part-way through, or a film that
+        // cannot play, must not bring it back on every launch.
+        let first = match clip {
+            Clip::Tour => !std::mem::replace(&mut self.preferences.intro_shown, true),
+            Clip::Step(step) => self.preferences.step_intros_shown.insert(step),
+        };
+        if first {
             self.save_preferences();
         }
         let fingerprint = match Fingerprint::read(&path) {
@@ -137,8 +380,12 @@ impl PhotoSortApp {
         };
         let player = player(ctx);
         player.select(Some(&media));
+        if self.preferences.intro_muted {
+            player.volume(0.0);
+        }
         player.toggle();
         self.intro = Intro::Playing(Box::new(Film {
+            clip,
             player,
             opened: ctx.input(|i| i.time),
             shown: None,
@@ -153,14 +400,15 @@ impl PhotoSortApp {
     /// Starts a due intro once nothing else asks for attention, then draws
     /// it over everything, including other dialogs.
     pub(super) fn intro_overlay(&mut self, ctx: &egui::Context) {
-        if matches!(self.intro, Intro::Due(_))
+        self.step_intro_due();
+        if matches!(self.intro, Intro::Due(..))
             && !self.other_modal_active()
             && !self.departure_pending()
             && self.crash_notice.is_none()
             && self.error.is_none()
-            && let Intro::Due(path) = std::mem::replace(&mut self.intro, Intro::Off)
+            && let Intro::Due(clip, path) = std::mem::replace(&mut self.intro, Intro::Off)
         {
-            self.start_intro(ctx, path);
+            self.start_intro(ctx, clip, path);
         }
         // That answer must not wait under the film.
         if self.departure_pending() {
@@ -224,15 +472,24 @@ impl PhotoSortApp {
         });
         let size = card_size(ctx.content_rect().size(), aspect);
         let texture = film.texture.as_ref().map(|(_, texture)| texture.id());
+        // What a screen reader calls the film.
+        let name = match film.clip {
+            Clip::Tour => "PhotoSort intro".to_owned(),
+            Clip::Step(step) => format!("{} intro", step.title()),
+        };
         let id = egui::Id::new("intro");
-        let skipped = egui::Modal::new(id)
+        let (player, muted) = (&film.player, self.preferences.intro_muted);
+        let (skipped, sound) = egui::Modal::new(id)
             .area(egui::Modal::default_area(id).fade_in(false))
             .backdrop_color(Color32::from_black_alpha((170.0 * alpha) as u8))
             .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
                 ui.set_opacity(alpha);
-                let (card, response) = ui.allocate_exact_size(size, Sense::hover());
-                let _ = named(response, egui::WidgetType::Image, "PhotoSort intro");
+                let (card, response) = ui.allocate_exact_size(size, Sense::click());
+                // A click on the picture pauses it and plays it again.
+                if named(response, egui::WidgetType::Image, name.as_str()).clicked() {
+                    player.toggle();
+                }
                 let painter = ui.painter();
                 painter.add(
                     egui::Shadow {
@@ -258,31 +515,51 @@ impl PhotoSortApp {
                     Stroke::new(1.0, Color32::from_white_alpha(14)),
                     StrokeKind::Inside,
                 );
-                // Skip floats over the film's top-right corner.
-                let mut corner = ui.new_child(
-                    egui::UiBuilder::new()
-                        .max_rect(card.shrink(f32::from(RADIUS)))
-                        .layout(egui::Layout::right_to_left(Align::Min)),
+                let sound = controls(ui, card, player, &state, muted);
+                // Skip floats over the film's top-right corner: a pill drawn
+                // by hand, so its words and its icon sit centred in it.
+                let inset = f32::from(RADIUS);
+                let words = painter.layout_no_wrap("Skip intro".to_owned(), medium(12.0), INK);
+                let glyph = painter.layout_no_wrap(
+                    egui_phosphor::regular::SKIP_FORWARD.to_owned(),
+                    medium(14.0),
+                    INK,
                 );
-                let skip = corner.add(
-                    egui::Button::new(
-                        RichText::new(format!(
-                            "Skip intro  {}",
-                            egui_phosphor::regular::SKIP_FORWARD
-                        ))
-                        .font(medium(12.0))
-                        .color(INK),
-                    )
-                    .fill(Color32::from_black_alpha(150))
-                    .stroke(Stroke::new(1.0, Color32::from_white_alpha(30)))
-                    .corner_radius(u8::MAX)
-                    .min_size(egui::vec2(0.0, 30.0)),
+                let (pad, gap) = (14.0, 7.0);
+                let pill = egui::Rect::from_min_size(
+                    egui::pos2(
+                        card.right() - inset - 2.0 * pad - words.size().x - gap - glyph.size().x,
+                        card.top() + inset,
+                    ),
+                    egui::vec2(2.0 * pad + words.size().x + gap + glyph.size().x, 30.0),
                 );
-                named(skip, egui::WidgetType::Button, "Skip intro")
-                    .on_hover_text("Esc")
-                    .clicked()
+                let skip = named(
+                    ui.interact(pill, id.with("skip"), Sense::click()),
+                    egui::WidgetType::Button,
+                    "Skip intro",
+                );
+                painter.rect(
+                    pill,
+                    15.0,
+                    Color32::from_black_alpha(if skip.hovered() { 200 } else { 150 }),
+                    Stroke::new(1.0, Color32::from_white_alpha(30)),
+                    StrokeKind::Inside,
+                );
+                let middle = pill.center().y;
+                let after = pill.left() + pad + words.size().x + gap;
+                painter.galley(
+                    egui::pos2(pill.left() + pad, middle - words.size().y / 2.0),
+                    words,
+                    INK,
+                );
+                painter.galley(egui::pos2(after, middle - glyph.size().y / 2.0), glyph, INK);
+                let skipped = skip.on_hover_text("Esc").clicked();
+                (skipped, sound)
             })
             .inner;
+        if let Some(on) = sound {
+            self.set_intro_sound(on);
+        }
         if skipped {
             tracing::debug!("intro skipped");
             self.intro = Intro::Off;
@@ -339,7 +616,14 @@ mod tests {
         };
         assert!(matches!(Intro::at_startup(&seen, true), Intro::Off));
         // The checkout's film is found from the crate root, where tests run.
-        assert!(matches!(Intro::at_startup(&fresh, true), Intro::Due(_)));
+        assert!(matches!(
+            Intro::at_startup(&fresh, true),
+            Intro::Due(Clip::Tour, _)
+        ));
+        // Every step has a film of its own beside it.
+        for step in Step::ALL {
+            assert!(film_path(Clip::Step(step)).is_some(), "{step:?}");
+        }
     }
 }
 
@@ -374,7 +658,7 @@ mod playback_tests {
             PhotoSortApp::with_runtime(Runtime::with_cache(|| {}, root.join("cache")), None);
         app.preferences_path = Some(root.join("preferences.json"));
         app.intro = Intro::at_startup(&app.preferences, true);
-        assert!(matches!(app.intro, Intro::Due(_)));
+        assert!(matches!(app.intro, Intro::Due(..)));
         app
     }
     fn frame(app: &mut PhotoSortApp, ctx: &egui::Context, events: Vec<egui::Event>) {
@@ -409,7 +693,7 @@ mod playback_tests {
         assert!(matches!(Intro::at_startup(&preferences, true), Intro::Off));
         let output = ctx.run_test(input(vec![]), |ui| app.update_workspace(ui, false));
         let tree = output.platform_output.accesskit_update.unwrap();
-        for label in ["Skip intro", "PhotoSort intro"] {
+        for label in ["Skip intro", "PhotoSort intro", "Pause", "Position", "Mute"] {
             assert!(
                 tree.nodes.iter().any(|(_, n)| n.label() == Some(label)),
                 "{label}"
@@ -469,11 +753,29 @@ mod playback_tests {
         assert!(matches!(app.intro, Intro::Off));
         let _ = saved(root.path());
         app.watch_intro();
-        assert!(matches!(app.intro, Intro::Due(_)));
+        assert!(matches!(app.intro, Intro::Due(..)));
         frame(&mut app, &ctx, vec![]);
         assert!(app.intro.playing());
-        frame(&mut app, &ctx, vec![key(egui::Key::Space)]);
+        // Space pauses it and M turns its sound off, for the next film too;
+        // neither closes it. Enter does.
+        let film = |app: &PhotoSortApp| match &app.intro {
+            Intro::Playing(film) => film.player.snapshot(),
+            _ => panic!("the film closed"),
+        };
+        assert!(film(&app).play_requested && film(&app).volume > 0.0);
+        frame(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Space), key(egui::Key::M)],
+        );
+        assert!(!film(&app).play_requested);
+        assert_eq!(film(&app).volume, 0.0);
+        assert!(app.preferences.intro_muted);
+        frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
         assert!(matches!(app.intro, Intro::Off));
+        app.watch_intro();
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(film(&app).volume, 0.0, "still muted");
         app.runtime.shutdown();
     }
 
@@ -501,7 +803,7 @@ mod playback_tests {
             show(&mut app, true);
             for _ in 0..2 {
                 frame(&mut app, &ctx, vec![]);
-                assert!(matches!(app.intro, Intro::Due(_)), "{name}");
+                assert!(matches!(app.intro, Intro::Due(..)), "{name}");
                 assert!(shown(&app), "{name}: the intro closed it");
                 assert!(!app.preferences.intro_shown, "{name}");
             }
@@ -518,6 +820,64 @@ mod playback_tests {
     /// One frame of an intro with nothing else drawn.
     fn overlay(app: &mut PhotoSortApp, ctx: &egui::Context) {
         let _ = ctx.run_test(input(vec![]), |ui| app.intro_overlay(&ui.ctx().clone()));
+    }
+    /// The film playing, if any.
+    fn playing(app: &PhotoSortApp) -> Option<Clip> {
+        match &app.intro {
+            Intro::Playing(film) => Some(film.clip),
+            _ => None,
+        }
+    }
+    /// Escape, then a frame of the intro alone.
+    fn skip(app: &mut PhotoSortApp, ctx: &egui::Context) {
+        let _ = ctx.run_test(input(vec![key(egui::Key::Escape)]), |ui| {
+            let ctx = ui.ctx().clone();
+            app.intro_keys(&ctx);
+            app.intro_overlay(&ctx);
+        });
+    }
+
+    #[test]
+    fn a_step_plays_its_own_film_the_first_time_it_is_opened_with_a_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = first_launch(root.path());
+        app.step_intros = true;
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        // The tour comes first. With no folder open, no step's film follows.
+        overlay(&mut app, &ctx);
+        assert_eq!(playing(&app), Some(Clip::Tour));
+        skip(&mut app, &ctx);
+        overlay(&mut app, &ctx);
+        assert_eq!(playing(&app), None);
+        assert!(app.preferences.step_intros_shown.is_empty());
+        // A folder is open: the step on screen plays its film, once.
+        app.root = Some(root.path().to_path_buf());
+        let first = app.step;
+        overlay(&mut app, &ctx);
+        assert_eq!(playing(&app), Some(Clip::Step(first)));
+        skip(&mut app, &ctx);
+        overlay(&mut app, &ctx);
+        assert_eq!(playing(&app), None, "already seen");
+        // Another step has its own, and going back does not replay the first.
+        app.step = Step::Cull;
+        overlay(&mut app, &ctx);
+        assert_eq!(playing(&app), Some(Clip::Step(Step::Cull)));
+        skip(&mut app, &ctx);
+        app.step = first;
+        overlay(&mut app, &ctx);
+        assert_eq!(playing(&app), None);
+        // Menu plays one again.
+        app.watch_step_intro();
+        overlay(&mut app, &ctx);
+        assert_eq!(playing(&app), Some(Clip::Step(first)));
+        // Shutdown finishes every queued write: both are remembered for
+        // the next launch.
+        app.runtime.shutdown();
+        assert_eq!(
+            saved(root.path()).step_intros_shown,
+            HashSet::from([first, Step::Cull])
+        );
     }
     /// One frame of the native Quit path: the shared departure guard, then the intro.
     fn native_quit(app: &mut PhotoSortApp, ctx: &egui::Context) {
