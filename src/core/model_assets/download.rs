@@ -248,12 +248,30 @@ mod tests {
         thread,
         time::Instant,
     };
-    /// Answers one request with `reply` and returns what was asked.
+    /// Answers one request with `reply` and returns what was asked: nothing
+    /// when no request comes. A download cancelled at once may never connect
+    /// (building the client alone can outlast the cancellation, as it does
+    /// on Windows), and waiting for it would hang the test.
     fn server(reply: Vec<u8>, stall: bool) -> (String, thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
         let handle = thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(10))
+                    }
+                    Err(_) => return String::new(),
+                }
+            };
+            // On Windows the socket takes the listener's non-blocking mode.
+            socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
