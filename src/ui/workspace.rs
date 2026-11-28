@@ -270,6 +270,8 @@ pub struct PhotoSortApp {
     /// The panel's width once the user has seen or resized it.
     delete_panel_width: Option<f32>,
     pick_review: crate::core::pick_review::Review,
+    /// Pick Best's two kinds of group, which one is shown and the people filter.
+    pick_modes: pick_review::PickModes,
     pick_run: Option<u64>,
     /// A photo of the selected Pick Best group, the one the keyboard acts on.
     pick_current: Option<MediaId>,
@@ -653,6 +655,7 @@ impl PhotoSortApp {
             delete_panel: false,
             delete_panel_width: None,
             pick_review: Default::default(),
+            pick_modes: Default::default(),
             pick_run: None,
             pick_current: None,
             pick_panel: false,
@@ -796,6 +799,7 @@ impl PhotoSortApp {
             rotations_by_hand: self.rotation_review.by_hand().clone(),
             trash_steps: self.trash_steps.clone(),
             by_hand: self.by_hand.clone(),
+            pick_subject_hand: self.pick_modes.subject_hand.clone(),
             waiting: (!self.waiting.is_empty()).then(|| self.waiting.clone()),
             // Nothing staged in Organize: nothing of the catalog is read.
             organize: self
@@ -915,6 +919,7 @@ impl PhotoSortApp {
         self.decisions.clear();
         self.trash_steps.clear();
         self.by_hand.clear();
+        self.pick_modes.subject_hand.clear();
         self.accepted.clear();
         self.trash_last = None;
         self.review_blocked = None;
@@ -970,6 +975,7 @@ impl PhotoSortApp {
         self.delete_run = None;
         self.delete_panel = false;
         self.pick_review = Default::default();
+        self.pick_modes = Default::default();
         self.pick_run = None;
         self.pick_current = None;
         self.pick_panel = false;
@@ -1595,6 +1601,8 @@ impl PhotoSortApp {
                 }
                 if self.step == Step::PickBest {
                     self.pick_run = Some(run);
+                    // Same subject groups come with this run, or not at all.
+                    self.pick_modes.found = None;
                     self.analysis.clear();
                     self.embeddings.clear();
                 }
@@ -2448,7 +2456,10 @@ impl PhotoSortApp {
                 burst.iter().map(|(id, _)| *id).collect(),
                 burst.into_iter().collect(),
             );
-            self.pick_review.replace(vec![cluster]);
+            // A burst: Similar's kind of group.
+            self.pick_modes.mode = pick_review::PickMode::Similar;
+            self.pick_modes.similar = vec![cluster];
+            self.show_pick_groups();
             self.pick_review.stage_new_suggestions(&mut self.decisions);
             self.view_data_ready.insert(Step::PickBest);
         }
@@ -2473,6 +2484,10 @@ impl PhotoSortApp {
                     id,
                     crate::core::analysis::Analysis {
                         score,
+                        // Checked for people, none found: Pick Best's
+                        // people filter can tell.
+                        faces: Some(Default::default()),
+                        people: Some(0),
                         ..Default::default()
                     },
                 );

@@ -628,7 +628,7 @@ fn model_panel_groups_models_and_links_every_source() {
         assert!(labels.iter().any(|l| l == group), "{group}: {labels:?}");
     }
     assert_eq!(labels.iter().filter(|l| *l == "Needed now").count(), 2);
-    assert_eq!(labels.iter().filter(|l| *l == "Missing").count(), 6);
+    assert_eq!(labels.iter().filter(|l| *l == "Missing").count(), 7);
     let runtime = model_assets::runtime::info(model_assets::runtime::Package::Cpu);
     // Every model downloads from its pinned file; Import stays in Details.
     let count = |pred: &dyn Fn(&str) -> bool| labels.iter().filter(|l| pred(l)).count();

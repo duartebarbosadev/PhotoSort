@@ -16,6 +16,9 @@ struct Policy {
     confidence: f64,
     geometry_subject: f64,
     geometry_scene: f64,
+    /// How alike the whole picture must be for one subject from another
+    /// angle; see `Pair::same_subject`.
+    angle: f64,
 }
 impl Strictness {
     fn policy(self) -> Policy {
@@ -25,6 +28,13 @@ impl Strictness {
             Self::Standard => (0.84, 0.78, 0.92, 0.84, 0.64, 0.82),
             Self::Broad => (0.80, 0.74, 0.89, 0.80, 0.60, 0.78),
         };
+        // Two framings of one subject measured 0.74 here, photos of
+        // unrelated things below 0.3.
+        let angle = match self {
+            Self::Conservative => 0.74,
+            Self::Standard => 0.70,
+            Self::Broad => 0.66,
+        };
         Policy {
             subject,
             scene,
@@ -32,6 +42,7 @@ impl Strictness {
             confidence,
             geometry_subject,
             geometry_scene,
+            angle,
         }
     }
 }
@@ -94,6 +105,66 @@ impl Pair {
             && ((self.subject_similarity >= p.subject && self.scene_similarity >= p.scene)
                 || (self.subject_similarity >= p.geometry_subject
                     && self.scene_similarity >= p.geometry_scene))
+    }
+}
+
+/// Photos further apart than this are never one subject seen from another
+/// angle: walking around a statue or a building takes minutes, not hours.
+pub const ANGLE_WINDOW_SECONDS: f64 = 15.0 * 60.0;
+
+/// What a pair must show to share a group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rule {
+    /// The same picture taken again: Cull's and Pick Best's similar groups.
+    Similar(Strictness),
+    /// The same subject, also from another angle or framing: Pick Best's
+    /// Same subject groups. Every similar pair passes it too.
+    SameSubject(Strictness),
+}
+impl From<Strictness> for Rule {
+    fn from(strictness: Strictness) -> Self {
+        Self::Similar(strictness)
+    }
+}
+impl Rule {
+    pub fn strictness(self) -> Strictness {
+        match self {
+            Self::Similar(strictness) | Self::SameSubject(strictness) => strictness,
+        }
+    }
+    /// The pair's verdict under this rule, from its raw evidence alone.
+    pub fn classify(self, pair: &Pair) -> Pair {
+        let mut result = pair.with_strictness(self.strictness());
+        if let Self::SameSubject(strictness) = self
+            && !result.accepted
+            && pair.same_subject(strictness)
+        {
+            result.accepted = true;
+            result.reason = "same_subject_angle".into();
+        }
+        result
+    }
+    /// Whether a classified pair still needs its geometry checked.
+    pub fn needs_geometry(self, pair: &Pair) -> bool {
+        pair.needs_geometry(self.strictness())
+    }
+}
+impl Pair {
+    /// One subject seen from another angle or framing. Another angle changes
+    /// the background and defeats point matching, so neither the regions
+    /// nor the geometry are asked for: the whole picture must still read as
+    /// alike, the photos must be taken within `ANGLE_WINDOW_SECONDS`, and
+    /// the same people must be in both. Without a capture time on both the
+    /// picture must be more alike still.
+    fn same_subject(&self, strictness: Strictness) -> bool {
+        let p = strictness.policy();
+        let face_safe = self.face_similarity.is_none_or(|v| v >= p.subject);
+        let floor = match self.time_delta_seconds {
+            Some(apart) if apart <= ANGLE_WINDOW_SECONDS => p.angle,
+            Some(_) => return false,
+            None => p.angle + 0.08,
+        };
+        self.complete && face_safe && self.scene_similarity >= floor
     }
 }
 

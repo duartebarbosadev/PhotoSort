@@ -452,6 +452,19 @@ impl Models {
         let max = values[0].max(values[1]);
         Ok((values[1] - max).exp() / values.iter().map(|v| (*v - max).exp()).sum::<f32>())
     }
+    /// The people in a photo, seen from any side (`persons`).
+    pub fn persons(&mut self, asset: &Asset) -> Result<Vec<super::persons::Person>> {
+        let path = model_path(super::persons::MODEL)
+            .context("Person detection model is not installed in resources/models")?;
+        let (input, scale) = super::persons::input(asset);
+        let output = self.infer("persons", &path, 416, input)?;
+        anyhow::ensure!(
+            output.len() == 3549 * 85,
+            "Person detection model must return 3549 rows of 85 values"
+        );
+        let (width, height) = asset.pixels.dimensions();
+        Ok(super::persons::decode(&output, scale, width, height))
+    }
 }
 fn embedding_input(asset: &Asset) -> Vec<f32> {
     let (w, h) = asset.pixels.dimensions();
@@ -766,6 +779,13 @@ pub fn analysis_signature() -> String {
 }
 pub fn aesthetic_signature() -> String {
     model_signature(&["aesthetic.onnx"])
+}
+pub fn persons_signature() -> String {
+    format!(
+        "{}:{}",
+        super::persons::RECIPE,
+        model_signature(&[super::persons::MODEL])
+    )
 }
 pub fn recognition_signature() -> String {
     format!(

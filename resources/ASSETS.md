@@ -30,6 +30,7 @@ ONNX Runtime is a separate download; see [ONNX Runtime](#onnx-runtime).
 | `models/face_detector.onnx`, `models/face_landmarks_detector.onnx` | MediaPipe face detector and Face Mesh V2 from `face_landmarker.task` (see below); `scripts/normalize_faces.py` folds float16 constants, then tflite2onnx 0.4.1 exports opset 11 | Apache-2.0 (MediaPipe) |
 | `models/face_blendshapes.onnx` | MediaPipe `face_blendshapes.tflite` from the same `face_landmarker.task` (52 expression scores from 146 Face Mesh points); `scripts/convert_blendshapes.py` with TensorFlow 2.16.2 and tf2onnx 1.16.1, opset 17, explicit convolution pads; verified against TFLite within 3e-6 | Apache-2.0 (MediaPipe) |
 | `models/face_recognition_sface.onnx` | OpenCV Zoo `face_recognition_sface_2021dec.onnx`, unmodified (see below) | Apache-2.0; `licenses/APACHE-2.0.txt` |
+| `models/person_detector.onnx` | YOLOX-nano `yolox_nano.onnx` from the YOLOX 0.1.1rc0 release, unmodified (see below) | Apache-2.0; `licenses/APACHE-2.0.txt` |
 | `runtime/libonnxruntime.dylib` | ONNX Runtime 1.29.0 shared library, unmodified from the official macOS arm64 release archive (see below) | MIT; `licenses/ONNXRUNTIME-MIT.txt` |
 | `runtime/onnxruntime.dll`, `runtime/onnxruntime_providers_shared.dll` | ONNX Runtime 1.29.0, unmodified from the official Windows x64 release archive (see below) | MIT; `licenses/ONNXRUNTIME-MIT.txt` |
 | `locations.tsv` | 155,210 latitude/longitude/country/region/city records converted from reverse_geocode 1.6.6's GeoNames dataset | GeoNames CC BY 4.0, `licenses/GEONAMES-CC-BY-4.0.txt`; reverse_geocode package LGPL |
@@ -150,6 +151,18 @@ SHA-256 `0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79`.
 Five-point alignment is implemented in Rust; the model consumes RGB 0..255 at 112×112.
 The pinned file can be restored from
 https://media.githubusercontent.com/media/opencv/opencv_zoo/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface/face_recognition_sface_2021dec.onnx.
+
+## Person detection model
+
+`models/person_detector.onnx` is Megvii's unmodified `yolox_nano.onnx` (YOLOX-nano, trained
+on COCO) from the [YOLOX 0.1.1rc0 release](https://github.com/Megvii-BaseDetection/YOLOX/releases/tag/0.1.1rc0),
+3,659,407 bytes, SHA-256 `c789161ed43c8269fcd4e67c67eeeb4e80c622da2eb296a20bc6007bd18a0b7d`.
+[Upstream project and Apache-2.0 license](https://github.com/Megvii-BaseDetection/YOLOX).
+Only its person class is read (`src/core/persons.rs`): the photo is letterboxed to 416×416 BGR
+0..255 on grey 114, and the 3,549 grid cells of strides 8, 16 and 32 are decoded in Rust. It finds
+people Pick Best's people filter counts, seen from any side, where the face detector finds faces only.
+The pinned file can be restored from
+https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_nano.onnx.
 
 ## Orientation model
 

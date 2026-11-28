@@ -16,13 +16,15 @@ enum Check {
     Aesthetic,
     Faces,
     Recognition,
+    Persons,
     Orientation,
 }
-const CHECKS: [Check; 5] = [
+const CHECKS: [Check; 6] = [
     Check::Scene,
     Check::Aesthetic,
     Check::Faces,
     Check::Recognition,
+    Check::Persons,
     Check::Orientation,
 ];
 impl Check {
@@ -32,6 +34,7 @@ impl Check {
             Self::Aesthetic => "aesthetics",
             Self::Faces => "face_geometry",
             Self::Recognition => "face_recognition",
+            Self::Persons => "person_detection",
             Self::Orientation => "orientation",
         }
     }
@@ -252,6 +255,17 @@ impl Engine {
                     );
                     Ok("Validated normalized 128-dimensional identity descriptor".into())
                 }
+                Check::Persons => {
+                    let people = self.models.persons(&self.asset)?;
+                    ensure!(
+                        people.iter().all(crate::core::persons::Person::valid),
+                        "Invalid person detection output"
+                    );
+                    Ok(format!(
+                        "Validated 3549-cell person detection output; {} found",
+                        people.len()
+                    ))
+                }
                 Check::Orientation => {
                     let path =
                         models::orientation_model().context("Orientation model is missing")?;
@@ -302,9 +316,9 @@ mod tests {
     }
     #[test]
     fn runtime_success_requires_real_second_pass_session_reuse() {
-        // Initializations after the first and second pass: seven models, or
-        // seven plus one accelerator replaced by a CPU fallback in the first pass.
-        for (first, second, reuse) in [(7, 7, true), (7, 14, false), (8, 8, true), (8, 9, false)] {
+        // Initializations after the first and second pass: eight models, or
+        // eight plus one accelerator replaced by a CPU fallback in the first pass.
+        for (first, second, reuse) in [(8, 8, true), (8, 16, false), (9, 9, true), (9, 10, false)] {
             let mut calls = 0;
             let report = run(
                 report(),
@@ -312,13 +326,13 @@ mod tests {
                     calls += 1;
                     Outcome {
                         result: Ok("valid".into()),
-                        initializations: if calls <= 5 { first } else { second },
+                        initializations: if calls <= 6 { first } else { second },
                         inferences: calls * 2,
                     }
                 },
                 &|| false,
             );
-            assert_eq!(calls, 10);
+            assert_eq!(calls, 12);
             assert_eq!(report.passed, reuse, "{first} then {second}");
             assert_eq!(report.sessions_reused, reuse);
             assert_eq!(report.diagnostics.runtime.load_verified, reuse);
@@ -343,7 +357,7 @@ mod tests {
             },
             &|| false,
         );
-        assert_eq!(calls, 5);
+        assert_eq!(calls, 6);
         assert!(
             !report.passed && !report.sessions_reused && !report.diagnostics.runtime.load_verified
         );
@@ -367,18 +381,18 @@ mod completion_tests {
             super::tests::report(),
             |_| {
                 calls += 1;
-                if calls == 10 {
+                if calls == 12 {
                     cancelled.set(true);
                 }
                 Outcome {
                     result: Ok("valid".into()),
-                    initializations: 7,
+                    initializations: 8,
                     inferences: calls * 2,
                 }
             },
             &|| cancelled.get(),
         );
-        assert_eq!(calls, 10);
+        assert_eq!(calls, 12);
         assert!(report.cancelled && !report.passed && !report.diagnostics.runtime.load_verified);
     }
 }

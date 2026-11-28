@@ -110,6 +110,7 @@ impl PhotoSortApp {
         }
         self.decisions.clear();
         self.by_hand.clear();
+        self.pick_modes.subject_hand.clear();
         self.accepted.clear();
         // Back to the defaults: with suggestions applied automatically, Easy
         // Delete, Fix Rotation and Pick Best stage them again; otherwise

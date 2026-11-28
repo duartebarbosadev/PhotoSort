@@ -1,5 +1,5 @@
 use photosort::core::subjects::{
-    Artifact, Geometry, Pair, Strictness, candidates, clusters, verify_geometry, verify_pair,
+    Artifact, Geometry, Pair, Rule, Strictness, candidates, clusters, verify_geometry, verify_pair,
 };
 use serde::Deserialize;
 use std::{cell::Cell, collections::BTreeMap};
@@ -252,4 +252,49 @@ fn dense_pooling_matches_python_on_square_irregular_and_zero_patch_grids() {
     ] {
         assert!(photosort::core::subjects::DenseEmbedding::from_tokens(&tokens, width).is_err());
     }
+}
+
+#[test]
+fn same_subject_joins_another_framing_taken_soon_after_that_similar_keeps_apart() {
+    // Two framings of one tower at night, eight minutes apart, as the
+    // sample photos measured: unlike enough that Similar keeps them apart.
+    let framing = Pair {
+        subject_similarity: 0.60,
+        face_similarity: None,
+        scene_similarity: 0.745,
+        complete: true,
+        geometry: Geometry::default(),
+        time_delta_seconds: Some(475.0),
+        confidence: 0.58,
+        accepted: false,
+        reason: String::new(),
+    };
+    let accepted = |rule: Rule, pair: &Pair| rule.classify(pair).accepted;
+    for strictness in [
+        Strictness::Conservative,
+        Strictness::Standard,
+        Strictness::Broad,
+    ] {
+        assert!(!accepted(Rule::Similar(strictness), &framing));
+        assert!(accepted(Rule::SameSubject(strictness), &framing));
+    }
+    let standard = Rule::SameSubject(Strictness::Standard);
+    // The same picture forty minutes on is another moment, not another angle.
+    let later = Pair {
+        time_delta_seconds: Some(2400.0),
+        ..framing.clone()
+    };
+    assert!(!accepted(standard, &later));
+    // Someone else in one of them: not the same subject.
+    let stranger = Pair {
+        face_similarity: Some(0.3),
+        ..framing.clone()
+    };
+    assert!(!accepted(standard, &stranger));
+    // Unrelated photos taken together stay apart.
+    let unrelated = Pair {
+        scene_similarity: 0.3,
+        ..framing
+    };
+    assert!(!accepted(standard, &unrelated));
 }

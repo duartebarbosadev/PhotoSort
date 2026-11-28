@@ -28,10 +28,274 @@ pub(super) struct Deck {
     trash: usize,
     freed: u64,
     /// Photos and videos going to Trash that are in no group here: marked
-    /// in another step. With `trash`, every Trash mark Review lists.
+    /// in another step. With `trash` and `not_shown`, every Trash mark
+    /// Review lists.
     elsewhere: usize,
+    /// Photos going to Trash in groups not shown: the other mode's, or
+    /// hidden by the people filter.
+    not_shown: usize,
     /// Groups Accept all suggestions would change.
     changed: usize,
+}
+
+/// Which kind of group Pick Best shows. Both stage into the one set of
+/// decisions, so switching keeps every choice.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum PickMode {
+    /// Near-duplicate shots: a burst, or the same picture taken again.
+    Similar,
+    /// One subject from other angles or framings, which Similar does not
+    /// group together. What Pick Best opens with.
+    #[default]
+    SameSubject,
+}
+
+/// Which groups Pick Best shows, by the faces found in their photos.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum People {
+    #[default]
+    All,
+    Without,
+    Only,
+}
+
+/// Which groups Pick Best shows, by how their photos show: taller than
+/// wide (portrait) or not (landscape, square too).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Orientation {
+    #[default]
+    All,
+    /// Portrait and landscape never share a card: a mixed group shows as
+    /// a portrait card and a landscape card, each with its own best.
+    Same,
+    /// Only groups with both portrait and landscape photos.
+    Mixed,
+}
+
+/// Pick Best's groups of both modes, and how they are shown.
+#[derive(Default)]
+pub(super) struct PickModes {
+    pub(super) mode: PickMode,
+    pub(super) people: People,
+    pub(super) orientation: Orientation,
+    pub(super) similar: Vec<Cluster>,
+    /// `None` until a Pick Best analysis found them; why, when it could not.
+    subject: Option<Result<Vec<Cluster>, String>>,
+    /// The Same subject groups of the analysis under way, when it sent them.
+    pub(super) found: Option<Result<HashMap<MediaId, usize>, String>>,
+    /// Groups of the mode shown that the filters hide, and those with a
+    /// photo never checked for people.
+    hidden: usize,
+    unchecked: usize,
+    /// Photos last chosen by hand in Same subject mode. The other photos
+    /// chosen by hand belong to Similar (or to another step): each mode's
+    /// Undo leaves the other's choices as they are.
+    pub(super) subject_hand: HashSet<MediaId>,
+}
+
+impl PickModes {
+    /// Whether an analysis found groups of either mode to show.
+    pub(super) fn has_groups(&self) -> bool {
+        !self.similar.is_empty() || self.subject.is_some()
+    }
+}
+
+impl PhotoSortApp {
+    /// Whether anyone is clearly in a group's photos, seen from any side
+    /// (`persons`) or by a face found: `None` while a photo was never
+    /// checked for people.
+    fn people_in(&self, cluster: &Cluster) -> Option<bool> {
+        let mut people = false;
+        for id in &cluster.ordered {
+            let analysis = self.analysis.get(id)?;
+            people |= analysis.people? > 0 || analysis.faces.as_ref().is_some_and(|f| f.count > 0);
+        }
+        Some(people)
+    }
+    fn mode_groups(&self, mode: PickMode) -> &[Cluster] {
+        match mode {
+            PickMode::Similar => &self.pick_modes.similar,
+            PickMode::SameSubject => match &self.pick_modes.subject {
+                Some(Ok(clusters)) => clusters,
+                _ => &[],
+            },
+        }
+    }
+    /// Whether the people filter can tell: a group of the mode shown was
+    /// checked for people.
+    pub(super) fn people_known(&self) -> bool {
+        self.mode_groups(self.pick_modes.mode)
+            .iter()
+            .any(|c| self.people_in(c).is_some())
+    }
+    /// Whether a photo shows taller than wide, as its card shows it: after
+    /// its EXIF orientation and the turns staged for it.
+    fn shown_portrait(&self, id: MediaId) -> bool {
+        self.photo_aspect(id, self.preview_turns(id)) < 1.0
+    }
+    /// A group's photos as they show, portrait then landscape, each in
+    /// capture order. `None` when they all show one way.
+    fn by_orientation(&self, cluster: &Cluster) -> Option<[Vec<MediaId>; 2]> {
+        let (mut portrait, mut landscape): (Vec<MediaId>, Vec<MediaId>) = cluster
+            .ordered
+            .iter()
+            .partition(|id| self.shown_portrait(**id));
+        if portrait.is_empty() || landscape.is_empty() {
+            return None;
+        }
+        for part in [&mut portrait, &mut landscape] {
+            part.sort_by_cached_key(|id| {
+                self.index.get(id).map(|i| {
+                    crate::core::dates::capture_order(&self.media[*i], self.metadata.get(id))
+                })
+            });
+        }
+        Some([portrait, landscape])
+    }
+    /// The groups of the mode chosen as the orientation filter has them:
+    /// each, a mixed one split into its portrait and landscape parts (a
+    /// part of one photo is no group), or only the mixed ones. With the
+    /// split parts, for `spare_split_parts`.
+    fn oriented_groups(&self) -> (Vec<Cluster>, Vec<Cluster>, Vec<Vec<MediaId>>) {
+        let (mut shown, mut hidden, mut parts) = (Vec::new(), Vec::new(), Vec::new());
+        for cluster in self.mode_groups(self.pick_modes.mode) {
+            let split = self.by_orientation(cluster);
+            match (self.pick_modes.orientation, split) {
+                (Orientation::Same, Some(split)) => {
+                    for part in split.into_iter().filter(|part| part.len() >= 2) {
+                        let mut part = crate::core::pick_review::ranked(
+                            cluster.key,
+                            &part,
+                            &self.analysis,
+                            &self.metadata,
+                        );
+                        self.arrange_pick_group(&mut part);
+                        parts.push(part.ordered.clone());
+                        shown.push(part);
+                    }
+                }
+                (Orientation::Mixed, None) => hidden.push(cluster.clone()),
+                _ => shown.push(cluster.clone()),
+            }
+        }
+        (shown, hidden, parts)
+    }
+    /// Shows the groups of the mode chosen that pass the orientation and
+    /// people filters. Nothing staged changes, but for `spare_split_parts`.
+    pub(super) fn show_pick_groups(&mut self) {
+        let mode = self.pick_modes.mode;
+        let people = if self.people_known() {
+            self.pick_modes.people
+        } else {
+            People::All
+        };
+        let (oriented, mut hidden, parts) = self.oriented_groups();
+        let mut shown = Vec::new();
+        let mut unchecked = 0;
+        for cluster in oriented {
+            let found = self.people_in(&cluster);
+            unchecked += usize::from(found.is_none());
+            let wanted = match (people, found) {
+                (People::All, _) => true,
+                (People::Without, Some(found)) => !found,
+                (People::Only, Some(found)) => found,
+                // Not checked: neither with nor without people.
+                (_, None) => false,
+            };
+            if wanted { &mut shown } else { &mut hidden }.push(cluster);
+        }
+        let other = match mode {
+            PickMode::Similar => PickMode::SameSubject,
+            PickMode::SameSubject => PickMode::Similar,
+        };
+        let other = self
+            .mode_groups(other)
+            .iter()
+            .map(|c| c.ordered.clone())
+            .collect();
+        self.pick_modes.hidden = hidden.len();
+        self.pick_modes.unchecked = unchecked;
+        self.pick_review.show(shown, hidden, other);
+        self.spare_split_parts(parts);
+        self.filter_dirty = true;
+    }
+    /// A part of a split group that shows with every photo in Trash, where
+    /// none was chosen by hand: the whole group's suggestion kept a photo
+    /// of the other orientation. The part keeps its own best instead, so a
+    /// card never sends all of itself to Trash. Nothing else changes.
+    fn spare_split_parts(&mut self, parts: Vec<Vec<MediaId>>) {
+        let shown: HashSet<MediaId> = self
+            .pick_review
+            .clusters()
+            .iter()
+            .flat_map(|c| c.ordered.iter().copied())
+            .collect();
+        let kept: Vec<MediaId> = parts
+            .iter()
+            .filter(|part| part.iter().all(|id| shown.contains(id)))
+            .filter(|part| {
+                part.iter()
+                    .all(|id| self.decision(*id).rejected && !self.by_hand.contains(id))
+            })
+            .map(|part| part[0])
+            .collect();
+        if !kept.is_empty() {
+            crate::core::model::update_trash(
+                &mut self.decisions,
+                kept.iter().map(|id| (*id, false)),
+            );
+            self.changed_items(kept);
+        }
+    }
+    pub(super) fn set_pick_mode(&mut self, mode: PickMode) {
+        if self.pick_modes.mode == mode || !self.pick_enabled() {
+            return;
+        }
+        self.pick_modes.mode = mode;
+        self.pending_bookmark = None;
+        self.deselect_pick_group();
+        self.show_pick_groups();
+        // Each mode stages its suggestions once it is shown.
+        self.stage_pick_suggestions();
+    }
+    pub(super) fn set_pick_orientation(&mut self, orientation: Orientation) {
+        if self.pick_modes.orientation == orientation || !self.pick_enabled() {
+            return;
+        }
+        self.pick_modes.orientation = orientation;
+        self.pending_bookmark = None;
+        self.deselect_pick_group();
+        self.show_pick_groups();
+    }
+    pub(super) fn set_pick_people(&mut self, people: People) {
+        if self.pick_modes.people == people || !self.pick_enabled() {
+            return;
+        }
+        self.pick_modes.people = people;
+        self.pending_bookmark = None;
+        self.show_pick_groups();
+    }
+    /// Notes the mode these photos were chosen by hand in.
+    fn note_pick_hand(&mut self, ids: impl IntoIterator<Item = MediaId>) {
+        for id in ids {
+            if self.pick_modes.mode == PickMode::SameSubject {
+                self.pick_modes.subject_hand.insert(id);
+            } else {
+                self.pick_modes.subject_hand.remove(&id);
+            }
+        }
+    }
+    /// Of these photos, those chosen by hand in the other mode (or, for
+    /// Same subject, in another step): this mode's Undo leaves them alone.
+    fn chosen_elsewhere(&self, ids: &[MediaId]) -> HashSet<MediaId> {
+        let subject = self.pick_modes.mode == PickMode::SameSubject;
+        ids.iter()
+            .filter(|id| {
+                self.by_hand.contains(id) && self.pick_modes.subject_hand.contains(id) != subject
+            })
+            .copied()
+            .collect()
+    }
 }
 
 impl PhotoSortApp {
@@ -122,17 +386,44 @@ impl PhotoSortApp {
     }
     pub(super) fn finish_pick_analysis(&mut self) {
         self.view_data_ready.insert(Step::PickBest);
-        let clusters = crate::core::pick_review::from_analysis(
+        let mut similar = crate::core::pick_review::from_analysis(
             &self.media,
             &self.analysis,
             &self.cull_groups,
             &self.metadata,
         );
-        let mut clusters = clusters;
-        for cluster in &mut clusters {
+        for cluster in &mut similar {
             self.arrange_pick_group(cluster);
         }
-        self.pick_review.replace(clusters);
+        // Same subject shows only what Similar does not group already: a
+        // group whose photos are all in one Similar group is left to it.
+        let similar_of: HashMap<MediaId, usize> = similar
+            .iter()
+            .enumerate()
+            .flat_map(|(n, c)| c.ordered.iter().map(move |id| (*id, n)))
+            .collect();
+        let within_similar = |c: &Cluster| {
+            let group = similar_of.get(&c.ordered[0]);
+            group.is_some() && c.ordered.iter().all(|id| similar_of.get(id) == group)
+        };
+        let subject = self.pick_modes.found.clone().map(|found| {
+            found.map(|groups| {
+                let mut clusters = crate::core::pick_review::from_analysis(
+                    &self.media,
+                    &self.analysis,
+                    &groups,
+                    &self.metadata,
+                );
+                clusters.retain(|c| !within_similar(c));
+                for cluster in &mut clusters {
+                    self.arrange_pick_group(cluster);
+                }
+                clusters
+            })
+        });
+        self.pick_modes.similar = similar;
+        self.pick_modes.subject = subject;
+        self.show_pick_groups();
         if self.step == Step::PickBest {
             self.trash_last = None;
         }
@@ -187,6 +478,7 @@ impl PhotoSortApp {
         }
         self.pick_review.toggle(id, &mut self.decisions);
         self.by_hand.insert(id);
+        self.note_pick_hand([id]);
         self.set_active(id);
         self.changed_items([id]);
     }
@@ -209,9 +501,11 @@ impl PhotoSortApp {
             let kept = !self.decision(id).rejected;
             crate::core::model::update_trash(&mut self.decisions, [(id, kept)]);
             self.by_hand.insert(id);
+            self.note_pick_hand([id]);
         } else {
             self.pick_review.keep_only(id, &mut self.decisions);
             self.by_hand.extend(members.iter().copied());
+            self.note_pick_hand(members.iter().copied());
         }
         self.set_active(id);
         self.changed_items(members);
@@ -243,8 +537,18 @@ impl PhotoSortApp {
             return;
         };
         let clear = !self.pick_undecided(group) && !self.preferences.pick_best_auto;
+        // A photo chosen by hand in the other mode stays as it was chosen.
+        let spared = self.chosen_elsewhere(&members);
         if !clear {
-            self.pick_review.accept(&[group], &mut self.decisions);
+            self.pick_review
+                .accept(&[group], &spared, &mut self.decisions);
+        }
+        let members: Vec<MediaId> = members
+            .into_iter()
+            .filter(|id| !spared.contains(id))
+            .collect();
+        for id in &members {
+            self.pick_modes.subject_hand.remove(id);
         }
         self.undo_group(members, clear);
     }
@@ -369,6 +673,10 @@ impl PhotoSortApp {
         if !(self.pick_panel && self.pick_current.is_some()) {
             self.panel_focus = false;
         }
+        // Before the deck: a mode or filter chosen here changes the groups
+        // the deck and the grid are drawn from this frame.
+        self.pick_modes_bar(ui);
+        ui.add_space(S2);
         self.pick_deck();
         self.pick_summary(ui);
         ui.add_space(S2);
@@ -421,6 +729,183 @@ impl PhotoSortApp {
         }
     }
 
+    /// The bar over Pick Best's groups: which kind of group, and the people
+    /// filter, with what that filter cannot tell.
+    pub(super) fn pick_modes_bar(&mut self, ui: &mut egui::Ui) {
+        let height = ui.spacing().interact_size.y;
+        let segment = |shown: &str, hover: &str| Segment {
+            shown: shown.to_owned(),
+            name: shown.to_owned(),
+            hover: Some(hover.to_owned()),
+        };
+        let enabled = self.pick_enabled();
+        let modes = [PickMode::Similar, PickMode::SameSubject];
+        let people = [People::All, People::Without, People::Only];
+        let orientations = [Orientation::All, Orientation::Same, Orientation::Mixed];
+        let known = self.people_known();
+        let (mut mode, mut filter, mut orientation) = (None, None, None);
+        ui.horizontal_wrapped(|ui| {
+            ui.add_enabled_ui(enabled, |ui| {
+                let selected = modes.iter().position(|m| *m == self.pick_modes.mode);
+                mode = segmented(
+                    ui,
+                    ui.id().with("pick_mode"),
+                    &[
+                        segment(
+                            "Similar",
+                            "For bursts and near-identical shots where only one is worth keeping.",
+                        ),
+                        segment(
+                            "Same subject",
+                            "For whenever you don't need 3 angles of the same stuff.",
+                        ),
+                    ],
+                    selected,
+                    height,
+                );
+            });
+            ui.add_space(S3);
+            ui.add_enabled_ui(enabled && known, |ui| {
+                let selected = people.iter().position(|p| *p == self.pick_modes.people);
+                filter = segmented(
+                    ui,
+                    ui.id().with("pick_people"),
+                    &[
+                        segment("All", "For going through everything, people or not."),
+                        segment(
+                            "Without people",
+                            "For scenery and things, when you don't want to pick between photos of friends.",
+                        ),
+                        segment(
+                            "Only people",
+                            "For when you just want the best shot of your friends and family.",
+                        ),
+                    ],
+                    // Never checked for people: the filter shows every group.
+                    if known { selected } else { Some(0) },
+                    height,
+                );
+            });
+            ui.add_space(S3);
+            ui.add_enabled_ui(enabled, |ui| {
+                let selected = orientations
+                    .iter()
+                    .position(|o| *o == self.pick_modes.orientation);
+                orientation = segmented(
+                    ui,
+                    ui.id().with("pick_orientation"),
+                    &[
+                        segment(
+                            "All",
+                            "For when you don't mind whether the one you keep is tall or wide.",
+                        ),
+                        segment(
+                            "Same orientation",
+                            "For keeping a tall and a wide one of each thing, say one for a story and one for a post.",
+                        ),
+                        segment(
+                            "Mixed only",
+                            "For when you shot the same thing both tall and wide and want to choose a format.",
+                        ),
+                    ],
+                    selected,
+                    height,
+                );
+            });
+            let mut notes = Vec::new();
+            if !known && !self.pick_review.clusters().is_empty() {
+                notes.push("People not detected yet · Analyze again to filter by people".to_owned());
+            } else {
+                let filtered = self.pick_modes.people != People::All;
+                let unchecked = self.pick_modes.unchecked;
+                if filtered && unchecked > 0 {
+                    notes.push(format!(
+                        "{} not checked for people",
+                        count(unchecked, "group", "groups")
+                    ));
+                }
+                let hidden = self.pick_modes.hidden.saturating_sub(if filtered {
+                    unchecked
+                } else {
+                    0
+                });
+                if hidden > 0 {
+                    notes.push(format!("{} hidden", count(hidden, "group", "groups")));
+                }
+            }
+            if !notes.is_empty() {
+                ui.add_space(S3);
+                super::review_card::summary_label(ui, &notes.join(" · "));
+            }
+        });
+        if let Some(index) = mode {
+            self.set_pick_mode(modes[index]);
+        }
+        if let Some(index) = filter.filter(|_| known) {
+            self.set_pick_people(people[index]);
+        }
+        if let Some(index) = orientation {
+            self.set_pick_orientation(orientations[index]);
+        }
+    }
+
+    /// Whether the filters hide every group of the mode shown.
+    pub(super) fn pick_filter_hides_all(&self) -> bool {
+        self.pick_modes.hidden > 0 && self.pick_review.clusters().is_empty()
+    }
+    /// Shows every group of the mode again: both filters back to All.
+    pub(super) fn clear_pick_filters(&mut self) {
+        self.pick_modes.people = People::All;
+        self.pick_modes.orientation = Orientation::All;
+        self.deselect_pick_group();
+        self.show_pick_groups();
+    }
+
+    /// Pick Best with no group to show, once it has analyzed: the title and
+    /// the line under it, for the mode and the filter.
+    pub(super) fn pick_empty_text(&self) -> (String, String) {
+        let hidden = self.pick_modes.hidden;
+        let filtered = self.pick_filter_hides_all();
+        let shown = match (self.pick_modes.people, self.pick_modes.orientation) {
+            (People::All, Orientation::Mixed) => "of portrait and landscape photos".to_owned(),
+            (People::All, _) => "for these filters".to_owned(),
+            (people, orientation) => format!(
+                "{}{}",
+                if people == People::Without {
+                    "without people"
+                } else {
+                    "with people"
+                },
+                if orientation == Orientation::Mixed {
+                    ", portrait and landscape"
+                } else {
+                    ""
+                }
+            ),
+        };
+        match (self.pick_modes.mode, &self.pick_modes.subject) {
+            (PickMode::SameSubject, None) => (
+                "Same subject groups not found yet".into(),
+                "Analyze again to find photos of one subject from other angles.".into(),
+            ),
+            (PickMode::SameSubject, Some(Err(error))) => {
+                ("Same subject groups could not be found".into(), error.clone())
+            }
+            (_, _) if filtered => (
+                format!("No groups {shown}"),
+                format!(
+                    "The filters hide {}.",
+                    count(hidden, "group", "groups")
+                ),
+            ),
+            (PickMode::SameSubject, Some(Ok(_))) => (
+                "No subject shot from other angles".into(),
+                "Photos of one subject taken from other angles within 15 minutes show here, when Similar does not group them already.".into(),
+            ),
+            (PickMode::Similar, _) => ("No similar photos to compare".into(), String::new()),
+        }
+    }
+
     /// One line over the grid: what is staged, the photo size, and Accept
     /// all suggestions.
     fn pick_summary(&mut self, ui: &mut egui::Ui) {
@@ -433,11 +918,18 @@ impl PhotoSortApp {
             count(trash, "photo", "photos"),
             super::review_card::size_text(freed),
         );
+        if deck.not_shown > 0 {
+            summary.push_str(&format!(" · {} more in groups not shown", deck.not_shown));
+        }
         if deck.elsewhere > 0 {
             summary.push_str(&format!(" · {} more marked in other steps", deck.elsewhere));
         }
         // Before anything is marked, the line says what to do instead.
-        if trash == 0 && deck.elsewhere == 0 && !self.pick_review.clusters().is_empty() {
+        if trash == 0
+            && deck.elsewhere == 0
+            && deck.not_shown == 0
+            && !self.pick_review.clusters().is_empty()
+        {
             summary = hint();
         }
         ui.horizontal(|ui| {
@@ -517,12 +1009,18 @@ impl PhotoSortApp {
                     .map_or(0, |i| self.media[*i].fingerprint.bytes);
                 (count + 1, bytes + size)
             });
+            deck.not_shown = self
+                .pick_review
+                .not_shown()
+                .iter()
+                .filter(|id| self.decisions.get(id).is_some_and(|d| d.rejected))
+                .count();
             deck.elsewhere = self
                 .decisions
                 .iter()
                 .filter(|(id, d)| d.rejected && self.index.contains_key(id))
                 .count()
-                .saturating_sub(deck.trash);
+                .saturating_sub(deck.trash + deck.not_shown);
             deck.changed = (0..self.pick_review.clusters().len())
                 .filter(|group| {
                     self.pick_review
@@ -790,6 +1288,117 @@ mod tests {
                 app.keyboard(ctx)
             });
         }
+    }
+
+    #[test]
+    fn modes_and_the_people_filter_change_what_is_shown_and_never_a_choice_made_elsewhere() {
+        let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+        app.preferences.pick_best_auto = false;
+        app.media = (1..=6).map(photo).collect();
+        app.index = app
+            .media
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
+        // Someone stands in 4 with their back turned: no face, but a person.
+        // 1 is the best of 1-2, 5 of 4-5.
+        for (n, score, people) in [
+            (1, 30., 0),
+            (2, 20., 0),
+            (3, 40., 0),
+            (4, 10., 1),
+            (5, 20., 0),
+            (6, 5., 0),
+        ] {
+            app.analysis.insert(
+                MediaId(n),
+                crate::core::analysis::Analysis {
+                    score,
+                    aesthetic: Some(0.5),
+                    faces: Some(FaceSummary::default()),
+                    people: Some(people),
+                    ..Default::default()
+                },
+            );
+            // All shot landscape; 5 was held upright, as its EXIF says.
+            app.metadata.insert(
+                MediaId(n),
+                Metadata {
+                    width: 6000,
+                    height: 4000,
+                    orientation: if n == 5 { 6 } else { 1 },
+                    ..Default::default()
+                },
+            );
+        }
+        let ids = |groups: &[(u64, usize)]| -> HashMap<MediaId, usize> {
+            groups.iter().map(|(n, g)| (MediaId(*n), *g)).collect()
+        };
+        app.cull_groups = Arc::new(ids(&[(1, 1), (2, 1), (4, 2), (5, 2)]));
+        // Same subject also joins 3 and 6, other angles of each.
+        app.pick_modes.found = Some(Ok(ids(&[(1, 1), (2, 1), (3, 1), (4, 2), (5, 2), (6, 2)])));
+        app.finish_pick_analysis();
+        app.set_step(Step::PickBest);
+        app.refilter();
+        // Pick Best opens on Same subject.
+        assert_eq!(app.pick_modes.mode, PickMode::SameSubject);
+        app.set_pick_mode(PickMode::Similar);
+        let shown = |app: &PhotoSortApp| -> Vec<Vec<u64>> {
+            app.pick_review
+                .clusters()
+                .iter()
+                .map(|c| {
+                    let mut ids: Vec<u64> = c.ordered.iter().map(|id| id.0).collect();
+                    ids.sort();
+                    ids
+                })
+                .collect()
+        };
+        let trashed = |app: &PhotoSortApp| -> Vec<u64> {
+            (1..=6)
+                .filter(|n| app.decision(MediaId(*n)).rejected)
+                .collect()
+        };
+        assert_eq!(shown(&app), vec![vec![1, 2], vec![4, 5]]);
+
+        // Only people: Accept all takes the shown group's suggestion and
+        // leaves the hidden one as it is, also once it shows again.
+        app.set_pick_people(People::Only);
+        assert_eq!(shown(&app), vec![vec![4, 5]]);
+        app.accept_pick_defaults();
+        assert_eq!(trashed(&app), vec![4]);
+        app.set_pick_people(People::All);
+        assert_eq!(trashed(&app), vec![4]);
+
+        // Photo 2 chosen by hand in Similar: 1 goes to Trash.
+        app.keep_pick(MediaId(2));
+        assert_eq!(trashed(&app), vec![1, 4]);
+        app.set_pick_mode(PickMode::SameSubject);
+        assert_eq!(shown(&app), vec![vec![1, 2, 3], vec![4, 5, 6]]);
+        assert_eq!(trashed(&app), vec![1, 4]);
+        // Same subject's Undo and Undo all leave Similar's choices alone.
+        app.undo_pick_group(0);
+        app.undo_accepted(Step::PickBest);
+        assert_eq!(trashed(&app), vec![1, 4]);
+        assert!(app.by_hand.contains(&MediaId(2)));
+        app.set_pick_mode(PickMode::Similar);
+        assert_eq!(shown(&app), vec![vec![1, 2], vec![4, 5]]);
+        // Similar's own Undo all takes back its Accept all.
+        app.undo_accepted(Step::PickBest);
+        assert_eq!(trashed(&app), vec![1]);
+
+        // 4-6 keeps the portrait 5 and sends 4 and 6 to Trash.
+        app.set_pick_mode(PickMode::SameSubject);
+        app.accept_pick_defaults();
+        assert_eq!(trashed(&app), vec![1, 4, 6]);
+        app.set_pick_orientation(Orientation::Mixed);
+        assert_eq!(shown(&app), vec![vec![4, 5, 6]]);
+        // Split apart, 5 is a card of one and no group; 4 and 6 make a
+        // card whose own best, 4, stays rather than all of it going.
+        app.set_pick_orientation(Orientation::Same);
+        assert_eq!(shown(&app), vec![vec![1, 2, 3], vec![4, 6]]);
+        assert_eq!(trashed(&app), vec![1, 6]);
     }
 
     #[test]
@@ -1298,6 +1907,7 @@ mod tests {
         ]);
         app.cull_groups = Arc::new(HashMap::from([(MediaId(4), 7), (MediaId(5), 7)]));
         app.pick_review = Default::default();
+        app.pick_modes.mode = PickMode::Similar;
         app.decisions.clear();
         app.finish_pick_analysis();
         let cluster = &app.pick_review.clusters()[0];

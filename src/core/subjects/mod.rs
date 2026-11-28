@@ -9,7 +9,7 @@ mod policy;
 pub mod store;
 pub use extraction::DenseEmbedding;
 pub use geometry::verify_geometry;
-pub use policy::{Pair, Strictness, verify_pair};
+pub use policy::{ANGLE_WINDOW_SECONDS, Pair, Rule, Strictness, verify_pair};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

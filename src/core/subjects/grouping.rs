@@ -1,5 +1,5 @@
 use super::{
-    Artifact, Judged, Links, Pair, Strictness,
+    Artifact, Judged, Links, Pair, Rule,
     candidates::candidates_with,
     dot,
     store::{Store, Verdicts},
@@ -46,10 +46,10 @@ pub struct Input {
 pub fn group(
     inputs: Vec<Input>,
     store: &Store,
-    strictness: Strictness,
+    rule: impl Into<Rule>,
     cancelled: impl Fn() -> bool,
 ) -> Result<Option<HashMap<MediaId, usize>>> {
-    group_with(inputs, store, strictness, 1, cancelled, |_, _| {})
+    group_with(inputs, store, rule, 1, cancelled, |_, _| {})
 }
 
 /// `group` with the neighbor search, and the pairs judged for a merge, on up
@@ -58,11 +58,12 @@ pub fn group(
 pub fn group_with(
     mut inputs: Vec<Input>,
     store: &Store,
-    strictness: Strictness,
+    rule: impl Into<Rule>,
     threads: usize,
     cancelled: impl Fn() -> bool,
     mut progress: impl FnMut(usize, usize),
 ) -> Result<Option<HashMap<MediaId, usize>>> {
+    let rule = rule.into();
     inputs.sort_by(|a, b| a.path.cmp(&b.path));
     let globals: Vec<_> = inputs
         .iter_mut()
@@ -107,8 +108,8 @@ pub fn group_with(
         }
         let (_, known) = verdicts.as_mut().unwrap();
         let id = Store::pair_id(&inputs[a].key, &inputs[b].key, times[a], times[b]);
-        let pair = match known.get(&id).map(|pair| pair.with_strictness(strictness)) {
-            Some(pair) if !pair.needs_geometry(strictness) => pair,
+        let pair = match known.get(&id).map(|pair| rule.classify(pair)) {
+            Some(pair) if !rule.needs_geometry(&pair) => pair,
             previous => {
                 let (left, right) = (evidence.load(a)?, evidence.load(b)?);
                 let Some(pair) = verdict(
@@ -116,7 +117,7 @@ pub fn group_with(
                     &left,
                     &right,
                     (times[a], times[b]),
-                    strictness,
+                    rule,
                     &cancelled,
                 ) else {
                     return Ok(None);
@@ -138,7 +139,7 @@ pub fn group_with(
     let mut merging = Merging {
         evidence,
         times: &times,
-        strictness,
+        rule,
         threads,
         cancelled: &cancelled,
         known: HashMap::new(),
@@ -171,18 +172,27 @@ pub fn group_with(
 }
 
 /// One pair's verdict from its photos' evidence. `previous` is what the
-/// cache held, read under this strictness. None when cancelled.
+/// cache held, read under this rule. None when cancelled.
 fn verdict(
     previous: Option<Pair>,
     left: &Artifact,
     right: &Artifact,
     times: (Option<i64>, Option<i64>),
-    strictness: Strictness,
+    rule: Rule,
     cancelled: impl Fn() -> bool,
 ) -> Option<Pair> {
-    let judge = |geometry| verify_pair(left, right, geometry, times.0, times.1, strictness);
+    let judge = |geometry| {
+        rule.classify(&verify_pair(
+            left,
+            right,
+            geometry,
+            times.0,
+            times.1,
+            rule.strictness(),
+        ))
+    };
     let mut pair = previous.unwrap_or_else(|| judge(Default::default()));
-    if pair.needs_geometry(strictness) {
+    if rule.needs_geometry(&pair) {
         pair = judge(verify_geometry(left, right, cancelled)?);
     }
     Some(pair)
@@ -240,11 +250,11 @@ struct Open {
 struct Merging<'a, C> {
     evidence: Evidence<'a>,
     times: &'a [Option<i64>],
-    strictness: Strictness,
+    rule: Rule,
     threads: usize,
     cancelled: &'a C,
     /// What earlier runs judged, by first photo: whether each pair is
-    /// accepted under this strictness. And how many verdicts that is.
+    /// accepted under this rule. And how many verdicts that is.
     known: HashMap<usize, HashMap<[u8; 32], bool>>,
     held: usize,
     /// This run's verdicts by first photo, not yet in their records.
@@ -258,7 +268,7 @@ impl<C: Fn() -> bool> Merging<'_, C> {
     /// would say. What it judges is kept for the next run.
     fn judge(&mut self, missing: Vec<(usize, usize)>) -> Result<Judged> {
         let (inputs, store) = (self.evidence.inputs, self.evidence.store);
-        let (times, strictness) = (self.times, self.strictness);
+        let (times, rule) = (self.times, self.rule);
         let mut open = Vec::new();
         for (n, &(a, b)) in missing.iter().enumerate() {
             if n % 256 == 0 && (self.cancelled)() {
@@ -268,8 +278,8 @@ impl<C: Fn() -> bool> Merging<'_, C> {
                 let mut known = HashMap::new();
                 if self.held < HELD {
                     for (id, pair) in store.merge_pairs(&inputs[a].key).iter() {
-                        let pair = pair.with_strictness(strictness);
-                        if !pair.needs_geometry(strictness) {
+                        let pair = rule.classify(pair);
+                        if !rule.needs_geometry(&pair) {
                             known.insert(*id, pair.accepted);
                         }
                     }
@@ -324,7 +334,7 @@ impl<C: Fn() -> bool> Merging<'_, C> {
                             &photos[&a],
                             &photos[&b],
                             (times[a], times[b]),
-                            strictness,
+                            rule,
                             stop,
                         )?);
                     }

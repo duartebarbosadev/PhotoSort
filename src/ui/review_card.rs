@@ -195,6 +195,9 @@ pub(super) struct AcceptedPhoto {
     before: (bool, u8),
     after: (bool, u8),
     by_hand: (bool, bool),
+    /// The Pick Best mode it was accepted in: each mode's Undo all takes
+    /// back only its own. Similar in every other step.
+    mode: super::pick_review::PickMode,
 }
 
 /// One photo Undo all puts back: the Trash mark and the turns Accept all
@@ -232,6 +235,7 @@ impl PhotoSortApp {
     /// Undo all. A second Accept all adds to the first, so Undo all takes
     /// back both.
     pub(super) fn note_accepted(&mut self, step: Step, before: Vec<(MediaId, (bool, u8))>) {
+        let mode = self.accept_mode(step);
         let changed: Vec<AcceptedPhoto> = before
             .into_iter()
             .map(|(id, before)| AcceptedPhoto {
@@ -239,26 +243,50 @@ impl PhotoSortApp {
                 before,
                 after: self.accept_mark(id),
                 by_hand: self.chosen_by_hand(id),
+                mode,
             })
             .filter(|photo| photo.before != photo.after)
             .collect();
         let noted = self.accepted.entry(step).or_default();
         for photo in changed {
-            match noted.iter_mut().find(|p| p.id == photo.id) {
+            match noted
+                .iter_mut()
+                .find(|p| p.id == photo.id && p.mode == photo.mode)
+            {
                 Some(earlier) => earlier.after = photo.after,
                 None => noted.push(photo),
             }
         }
         noted.retain(|p| p.before != p.after);
     }
-    /// The photos the step shows now, in Easy Delete the selected tab's:
-    /// Undo all reaches only them, as Accept all does. `None` for all.
+    /// The Pick Best mode shown, whose Accept all and Undo all go together.
+    fn accept_mode(&self, step: Step) -> super::pick_review::PickMode {
+        if step == Step::PickBest {
+            self.pick_modes.mode
+        } else {
+            Default::default()
+        }
+    }
+    /// The photos the step shows now, in Easy Delete the selected tab's and
+    /// in Pick Best the groups shown: Undo all reaches only them, as Accept
+    /// all does. `None` for all.
     fn accept_scope(&self, step: Step) -> Option<HashSet<MediaId>> {
-        (step == Step::EasyDelete).then(|| {
-            self.delete_candidates(&self.delete_review_ids())
-                .into_iter()
-                .collect()
-        })
+        match step {
+            Step::EasyDelete => Some(
+                self.delete_candidates(&self.delete_review_ids())
+                    .into_iter()
+                    .collect(),
+            ),
+            // Pick Best's mode and people filter shown.
+            Step::PickBest => Some(
+                self.pick_review
+                    .clusters()
+                    .iter()
+                    .flat_map(|c| c.ordered.iter().copied())
+                    .collect(),
+            ),
+            _ => None,
+        }
     }
     /// What Undo all would put back, for the photos shown: the Trash mark
     /// and the turns Accept all changed, each only while it is still as
@@ -269,8 +297,10 @@ impl PhotoSortApp {
             return Vec::new();
         };
         let scope = self.accept_scope(step);
+        let mode = self.accept_mode(step);
         noted
             .iter()
+            .filter(|p| p.mode == mode)
             .filter(|p| scope.as_ref().is_none_or(|shown| shown.contains(&p.id)))
             .filter_map(|p| {
                 let now = self.accept_mark(p.id);
@@ -307,11 +337,14 @@ impl PhotoSortApp {
             return;
         }
         let photos = self.accepted_left(step);
-        // Forgotten for the photos shown; another tab's stay for its own
-        // Undo all.
+        // Forgotten for the photos shown; another tab's or mode's stay for
+        // its own Undo all.
         let scope = self.accept_scope(step);
+        let mode = self.accept_mode(step);
         if let Some(noted) = self.accepted.get_mut(&step) {
-            noted.retain(|p| scope.as_ref().is_some_and(|shown| !shown.contains(&p.id)));
+            noted.retain(|p| {
+                p.mode != mode || scope.as_ref().is_some_and(|shown| !shown.contains(&p.id))
+            });
         }
         for (id, trash, turns) in &photos {
             if let Some(trash) = trash {

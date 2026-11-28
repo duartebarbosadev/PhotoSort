@@ -109,9 +109,16 @@ fn kept(decisions: &HashMap<MediaId, Decision>, id: MediaId) -> bool {
 
 #[derive(Default)]
 pub struct Review {
+    /// The groups shown, which every action by group goes by.
     clusters: Vec<Cluster>,
     /// Every member's group.
     index: HashMap<MediaId, usize>,
+    /// The groups of the mode shown that a filter hides: their suggestions
+    /// stage with the shown ones, and nothing else acts on them.
+    hidden: Vec<Cluster>,
+    /// The other mode's groups, each photo kept or not: the guards that
+    /// read every group (`chosen`, `last_kept`) count them too.
+    other: Vec<Vec<MediaId>>,
     /// Photos whose suggestion was staged once; see `Session::pick_suggested`.
     suggested: HashSet<MediaId>,
     /// The stamp of the last change to the review itself.
@@ -135,13 +142,28 @@ impl Review {
     }
     /// The caller supplies capture ordering. Decisions are never touched:
     /// a new analysis keeps every choice already staged.
-    pub fn replace(&mut self, mut clusters: Vec<Cluster>) {
-        clusters.retain(|c| {
+    pub fn replace(&mut self, clusters: Vec<Cluster>) {
+        self.show(clusters, Vec::new(), Vec::new());
+    }
+    /// Shows these groups; `hidden` are the rest of the mode shown and
+    /// `other` the other mode's (see the fields). Decisions are never
+    /// touched: a filter or another mode keeps every choice staged.
+    pub fn show(
+        &mut self,
+        mut clusters: Vec<Cluster>,
+        mut hidden: Vec<Cluster>,
+        other: Vec<Vec<MediaId>>,
+    ) {
+        let complete = |c: &Cluster| {
             c.ordered.len() >= 2
                 && c.ordered
                     .iter()
                     .all(|id| c.scores.get(id).is_some_and(|s| s.is_finite()))
-        });
+        };
+        clusters.retain(complete);
+        hidden.retain(complete);
+        self.hidden = hidden;
+        self.other = other;
         self.index = clusters
             .iter()
             .enumerate()
@@ -149,6 +171,24 @@ impl Review {
             .collect();
         self.clusters = clusters;
         self.revision = super::revision::next();
+    }
+    /// Every group's photos: shown, hidden by a filter and the other mode's.
+    fn every_group(&self) -> impl Iterator<Item = &[MediaId]> {
+        self.clusters
+            .iter()
+            .chain(&self.hidden)
+            .map(|c| c.ordered.as_slice())
+            .chain(self.other.iter().map(Vec::as_slice))
+    }
+    /// The photos of the groups not shown, hidden or the other mode's.
+    pub fn not_shown(&self) -> HashSet<MediaId> {
+        self.hidden
+            .iter()
+            .flat_map(|c| c.ordered.iter())
+            .chain(self.other.iter().flatten())
+            .filter(|id| !self.index.contains_key(id))
+            .copied()
+            .collect()
     }
     pub fn suggested(&self) -> &HashSet<MediaId> {
         &self.suggested
@@ -168,7 +208,7 @@ impl Review {
         decisions: &mut HashMap<MediaId, Decision>,
     ) -> Vec<MediaId> {
         let mut marked = Vec::new();
-        for cluster in &self.clusters {
+        for cluster in self.clusters.iter().chain(&self.hidden) {
             let best_kept = kept(decisions, cluster.best());
             for (id, keep) in cluster.suggestion() {
                 if self.suggested.insert(id) && !keep && best_kept {
@@ -186,10 +226,10 @@ impl Review {
     /// The photos kept in a group that has a photo marked for Trash: each
     /// was chosen over that one, by the suggestion or by hand.
     pub fn chosen(&self, decisions: &HashMap<MediaId, Decision>) -> HashSet<MediaId> {
-        self.clusters
-            .iter()
-            .filter(|c| c.ordered.iter().any(|id| !kept(decisions, *id)))
-            .flat_map(|c| c.ordered.iter().copied())
+        self.every_group()
+            .filter(|ordered| ordered.iter().any(|id| !kept(decisions, *id)))
+            .flatten()
+            .copied()
             .filter(|id| kept(decisions, *id))
             .collect()
     }
@@ -237,10 +277,9 @@ impl Review {
     /// The one photo still kept in each group whose others are all marked
     /// for Trash: marking it too would send the whole group there.
     pub fn last_kept(&self, decisions: &HashMap<MediaId, Decision>) -> HashSet<MediaId> {
-        self.clusters
-            .iter()
-            .filter_map(|c| {
-                let mut kept = c.ordered.iter().copied().filter(|id| kept(decisions, *id));
+        self.every_group()
+            .filter_map(|ordered| {
+                let mut kept = ordered.iter().copied().filter(|id| kept(decisions, *id));
                 let only = kept.next()?;
                 kept.next().is_none().then_some(only)
             })
@@ -324,12 +363,18 @@ impl Review {
         }
     }
     /// Puts each group back to its suggestion in full: one group, asked for
-    /// by hand.
-    pub fn accept(&self, groups: &[usize], decisions: &mut HashMap<MediaId, Decision>) {
+    /// by hand. The photos in `spared` stay as they are.
+    pub fn accept(
+        &self,
+        groups: &[usize],
+        spared: &HashSet<MediaId>,
+        decisions: &mut HashMap<MediaId, Decision>,
+    ) {
         let marks: Vec<_> = groups
             .iter()
             .filter_map(|g| self.clusters.get(*g))
             .flat_map(Cluster::suggestion)
+            .filter(|(id, _)| !spared.contains(id))
             .map(|(id, keep)| (id, !keep))
             .collect();
         update_trash(decisions, marks);
@@ -491,6 +536,37 @@ pub fn rank(
     }
 }
 
+/// One group ranked by `rank`, its best photo suggested: `members` in
+/// capture order, each with its analysis.
+pub fn ranked(
+    key: usize,
+    members: &[MediaId],
+    analysis: &HashMap<MediaId, super::analysis::Analysis>,
+    metadata: &HashMap<MediaId, super::model::Metadata>,
+) -> Cluster {
+    let Ranking {
+        ordered,
+        eyes,
+        soft,
+        copies,
+        reason,
+    } = rank(members, analysis, metadata);
+    Cluster {
+        key,
+        scores: members.iter().map(|id| (*id, analysis[id].score)).collect(),
+        shown: ordered.clone(),
+        ordered,
+        eyes: if eyes.values().any(|e| e.closed > 0) {
+            eyes
+        } else {
+            HashMap::new()
+        },
+        soft,
+        copies,
+        reason,
+    }
+}
+
 /// Reuse completed shared analysis; never initialize models or read photos here.
 ///
 /// Each group whose photos all have their quality analysis is ranked by
@@ -526,27 +602,7 @@ pub fn from_analysis(
             continue;
         }
         members.sort_by_key(|id| &order[id]);
-        let Ranking {
-            ordered,
-            eyes,
-            soft,
-            copies,
-            reason,
-        } = rank(&members, analysis, metadata);
-        clusters.push(Cluster {
-            key,
-            scores: members.iter().map(|id| (*id, analysis[id].score)).collect(),
-            shown: ordered.clone(),
-            ordered,
-            eyes: if eyes.values().any(|e| e.closed > 0) {
-                eyes
-            } else {
-                HashMap::new()
-            },
-            soft,
-            copies,
-            reason,
-        });
+        clusters.push(ranked(key, &members, analysis, metadata));
     }
     clusters.sort_by_key(|c| c.ordered.iter().map(|id| &order[id]).min().cloned());
     clusters
@@ -785,7 +841,7 @@ mod tests {
         review.keep_only(MediaId(1), &mut decisions);
         assert_eq!(trashed(&decisions), vec![2, 3]);
         assert!(review.changed(0, &decisions));
-        review.accept(&[0], &mut decisions);
+        review.accept(&[0], &HashSet::new(), &mut decisions);
         assert_eq!(trashed(&decisions), vec![1, 3]);
         assert_eq!(review.changed_count(&[0], &decisions), 0);
     }
@@ -836,7 +892,7 @@ mod tests {
         // Accept all leaves it alone too; the group's own Undo keeps the
         // best photo.
         assert!(!review.pending(0, &decisions, &HashSet::new()));
-        review.accept(&[0], &mut decisions);
+        review.accept(&[0], &HashSet::new(), &mut decisions);
         assert_eq!(trashed(&decisions), vec![1, 3]);
     }
 

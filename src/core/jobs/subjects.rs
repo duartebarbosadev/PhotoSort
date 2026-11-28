@@ -17,6 +17,8 @@ pub(super) struct SubjectJob {
     pub(super) inputs: Vec<subjects::grouping::Input>,
     pub(super) store: Arc<subjects::store::Store>,
     pub(super) strictness: subjects::Strictness,
+    /// Pick Best: its Same subject groups too, from the same evidence.
+    pub(super) same_subject: bool,
     pub(super) stats: AnalysisStats,
 }
 
@@ -57,27 +59,48 @@ fn group(
     }
     // The grouping reports its own progress: on a large library the neighbor
     // search, the pair checks and the merging of long bursts each take a while.
+    // Pick Best groups twice, each pass half of the bar.
+    let passes = if job.same_subject { 2 } else { 1 };
     let mut steps = super::ProgressSteps::default();
+    let mut report = |pass: usize, done: usize, total: usize| {
+        let (done, total) = (pass * total + done, passes * total);
+        if steps.due(done, total) {
+            publisher.send_checked(
+                job.epoch,
+                Event::Progress {
+                    run: job.run,
+                    done,
+                    total,
+                },
+                cancelled,
+            )
+        }
+    };
+    let inputs = job.same_subject.then(|| job.inputs.clone());
     let grouped = subjects::grouping::group_with(
         job.inputs,
         &job.store,
         job.strictness,
         job.stats.model_threads,
         cancelled,
-        |done, total| {
-            if steps.due(done, total) {
-                publisher.send_checked(
-                    job.epoch,
-                    Event::Progress {
-                        run: job.run,
-                        done,
-                        total,
-                    },
-                    cancelled,
-                )
-            }
-        },
+        |done, total| report(0, done, total),
     );
+    // Verdicts the first pass judged are in the store: this pass reads
+    // them again under its own rule, and judges only what it newly asks.
+    let same_subject = match (&grouped, inputs) {
+        (Ok(Some(_)), Some(inputs)) if !cancelled() => Some(
+            subjects::grouping::group_with(
+                inputs,
+                &job.store,
+                subjects::Rule::SameSubject(job.strictness),
+                job.stats.model_threads,
+                cancelled,
+                |done, total| report(1, done, total),
+            )
+            .map_err(|error| format!("Same subject grouping failed: {error:#}")),
+        ),
+        _ => None,
+    };
     match grouped {
         Ok(Some(groups)) if !cancelled() => {
             publisher.send_checked(
@@ -88,6 +111,26 @@ fn group(
                 },
                 cancelled,
             );
+            match same_subject {
+                Some(Ok(Some(groups))) => publisher.send_checked(
+                    job.epoch,
+                    Event::SameSubjectGroups {
+                        run: job.run,
+                        groups: Ok(groups),
+                    },
+                    cancelled,
+                ),
+                Some(Err(error)) => publisher.send_checked(
+                    job.epoch,
+                    Event::SameSubjectGroups {
+                        run: job.run,
+                        groups: Err(error),
+                    },
+                    cancelled,
+                ),
+                // Cancelled, or not Pick Best.
+                _ => {}
+            }
             cache.request(false);
             publisher.send_checked(
                 job.epoch,
