@@ -28,6 +28,9 @@ pub struct Cluster {
     pub key: usize,
     /// The suggested photo first, then the others from best to worst.
     pub ordered: Vec<MediaId>,
+    /// The order its card and panel show the photos in; see `arrange`.
+    /// Best to worst until arranged.
+    pub shown: Vec<MediaId>,
     /// Overall scores; a missing score never becomes a Trash suggestion.
     pub scores: HashMap<MediaId, f64>,
     /// Each photo's eyes against the rest of the group; empty without faces.
@@ -48,6 +51,7 @@ impl Cluster {
         });
         Self {
             key,
+            shown: ordered.clone(),
             ordered,
             scores,
             eyes: HashMap::new(),
@@ -55,6 +59,35 @@ impl Cluster {
             copies: HashSet::new(),
             reason: Reason::Score,
         }
+    }
+    /// Shows the photos most alike side by side: the suggested one first,
+    /// then each next the one closest to the photo before it. `distance`
+    /// says how far apart two photos are; where it cannot for some pair,
+    /// they stay best to worst.
+    pub fn arrange(&mut self, distance: impl Fn(MediaId, MediaId) -> Option<f64>) {
+        let Some((&best, others)) = self.ordered.split_first() else {
+            return;
+        };
+        let mut shown = vec![best];
+        let mut rest = others.to_vec();
+        while let Some(&last) = shown.last()
+            && !rest.is_empty()
+        {
+            let mut closest: Option<(usize, f64)> = None;
+            for (at, id) in rest.iter().enumerate() {
+                let Some(far) = distance(last, *id) else {
+                    self.shown = self.ordered.clone();
+                    return;
+                };
+                if closest.is_none_or(|(_, nearest)| far < nearest) {
+                    closest = Some((at, far));
+                }
+            }
+            if let Some((at, _)) = closest {
+                shown.push(rest.remove(at));
+            }
+        }
+        self.shown = shown;
     }
     /// The photo PhotoSort suggests keeping.
     pub fn best(&self) -> MediaId {
@@ -503,6 +536,7 @@ pub fn from_analysis(
         clusters.push(Cluster {
             key,
             scores: members.iter().map(|id| (*id, analysis[id].score)).collect(),
+            shown: ordered.clone(),
             ordered,
             eyes: if eyes.values().any(|e| e.closed > 0) {
                 eyes
@@ -521,6 +555,22 @@ pub fn from_analysis(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_group_shows_the_most_alike_photos_side_by_side() {
+        let ids: Vec<MediaId> = (1..=4).map(MediaId).collect();
+        let scores = ids.iter().map(|id| (*id, 10.0 - id.0 as f64)).collect();
+        let mut cluster = Cluster::new(1, ids.clone(), scores);
+        assert_eq!(cluster.ordered, ids, "best to worst");
+        // Where each photo sits: 3 is next to the best, 4 next to 3, 2 far.
+        let place = |id: MediaId| [0.0_f64, 10.0, 1.0, 2.0][id.0 as usize - 1];
+        cluster.arrange(|a, b| Some((place(a) - place(b)).abs()));
+        assert_eq!(cluster.shown, [1, 3, 4, 2].map(MediaId));
+        assert_eq!((cluster.best(), cluster.ordered.clone()), (MediaId(1), ids));
+        // No distance for some pair: best to worst, as before.
+        cluster.arrange(|a, b| (a != MediaId(2) && b != MediaId(2)).then_some(0.0));
+        assert_eq!(cluster.shown, cluster.ordered);
+    }
     use crate::core::analysis::Analysis;
     use crate::core::faces::{EyeState, FaceEyes, FaceSummary};
     use crate::core::model::{Fingerprint, Media, MediaKind};

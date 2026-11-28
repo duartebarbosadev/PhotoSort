@@ -129,6 +129,46 @@ fn shared_raw_preview_geometry_recipes_reuse_and_fallbacks() -> anyhow::Result<(
                 );
                 assert_eq!(pipeline.inspect(&request)?, detail);
                 assert_eq!(pipeline.stats.decodes, 2);
+                // Fast detail: a quarter of the photo shown at half its size
+                // or smaller comes from the half-size decode, upright and the
+                // same picture as the full one; zooming in decodes full size.
+                let quarter = Request {
+                    region: Region {
+                        x: 0,
+                        y: 0,
+                        width: width / 2,
+                        height: height / 2,
+                    },
+                    output_edge: width.max(height) / 8,
+                    ..request.clone()
+                };
+                let full = pipeline.inspect(&quarter)?;
+                let before = reopened.stats.decodes;
+                let half = reopened.inspect(&quarter)?;
+                assert_eq!(reopened.stats.decodes, before + 1);
+                assert_eq!(half.dimensions(), full.dimensions());
+                let mean = |image: &image::RgbaImage| {
+                    let mut sum = [0f64; 3];
+                    for pixel in image.pixels() {
+                        for (channel, total) in sum.iter_mut().enumerate() {
+                            *total += f64::from(pixel[channel]);
+                        }
+                    }
+                    sum.map(|total| total / f64::from(image.width() * image.height()))
+                };
+                let (half_mean, full_mean) = (mean(&half), mean(&full));
+                for channel in 0..3 {
+                    assert!(
+                        (half_mean[channel] - full_mean[channel]).abs() < 2.0,
+                        "orientation {orientation}: {half_mean:?} vs {full_mean:?}"
+                    );
+                }
+                reopened.inspect(&request)?;
+                assert_eq!(
+                    reopened.stats.decodes,
+                    before + 2,
+                    "Zooming in decodes full size"
+                );
                 assert_eq!(
                     pipeline.analysis(photo, || false)?.pixels,
                     analysis.pixels,

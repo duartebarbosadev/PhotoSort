@@ -178,6 +178,11 @@ impl PhotoSortApp {
         self.runtime.cache.configure(next.cache);
         self.runtime.processing.configure(next.processing);
         self.reduce_motion_pending = Some(next.reduce_motion);
+        if next.raw_detail != self.preferences.raw_detail {
+            self.runtime.raw_look.set_detail(next.raw_detail);
+            // The photo on screen is asked for again in the new quality.
+            self.inspection_frames.clear();
+        }
         if next.raw_look != self.preferences.raw_look {
             self.runtime.raw_look.set(next.raw_look);
             self.reload_raw_previews();

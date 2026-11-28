@@ -167,6 +167,197 @@ impl GroupLink {
     }
 }
 
+/// What a click on a card's photo, or its number, does: on a card nobody
+/// has started, keep it and send the others to Trash; once started, switch
+/// it between Keep and Trash. U starts the card over.
+pub(super) fn keep_text(started: bool, keep: bool, side: usize) -> String {
+    let what = if !started {
+        "Keep this one, the others to Trash"
+    } else if keep {
+        "Move to Trash"
+    } else {
+        "Keep this one too"
+    };
+    // Only the first nine photos have a number key.
+    if side < 9 {
+        format!("{what} · {}", side + 1)
+    } else {
+        what.to_owned()
+    }
+}
+
+/// A photo Accept all suggestions changed: its Trash mark and quarter turns
+/// before and as Accept all left them, and whether each had been chosen by
+/// hand before it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct AcceptedPhoto {
+    id: MediaId,
+    before: (bool, u8),
+    after: (bool, u8),
+    by_hand: (bool, bool),
+}
+
+/// One photo Undo all puts back: the Trash mark and the turns Accept all
+/// changed and nobody changed since, each on its own.
+type Restore = (MediaId, Option<bool>, Option<u8>);
+
+impl PhotoSortApp {
+    /// Whether a card is under way: any of its photos chosen by hand, or
+    /// marked for Trash, by its Accept, Accept all or a suggestion applied
+    /// on its own. Its photos' numbers then switch only their own photo;
+    /// only an untouched card keeps one and sends the rest to Trash. Its
+    /// Undo (U) starts it over.
+    pub(super) fn card_started(&self, photos: &[MediaId]) -> bool {
+        photos
+            .iter()
+            .any(|id| self.by_hand.contains(id) || self.decision(*id).rejected)
+    }
+    /// A photo's Trash mark and quarter turns, what Accept all changes.
+    fn accept_mark(&self, id: MediaId) -> (bool, u8) {
+        let decision = self.decision(id);
+        (decision.rejected, decision.turns % 4)
+    }
+    /// Whether a photo's Keep or Trash, and its turns, were chosen by hand.
+    fn chosen_by_hand(&self, id: MediaId) -> (bool, bool) {
+        (
+            self.by_hand.contains(&id),
+            self.rotation_review.by_hand().contains(&id),
+        )
+    }
+    /// Before an Accept all: the marks of the photos it may change.
+    pub(super) fn accept_marks(&self, ids: &[MediaId]) -> Vec<(MediaId, (bool, u8))> {
+        ids.iter().map(|id| (*id, self.accept_mark(*id))).collect()
+    }
+    /// After the summary's Accept all: notes each photo it changed, for
+    /// Undo all. A second Accept all adds to the first, so Undo all takes
+    /// back both.
+    pub(super) fn note_accepted(&mut self, step: Step, before: Vec<(MediaId, (bool, u8))>) {
+        let changed: Vec<AcceptedPhoto> = before
+            .into_iter()
+            .map(|(id, before)| AcceptedPhoto {
+                id,
+                before,
+                after: self.accept_mark(id),
+                by_hand: self.chosen_by_hand(id),
+            })
+            .filter(|photo| photo.before != photo.after)
+            .collect();
+        let noted = self.accepted.entry(step).or_default();
+        for photo in changed {
+            match noted.iter_mut().find(|p| p.id == photo.id) {
+                Some(earlier) => earlier.after = photo.after,
+                None => noted.push(photo),
+            }
+        }
+        noted.retain(|p| p.before != p.after);
+    }
+    /// The photos the step shows now, in Easy Delete the selected tab's:
+    /// Undo all reaches only them, as Accept all does. `None` for all.
+    fn accept_scope(&self, step: Step) -> Option<HashSet<MediaId>> {
+        (step == Step::EasyDelete).then(|| {
+            self.delete_candidates(&self.delete_review_ids())
+                .into_iter()
+                .collect()
+        })
+    }
+    /// What Undo all would put back, for the photos shown: the Trash mark
+    /// and the turns Accept all changed, each only while it is still as
+    /// Accept all left it and was not chosen by hand since: then it is the
+    /// user's, even where it ended up as Accept all left it.
+    fn accepted_left(&self, step: Step) -> Vec<Restore> {
+        let Some(noted) = self.accepted.get(&step).filter(|n| !n.is_empty()) else {
+            return Vec::new();
+        };
+        let scope = self.accept_scope(step);
+        noted
+            .iter()
+            .filter(|p| scope.as_ref().is_none_or(|shown| shown.contains(&p.id)))
+            .filter_map(|p| {
+                let now = self.accept_mark(p.id);
+                let hand = self.chosen_by_hand(p.id);
+                let trash =
+                    (p.before.0 != p.after.0 && now.0 == p.after.0 && (p.by_hand.0 || !hand.0))
+                        .then_some(p.before.0);
+                let turns =
+                    (p.before.1 != p.after.1 && now.1 == p.after.1 && (p.by_hand.1 || !hand.1))
+                        .then_some(p.before.1);
+                (trash.is_some() || turns.is_some()).then_some((p.id, trash, turns))
+            })
+            .collect()
+    }
+    /// Whether the step's summary offers Undo all in place of Accept all:
+    /// Accept all has nothing left to do, and what it did is still there.
+    pub(super) fn offers_undo_all(&self, step: Step, acceptable: bool) -> bool {
+        !acceptable && !self.accepted_left(step).is_empty()
+    }
+    /// Whether the step takes changes now, as its buttons say.
+    fn step_enabled(&self, step: Step) -> bool {
+        match step {
+            Step::EasyDelete => self.delete_enabled(),
+            Step::PickBest => self.pick_enabled(),
+            Step::Rotation => self.rotation_enabled(),
+            _ => false,
+        }
+    }
+    /// Undo all, Shift+U: what this step's Accept all suggestions changed
+    /// goes back as it was, and only that. Waits while the step is busy,
+    /// as the button does.
+    pub(super) fn undo_accepted(&mut self, step: Step) {
+        if !self.step_enabled(step) {
+            return;
+        }
+        let photos = self.accepted_left(step);
+        // Forgotten for the photos shown; another tab's stay for its own
+        // Undo all.
+        let scope = self.accept_scope(step);
+        if let Some(noted) = self.accepted.get_mut(&step) {
+            noted.retain(|p| scope.as_ref().is_some_and(|shown| !shown.contains(&p.id)));
+        }
+        for (id, trash, turns) in &photos {
+            if let Some(trash) = trash {
+                crate::core::model::update_trash(&mut self.decisions, [(*id, *trash)]);
+            }
+            if let Some(turns) = turns {
+                crate::core::rotation::set_turns(&mut self.decisions, *id, *turns);
+            }
+        }
+        self.set_status(match photos.len() {
+            0 => "Nothing to undo".into(),
+            1 => "Accept all undone · 1 photo back as it was".into(),
+            n => format!("Accept all undone · {n} photos back as they were"),
+        });
+        if !photos.is_empty() {
+            self.pending_bookmark = None;
+            self.changed_items(photos.iter().map(|p| p.0));
+        }
+    }
+    /// The summary's Accept all suggestions, or, once it has nothing left
+    /// to do and what it did is still there, Undo Accept all in its place.
+    pub(super) fn accept_or_undo_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        acceptable: bool,
+        enabled: bool,
+    ) -> Option<bool> {
+        let undo = self.offers_undo_all(self.step, acceptable);
+        let (button, key) = if undo {
+            (
+                egui::Button::new(format!(
+                    "{}  Undo Accept all",
+                    egui_phosphor::regular::ARROW_U_UP_LEFT
+                )),
+                "Puts back what Accept all changed; your own choices stay · Shift+U",
+            )
+        } else {
+            (egui::Button::new("Accept all suggestions"), "Shift+A")
+        };
+        ui.add_enabled(enabled && (undo || acceptable), button)
+            .on_hover_text(key)
+            .clicked()
+            .then_some(undo)
+    }
+}
+
 impl PhotoSortApp {
     /// After a group card's Accept, Undo or R, for its photos: Undo where
     /// the step starts with nothing marked (`clear`) unmarks every one of

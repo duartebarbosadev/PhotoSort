@@ -47,7 +47,11 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe,
     *needed = 0;
     *embedded = 0;
     *source_width = *source_height = 0;
-    const int preview = recipe != 0;
+    /* 1 and 2 are previews, with their own neutral look; 3 is Original
+       detail at half size, with the full decode's look. All three decode
+       the sensor at half size. */
+    const int preview = recipe == 1 || recipe == 2;
+    const int half = recipe != 0;
     libraw_data_t *raw = libraw_init(0);
     if (!raw) { *error = LIBRAW_UNSUFFICIENT_MEMORY; return 0; }
     libraw_set_progress_handler(raw, progress, context);
@@ -115,7 +119,11 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe,
         *error = PHOTOSORT_IMPOSSIBLE_SIZE;
         libraw_close(raw); return 0;
     }
-    *needed = sensor * (preview ? HALF_BYTES_PER_PIXEL : FULL_BYTES_PER_PIXEL);
+    /* LibRaw halves only a mosaic (colour-filtered) sensor; a linear DNG,
+       a monochrome or reduced-size RAW comes out full size, so Original
+       detail at half size (3) counts the full decode's memory for them. */
+    const int halved = half && (recipe != 3 || raw->idata.filters);
+    *needed = sensor * (halved ? HALF_BYTES_PER_PIXEL : FULL_BYTES_PER_PIXEL);
     if (!sensor || *needed > allowance) {
         *error = sensor ? PHOTOSORT_NEEDS_MEMORY : LIBRAW_UNSUFFICIENT_MEMORY;
         libraw_close(raw); return 0;
@@ -130,7 +138,7 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe,
     raw->params.output_bps = 8;
     raw->params.user_qual = 3;
     raw->params.user_flip = 0; /* EXIF/XMP orientation belongs to the shared pipeline. */
-    raw->params.half_size = preview;
+    raw->params.half_size = half;
     raw->params.no_auto_bright = preview ? 1 : 0;
     raw->params.auto_bright_thr = 0.01;
     raw->params.bright = preview ? 1.0 : 1.25;
@@ -140,7 +148,7 @@ libraw_processed_image_t *photosort_raw_decode(const char *path, int recipe,
     *error = libraw_unpack(raw);
     if (!*error) *error = libraw_dcraw_process(raw);
     libraw_processed_image_t *image = *error ? 0 : libraw_dcraw_make_mem_image(raw, error);
-    if (image && !preview) {
+    if (image && !half) {
         *source_width = image->width;
         *source_height = image->height;
     }

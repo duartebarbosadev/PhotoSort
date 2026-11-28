@@ -16,6 +16,17 @@ pub enum RawLook {
     Enhanced,
 }
 
+/// How Original detail decodes a RAW photo. Fast decodes it at half size
+/// wherever it is shown at half its size or smaller, as at Fit, several
+/// times faster and with the same look; it decodes full size to zoom in.
+/// Full always decodes full size.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RawDetail {
+    #[default]
+    Fast,
+    Full,
+}
+
 /// Share of pixels clipped at each end when stretching levels, so a few hot
 /// or dead pixels cannot hold the range open.
 const CLIP: f64 = 0.001;
@@ -96,14 +107,35 @@ impl Levels {
 #[derive(Clone, Default)]
 pub struct Control(Arc<AtomicU8>);
 
+/// The look in the low bit, Full detail in the next one.
+const FULL_DETAIL: u8 = 2;
+
 impl Control {
     pub fn set(&self, look: RawLook) {
-        self.0.store(look as u8, Ordering::Release);
+        if look == RawLook::Enhanced {
+            self.0.fetch_or(1, Ordering::AcqRel);
+        } else {
+            self.0.fetch_and(!1, Ordering::AcqRel);
+        }
     }
     pub fn get(&self) -> RawLook {
-        match self.0.load(Ordering::Acquire) {
+        match self.0.load(Ordering::Acquire) & 1 {
             1 => RawLook::Enhanced,
             _ => RawLook::Neutral,
+        }
+    }
+    pub fn set_detail(&self, detail: RawDetail) {
+        if detail == RawDetail::Full {
+            self.0.fetch_or(FULL_DETAIL, Ordering::AcqRel);
+        } else {
+            self.0.fetch_and(!FULL_DETAIL, Ordering::AcqRel);
+        }
+    }
+    pub fn detail(&self) -> RawDetail {
+        if self.0.load(Ordering::Acquire) & FULL_DETAIL != 0 {
+            RawDetail::Full
+        } else {
+            RawDetail::Fast
         }
     }
 }

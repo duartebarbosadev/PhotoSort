@@ -3,9 +3,6 @@ use super::*;
 use crate::core::pick_review::{Cluster, Reason, Review};
 use crate::core::text::{TO_TRASH, TRASH};
 
-/// Photos a card shows, best first; the panel beside the grid shows them all.
-const CARD_PHOTOS: usize = 3;
-
 fn count(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
@@ -19,9 +16,9 @@ type Shaped = (u64, u64, Option<usize>, (usize, u64));
 #[derive(Default)]
 pub(super) struct Deck {
     shaped: Option<Shaped>,
-    /// Each group's card: its photos' widths over their heights, and how
-    /// many it shows.
-    aspects: Vec<([f32; CARD_PHOTOS], usize)>,
+    /// Each group's card: its photos' widths over their heights, every
+    /// photo of the group, best first.
+    aspects: Vec<Vec<f32>>,
     /// Changes whenever a card's shape may have: the grid asks its cards
     /// again.
     stamp: u64,
@@ -87,6 +84,42 @@ impl PhotoSortApp {
         }
     }
 
+    /// Orders a group's photos so the most alike sit side by side. A burst
+    /// is best told apart by when each shot was taken: a pose held for a
+    /// few frames, then changed. So by capture time where every photo of the
+    /// group has one (the file names settle shots of one millisecond), else
+    /// by what they show (their embeddings), else best to worst. The
+    /// embedding sees the whole frame, where a large scene can outweigh the
+    /// person in it.
+    fn arrange_pick_group(&self, cluster: &mut Cluster) {
+        let taken = |id: MediaId| {
+            let m = self.metadata.get(&id)?;
+            Some(m.captured_ms? + i64::from(m.captured_subsec_ms.unwrap_or(0)))
+        };
+        let timed = cluster.ordered.iter().all(|id| taken(*id).is_some());
+        let embedded = cluster
+            .ordered
+            .iter()
+            .all(|id| self.embeddings.contains_key(id));
+        // Each photo's place among the group's file names, for ties.
+        let mut named = cluster.ordered.clone();
+        named.sort_by_key(|id| self.index.get(id).map(|i| self.media[*i].name()));
+        let place = |id: MediaId| named.iter().position(|n| *n == id).unwrap_or(0) as f64;
+        cluster.arrange(|a, b| {
+            if timed {
+                let apart = (taken(a)? - taken(b)?).abs() as f64;
+                Some(apart + (place(a) - place(b)).abs() * 0.001)
+            } else if embedded {
+                let (a, b) = (self.embeddings.get(&a)?, self.embeddings.get(&b)?);
+                let dot: f64 = a.iter().zip(b.iter()).map(|(x, y)| f64::from(x * y)).sum();
+                let norm = |v: &[f32]| v.iter().map(|x| f64::from(x * x)).sum::<f64>().sqrt();
+                let length = norm(a) * norm(b);
+                (length > 0.0).then(|| 1.0 - dot / length)
+            } else {
+                None
+            }
+        });
+    }
     pub(super) fn finish_pick_analysis(&mut self) {
         self.view_data_ready.insert(Step::PickBest);
         let clusters = crate::core::pick_review::from_analysis(
@@ -95,6 +128,10 @@ impl PhotoSortApp {
             &self.cull_groups,
             &self.metadata,
         );
+        let mut clusters = clusters;
+        for cluster in &mut clusters {
+            self.arrange_pick_group(cluster);
+        }
         self.pick_review.replace(clusters);
         if self.step == Step::PickBest {
             self.trash_last = None;
@@ -118,7 +155,7 @@ impl PhotoSortApp {
             self.changed_items(marked);
         }
     }
-    fn pick_enabled(&self) -> bool {
+    pub(super) fn pick_enabled(&self) -> bool {
         !self.busy && self.pick_run.is_none()
     }
     /// The selected group.
@@ -135,11 +172,12 @@ impl PhotoSortApp {
             .map(|c| self.pick_order(c))
             .unwrap_or_default()
     }
-    /// A group's photos as its card and panel show them: best first, and
-    /// those already marked for Trash when the list was built last.
+    /// A group's photos as its card and panel show them: best first, the
+    /// most alike side by side (`Cluster::arrange`), and those already
+    /// marked for Trash when the list was built last.
     pub(super) fn pick_order(&self, cluster: &Cluster) -> Vec<MediaId> {
         let (last, first): (Vec<MediaId>, Vec<MediaId>) =
-            cluster.ordered.iter().partition(|id| self.shown_last(**id));
+            cluster.shown.iter().partition(|id| self.shown_last(**id));
         first.into_iter().chain(last).collect()
     }
     /// Switches one photo between Keep and Trash.
@@ -152,10 +190,36 @@ impl PhotoSortApp {
         self.set_active(id);
         self.changed_items([id]);
     }
+    /// A photo's number, or a click on it: in a group nobody has started by
+    /// hand, that photo is kept and the others go to Trash; once the group is
+    /// started, it switches that photo between Keep and Trash. U starts over.
+    pub(super) fn keep_pick(&mut self, id: MediaId) {
+        if !self.pick_enabled() {
+            return;
+        }
+        let Some(members) = self.pick_review.cluster_of(id).map(|c| c.ordered.clone()) else {
+            return;
+        };
+        // In focus a number or click only shows that photo; D marks it.
+        if self.focus_active() && self.pick_review.group_of(id) == self.pick_group() {
+            self.set_active(id);
+            return;
+        }
+        if self.card_started(&members) {
+            let kept = !self.decision(id).rejected;
+            crate::core::model::update_trash(&mut self.decisions, [(id, kept)]);
+            self.by_hand.insert(id);
+        } else {
+            self.pick_review.keep_only(id, &mut self.decisions);
+            self.by_hand.extend(members.iter().copied());
+        }
+        self.set_active(id);
+        self.changed_items(members);
+    }
     /// The number keys: the nth photo of the group shown beside the grid.
-    pub(super) fn toggle_pick_slot(&mut self, slot: usize) {
+    pub(super) fn keep_pick_slot(&mut self, slot: usize) {
         if let Some(id) = self.pick_panel_ids().get(slot).copied() {
-            self.toggle_pick(id);
+            self.keep_pick(id);
         }
     }
     /// The selected group's Accept or Undo: one group, asked for by hand.
@@ -192,9 +256,17 @@ impl PhotoSortApp {
         if !self.pick_enabled() {
             return;
         }
+        let photos: Vec<MediaId> = self
+            .pick_review
+            .clusters()
+            .iter()
+            .flat_map(|c| c.ordered.iter().copied())
+            .collect();
+        let before = self.accept_marks(&photos);
         let accepted = self
             .pick_review
             .accept_undecided(&mut self.decisions, &self.by_hand);
+        self.note_accepted(Step::PickBest, before);
         self.accepted_status(accepted.suggestions);
         self.changed_items(accepted.photos);
     }
@@ -221,27 +293,35 @@ impl PhotoSortApp {
         self.set_active(best);
         self.pick_panel = true;
     }
-    /// Enter: the suggestion is already the decision, so show the selected
-    /// group, or move on to the next one.
-    pub(super) fn next_pick_group(&mut self) {
-        if self.pick_current.is_some() && !self.pick_panel {
-            self.pick_panel = true;
-        } else {
-            self.navigate_pick(1);
+    /// A: the selected group takes its suggestion, as its Accept suggestion
+    /// button does. A group decided already stays as it is.
+    pub(super) fn accept_pick_card(&mut self) {
+        if let Some(group) = self.pick_group()
+            && self.pick_link(group) == Some(GroupLink::Accept)
+        {
+            self.undo_pick_group(group);
+        }
+    }
+    /// U: the selected group's Undo, as its button.
+    pub(super) fn undo_pick_card(&mut self) {
+        if let Some(group) = self.pick_group()
+            && self.pick_link(group) == Some(GroupLink::Undo)
+        {
+            self.undo_pick_group(group);
         }
     }
     /// The panel's Undo, beside its Keep/Trash switches: Accept suggestion
     /// while the group is undecided, as on its card.
     pub(super) fn pick_undo_button(&mut self, ui: &mut egui::Ui) {
         if let Some(group) = self.pick_group() {
-            let button = if self.pick_undecided(group) {
-                primary(ACCEPT)
+            let (button, key) = if self.pick_undecided(group) {
+                (primary(ACCEPT), "A")
             } else {
-                egui::Button::new("Undo")
+                (egui::Button::new("Undo"), "U")
             };
             if ui
                 .add_enabled(self.pick_link(group).is_some(), button)
-                .on_hover_text("R")
+                .on_hover_text(key)
                 .clicked()
             {
                 self.undo_pick();
@@ -275,7 +355,7 @@ pub(super) const ACCEPT: &str = "Accept suggestion";
 /// The line over the grid while nothing is marked: what to do.
 fn hint() -> String {
     format!(
-        "Nothing marked yet: accept a group's suggestion, or click a photo to mark it for the {TRASH}."
+        "Nothing marked yet: accept a group's suggestion, or click the photo to keep and the others go to the {TRASH}."
     )
 }
 
@@ -284,6 +364,11 @@ impl PhotoSortApp {
     /// one card per group with its best photos. Clicking a card opens all of
     /// its photos large in a panel beside the grid.
     pub(super) fn pick_grid(&mut self, ui: &mut egui::Ui) {
+        // Focus belongs to the panel: closed any way (X, Esc, a click on the
+        // grid's background), it ends.
+        if !(self.pick_panel && self.pick_current.is_some()) {
+            self.panel_focus = false;
+        }
         self.pick_deck();
         self.pick_summary(ui);
         ui.add_space(S2);
@@ -309,8 +394,8 @@ impl PhotoSortApp {
                         groups,
                         stamp,
                         |app, i, shapes| {
-                            if let Some((aspects, shown)) = app.grids.pick.aspects.get(i) {
-                                shapes.extend_from_slice(&aspects[..*shown]);
+                            if let Some(aspects) = app.grids.pick.aspects.get(i) {
+                                shapes.extend_from_slice(aspects);
                             }
                         },
                         |app, i| app.pick_card_has_facts(i),
@@ -357,15 +442,10 @@ impl PhotoSortApp {
         }
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add_enabled(
-                        changed > 0 && self.pick_enabled(),
-                        egui::Button::new("Accept all suggestions"),
-                    )
-                    .on_hover_text("A")
-                    .clicked()
-                {
-                    self.accept_pick_defaults();
+                match self.accept_or_undo_button(ui, changed > 0, self.pick_enabled()) {
+                    Some(true) => self.undo_accepted(Step::PickBest),
+                    Some(false) => self.accept_pick_defaults(),
+                    None => {}
                 }
                 ui.add_space(S3);
                 self.size_slider(ui);
@@ -414,13 +494,10 @@ impl PhotoSortApp {
             deck.aspects.clear();
             deck.aspects
                 .extend(self.pick_review.clusters().iter().map(|cluster| {
-                    let mut aspects = [0.0; CARD_PHOTOS];
-                    let mut shown = 0;
-                    for (slot, id) in aspects.iter_mut().zip(self.pick_order(cluster)) {
-                        *slot = self.photo_aspect(id, 0);
-                        shown += 1;
-                    }
-                    (aspects, shown)
+                    self.pick_order(cluster)
+                        .into_iter()
+                        .map(|id| self.photo_aspect(id, 0))
+                        .collect()
                 }));
             deck.shaped = Some(shaped);
             deck.stamp = crate::core::revision::next();
@@ -514,17 +591,13 @@ impl PhotoSortApp {
     /// Whether a group's card has a line under its photos.
     fn pick_card_has_facts(&self, group: usize) -> bool {
         let cluster = &self.pick_review.clusters()[group];
-        let shown: Vec<MediaId> = self
-            .pick_order(cluster)
-            .into_iter()
-            .take(CARD_PHOTOS)
-            .collect();
+        let shown = self.pick_order(cluster);
         self.pick_facts(cluster, &shown)
             .iter()
             .any(|facts| !facts.is_empty())
     }
 
-    /// The card for one group: its best photos and their deciding facts,
+    /// The card for one group: every photo, best first, and their deciding facts,
     /// the suggested one marked. A group nobody has decided yet shows no
     /// Keep or Trash, only that mark and Accept suggestion; once anything
     /// in it is decided, each photo has its Keep/Trash pill, and Undo as
@@ -533,8 +606,11 @@ impl PhotoSortApp {
         let cluster = &self.pick_review.clusters()[group];
         let enabled = self.pick_enabled();
         let undecided = self.pick_undecided(group);
+        let started = self.card_started(&cluster.ordered);
         let order = self.pick_order(cluster);
-        let shown: Vec<MediaId> = order.iter().take(CARD_PHOTOS).copied().collect();
+        // Every photo of the group, best first: a burst of many makes a
+        // wide card, which its row shrinks to fit.
+        let shown = order;
         let facts = self.pick_facts(cluster, &shown);
         let photos = shown
             .iter()
@@ -547,10 +623,12 @@ impl PhotoSortApp {
                 CardPhoto {
                     id: *id,
                     turns: self.preview_turns(*id),
-                    badge: if undecided {
+                    // Only Trash is marked: the photos left unmarked are the
+                    // ones kept.
+                    badge: if undecided || keep {
                         Badge::None
                     } else {
-                        Badge::keep(keep)
+                        Badge::keep(false)
                     },
                     suggested,
                     suggested_hover: suggested.then(|| self.pick_keep_why(cluster)),
@@ -562,39 +640,13 @@ impl PhotoSortApp {
                     trash: !keep,
                     dimmed: self.trashed_elsewhere(*id),
                     inset: None,
-                    toggle: enabled.then(|| {
-                        format!(
-                            "{} · {}",
-                            if undecided {
-                                "Mark for Trash"
-                            } else if keep {
-                                "Move to Trash instead"
-                            } else {
-                                "Keep instead"
-                            },
-                            side + 1
-                        )
-                    }),
+                    toggle: enabled.then(|| super::review_card::keep_text(started, keep, side)),
                 }
             })
             .collect();
-        // Only the photos the card leaves out, and any of them kept, which
-        // means something once the group is decided.
-        let hidden = &order[shown.len()..];
-        let state_text = (!hidden.is_empty()).then(|| {
-            let kept = hidden
-                .iter()
-                .filter(|id| Review::keeps(&self.decisions, **id))
-                .count();
-            if kept > 0 && !undecided {
-                format!("+{} more, {kept} kept", hidden.len())
-            } else {
-                format!("+{} more", hidden.len())
-            }
-        });
         let others = cluster.ordered.len() - 1;
         let accept = format!(
-            "Keep the starred photo and mark the {} for Trash · R",
+            "Keep the starred photo and mark the {} for Trash · A",
             if others == 1 {
                 "other one".to_owned()
             } else {
@@ -603,14 +655,14 @@ impl PhotoSortApp {
         );
         ReviewCard {
             // No date over the photos: the card is its photos, and the
-            // header holds only Accept or Undo and how many more it has.
+            // header holds only Accept or Undo.
             title: String::new(),
-            state_text,
+            state_text: None,
             photos,
             buttons: Vec::new(),
-            // The selected group shows in the panel beside the grid, which
-            // is enough: no outline that could be read as Keep or Trash.
-            shown: self.pick_panel && self.pick_group() == Some(group),
+            // The selected group, outlined while the panel is hidden too:
+            // the keys still act on it.
+            shown: self.pick_group() == Some(group),
             title_hover: None,
             undo: self.pick_link(group).map(|link| match link {
                 GroupLink::Accept => (ACCEPT.to_owned(), accept),
@@ -625,6 +677,11 @@ impl PhotoSortApp {
     /// group so the keyboard follows the mouse.
     pub(super) fn pick_card_event(&mut self, group: usize, event: CardEvent) {
         self.pending_bookmark = None;
+        // A click on another group's card leaves focus: the panel shows
+        // that group whole.
+        if self.pick_group() != Some(group) {
+            self.panel_focus = false;
+        }
         let Some(ordered) = self
             .pick_review
             .clusters()
@@ -643,7 +700,7 @@ impl PhotoSortApp {
             }
             CardEvent::Toggle(side) => {
                 if let Some(id) = ordered.get(side) {
-                    self.toggle_pick(*id);
+                    self.keep_pick(*id);
                 }
             }
             CardEvent::Undo => self.undo_pick_group(group),
@@ -704,22 +761,35 @@ mod tests {
         ids
     }
     fn key(app: &mut PhotoSortApp, key: egui::Key, modifiers: egui::Modifiers) {
+        hold(app, key, modifiers, 0);
+    }
+    /// Switches the photo at `side` of a group's card by hand, as D would,
+    /// where a test needs a single photo marked or unmarked.
+    fn flip(app: &mut PhotoSortApp, group: usize, side: usize) {
+        let id = app.pick_order(&app.pick_review.clusters()[group])[side];
+        app.toggle_pick(id);
+    }
+    /// A key press, then `repeats` more of it with no release between, as
+    /// a held key sends them: egui marks those as repeats itself.
+    fn hold(app: &mut PhotoSortApp, key: egui::Key, modifiers: egui::Modifiers, repeats: usize) {
         let ctx = egui::Context::default();
         theme_install(&ctx);
-        let input = egui::RawInput {
-            events: vec![egui::Event::Key {
-                key,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers,
-            }],
-            ..Default::default()
-        };
-        let _ = ctx.run_test(input, |ui| {
-            let ctx = &ui.ctx().clone();
-            app.keyboard(ctx)
-        });
+        for _ in 0..=repeats {
+            let input = egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                ..Default::default()
+            };
+            let _ = ctx.run_test(input, |ui| {
+                let ctx = &ui.ctx().clone();
+                app.keyboard(ctx)
+            });
+        }
     }
 
     #[test]
@@ -779,12 +849,13 @@ mod tests {
         assert!(trashed(&app).is_empty());
         assert_eq!(app.staged_change_count(), 0);
         // Accepting one group stages that group only, which then shows
-        // Keep and Trash, and Undo, which takes it back to nothing marked.
+        // Trash on the photos going there (the rest, unmarked, are kept),
+        // and Undo, which takes it back to nothing marked.
         app.pick_card_event(0, CardEvent::Undo);
         assert_eq!(trashed(&app), vec![1]);
         assert_eq!(app.staged_change_count(), 1);
         let shown = super::super::review_card::render_grid(&mut app);
-        assert!(shown.contains(&keep) && shown.contains(&trash), "{shown}");
+        assert!(!shown.contains(&keep) && shown.contains(&trash), "{shown}");
         assert_eq!(shown.matches(ACCEPT).count(), 1, "{shown}");
         assert!(shown.contains("Undo"), "{shown}");
         app.pick_card_event(0, CardEvent::Undo);
@@ -797,8 +868,8 @@ mod tests {
         assert_eq!(trashed(&app), vec![1]);
         // A photo of the other group marked and unmarked by hand: that group
         // is decided, every photo kept, and Accept all leaves it so.
-        app.pick_card_event(1, CardEvent::Toggle(1));
-        app.pick_card_event(1, CardEvent::Toggle(1));
+        flip(&mut app, 1, 1);
+        flip(&mut app, 1, 1);
         assert!(!app.pick_undecided(1));
         app.accept_pick_defaults();
         assert_eq!(trashed(&app), vec![1]);
@@ -845,7 +916,7 @@ mod tests {
         };
         assert_eq!(shown(&app), vec![2, 1, 3]);
         // Marking photo 2 leaves it in place.
-        app.pick_card_event(0, CardEvent::Toggle(0));
+        flip(&mut app, 0, 0);
         app.refilter();
         assert!(app.decision(MediaId(2)).rejected);
         assert_eq!(shown(&app), vec![2, 1, 3]);
@@ -858,26 +929,40 @@ mod tests {
     }
 
     #[test]
-    fn a_click_toggles_and_undo_restores_the_suggestion() {
+    fn a_click_keeps_that_photo_and_undo_restores_the_suggestion() {
         let mut app = app();
+        // Its suggestion is applied (3, the best, kept; 1 and 2 in Trash):
+        // a click switches only its photo, and the others stay as accepted.
         app.pick_card_event(0, CardEvent::Toggle(1));
-        assert_eq!(trashed(&app), vec![1, 4], "Photo 2 is kept too");
+        assert_eq!(trashed(&app), vec![1, 4], "Photo 2 alone comes back");
+        app.pick_card_event(0, CardEvent::Toggle(1));
+        assert_eq!(trashed(&app), vec![1, 2, 4]);
+        // A group nobody has touched (suggestions off, Undo clears it): a
+        // click keeps that photo and sends the others to Trash.
+        app.preferences.pick_best_auto = false;
+        app.pick_card_event(0, CardEvent::Undo);
+        assert_eq!(trashed(&app), vec![4]);
+        app.pick_card_event(0, CardEvent::Toggle(1));
+        assert_eq!(trashed(&app), vec![1, 3, 4], "Photo 2 alone is kept");
         assert_eq!(app.pick_group(), Some(0));
         assert!(app.pick_review.changed(0, &app.decisions));
-        // Toggling back by hand is no change.
-        app.pick_card_event(0, CardEvent::Toggle(1));
-        assert!(!app.pick_review.changed(0, &app.decisions));
-        // Pick another photo as the keeper, then Undo.
+        // Once started, a click switches that photo: back from Trash, then
+        // to Trash again.
         app.pick_card_event(0, CardEvent::Toggle(0));
+        assert_eq!(trashed(&app), vec![1, 4], "Photo 3 is kept too");
+        app.pick_card_event(0, CardEvent::Toggle(0));
+        assert_eq!(trashed(&app), vec![1, 3, 4], "a second click trashes it");
         app.pick_card_event(0, CardEvent::Toggle(1));
-        assert_eq!(trashed(&app), vec![1, 3, 4]);
+        assert_eq!(trashed(&app), vec![1, 2, 3, 4], "so does one on photo 2");
+        // Undo starts the group over, as suggested.
+        app.preferences.pick_best_auto = true;
         app.pick_card_event(0, CardEvent::Undo);
         assert_eq!(trashed(&app), vec![1, 2, 4]);
         // Accept all leaves a group the user has started on as it is: photos
         // 1 and 4 were kept by hand, so the rest of their groups stays too,
         // photo 2 included, which nobody decided.
-        app.pick_card_event(1, CardEvent::Toggle(1));
-        app.pick_card_event(0, CardEvent::Toggle(2));
+        flip(&mut app, 1, 1);
+        flip(&mut app, 0, 2);
         app.decisions.remove(&MediaId(2));
         assert_eq!(trashed(&app), Vec::<u64>::new());
         app.accept_pick_defaults();
@@ -887,7 +972,7 @@ mod tests {
         // undecided photo 4 would leave it with no photo kept.
         app.pick_card_event(1, CardEvent::Undo);
         app.decisions.remove(&MediaId(4));
-        app.pick_card_event(1, CardEvent::Toggle(0));
+        flip(&mut app, 1, 0);
         assert_eq!(trashed(&app), vec![5]);
         app.accept_pick_defaults();
         assert_eq!(trashed(&app), vec![5]);
@@ -908,11 +993,167 @@ mod tests {
         key(&mut app, egui::Key::Enter, egui::Modifiers::NONE);
         assert_eq!(app.pick_group(), Some(0));
         assert!(app.pick_panel);
-        // Number keys toggle the nth photo of the group shown, best first.
-        key(&mut app, egui::Key::Num2, egui::Modifiers::NONE);
-        assert_eq!(trashed(&app), vec![1, 4], "Photo 2 is the second best");
+        // D never guesses which photo of the group the user means.
+        key(&mut app, egui::Key::D, egui::Modifiers::NONE);
+        assert_eq!(trashed(&app), vec![1, 2, 4], "D changed the group");
+        // A number key switches the nth photo of the group shown, best
+        // first: its suggestion is applied, so the others stay as they are. The group's view stays as it
+        // is: original detail already shown is not dropped to wait again.
+        app.view_started = Instant::now() - Duration::from_secs(1);
+        hold(&mut app, egui::Key::Num2, egui::Modifiers::NONE, 3);
+        assert_eq!(
+            trashed(&app),
+            vec![1, 4],
+            "2 brings back the second best alone"
+        );
+        assert!(
+            app.view_started.elapsed() >= Duration::from_secs(1),
+            "a switch restarted the wait for original detail"
+        );
         key(&mut app, egui::Key::R, egui::Modifiers::NONE);
-        assert_eq!(trashed(&app), vec![1, 2, 4], "R undoes the group");
+        assert_eq!(trashed(&app), vec![1, 4], "R does nothing here");
+        key(&mut app, egui::Key::U, egui::Modifiers::NONE);
+        assert_eq!(trashed(&app), vec![1, 2, 4], "U undoes the group");
+        // F focuses one photo: the arrows flip between the group's three,
+        // round from the last, never leaving the group or restarting the
+        // wait for detail.
+        key(&mut app, egui::Key::F, egui::Modifiers::NONE);
+        assert!(app.focus_active());
+        let first = app.focused_slot;
+        // In focus a number only shows that photo, marking nothing; D
+        // sends the one shown to Trash and back, alone. Photo 3 is the best.
+        key(&mut app, egui::Key::Num1, egui::Modifiers::NONE);
+        assert_eq!(app.focused_slot, 0);
+        assert_eq!(trashed(&app), vec![1, 2, 4], "a number marked a photo");
+        key(&mut app, egui::Key::D, egui::Modifiers::NONE);
+        assert_eq!(trashed(&app), vec![1, 2, 3, 4], "D trashes the one shown");
+        key(&mut app, egui::Key::D, egui::Modifiers::NONE);
+        assert_eq!(trashed(&app), vec![1, 2, 4], "D again keeps it");
+        key(&mut app, egui::Key::Num2, egui::Modifiers::NONE);
+        assert_eq!(app.focused_slot, 1);
+        key(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE);
+        assert_eq!(app.pick_group(), Some(0));
+        assert_eq!(app.focused_slot, (first + 1) % 3);
+        key(&mut app, egui::Key::ArrowLeft, egui::Modifiers::NONE);
+        key(&mut app, egui::Key::ArrowLeft, egui::Modifiers::NONE);
+        assert_eq!(app.focused_slot, (first + 2) % 3);
+        assert!(app.view_started.elapsed() >= Duration::from_secs(1));
+        // Only the focused photo is drawn, but every photo of the group is
+        // asked for in its view, so flipping shows detail at once.
+        for n in 1..=3 {
+            app.metadata.insert(
+                MediaId(n),
+                Metadata {
+                    width: 6000,
+                    height: 4000,
+                    ..Default::default()
+                },
+            );
+        }
+        app.inspection_wanted.clear();
+        let ctx = egui::Context::default();
+        theme_install(&ctx);
+        // Small previews, so the panel wants original detail.
+        for n in 1..=3 {
+            let handle = ctx.load_texture(
+                "preview",
+                egui::ColorImage::filled([600, 400], Color32::WHITE),
+                egui::TextureOptions::LINEAR,
+            );
+            app.textures.insert(
+                (MediaId(n), true),
+                Texture {
+                    handle,
+                    bytes: 600 * 400 * 4,
+                    used: 0,
+                },
+            );
+        }
+        let _ = ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.review_canvas(ui));
+            },
+        );
+        let mut asked: Vec<u64> = app.inspection_wanted.iter().map(|r| r.slot).collect();
+        asked.sort_unstable();
+        assert_eq!(asked, [0, 1, 2]);
+        let regions: Vec<_> = app.inspection_wanted.iter().map(|r| r.region).collect();
+        assert!(regions.windows(2).all(|pair| pair[0] == pair[1]));
+        // Esc leaves focus first, then closes the panel.
+        key(&mut app, egui::Key::Escape, egui::Modifiers::NONE);
+        assert!(!app.focus_active() && app.pick_panel);
+        // Closing the panel any other way (its X) ends focus too.
+        key(&mut app, egui::Key::F, egui::Modifiers::NONE);
+        assert!(app.focus_active());
+        app.pick_panel = false;
+        super::super::review_card::render_grid(&mut app);
+        assert!(!app.panel_focus, "focus outlived the panel");
+        app.pick_panel = true;
+        // A click on another group's card leaves focus too.
+        key(&mut app, egui::Key::F, egui::Modifiers::NONE);
+        app.pick_card_event(1, CardEvent::Select(0));
+        assert!(!app.panel_focus && app.pick_group() == Some(1));
+        app.pick_card_event(0, CardEvent::Select(0));
+        app.view_started = Instant::now() - Duration::from_secs(1);
+        // Out of focus the three sit in one row, two in view at a time,
+        // scrolling sideways: only those in view ask for detail.
+        app.inspection_wanted.clear();
+        let _ = ctx.run_test(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.review_canvas(ui));
+            },
+        );
+        assert_eq!(app.inspection_wanted.len(), 2);
+        // A two-finger swipe across the row, never quite level, scrolls it
+        // to the third photo and leaves the zoom alone.
+        let zoom = app.view_for(0).zoom;
+        let mut slots = Vec::new();
+        for step in 0..12 {
+            app.inspection_wanted.clear();
+            let events = if step < 4 {
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(900.0, 400.0)),
+                    egui::Event::MouseWheel {
+                        phase: egui::TouchPhase::Move,
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(-200.0, 30.0),
+                        modifiers: Default::default(),
+                    },
+                ]
+            } else {
+                Vec::new()
+            };
+            let _ = ctx.run_test(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1400.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| app.review_canvas(ui));
+                },
+            );
+            slots = app.inspection_wanted.iter().map(|r| r.slot).collect();
+        }
+        assert!(slots.contains(&2), "the row did not scroll: {slots:?}");
+        assert_eq!(app.view_for(0).zoom, zoom, "a sideways swipe zoomed");
         // Arrows move to the next group; Esc closes the panel.
         key(&mut app, egui::Key::ArrowDown, egui::Modifiers::NONE);
         assert_eq!(app.pick_group(), Some(1));
@@ -963,7 +1204,44 @@ mod tests {
     }
 
     #[test]
-    fn a_card_has_no_title_and_never_draws_the_count_over_its_undo() {
+    fn a_group_shows_its_shots_in_the_order_they_were_taken_from_the_best() {
+        let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
+        app.media = (1..=3).map(photo).collect();
+        app.index = app
+            .media
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
+        // Standing (1, the best), sitting 16 s later (2), standing again
+        // 14 s later (3). The whole-frame embeddings, ruled by the scene,
+        // put the sitting shot closest to the best.
+        for (n, at) in [(1, 0), (2, 16_000), (3, 14_000)] {
+            app.metadata.insert(
+                MediaId(n),
+                Metadata {
+                    captured_ms: Some(at),
+                    ..Default::default()
+                },
+            );
+        }
+        for (n, embedding) in [(1, [1.0, 0.0]), (2, [1.0, 0.1]), (3, [0.0, 1.0])] {
+            app.embeddings
+                .insert(MediaId(n), Arc::new(embedding.to_vec()));
+        }
+        let ids: Vec<MediaId> = (1..=3).map(MediaId).collect();
+        let scores = ids.iter().map(|id| (*id, 10.0 - id.0 as f64)).collect();
+        let mut cluster = Cluster::new(1, ids, scores);
+        app.arrange_pick_group(&mut cluster);
+        assert_eq!(cluster.shown, [1, 3, 2].map(MediaId), "by capture time");
+        // Without capture times, the embeddings decide.
+        app.metadata.clear();
+        app.arrange_pick_group(&mut cluster);
+        assert_eq!(cluster.shown, [1, 2, 3].map(MediaId), "by embedding");
+    }
+
+    #[test]
+    fn a_card_has_no_title_and_shows_every_photo_of_its_group() {
         let mut app = PhotoSortApp::with_runtime(Runtime::new(|| {}), None);
         app.media = (1..=20).map(photo).collect();
         app.index = app
@@ -981,75 +1259,12 @@ mod tests {
         app.set_step(Step::PickBest);
         app.refilter();
         app.review = false;
-        // Decided by hand, kept as it is: its count says how many it keeps.
-        app.by_hand.insert(MediaId(20));
-        // The header as painted for photos of a shape: the count beside
-        // Undo, and whether the two overlap. No title over them.
-        let mut header = |width: u32, height: u32| {
-            for n in 1..=20 {
-                app.metadata.insert(
-                    MediaId(n),
-                    Metadata {
-                        width,
-                        height,
-                        ..Default::default()
-                    },
-                );
-            }
-            app.metadata_shapes += 1;
-            app.preferences.photo_size = *crate::core::preferences::PHOTO_SIZES.start();
-            let ctx = egui::Context::default();
-            theme_install(&ctx);
-            let output = ctx.run_test(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1200.0, 900.0),
-                    )),
-                    ..Default::default()
-                },
-                |ui| {
-                    egui::CentralPanel::default().show(ui, |ui| app.library(ui));
-                },
-            );
-            fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
-                match shape {
-                    egui::Shape::Text(text) => out.push(text),
-                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
-                    _ => {}
-                }
-            }
-            let mut texts = Vec::new();
-            for clipped in &output.shapes {
-                walk(&clipped.shape, &mut texts);
-            }
-            let span = |t: &egui::epaint::TextShape| (t.pos.x, t.pos.x + t.galley.size().x);
-            assert!(!texts.iter().any(|t| t.galley.text().contains("Group")));
-            let undo = texts
-                .iter()
-                .find(|t| t.galley.text().ends_with("Undo"))
-                .expect("the card's Undo");
-            let count = texts.iter().find(|t| t.galley.text().starts_with("+17"));
-            (
-                count.map(|t| t.galley.text().to_owned()),
-                count.is_some_and(|t| span(t).1 > span(undo).0),
-            )
-        };
-        // Wide photos: room for the whole count.
-        assert_eq!(
-            header(3000, 2000),
-            (Some("+17 more, 17 kept".to_owned()), false)
-        );
-        // Narrower cards, down to the narrowest: the count stays clear of
-        // Undo, shortened where it must be.
-        let mut counts = Vec::new();
-        for width in [1600, 1400, 1000, 500] {
-            let (count, over) = header(width, 2000);
-            assert!(!over, "{width}: {count:?}");
-            counts.push(count.expect("the count beside Undo"));
-        }
-        assert!(counts.iter().all(|c| c.starts_with("+17 more")));
-        assert!(counts.iter().any(|c| c == "+17 more"), "{counts:?}");
+        // Every photo of the group is on its card, however many there are:
+        // no "+N more" leaves some out.
+        let card = app.pick_card(0);
+        assert_eq!(card.photos.len(), 20);
+        assert_eq!(card.state_text, None);
+        assert!(card.title.is_empty());
     }
 
     #[test]

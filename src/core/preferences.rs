@@ -36,6 +36,9 @@ pub struct Preferences {
     pub faceless: Faceless,
     /// How RAW photos are displayed; analysis always uses the neutral render.
     pub raw_look: super::raw_look::RawLook,
+    /// How Original detail decodes RAW photos: half size at Fit, or always
+    /// full size.
+    pub raw_detail: super::raw_look::RawDetail,
     /// Finish every interface animation instantly.
     pub reduce_motion: bool,
     /// Where Review shows the strip of photos, in every step.
@@ -130,6 +133,7 @@ impl Default for Preferences {
             keep_companions: true,
             faceless: Default::default(),
             raw_look: Default::default(),
+            raw_detail: Default::default(),
             reduce_motion: false,
             strip_position: StripPosition::Bottom,
             show_filenames: true,

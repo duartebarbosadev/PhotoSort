@@ -256,6 +256,13 @@ impl PhotoSortApp {
                 0.0
             })
         .max(40.0);
+        // Easy Delete and Pick Best: F shows one photo of the card at a
+        // time, as large as the panel. A card of more than two photos sits in
+        // one row, each photo as tall as the panel allows within half its
+        // width, scrolling sideways, so two of them are always side by side.
+        let cards = matches!(self.step, Step::EasyDelete | Step::PickBest);
+        let focus = cards && self.panel_focus && ids.len() > 1;
+        let row = cards && !focus && ids.len() > 2;
         let ideal_columns = if ids.len() == 4 { 2 } else { 3 };
         let columns = if beside_grid && ids.len() == 2 {
             // A narrow panel: side by side or stacked, whichever shows the
@@ -274,10 +281,12 @@ impl PhotoSortApp {
                 self.delete_current
                     .map_or(0.75, |id| self.delete_card_ratio(id))
             };
-            let width = ui.available_width();
-            let side_by_side = (width / 2.0).min(height / ratio);
-            let stacked = width.min(height / 2.0 / ratio);
-            if side_by_side >= stacked { 2 } else { 1 }
+            two_photo_columns(
+                ui.available_width(),
+                height,
+                ui.spacing().item_spacing.x,
+                ratio,
+            )
         } else {
             ((ui.available_width() / 250.0).floor() as usize)
                 .clamp(1, ideal_columns)
@@ -289,7 +298,7 @@ impl PhotoSortApp {
         let row_height = if rows == 1 {
             height
         } else {
-            ((height - 10.0 * (rows - 1) as f32) / rows as f32).max(100.0)
+            ((height - ROW_GAP * (rows - 1) as f32) / rows as f32).max(100.0)
         };
         let focus_key = egui::Id::new("inspection_focus_layout");
         let focus_layout = (
@@ -319,6 +328,18 @@ impl PhotoSortApp {
         ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
         if self.step == Step::Cull && self.swipe_shown() {
             self.swipe_canvas(ui, egui::vec2(ui.available_width(), height));
+        } else if focus {
+            let slot = (self.focused_slot as usize).min(ids.len() - 1);
+            self.photo_canvas(
+                ui,
+                ids[slot],
+                slot as u64,
+                egui::vec2(ui.available_width(), height),
+                true,
+            );
+            self.keep_focus_frames(&ids, slot);
+        } else if row {
+            self.photo_row(ui, &ids, height, follow_focus);
         } else {
             egui::ScrollArea::vertical()
                 .id_salt("inspection_canvas")
@@ -429,9 +450,9 @@ impl PhotoSortApp {
                         .clicked()
                         {
                             if self.step == Step::EasyDelete {
-                                self.toggle_delete_candidate(side);
+                                self.keep_delete_candidate(side);
                             } else {
-                                self.toggle_pick(*id);
+                                self.keep_pick(*id);
                             }
                         }
                     }
@@ -440,6 +461,16 @@ impl PhotoSortApp {
                         self.delete_undo_button(ui);
                     } else {
                         self.pick_undo_button(ui);
+                    }
+                    if ids.len() > 1
+                        && ui
+                            .selectable_label(self.panel_focus, "Focus")
+                            .on_hover_text(
+                                "One photo at a time: the arrows or a number show another, D sends it to Trash or back · F",
+                            )
+                            .clicked()
+                    {
+                        self.panel_focus ^= true;
                     }
                 } else if self.step == Step::Rotation {
                     self.rotation_bar_buttons(ui);
@@ -1081,9 +1112,12 @@ impl PhotoSortApp {
             }
             ui.ctx().request_repaint();
         }
-        let texture = self
-            .texture(id, count <= 4)
-            .or_else(|| self.texture(id, false));
+        // Many compared photos are small: their thumbnails do. A large slot
+        // (one photo, a few, or a card's row) takes the 2048 px preview.
+        let large = count <= 4
+            || rect.width().max(rect.height()) * ui.ctx().pixels_per_point()
+                > crate::core::pipeline::THUMB_EDGE as f32 * 1.15;
+        let texture = self.texture(id, large).or_else(|| self.texture(id, false));
         if count == 1 && self.textures.contains_key(&(id, true)) {
             self.prefetch_neighbours(id);
         }
@@ -1113,8 +1147,8 @@ impl PhotoSortApp {
                 .rect_stroke(rect, R_SURFACE, stroke, StrokeKind::Inside);
         }
         let content = egui::Rect::from_min_max(
-            rect.min + egui::vec2(8.0, 28.0),
-            rect.max - egui::vec2(8.0, 8.0),
+            rect.min + egui::vec2(SLOT_MARGIN, SLOT_LABEL),
+            rect.max - egui::vec2(SLOT_MARGIN, SLOT_MARGIN),
         );
         let mut view = self.view_for(slot);
         let turns = if !corrected {
@@ -1220,7 +1254,7 @@ impl PhotoSortApp {
                 // in for detail. The 2048 px preview does: loaded when the
                 // detail failed, and only if already in memory while the
                 // detail waits behind the other photos'.
-                if count > 4 && (failed || queued) {
+                if !large && (failed || queued) {
                     let preview = if failed {
                         self.texture(id, true)
                     } else {
@@ -1440,9 +1474,10 @@ impl PhotoSortApp {
             );
         }
         if pixels && matches!(self.step, Step::EasyDelete | Step::PickBest) {
-            // Nothing decided in its group or card: no Keep or Trash, only
-            // the suggestion's star, where the pill would be.
-            let pill = if self.panel_undecided() {
+            // Nothing decided in its group or card, or the photo kept: no
+            // pill, only the suggestion's star where it would be. Only Trash
+            // is marked.
+            let pill = if self.panel_undecided() || !d.rejected {
                 Align2::RIGHT_TOP.anchor_size(rect.right_top() + egui::vec2(-S2, S2), Vec2::ZERO)
             } else {
                 decision_pill(ui.painter(), rect, !d.rejected)
@@ -1480,10 +1515,10 @@ impl PhotoSortApp {
             self.slot_stars(ui, rect, id);
         }
         if pan.is_none() && response.clicked() && self.step == Step::EasyDelete {
-            self.toggle_delete_candidate(slot as usize);
+            self.keep_delete_candidate(slot as usize);
         }
         if pan.is_none() && response.clicked() && self.step == Step::PickBest {
-            self.toggle_pick(id);
+            self.keep_pick(id);
         }
         if response.clicked() {
             self.pending_bookmark = None;
@@ -1496,9 +1531,21 @@ impl PhotoSortApp {
         }
         if response.hovered() {
             // Scrolling zooms, and so does a trackpad pinch (or Ctrl+scroll,
-            // which egui reports as a zoom instead of a scroll).
-            let (delta, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
-            let factor = (delta * 0.003).exp() * pinch;
+            // which egui reports as a zoom instead of a scroll). A mostly
+            // sideways swipe is not a zoom: a card's row scrolls with it.
+            // The card steps' panel zooms at half the rate, so a swipe meant
+            // to move along the row does not jump the zoom.
+            let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta()));
+            let delta = if sideways(scroll) { 0.0 } else { scroll.y };
+            let rate = if matches!(
+                self.step,
+                Step::EasyDelete | Step::PickBest | Step::Rotation
+            ) {
+                0.0015
+            } else {
+                0.003
+            };
+            let factor = (delta * rate).exp() * pinch;
             if factor != 1.0 {
                 self.focused_slot = slot;
                 let anchor = response
@@ -1617,6 +1664,155 @@ impl PhotoSortApp {
 }
 
 /// Height reserved for the filmstrip below the review canvas.
+impl PhotoSortApp {
+    /// A card of more than two photos in one row: each as tall as the panel
+    /// allows within half its width, so two are always side by side, the
+    /// row scrolling sideways with its bar (the wheel zooms) and following
+    /// the focused photo.
+    fn photo_row(&mut self, ui: &mut egui::Ui, ids: &[MediaId], height: f32, follow: bool) {
+        let gap = ui.spacing().item_spacing.x;
+        let half = ((ui.available_width() - gap) / 2.0).max(100.0);
+        let tall = height - ui.spacing().scroll.allocated_width();
+        let widths: Vec<f32> = ids
+            .iter()
+            .map(|id| {
+                let photo = (tall - SLOT_LABEL - SLOT_MARGIN) * self.photo_aspect(*id, 0);
+                (photo + 2.0 * SLOT_MARGIN).min(half)
+            })
+            .collect();
+        // Each card's row scrolls on its own: the next opens at its start.
+        egui::ScrollArea::horizontal()
+            .id_salt(("inspection_row", ids.first().copied()))
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .scroll_source(egui::scroll_area::ScrollSource {
+                scroll_bar: true,
+                drag: egui::scroll_area::DragScroll::Never,
+                mouse_wheel: false,
+            })
+            .max_height(height)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                // A two-finger swipe across the row scrolls it; the canvas
+                // leaves a mostly sideways one alone (see `sideways`).
+                let swipe = ui.input(|i| i.smooth_scroll_delta);
+                let over = ui
+                    .ctx()
+                    .pointer_hover_pos()
+                    .is_some_and(|pointer| ui.clip_rect().contains(pointer));
+                if over && swipe.x != 0.0 && sideways(swipe) {
+                    ui.scroll_with_delta(egui::vec2(swipe.x, 0.0));
+                }
+                ui.horizontal(|ui| {
+                    for (slot, id) in ids.iter().enumerate() {
+                        let size = egui::vec2(widths[slot], tall);
+                        if follow && slot as u64 == self.focused_slot {
+                            ui.scroll_to_rect(
+                                egui::Rect::from_min_size(ui.next_widget_position(), size),
+                                Some(Align::Center),
+                            );
+                        }
+                        self.photo_canvas(ui, *id, slot as u64, size, true);
+                    }
+                });
+            });
+    }
+    /// In focus, the card's other photos of the same size are asked for in
+    /// the focused one's view too, so their detail is decoded and kept:
+    /// flipping to one shows it at once, never its preview first.
+    fn keep_focus_frames(&mut self, ids: &[MediaId], focused: usize) {
+        let Some(request) = self
+            .inspection_wanted
+            .iter()
+            .find(|r| r.slot == focused as u64)
+            .cloned()
+        else {
+            return;
+        };
+        let shape = |app: &Self, id: &MediaId| {
+            app.metadata
+                .get(id)
+                .map(|m| (m.width, m.height, m.orientation))
+        };
+        let Some(focused_shape) = shape(self, &ids[focused]) else {
+            return;
+        };
+        for (slot, id) in ids.iter().enumerate() {
+            if slot == focused || shape(self, id) != Some(focused_shape) {
+                continue;
+            }
+            if let Some(index) = self.index.get(id).copied() {
+                let mut other = request.clone();
+                other.slot = slot as u64;
+                other.media = self.media[index].clone();
+                other.allow_large = self.limits.open_large.contains(id);
+                self.inspection_wanted.push(other);
+            }
+        }
+    }
+    /// Whether the card's panel shows one photo at a time (F).
+    pub(super) fn focus_active(&self) -> bool {
+        let shown = match self.step {
+            Step::EasyDelete => self.delete_panel && self.delete_current.is_some(),
+            Step::PickBest => self.pick_panel && self.pick_current.is_some(),
+            _ => false,
+        };
+        self.panel_focus && shown && self.comparison_ids().len() > 1
+    }
+    /// F: the panel shows one photo of the card at a time, or all again.
+    pub(super) fn toggle_panel_focus(&mut self) {
+        let shown = match self.step {
+            Step::EasyDelete => self.delete_panel && self.delete_current.is_some(),
+            Step::PickBest => self.pick_panel && self.pick_current.is_some(),
+            _ => false,
+        };
+        if shown && self.comparison_ids().len() > 1 {
+            self.panel_focus ^= true;
+        }
+    }
+    /// The arrows in focus: the previous or next photo of the card, round
+    /// from the last to the first. The view and its detail stay as they are.
+    pub(super) fn flip_focus(&mut self, delta: isize) {
+        let ids = self.comparison_ids();
+        if ids.len() < 2 {
+            return;
+        }
+        let next = (self.focused_slot as isize + delta).rem_euclid(ids.len() as isize) as usize;
+        if self.step == Step::PickBest {
+            self.set_active(ids[next]);
+        } else {
+            self.active = Some(ids[next]);
+        }
+        self.focused_slot = next as u64;
+    }
+}
+
+/// Whether a scroll is mostly sideways: a swipe along a card's row, not a
+/// zoom. A trackpad swipe is never perfectly level, so it counts as sideways
+/// unless it goes at least twice as far up or down as across.
+pub(super) fn sideways(scroll: Vec2) -> bool {
+    scroll.y.abs() <= scroll.x.abs() * 2.0
+}
+
+/// A compared photo's slot: the strip over the photo for its number and
+/// marks, and the margin on its other sides.
+const SLOT_LABEL: f32 = 28.0;
+const SLOT_MARGIN: f32 = 8.0;
+/// The gap between rows of compared photos.
+const ROW_GAP: f32 = 10.0;
+
+/// Two photos in the panel beside a grid: side by side (2 columns) or
+/// stacked (1), whichever shows them larger once each slot's label strip and
+/// margins and the gap between them are taken out. `ratio` is the photos'
+/// height over width; a tie goes side by side, the way their card shows them.
+fn two_photo_columns(width: f32, height: f32, gap: f32, ratio: f32) -> usize {
+    let photo = |slot_width: f32, slot_height: f32| {
+        (slot_width - 2.0 * SLOT_MARGIN).min((slot_height - SLOT_LABEL - SLOT_MARGIN) / ratio)
+    };
+    let side_by_side = photo((width - gap) / 2.0, height);
+    let stacked = photo(width, (height - ROW_GAP) / 2.0);
+    if side_by_side >= stacked { 2 } else { 1 }
+}
+
 const FILMSTRIP: f32 = 72.0;
 /// Height of a file name under a strip tile.
 const STRIP_NAME: f32 = 15.0;

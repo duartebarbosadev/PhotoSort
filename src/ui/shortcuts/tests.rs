@@ -787,7 +787,7 @@ fn guided_keys_match_their_cards_and_trash_keys_only_mark_where_marks_show() {
             app.keyboard(&ui.ctx().clone())
         });
     };
-    // An Eyes closed card of four photos: 3 and 4 switch the third and
+    // An Eyes closed card of four photos: 3 and 4 reach the third and
     // fourth, as their tooltips say.
     let mut app = app(Step::EasyDelete);
     app.media = (1..=4)
@@ -817,11 +817,17 @@ fn guided_keys_match_their_cards_and_trash_keys_only_mark_where_marks_show() {
     }]);
     app.delete_current = Some(MediaId(1));
     app.delete_panel = true;
-    for (key, photo) in [(egui::Key::Num3, MediaId(3)), (egui::Key::Num4, MediaId(4))] {
-        let before = app.decision(photo).rejected;
-        press(&mut app, key);
-        assert_ne!(app.decision(photo).rejected, before, "{key:?}");
-    }
+    // 3 keeps the third and sends the others to Trash; then 4 brings the
+    // fourth back.
+    let marked = |app: &PhotoSortApp| {
+        (1..=4)
+            .map(|n| app.decision(MediaId(n)).rejected)
+            .collect::<Vec<_>>()
+    };
+    press(&mut app, egui::Key::Num3);
+    assert_eq!(marked(&app), [true, true, false, true]);
+    press(&mut app, egui::Key::Num4);
+    assert_eq!(marked(&app), [true, true, false, false]);
     // The card shows none of its photos as the active one, so it has no
     // toolbar stars, and the rating and rotation keys change no photo.
     let rate = |app: &mut PhotoSortApp| {
@@ -859,12 +865,19 @@ fn guided_keys_match_their_cards_and_trash_keys_only_mark_where_marks_show() {
     }]);
     assert_eq!(rate(&mut app), (true, Some(3)));
     app.runtime.shutdown();
-    // Fix Rotation shows no Trash marks, so D and Delete stage none.
+    // In Fix Rotation the trash keys act on the selected photo as in Cull:
+    // Delete marks it and waits while busy, D marks it or takes it back.
     let mut app = super::tests::app(Step::Rotation);
-    for key in [egui::Key::D, egui::Key::Delete, egui::Key::Backspace] {
+    app.busy = true;
+    press(&mut app, egui::Key::Delete);
+    assert!(app.decisions.is_empty());
+    app.busy = false;
+    for key in [egui::Key::Delete, egui::Key::Backspace] {
         press(&mut app, key);
+        assert!(app.decision(MediaId(7)).rejected, "{key:?}");
     }
-    assert!(app.decisions.is_empty() && !app.plan_open);
+    press(&mut app, egui::Key::D);
+    assert!(!app.decision(MediaId(7)).rejected && !app.plan_open);
     app.runtime.shutdown();
     // Reviewing in Cull, Delete marks the photo as D does, and waits while busy.
     let mut app = super::tests::app(Step::Cull);

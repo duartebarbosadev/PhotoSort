@@ -56,6 +56,7 @@ impl Section {
                     || d.show_filenames != s.show_filenames
                     || d.compact_strip != s.compact_strip
                     || d.raw_look != s.raw_look
+                    || d.raw_detail != s.raw_detail
                     || d.reduce_motion != s.reduce_motion
                     || d.show_shortcuts != s.show_shortcuts
             }
@@ -917,7 +918,7 @@ fn general_page(ui: &mut egui::Ui, draft: &mut Preferences) {
 
 fn appearance_page(ui: &mut egui::Ui, draft: &mut Preferences) {
     use crate::core::preferences::StripPosition;
-    use crate::core::raw_look::RawLook;
+    use crate::core::raw_look::{RawDetail, RawLook};
     card(ui, icon::IMAGE, "Photos", None, false, |rows| {
         rows.row("Photo strip in Review", "", None, |ui| {
             choice(
@@ -957,6 +958,22 @@ fn appearance_page(ui: &mut egui::Ui, draft: &mut Preferences) {
                     &[
                         (RawLook::Neutral, "Neutral", None),
                         (RawLook::Enhanced, "Enhanced", None),
+                    ],
+                );
+            },
+        );
+        rows.row(
+            "RAW original detail",
+            "Fast decodes at half size until you zoom in, several times quicker and the same at Fit. Full always decodes every pixel.",
+            None,
+            |ui| {
+                choice(
+                    ui,
+                    "raw-detail",
+                    &mut draft.raw_detail,
+                    &[
+                        (RawDetail::Fast, "Fast", None),
+                        (RawDetail::Full, "Full", None),
                     ],
                 );
             },

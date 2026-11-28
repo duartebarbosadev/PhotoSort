@@ -142,6 +142,7 @@ pub struct Pipeline {
     writes: Option<Arc<super::cache::Writes>>,
     started: std::time::SystemTime,
     raw_look: super::raw_look::RawLook,
+    raw_detail: super::raw_look::RawDetail,
     /// Enhanced-look levels per RAW source, so 1:1 crops match the preview.
     raw_levels: HashMap<String, super::raw_look::Levels>,
     /// Threads one proxy downscale may use; see `limit_threads`.
@@ -169,6 +170,7 @@ impl Pipeline {
             writes: None,
             started: std::time::SystemTime::now(),
             raw_look: Default::default(),
+            raw_detail: Default::default(),
             raw_levels: HashMap::new(),
             threads: super::processing::available(),
         }
@@ -459,6 +461,67 @@ impl Pipeline {
     /// are cached per look, so switching never shows a stale render.
     pub fn set_raw_look(&mut self, look: super::raw_look::RawLook) {
         self.raw_look = look;
+    }
+    /// How Original detail decodes RAW photos; see `RawDetail`.
+    pub fn set_raw_detail(&mut self, detail: super::raw_look::RawDetail) {
+        self.raw_detail = detail;
+    }
+    /// Whether a RAW request shows the photo at half its size or smaller,
+    /// so the half-size decode holds every pixel it needs. A full-size
+    /// decode already kept serves it instead.
+    fn half_detail(&self, request: &super::inspection::Request, key: &str) -> bool {
+        // A photo opened anyway past the memory limit is decoded full size.
+        self.raw_detail == super::raw_look::RawDetail::Fast
+            && !request.allow_large
+            && request.media.kind == MediaKind::Raw
+            && request.region.width.max(request.region.height)
+                >= request.output_edge.saturating_mul(2)
+            && !self
+                .details
+                .get(key)
+                .is_some_and(|entry| entry.prepared.full_resolution)
+    }
+    /// A RAW photo decoded at half size for Original detail, upright, kept
+    /// apart from the full-size decode so zooming in never reuses it.
+    fn canonical_half(
+        &mut self,
+        media: &Media,
+        key: &str,
+        meta: &mut Metadata,
+        cancelled: &(impl Fn() -> bool + Sync),
+    ) -> Result<Prepared> {
+        self.tick += 1;
+        let half_key = format!("half:{key}");
+        if let Some(entry) = self.details.get_mut(&half_key) {
+            entry.tick = self.tick;
+            (meta.width, meta.height) = (entry.prepared.width, entry.prepared.height);
+            return Ok(entry.prepared.clone());
+        }
+        self.stats.decodes += 1;
+        let decoded = decode_raw_recipe(
+            &media.path,
+            RawRecipe::DetailHalf,
+            &mut self.colors,
+            cancelled,
+        )?;
+        anyhow::ensure!(
+            !cancelled() && Self::key(media)? == key,
+            "Photo changed or preparation cancelled"
+        );
+        let (width, height) = decoded.source;
+        (meta.width, meta.height) = (width, height);
+        // LibRaw halves only a mosaic sensor: a full-size result is the full
+        // decode (same look), kept as one so zooming in reuses it.
+        let full_resolution = decoded.image.width().saturating_mul(2) > width.saturating_add(2);
+        let prepared = Prepared {
+            image: Arc::new(orient(decoded.image, meta.orientation)),
+            warning: None,
+            width,
+            height,
+            full_resolution,
+        };
+        self.retain_detail(if full_resolution { key } else { &half_key }, &prepared);
+        Ok(prepared)
     }
     fn enhanced(&self, media: &Media) -> bool {
         media.kind == MediaKind::Raw && self.raw_look == super::raw_look::RawLook::Enhanced
@@ -1130,10 +1193,35 @@ impl Pipeline {
         {
             return self.inspect_native_region(request, &key, meta, cancelled);
         }
-        let prepared = self.canonical(&request.media, &key, &mut meta, true, cancelled)?;
+        let mut half = self.half_detail(request, &key);
+        let prepared = if half {
+            match self.canonical_half(&request.media, &key, &mut meta, cancelled) {
+                // Too large even at half size: the full decode says how much
+                // it needs, so Open anyway then opens every pixel.
+                Err(error) if error.downcast_ref::<super::memory::TooLarge>().is_some() => {
+                    half = false;
+                    self.canonical(&request.media, &key, &mut meta, true, cancelled)?
+                }
+                result => result?,
+            }
+        } else {
+            self.canonical(&request.media, &key, &mut meta, true, cancelled)?
+        };
+        let orientation = meta.orientation;
         self.metadata.put(key.clone(), meta);
         let image = prepared.image;
-        let r = request.region;
+        let r = if half {
+            // The region is in the full-size photo, upright: scaled to the
+            // half-size one, each side by its own ratio.
+            let (full_w, full_h) = if (5..=8).contains(&orientation) {
+                (prepared.height, prepared.width)
+            } else {
+                (prepared.width, prepared.height)
+            };
+            half_region(request.region, (full_w, full_h), image.dimensions())
+        } else {
+            request.region
+        };
         anyhow::ensure!(
             r.width > 0
                 && r.height > 0
@@ -1485,6 +1573,30 @@ impl Decoded {
         }
     }
 }
+/// `region` of a `full`-size photo, in a smaller copy of `size`: each side
+/// scaled by its own ratio and kept inside the copy.
+fn half_region(
+    region: super::inspection::Region,
+    full: (u32, u32),
+    size: (u32, u32),
+) -> super::inspection::Region {
+    // The near edge rounds down and the far edge up, so the copy's region
+    // covers every pixel of the full one's, up to the copy's own edge.
+    let down = |v: u32, from: u32, to: u32| u64::from(v) * u64::from(to) / u64::from(from.max(1));
+    let up = |v: u32, from: u32, to: u32| {
+        (u64::from(v) * u64::from(to)).div_ceil(u64::from(from.max(1)))
+    };
+    let x = (down(region.x, full.0, size.0) as u32).min(size.0.saturating_sub(1));
+    let y = (down(region.y, full.1, size.1) as u32).min(size.1.saturating_sub(1));
+    let right = (up(region.x + region.width, full.0, size.0) as u32).min(size.0);
+    let bottom = (up(region.y + region.height, full.1, size.1) as u32).min(size.1);
+    super::inspection::Region {
+        x,
+        y,
+        width: right.saturating_sub(x).max(1),
+        height: bottom.saturating_sub(y).max(1),
+    }
+}
 fn decode(
     media: &Media,
     metadata: &Metadata,
@@ -1534,6 +1646,10 @@ enum RawRecipe {
     Original = 0,
     Preview = 1,
     PreviewFallback = 2,
+    /// Original detail at half size: the full decode's look, a quarter of
+    /// its pixels, several times faster. Enough wherever the photo is shown
+    /// at half its size or smaller, as at Fit.
+    DetailHalf = 3,
 }
 /// Only a sensor decode is bounded by memory (raw.c); an embedded JPEG is
 /// bounded by its own size, so a 150 MP RAW still shows a preview and thumbnail.
@@ -1743,6 +1859,23 @@ fn native_raster(media: &Media) -> bool {
 #[cfg(test)]
 mod metadata_cache_tests {
     use super::*;
+    #[test]
+    fn a_half_size_region_covers_every_pixel_of_the_full_one() {
+        use super::super::inspection::Region;
+        let region = |x, y, width, height| Region {
+            x,
+            y,
+            width,
+            height,
+        };
+        let half = |r| half_region(r, (6025, 4024), (3012, 2012));
+        // The whole photo, an odd width included, is the whole copy.
+        assert_eq!(half(region(0, 0, 6025, 4024)), region(0, 0, 3012, 2012));
+        // A small region keeps its far edge: rounded up, not cut short.
+        assert_eq!(half(region(1, 1, 3, 3)), region(0, 0, 2, 2));
+        // The last pixel stays inside the copy.
+        assert_eq!(half(region(6024, 4023, 1, 1)), region(3011, 2011, 1, 1));
+    }
     #[test]
     fn metadata_capacity_preserves_recent_photo_without_disk_reread() {
         let directory = tempfile::tempdir().unwrap();
