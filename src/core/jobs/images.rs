@@ -83,6 +83,8 @@ struct CachedAnalysis {
     embedding: Option<Vec<f32>>,
     aesthetic: Option<f32>,
     faces: Option<faces::FaceSummary>,
+    /// The people found in it (`persons`), for Pick Best.
+    persons: Option<Vec<crate::core::persons::Person>>,
 }
 
 /// Retire cached results made with other models, returning whether the analysis
@@ -241,6 +243,7 @@ struct ImageWorker {
     result_epoch: u64,
     model_signature: String,
     aesthetic_signature: String,
+    persons_signature: String,
     technical_measurements: u64,
     content_hashes: u64,
     quality_measurements: u64,
@@ -321,6 +324,7 @@ impl ImageWorker {
             result_epoch: 0,
             model_signature: String::new(),
             aesthetic_signature: String::new(),
+            persons_signature: String::new(),
             technical_measurements: 0,
             content_hashes: 0,
             quality_measurements: 0,
@@ -783,6 +787,14 @@ impl ImageWorker {
         ) {
             self.subject_store = None;
         }
+        // People come from their own model: replacing it clears only them.
+        let persons = models::persons_signature();
+        if self.persons_signature != persons {
+            for cached in self.results.values_mut() {
+                cached.persons = None;
+            }
+            self.persons_signature = persons;
+        }
         if self.evidence_unavailable(&scope) || scope.cancelled() {
             return;
         }
@@ -996,6 +1008,7 @@ impl ImageWorker {
             inputs: std::mem::take(&mut self.gathered.subject),
             store: self.subject_store.as_ref().unwrap().clone(),
             strictness: self.selection.strictness,
+            same_subject: self.selection.profile == AnalysisProfile::Quality,
             stats,
         };
         if self.subjects.try_send(job).is_err() {
@@ -1093,6 +1106,7 @@ impl ImageWorker {
         }
         if self.selection.profile == AnalysisProfile::Quality {
             self.aesthetic(&mut it, &store)?;
+            self.persons(&mut it, &store)?;
         }
         self.publish(&mut it)
     }
@@ -1185,6 +1199,7 @@ impl ImageWorker {
                 embedding: None,
                 aesthetic: None,
                 faces: None,
+                persons: None,
             },
         );
         Ok(())
@@ -1402,6 +1417,28 @@ impl ImageWorker {
         Ok(())
     }
 
+    /// The people in the photo, for Pick Best's people filter: from the
+    /// store when this model found them before.
+    fn persons(&mut self, it: &mut Item, store: &subjects::store::Store) -> anyhow::Result<()> {
+        if self.cached_mut(&it.source_key).persons.is_some() {
+            return Ok(());
+        }
+        let key = subjects::store::Store::persons_key(&it.source_key, &models::persons_signature());
+        let people = if let Some(people) = store.persons(&key) {
+            people
+        } else {
+            let people = self.models.persons(&it.asset(&mut self.pipeline)?)?;
+            anyhow::ensure!(
+                !it.scope.cancelled() && Pipeline::key(it.media)? == it.source_key,
+                "Photo changed or analysis cancelled"
+            );
+            store.put_persons(&key, &people)?;
+            people
+        };
+        self.cached_mut(&it.source_key).persons = Some(people);
+        Ok(())
+    }
+
     /// Cached measurements for `key`, reclassified and scored for the current options.
     fn scored(&self, key: &str) -> Scored {
         let cached = self
@@ -1411,6 +1448,7 @@ impl ImageWorker {
         let mut technical = cached.technical.clone();
         technical.reclassify(self.selection.thresholds);
         technical.faces = cached.faces.clone();
+        technical.people = cached.persons.as_deref().map(crate::core::persons::count);
         if let Some(aesthetic) = cached.aesthetic {
             technical.aesthetic = Some(aesthetic);
             let sharpness = technical
@@ -1612,6 +1650,7 @@ mod signature_tests {
             embedding: Some(vec![1.0]),
             aesthetic: Some(0.7),
             faces: None,
+            persons: None,
         };
         HashMap::from([("photo".to_owned(), cached)])
     }

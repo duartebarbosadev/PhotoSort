@@ -8,6 +8,10 @@ pub struct Analysis {
     pub quality_sharpness: Option<f64>,
     pub aesthetic: Option<f32>,
     pub faces: Option<super::faces::FaceSummary>,
+    /// How many people are clearly in the photo, seen from any side
+    /// (`persons::count`); `None` until Pick Best's analysis looked.
+    #[serde(default)]
+    pub people: Option<usize>,
     pub brightness: f64,
     pub black_fraction: f64,
     pub score: f64,

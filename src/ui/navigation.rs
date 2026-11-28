@@ -272,6 +272,11 @@ impl PhotoSortApp {
         if step == Step::PickBest {
             self.pick_current = None;
             self.pick_panel = false;
+            // Turns staged in another step change which photos show as
+            // portrait: the orientation filter reads them again.
+            if self.pick_modes.has_groups() {
+                self.show_pick_groups();
+            }
             self.stage_pick_suggestions();
         }
         if step == Step::Cull || self.metadata_organize_mode() {

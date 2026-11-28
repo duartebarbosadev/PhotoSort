@@ -346,6 +346,27 @@ impl Store {
         anyhow::ensure!((0.0..=1.0).contains(&value), "Invalid aesthetic score");
         self.write(key, Kind::Aesthetic, &value)
     }
+    pub fn persons_key(source: &str, model: &str) -> String {
+        blake3::hash(format!("persons:{source}:{model}").as_bytes())
+            .to_hex()
+            .to_string()
+    }
+    pub fn persons(&self, key: &str) -> Option<Vec<crate::core::persons::Person>> {
+        self.read(
+            key,
+            Kind::Persons,
+            |people: &Vec<crate::core::persons::Person>| {
+                people.iter().all(crate::core::persons::Person::valid)
+            },
+        )
+    }
+    pub fn put_persons(&self, key: &str, value: &[crate::core::persons::Person]) -> Result<()> {
+        anyhow::ensure!(
+            value.iter().all(crate::core::persons::Person::valid),
+            "Invalid person evidence"
+        );
+        self.write(key, Kind::Persons, &value)
+    }
     /// One pair inside the first photo's `pairs` record.
     pub fn pair_id(a: &str, b: &str, ta: Option<i64>, tb: Option<i64>) -> [u8; 32] {
         *blake3::hash(format!("subject-pair-v2:{a}:{b}:{ta:?}:{tb:?}").as_bytes()).as_bytes()

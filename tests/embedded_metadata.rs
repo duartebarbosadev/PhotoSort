@@ -471,6 +471,7 @@ fn embedded_rotation_preserves_unapplied_ratings_and_saved_focus_across_reload()
         rotations_by_hand: Default::default(),
         trash_steps: Default::default(),
         by_hand: Default::default(),
+        pick_subject_hand: Default::default(),
         organize: None,
         manual_groups: Default::default(),
         scene_groups: Default::default(),

@@ -145,6 +145,12 @@ pub enum Event {
         run: u64,
         groups: HashMap<MediaId, usize>,
     },
+    /// Pick Best's Same subject groups, found after its similar groups:
+    /// or why they could not be.
+    SameSubjectGroups {
+        run: u64,
+        groups: Result<HashMap<MediaId, usize>, String>,
+    },
     AnalysisDone {
         run: u64,
         stats: AnalysisStats,

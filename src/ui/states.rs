@@ -253,14 +253,23 @@ impl PhotoSortApp {
                 },
             );
         } else if self.step == Step::PickBest {
-            let title = if unanalysed {
-                "Find similar photos"
+            // Once analyzed, the other mode and the people filter stay at
+            // hand: an empty view is only this mode's, or this filter's.
+            let (title, note) = if unanalysed {
+                ("Find similar photos".to_owned(), String::new())
             } else {
-                "No similar photos to compare"
+                self.pick_modes_bar(ui);
+                self.pick_empty_text()
             };
-            let note = if waiting { waiting_note } else { "" };
-            state_card(ui, icon::STACK, title, note, |ui| {
-                if ui
+            let note = if waiting { waiting_note } else { note.as_str() };
+            // Every group hidden by the filters: the way back is the
+            // filters, not another analysis.
+            let filtered = !unanalysed && self.pick_filter_hides_all();
+            let mut show_all = false;
+            state_card(ui, icon::STACK, &title, note, |ui| {
+                if filtered {
+                    show_all = ui.add(primary("Show all groups")).clicked();
+                } else if ui
                     .add_enabled(
                         can_analyze || waiting,
                         primary(analyze_label("Analyze library")),
@@ -271,6 +280,9 @@ impl PhotoSortApp {
                 }
                 next_button(ui, next, &mut action);
             });
+            if show_all {
+                self.clear_pick_filters();
+            }
         } else if self.step == Step::EasyDelete {
             let hidden = !self.delete_review.entries().is_empty();
             state_card(

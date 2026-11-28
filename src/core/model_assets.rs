@@ -20,6 +20,7 @@ pub enum Id {
     Landmarks,
     Blendshapes,
     People,
+    Persons,
     Rotation,
 }
 #[derive(Clone, Copy)]
@@ -43,7 +44,7 @@ pub struct Asset {
     /// Rotation) rather than by the analysis most steps share.
     pub optional: bool,
 }
-pub const ALL: [Asset; 7] = [
+pub const ALL: [Asset; 8] = [
     Asset {
         id: Id::Scene,
         name: "dinov2-small.onnx",
@@ -129,6 +130,19 @@ pub const ALL: [Asset; 7] = [
         optional: true,
     },
     Asset {
+        id: Id::Persons,
+        name: "person_detector.onnx",
+        title: "Person detection",
+        bytes: 3_659_407,
+        url: "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_nano.onnx",
+        license: "Apache-2.0",
+        download_note: None,
+        page: "https://github.com/Megvii-BaseDetection/YOLOX/releases/tag/0.1.1rc0",
+        origin: "Megvii YOLOX-nano (COCO object detector), unmodified 0.1.1rc0 release asset",
+        about: "Finds the people in each photo, also seen from behind, for Pick Best's people filter.",
+        optional: false,
+    },
+    Asset {
         id: Id::Rotation,
         name: "orientation.onnx",
         title: "Orientation detection",
@@ -182,6 +196,7 @@ pub fn required(profile: super::jobs::AnalysisProfile) -> &'static [Id] {
             Id::Detector,
             Id::Landmarks,
             Id::Blendshapes,
+            Id::Persons,
         ],
     }
 }

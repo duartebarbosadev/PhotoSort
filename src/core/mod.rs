@@ -33,6 +33,7 @@ pub mod rotation;
 
 pub mod delete_review;
 
+pub mod persons;
 pub mod pick_review;
 
 pub mod dates;

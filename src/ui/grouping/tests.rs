@@ -206,6 +206,8 @@ fn fresh_pick_review_uses_corrected_members_after_async_completion() {
         .collect();
     app.pick_run = Some(42);
     app.analysis_run = None;
+    // Cull's corrected groups are Pick Best's Similar groups.
+    app.pick_modes.mode = super::pick_review::PickMode::Similar;
     app.resolve_groups(app.automatic_groups.clone(), Edit::Resolve, Some(42), false);
     settle(&mut app);
     assert!(app.pick_run.is_none());
@@ -278,6 +280,7 @@ fn real_application_reopen_restores_groups_and_bookmark_without_ai() {
         rotations_by_hand: Default::default(),
         trash_steps: Default::default(),
         by_hand: Default::default(),
+        pick_subject_hand: Default::default(),
         waiting: None,
     }
     .save(&catalog.root)

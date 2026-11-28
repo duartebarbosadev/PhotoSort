@@ -108,6 +108,7 @@ impl PhotoSortApp {
             Event::SubjectStarted { run } => self.on_subject_started(run),
             Event::FaceGroups { run, groups } => self.on_face_groups(run, groups),
             Event::SubjectGroups { run, groups } => self.on_subject_groups(run, groups),
+            Event::SameSubjectGroups { run, groups } => self.on_same_subject_groups(run, groups),
             Event::MixedGroups { run, labels } => self.on_mixed_groups(run, labels),
             Event::GroupsEdited(result) => self.finish_group_edit(result),
             Event::ModelsNeeded { run, issue } => self.models_needed(run, issue),
@@ -247,6 +248,7 @@ impl PhotoSortApp {
         self.decisions = session.decisions.into();
         self.trash_steps = session.trash_steps;
         self.by_hand = session.by_hand;
+        self.pick_modes.subject_hand = session.pick_subject_hand;
         self.accepted.clear();
         self.trash_steps
             .retain(|id, _| self.decisions.get(id).is_some_and(|d| d.rejected));
@@ -756,6 +758,16 @@ impl PhotoSortApp {
         }
     }
 
+    fn on_same_subject_groups(
+        &mut self,
+        run: u64,
+        groups: Result<HashMap<MediaId, usize>, String>,
+    ) {
+        if self.analysis_run == Some(run) && self.pick_run == Some(run) {
+            self.pick_modes.found = Some(groups);
+        }
+    }
+
     fn on_mixed_groups(&mut self, run: u64, labels: HashMap<MediaId, String>) {
         if self.analysis_run == Some(run) && self.organize_run == Some((run, GroupMode::Mixed)) {
             self.mixed_labels = Some(labels);
@@ -997,6 +1009,7 @@ impl PhotoSortApp {
         self.decisions = session.decisions.clone().into();
         self.trash_steps = session.trash_steps.clone();
         self.by_hand = session.by_hand.clone();
+        self.pick_modes.subject_hand = session.pick_subject_hand.clone();
         self.accepted.clear();
         self.delete_review
             .restore_suggested(session.suggested.clone());

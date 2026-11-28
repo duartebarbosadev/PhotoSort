@@ -96,6 +96,7 @@ impl PhotoSortApp {
         self.pick_review.restore_suggested(Default::default());
         // Starting over: nothing counts as decided by hand any more.
         self.by_hand.clear();
+        self.pick_modes.subject_hand.clear();
         self.accepted.clear();
         self.pending_bookmark = None;
         // A closed preview is a derived snapshot; unfinished recovery stays guarded.

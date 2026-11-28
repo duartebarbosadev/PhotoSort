@@ -55,9 +55,9 @@ fn undo_and_accept_all_restore_the_suggestions() {
     r.keep_only(id(1), &mut d);
     r.toggle(id(5), &mut d);
     assert_eq!(r.changed_count(&[0, 1], &d), 2);
-    r.accept(&[0], &mut d);
+    r.accept(&[0], &Default::default(), &mut d);
     assert!(!r.changed(0, &d) && r.changed(1, &d));
-    r.accept(&[0, 1], &mut d);
+    r.accept(&[0, 1], &Default::default(), &mut d);
     assert!(rejected(&d, 1) && rejected(&d, 2) && !rejected(&d, 3));
     assert!(rejected(&d, 4) && !rejected(&d, 5));
 }

@@ -29,6 +29,8 @@ pub(crate) enum Kind {
     Pairs = 13,
     /// One photo's duplicate assessments with the photos after it.
     Duplicates = 14,
+    /// The people found in one photo (`core::persons`).
+    Persons = 15,
 }
 pub(crate) fn encode(kind: Kind, value: &impl Serialize) -> Result<Vec<u8>> {
     let payload = postcard::to_allocvec(value)?;

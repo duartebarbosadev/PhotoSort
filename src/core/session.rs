@@ -148,6 +148,10 @@ pub struct Session {
     /// all suggestions leaves them as they are.
     #[serde(default, rename = "decided_by_hand")]
     pub by_hand: HashSet<MediaId>,
+    /// Of those, the photos last chosen in Pick Best's Same subject mode:
+    /// its Similar mode leaves them as they are, and the other way round.
+    #[serde(default)]
+    pub pick_subject_hand: HashSet<MediaId>,
     /// What this folder's unfinished file plan does not say itself, while
     /// that plan waits for Retry. An earlier build skips it; one that
     /// cannot be read is dropped and never costs the staged choices.
